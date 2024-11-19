@@ -123,6 +123,26 @@ private:
     GC::Ptr<Crypto::Crypto> m_crypto;
 
     bool m_error_reporting_mode { false };
+
+    // https://w3c.github.io/resource-timing/#sec-extensions-performance-interface
+    // Each ECMAScript global environment has:
+    // https://w3c.github.io/resource-timing/#dfn-resource-timing-buffer-size-limit
+    // A resource timing buffer size limit which should initially be 250 or greater.
+    // The recommended minimum number of PerformanceResourceTiming objects is 250, though this may be changed by the
+    // user agent. setResourceTimingBufferSize can be called to request a change to this limit.
+    u32 m_resource_timing_buffer_size_limit { 250 };
+
+    // A resource timing buffer current size which is initially 0.
+    u32 m_resource_timing_buffer_current_size { 0 };
+
+    // A resource timing buffer full event pending flag which is initially false.
+    bool m_resource_timing_buffer_full_event_pending { false };
+
+    // A resource timing secondary buffer current size which is initially 0.
+    u32 m_resource_timing_secondary_buffer_current_size { 0 };
+
+    // A resource timing secondary buffer to store PerformanceResourceTiming objects that is initially empty.
+    Vector<GC::Ref<ResourceTiming::PerformanceResourceTiming>> m_resource_timing_secondary_buffer;
 };
 
 }

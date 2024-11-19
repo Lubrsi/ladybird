@@ -39,6 +39,7 @@
 #include <LibWeb/PerformanceTimeline/PerformanceObserverEntryList.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/ImageCodecPlugin.h>
+#include <LibWeb/ResourceTiming/PerformanceResourceTiming.h>
 #include <LibWeb/UserTiming/PerformanceMark.h>
 #include <LibWeb/UserTiming/PerformanceMeasure.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
@@ -75,6 +76,7 @@ void WindowOrWorkerGlobalScopeMixin::visit_edges(JS::Cell::Visitor& visitor)
         entry.value.visit_edges(visitor);
     visitor.visit(m_registered_event_sources);
     visitor.visit(m_crypto);
+    visitor.visit(m_resource_timing_secondary_buffer);
 }
 
 void WindowOrWorkerGlobalScopeMixin::finalize()

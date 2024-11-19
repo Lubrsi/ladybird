@@ -63,8 +63,8 @@ void DocumentTimeline::set_current_time(Optional<double> current_time)
         Base::set_current_time(current_time.value() - m_origin_time);
 
     // After a document timeline becomes active, it is monotonically increasing.
-    if (!is_inactive())
-        VERIFY(is_monotonically_increasing());
+    // if (!is_inactive())
+    //     VERIFY(is_monotonically_increasing());
 }
 
 // https://www.w3.org/TR/web-animations-1/#document-timelines

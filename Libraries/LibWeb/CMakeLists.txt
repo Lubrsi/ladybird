@@ -729,6 +729,7 @@ set(SOURCES
     ResizeObserver/ResizeObserver.cpp
     ResizeObserver/ResizeObserverEntry.cpp
     ResizeObserver/ResizeObserverSize.cpp
+    ResourceTiming/PerformanceResourceTiming.cpp
     SecureContexts/AbstractOperations.cpp
     ServiceWorker/Job.cpp
     ServiceWorker/Registration.cpp

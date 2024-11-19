@@ -36,8 +36,8 @@ public:
     [[nodiscard]] HighResolutionTime::DOMHighResTimeStamp secure_connection_start_time() const { return m_secure_connection_start_time; }
     void set_secure_connection_start_time(HighResolutionTime::DOMHighResTimeStamp secure_connection_start_time) { m_secure_connection_start_time = secure_connection_start_time; }
 
-    [[nodiscard]] ReadonlyBytes lpn_negotiated_protocol() const { return m_lpn_negotiated_protocol; }
-    void set_lpn_negotiated_protocol(ByteBuffer lpn_negotiated_protocol) { m_lpn_negotiated_protocol = move(lpn_negotiated_protocol); }
+    [[nodiscard]] FlyString const& alpn_negotiated_protocol() const { return m_alpn_negotiated_protocol; }
+    void set_alpn_negotiated_protocol(FlyString const& alpn_negotiated_protocol) { m_alpn_negotiated_protocol = alpn_negotiated_protocol; }
 
 private:
     ConnectionTimingInfo();
@@ -70,7 +70,7 @@ private:
     // https://fetch.spec.whatwg.org/#connection-timing-info-alpn-negotiated-protocol
     // ALPN negotiated protocol (default the empty byte sequence)
     //     A byte sequence.
-    ByteBuffer m_lpn_negotiated_protocol;
+    FlyString m_alpn_negotiated_protocol;
 };
 
 }

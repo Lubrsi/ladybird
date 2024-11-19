@@ -1,0 +1,20 @@
+@@ -2685,9 +2685,10 @@
+ 
+         // Inherited interfaces must have their IDL files imported.
+         VERIFY(imported_interface_iterator != start_interface.imported_modules.end());
++        current_interface = &*imported_interface_iterator;
+ 
+         // 2. Push I onto stack.
+-        inheritance_chain.append(*imported_interface_iterator);
++        inheritance_chain.append(*current_interface);
+     }
+ 
+     // 4. Return stack.
+@@ -3856,6 +3857,7 @@
+     using namespace Web::Selection;
+     using namespace Web::NavigationTiming;
+     using namespace Web::PerformanceTimeline;
++    using namespace Web::ResourceTiming;
+     using namespace Web::UserTiming;
+     using namespace Web::Streams;
+     using namespace Web::SVG;
