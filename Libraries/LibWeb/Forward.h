@@ -91,6 +91,15 @@ class CompressionStream;
 class DecompressionStream;
 }
 
+namespace Web::ContentSecurityPolicy {
+class Policy;
+}
+
+namespace Web::ContentSecurityPolicy::Directives {
+class DefaultSource;
+class Directive;
+}
+
 namespace Web::Cookie {
 struct Cookie;
 struct ParsedCookie;
@@ -530,6 +539,7 @@ class TimeRanges;
 class ToggleEvent;
 class TrackEvent;
 class TraversableNavigable;
+class UniversalGlobalScopeMixin;
 class UserActivation;
 class ValidityState;
 class VideoTrack;
