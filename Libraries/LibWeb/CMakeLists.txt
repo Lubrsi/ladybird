@@ -30,6 +30,7 @@ set(SOURCES
     Clipboard/ClipboardEvent.cpp
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
+    ContentSecurityPolicy/AbstractOperations.cpp
     ContentSecurityPolicy/Directives/DirectiveFactory.cpp
     ContentSecurityPolicy/Directives/DirectiveOperations.cpp
     ContentSecurityPolicy/Policy.cpp
