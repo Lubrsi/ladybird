@@ -903,7 +903,9 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
             entry->document_state()->set_resource(Empty {});
         }
 
-        // FIXME 9. Set responsePolicyContainer to the result of creating a policy container from a fetch response given response and request's reserved client.
+        // 9. Set responsePolicyContainer to the result of creating a policy container from a fetch response given response and request's reserved client.
+        response_policy_container = create_a_policy_container_from_a_fetch_response(*response_holder->response(), request->reserved_client());
+
         // FIXME 10. Set finalSandboxFlags to the union of targetSnapshotParams's sandboxing flags and responsePolicyContainer's CSP list's CSP-derived sandboxing flags.
 
         // 11. Set responseOrigin to the result of determining the origin given response's URL, finalSandboxFlags, and entry's document state's initiator origin.
