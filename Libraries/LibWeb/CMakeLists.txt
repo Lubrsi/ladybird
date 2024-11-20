@@ -31,7 +31,9 @@ set(SOURCES
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
     ContentSecurityPolicy/Directives/DirectiveFactory.cpp
+    ContentSecurityPolicy/Directives/DirectiveOperations.cpp
     ContentSecurityPolicy/Policy.cpp
+    ContentSecurityPolicy/Violation.cpp
     Crypto/Crypto.cpp
     Crypto/CryptoAlgorithms.cpp
     Crypto/CryptoBindings.cpp
