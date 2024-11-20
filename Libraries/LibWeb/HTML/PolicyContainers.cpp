@@ -31,7 +31,7 @@ PolicyContainer create_a_policy_container_from_a_fetch_response(GC::Ref<Fetch::I
 
     // 5. Set result's referrer policy to the result of parsing the `Referrer-Policy` header given response.
     //    [REFERRERPOLICY]
-    result.referrer_policy = ReferrerPolicy::parse_a_referrer_policy_from_a_referrer_policy_header(response);
+    // result.referrer_policy = ReferrerPolicy::parse_a_referrer_policy_from_a_referrer_policy_header(response);
 
     // 6. Return result.
     return result;

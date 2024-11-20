@@ -8,6 +8,8 @@
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/WorkerGlobalScopePrototype.h>
 #include <LibWeb/CSS/FontFaceSet.h>
+#include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
+#include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/HTML/EventHandler.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/MessageEvent.h>
@@ -163,6 +165,31 @@ GC::Ref<CSS::FontFaceSet> WorkerGlobalScope::fonts()
     if (!m_fonts)
         m_fonts = CSS::FontFaceSet::create(realm());
     return *m_fonts;
+}
+
+// https://w3c.github.io/webappsec-csp/#run-global-object-csp-initialization
+ContentSecurityPolicy::Directives::Directive::Result WorkerGlobalScope::run_csp_initialization() const
+{
+    // 1. Let result be "Allowed".
+    auto result = ContentSecurityPolicy::Directives::Directive::Result::Allowed;
+
+    // 2. For each policy of global’s CSP list:
+    auto& settings = HTML::principal_realm_settings_object(realm());
+    auto csp_list = settings.policy_container().csp_list;
+    for (auto const& policy : csp_list) {
+        // 1. For each directive of policy:
+        for (auto const& directive : policy.directives()) {
+            // 1. Execute directive’s initialization algorithm on global. If its returned value is "Blocked", then set
+            //    result to "Blocked".
+            auto directive_result = directive.initialization(GC::Ref { *this });
+            if (directive_result == ContentSecurityPolicy::Directives::Directive::Result::Blocked) {
+                result = ContentSecurityPolicy::Directives::Directive::Result::Blocked;
+            }
+        }
+    }
+
+    // 3. Return result.
+    return result;
 }
 
 }

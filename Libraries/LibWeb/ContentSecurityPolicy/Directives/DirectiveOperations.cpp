@@ -12,6 +12,61 @@
 
 namespace Web::ContentSecurityPolicy::Directives {
 
+// https://w3c.github.io/webappsec-csp/#directive-fallback-list
+// Will return an ordered set of the fallback directives for a specific directive.
+// The returned ordered set is sorted from most relevant to least relevant and it includes the effective directive
+// itself.
+static HashMap<FlyString, Vector<StringView>> fetch_directive_fallback_list
+{
+    // "script-src-elem"
+    //      1. Return << "script-src-elem", "script-src", "default-src" >>.
+    { "script-src-elem"_fly_string, { "script-src-elem"sv, "script-src"sv, "default-src"sv } },
+
+    // "script-src-attr"
+    //      1. Return << "script-src-attr", "script-src", "default-src" >>.
+    { "script-src-attr"_fly_string, { "script-src-attr"sv, "script-src"sv, "default-src"sv } },
+
+    // "style-src-elem"
+    //      1. Return << "style-src-elem", "style-src", "default-src" >>.
+    { "style-src-elem"_fly_string, { "style-src-elem"sv, "style-src"sv, "default-src"sv } },
+
+    // "style-src-attr"
+    //      1. Return << "style-src-attr", "style-src", "default-src" >>.
+    { "style-src-attr"_fly_string, { "style-src-attr"sv, "style-src"sv, "default-src"sv } },
+
+    // "worker-src"
+    //      1. Return << "worker-src", "child-src", "script-src", "default-src" >>.
+    { "worker-src"_fly_string, { "worker-src"sv, "child-src"sv, "script-src"sv, "default-src"sv  } },
+
+    // "connect-src"
+    //      1. Return << "connect-src", "default-src" >>.
+    { "connect-src"_fly_string, { "connect-src"sv, "default-src"sv } },
+
+    // "manifest-src"
+    //      1. Return << "manifest-src", "default-src" >>.
+    { "manifest-src"_fly_string, { "manifest-src"sv, "default-src"sv } },
+
+    // "object-src"
+    //      1. Return << "object-src", "default-src" >>.
+    { "object-src"_fly_string, { "object-src"sv, "default-src"sv } },
+
+    // "frame-src"
+    //      1. Return << "frame-src", "child-src", "default-src" >>.
+    { "frame-src"_fly_string, { "frame-src"sv, "child-src"sv, "default-src"sv } },
+
+    // "media-src"
+    //      1. Return << "media-src", "default-src" >>.
+    { "media-src"_fly_string, { "media-src"sv, "default-src"sv } },
+
+    // "font-src"
+    //      1. Return << "font-src", "default-src" >>.
+    { "font-src"_fly_string, { "font-src"sv, "default-src"sv } },
+
+    // "img-src"
+    //      1. Return << "img-src", "default-src" >>.
+    { "img-src"_fly_string, { "img-src"sv, "default-src"sv } },
+};
+
 // https://w3c.github.io/webappsec-csp/#effective-directive-for-a-request
 Optional<StringView> get_the_effective_directive_for_request(GC::Ref<Fetch::Infrastructure::Request const> request)
 {
@@ -98,6 +153,40 @@ Optional<StringView> get_the_effective_directive_for_request(GC::Ref<Fetch::Infr
     default:
         return "connect-src"sv;
     }
+}
+
+// https://w3c.github.io/webappsec-csp/#directive-fallback-list
+Vector<StringView> get_fetch_directive_fallback_list(Optional<StringView> directive_name)
+{
+    if (!directive_name.has_value())
+        return {};
+
+    auto list_iterator = fetch_directive_fallback_list.find(directive_name.value());
+    if (list_iterator == fetch_directive_fallback_list.end())
+        return {};
+
+    return list_iterator->value;
+}
+
+ShouldExecute should_fetch_directive_execute(Optional<StringView> effective_directive_name, StringView directive_name, Policy const& policy)
+{
+    // 1. Let directive fallback list be the result of executing § 6.8.3 Get fetch directive fallback list on effective
+    //    directive name.
+    auto const& directive_fallback_list = get_fetch_directive_fallback_list(effective_directive_name);
+
+    // 2. For each fallback directive of directive fallback list:
+    for (auto fallback_directive : directive_fallback_list) {
+        // 1. If directive name is fallback directive, Return "Yes".
+        if (directive_name == fallback_directive)
+            return ShouldExecute::Yes;
+
+        // 2. If policy contains a directive whose name is fallback directive, Return "No".
+        if (policy.contains_directive_with_name(fallback_directive))
+            return ShouldExecute::No;
+    }
+
+    // 3. Return "No".
+    return ShouldExecute::No;
 }
 
 }

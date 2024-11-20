@@ -93,6 +93,7 @@ class DecompressionStream;
 
 namespace Web::ContentSecurityPolicy {
 class Policy;
+class Violation;
 }
 
 namespace Web::ContentSecurityPolicy::Directives {

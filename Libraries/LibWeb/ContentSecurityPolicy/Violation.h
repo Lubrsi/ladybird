@@ -5,7 +5,7 @@
  */
 
 #include <LibJS/Heap/Cell.h>
-#include <LibURL/Forward.h>
+#include <LibURL/URL.h>
 #include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/Forward.h>
 

@@ -17,7 +17,7 @@ bool csp_list_contains_header_delivered_policy(Vector<Policy> const& csp_list)
 {
     // A CSP list contains a header-delivered Content Security Policy if it contains a policy whose source is "header".
     auto header_delivered_entry = csp_list.find_if([](auto const& policy) {
-        return policy.source == Policy::Source::Header;
+        return policy.source() == Policy::Source::Header;
     });
 
     return !header_delivered_entry.is_end();

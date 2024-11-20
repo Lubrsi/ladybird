@@ -31,6 +31,7 @@ set(SOURCES
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
     ContentSecurityPolicy/AbstractOperations.cpp
+    ContentSecurityPolicy/Directives/DefaultSource.cpp
     ContentSecurityPolicy/Directives/DirectiveFactory.cpp
     ContentSecurityPolicy/Directives/DirectiveOperations.cpp
     ContentSecurityPolicy/Policy.cpp

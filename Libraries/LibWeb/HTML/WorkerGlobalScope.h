@@ -96,6 +96,8 @@ public:
 
     bool is_closing() const { return m_closing; }
 
+    [[nodiscard]] ContentSecurityPolicy::Directives::Directive::Result run_csp_initialization() const;
+
 protected:
     explicit WorkerGlobalScope(JS::Realm&, GC::Ref<Web::Page>);
 

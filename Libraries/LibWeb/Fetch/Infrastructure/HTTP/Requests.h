@@ -335,10 +335,15 @@ public:
     [[nodiscard]] BufferPolicy buffer_policy() const { return m_buffer_policy; }
     void set_buffer_policy(BufferPolicy buffer_policy) { m_buffer_policy = buffer_policy; }
 
+    [[nodiscard]] ContentSecurityPolicy::Directives::Directive::Result should_be_blocked_by_content_security_policy(JS::Realm&);
+
 private:
     explicit Request(GC::Ref<HeaderList>);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
+
+    Optional<ContentSecurityPolicy::Directives::Directive> does_request_violate_policy(ContentSecurityPolicy::Policy const& policy) const;
+    Optional<ContentSecurityPolicy::Directives::Directive> does_resource_hint_request_violate_policy(ContentSecurityPolicy::Policy const& policy) const;
 
     // https://fetch.spec.whatwg.org/#concept-request-method
     // A request has an associated method (a method). Unless stated otherwise it is `GET`.
