@@ -5,56 +5,55 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibIPC/Decoder.h>
-#include <LibIPC/Encoder.h>
-#include <LibWeb/ContentSecurityPolicy/Policy.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
+#include <LibJS/Runtime/Realm.h>
 #include <LibWeb/HTML/PolicyContainers.h>
-#include <LibWeb/ReferrerPolicy/AbstractOperations.h>
+#include <LibWeb/HTML/SerializedPolicyContainer.h>
 
 namespace Web::HTML {
 
-// https://html.spec.whatwg.org/multipage/browsers.html#creating-a-policy-container-from-a-fetch-response
-PolicyContainer create_a_policy_container_from_a_fetch_response(GC::Ref<Fetch::Infrastructure::Response const> response, GC::Ptr<Environment>)
+GC_DEFINE_ALLOCATOR(PolicyContainer);
+
+PolicyContainer::PolicyContainer(JS::Realm&)
 {
-    // FIXME: 1. If response's URL's scheme is "blob", then return a clone of response's URL's blob URL entry's
-    //           environment's policy container.
+}
 
-    // 2. Let result be a new policy container.
-    PolicyContainer result;
-
-    // 3. Set result's CSP list to the result of parsing a response's Content Security Policies given response.
-    result.csp_list = ContentSecurityPolicy::Policy::parse_a_responses_content_security_policies(response);
-
-    // FIXME: 4. If environment is non-null, then set result's embedder policy to the result of obtaining an embedder
-    //           policy given response and environment. Otherwise, set it to "unsafe-none".
-
-    // 5. Set result's referrer policy to the result of parsing the `Referrer-Policy` header given response.
-    //    [REFERRERPOLICY]
-    // result.referrer_policy = ReferrerPolicy::parse_a_referrer_policy_from_a_referrer_policy_header(response);
-
-    // 6. Return result.
+GC::Ref<PolicyContainer> create_a_policy_container_from_serialized_policy_container(JS::Realm& realm, SerializedPolicyContainer const& serialized_policy_container)
+{
+    GC::Ref<PolicyContainer> result = realm.create<PolicyContainer>(realm);
+    result->embedder_policy = serialized_policy_container.embedder_policy;
+    result->referrer_policy = serialized_policy_container.referrer_policy;
     return result;
 }
 
+// https://html.spec.whatwg.org/#clone-a-policy-container
+GC::Ref<PolicyContainer> PolicyContainer::clone(JS::Realm& realm) const
+{
+    // 1. Let clone be a new policy container.
+    auto clone = realm.create<PolicyContainer>(realm);
+
+    // FIXME: 2. For each policy in policyContainer's CSP list, append a copy of policy into clone's CSP list.
+
+    // 3. Set clone's embedder policy to a copy of policyContainer's embedder policy.
+    // NOTE: This is a C++ copy.
+    clone->embedder_policy = embedder_policy;
+
+    // 4. Set clone's referrer policy to policyContainer's referrer policy.
+    clone->referrer_policy = referrer_policy;
+
+    // 5. Return clone.
+    return clone;
 }
 
-namespace IPC {
-
-template<>
-ErrorOr<void> encode(IPC::Encoder& encoder, Web::HTML::PolicyContainer const& policy_container)
+SerializedPolicyContainer PolicyContainer::serialize() const
 {
-    TRY(encode(encoder, policy_container.referrer_policy));
-
-    return {};
+    return SerializedPolicyContainer {
+        .embedder_policy = embedder_policy,
+        .referrer_policy = referrer_policy,
+    };
 }
 
-template<>
-ErrorOr<Web::HTML::PolicyContainer> decode(IPC::Decoder& decoder)
+void PolicyContainer::visit_edges(Cell::Visitor& visitor)
 {
-    auto referrer_policy = TRY(decoder.decode<Web::ReferrerPolicy::ReferrerPolicy>());
-
-    return Web::HTML::PolicyContainer { .referrer_policy = referrer_policy };
 }
 
 }

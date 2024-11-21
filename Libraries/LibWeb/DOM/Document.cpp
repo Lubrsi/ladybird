@@ -533,6 +533,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_top_layer_pending_removals);
     visitor.visit(m_console_client);
     visitor.visit(m_editing_host_manager);
+    visitor.visit(m_policy_container);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -3217,18 +3218,22 @@ HTML::SandboxingFlagSet Document::active_sandboxing_flag_set() const
     return m_active_sandboxing_flag_set;
 }
 
-HTML::PolicyContainer Document::policy_container() const
+GC::Ref<HTML::PolicyContainer> Document::policy_container() const
 {
-    return m_policy_container;
+    auto& realm = this->realm();
+    if (!m_policy_container) {
+        m_policy_container = realm.create<HTML::PolicyContainer>(realm);
+    }
+    return *m_policy_container;
 }
 
-void Document::set_policy_container(HTML::PolicyContainer policy_container)
+void Document::set_policy_container(GC::Ref<HTML::PolicyContainer> policy_container)
 {
-    m_policy_container = move(policy_container);
+    m_policy_container = policy_container;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#snapshotting-source-snapshot-params
-HTML::SourceSnapshotParams Document::snapshot_source_snapshot_params() const
+GC::Ref<HTML::SourceSnapshotParams> Document::snapshot_source_snapshot_params() const
 {
     // To snapshot source snapshot params given a Document sourceDocument, return a new source snapshot params with
 
@@ -3243,13 +3248,13 @@ HTML::SourceSnapshotParams Document::snapshot_source_snapshot_params() const
     // source policy container
     //     sourceDocument's policy container
 
-    return HTML::SourceSnapshotParams {
-        .has_transient_activation = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).has_transient_activation(),
-        .sandboxing_flags = m_active_sandboxing_flag_set,
-        .allows_downloading = !has_flag(m_active_sandboxing_flag_set, HTML::SandboxingFlagSet::SandboxedDownloads),
-        .fetch_client = relevant_settings_object(),
-        .source_policy_container = m_policy_container
-    };
+    auto snapshot_params = realm().create<HTML::SourceSnapshotParams>();
+    snapshot_params->has_transient_activation = verify_cast<HTML::Window>(HTML::relevant_global_object(*this)).has_transient_activation();
+    snapshot_params->sandboxing_flags = m_active_sandboxing_flag_set;
+    snapshot_params->allows_downloading = !has_flag(m_active_sandboxing_flag_set, HTML::SandboxingFlagSet::SandboxedDownloads);
+    snapshot_params->fetch_client = relevant_settings_object();
+    snapshot_params->source_policy_container = policy_container();
+    return snapshot_params;
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#descendant-navigables

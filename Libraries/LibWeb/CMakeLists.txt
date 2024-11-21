@@ -468,6 +468,7 @@ set(SOURCES
     HTML/SelectedFile.cpp
     HTML/SelectItem.cpp
     HTML/ServiceWorker.cpp
+    HTML/SerializedPolicyContainer.cpp
     HTML/ServiceWorkerContainer.cpp
     HTML/ServiceWorkerRegistration.cpp
     HTML/SessionHistoryEntry.cpp
@@ -475,6 +476,7 @@ set(SOURCES
     HTML/ShadowRealmGlobalScope.cpp
     HTML/SharedResourceRequest.cpp
     HTML/SourceSet.cpp
+    HTML/SourceSnapshotParams.cpp
     HTML/Storage.cpp
     HTML/StructuredSerialize.cpp
     HTML/SubmitEvent.cpp

@@ -32,7 +32,7 @@ public:
     String api_url_character_encoding() override { return m_api_url_character_encoding; }
     URL::URL api_base_url() override;
     URL::Origin origin() override;
-    PolicyContainer policy_container() override;
+    GC::Ref<PolicyContainer> policy_container() override;
     CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability() override;
 
 private:

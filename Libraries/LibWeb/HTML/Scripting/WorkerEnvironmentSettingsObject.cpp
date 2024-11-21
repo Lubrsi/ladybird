@@ -68,7 +68,7 @@ URL::Origin WorkerEnvironmentSettingsObject::origin()
     return m_origin;
 }
 
-PolicyContainer WorkerEnvironmentSettingsObject::policy_container()
+GC::Ref<PolicyContainer> WorkerEnvironmentSettingsObject::policy_container()
 {
     // Return worker global scope's policy container.
     return m_global_scope->policy_container();

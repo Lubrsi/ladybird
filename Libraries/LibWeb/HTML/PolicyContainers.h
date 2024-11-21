@@ -18,7 +18,13 @@ namespace Web::HTML {
 
 // https://html.spec.whatwg.org/multipage/origin.html#policy-container
 // A policy container is a struct containing policies that apply to a Document, a WorkerGlobalScope, or a WorkletGlobalScope. It has the following items:
-struct PolicyContainer {
+struct PolicyContainer : public JS::Cell {
+    GC_CELL(PolicyContainer, JS::Cell)
+    GC_DECLARE_ALLOCATOR(PolicyContainer);
+
+public:
+    virtual ~PolicyContainer() = default;
+
     // https://html.spec.whatwg.org/multipage/origin.html#policy-container-csp-list
     // A CSP list, which is a CSP list. It is initially empty.
     Vector<ContentSecurityPolicy::Policy> csp_list;
@@ -30,17 +36,20 @@ struct PolicyContainer {
     // https://html.spec.whatwg.org/multipage/origin.html#policy-container-referrer-policy
     // A referrer policy, which is a referrer policy. It is initially the default referrer policy.
     ReferrerPolicy::ReferrerPolicy referrer_policy { ReferrerPolicy::DEFAULT_REFERRER_POLICY };
+
+    [[nodiscard]] GC::Ref<PolicyContainer> clone(JS::Realm&) const;
+    [[nodiscard]] SerializedPolicyContainer serialize() const;
+
+protected:
+    virtual void visit_edges(Cell::Visitor&) override;
+
+private:
+    PolicyContainer(JS::Realm&);
 };
 
 // https://html.spec.whatwg.org/multipage/browsers.html#creating-a-policy-container-from-a-fetch-response
-PolicyContainer create_a_policy_container_from_a_fetch_response(GC::Ref<Fetch::Infrastructure::Response const> response, GC::Ptr<Environment> environment);
+GC::Ref<PolicyContainer> create_a_policy_container_from_a_fetch_response(JS::Realm&, GC::Ref<Fetch::Infrastructure::Response const> response, GC::Ptr<Environment> environment);
 
-}
+GC::Ref<PolicyContainer> create_a_policy_container_from_serialized_policy_container(JS::Realm&, SerializedPolicyContainer const&);
 
-namespace IPC {
-template<>
-ErrorOr<void> encode(IPC::Encoder&, Web::HTML::PolicyContainer const&);
-
-template<>
-ErrorOr<Web::HTML::PolicyContainer> decode(IPC::Decoder&);
 }
