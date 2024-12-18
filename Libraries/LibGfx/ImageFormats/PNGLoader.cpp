@@ -230,6 +230,12 @@ ErrorOr<void> PNGLoadingContext::apply_exif_orientation()
 
 ErrorOr<size_t> PNGLoadingContext::read_frames(png_structp png_ptr, png_infop info_ptr)
 {
+    if (!png_get_valid(png_ptr, info_ptr, PNG_INFO_IDAT)) {
+        // There's no IDAT chunk, so let's fall back to a single transparent frame.
+        frame_descriptors.append({ TRY(Bitmap::create(BitmapFormat::BGRA8888, AlphaType::Unpremultiplied, size)), 0 });
+        return 1;
+    }
+
     if (png_get_acTL(png_ptr, info_ptr, &frame_count, &loop_count)) {
         // acTL chunk present: This is an APNG.
 
