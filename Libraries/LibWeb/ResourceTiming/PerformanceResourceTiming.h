@@ -15,14 +15,14 @@
 namespace Web::ResourceTiming {
 
 // https://w3c.github.io/resource-timing/#dom-performanceresourcetiming
-class PerformanceResourceTiming final : public PerformanceTimeline::PerformanceEntry {
+class PerformanceResourceTiming : public PerformanceTimeline::PerformanceEntry {
     WEB_PLATFORM_OBJECT(PerformanceResourceTiming, PerformanceTimeline::PerformanceEntry);
     GC_DECLARE_ALLOCATOR(PerformanceResourceTiming);
 
 public:
-    virtual ~PerformanceResourceTiming();
+    virtual ~PerformanceResourceTiming() override;
 
-    static void mark_resource_timing(GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, String const& requested_url, Fetch::Infrastructure::Request::InitiatorType initiator_type, JS::Object& global, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type = ""_fly_string);
+    static void mark_resource_timing(GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, String const& requested_url, FlyString const& initiator_type, JS::Object& global, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type = ""_fly_string);
 
     // NOTE: These three functions are answered by the registry for the given entry type.
     // https://w3c.github.io/timing-entrytypes-registry/#registry
@@ -46,10 +46,10 @@ public:
 
     FlyString next_hop_protocol() const;
 
-    HighResolutionTime::DOMHighResTimeStamp worker_start() const;
-    HighResolutionTime::DOMHighResTimeStamp redirect_start() const;
-    HighResolutionTime::DOMHighResTimeStamp redirect_end() const;
-    HighResolutionTime::DOMHighResTimeStamp fetch_start() const;
+    virtual HighResolutionTime::DOMHighResTimeStamp worker_start() const;
+    virtual HighResolutionTime::DOMHighResTimeStamp redirect_start() const;
+    virtual HighResolutionTime::DOMHighResTimeStamp redirect_end() const;
+    virtual HighResolutionTime::DOMHighResTimeStamp fetch_start() const;
     HighResolutionTime::DOMHighResTimeStamp domain_lookup_start() const;
     HighResolutionTime::DOMHighResTimeStamp domain_lookup_end() const;
     HighResolutionTime::DOMHighResTimeStamp connect_start() const;
@@ -67,12 +67,15 @@ public:
     Bindings::RenderBlockingStatusType render_blocking_status() const;
     String const& content_type() const;
 
-private:
+protected:
     PerformanceResourceTiming(JS::Realm&, String const& name, HighResolutionTime::DOMHighResTimeStamp start_time, HighResolutionTime::DOMHighResTimeStamp duration, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info);
+
+    void setup_the_resource_timing_entry(FlyString const& initiator_type, String const& requested_url, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type = ""_fly_string);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
+private:
     FlyString m_initiator_type;
     String m_requested_url;
     GC::Ref<Fetch::Infrastructure::FetchTimingInfo> m_timing_info;
@@ -81,5 +84,7 @@ private:
     Fetch::Infrastructure::Status m_response_status;
     FlyString m_delivery_type;
 };
+
+HighResolutionTime::DOMHighResTimeStamp convert_fetch_timestamp(HighResolutionTime::DOMHighResTimeStamp time_stamp, JS::Object const& global);
 
 }

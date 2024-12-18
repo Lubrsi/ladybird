@@ -75,6 +75,8 @@ void HTMLLinkElement::inserted()
         fetch_and_process_linked_resource();
     }
 
+    return;
+
     // FIXME: Follow spec for fetching and processing these attributes as well
     if (m_relationship & Relationship::Preload) {
         if (auto maybe_href = document().encoding_parse_url(get_attribute_value(HTML::AttributeNames::href)); maybe_href.has_value()) {
@@ -589,6 +591,7 @@ WebIDL::ExceptionOr<void> HTMLLinkElement::load_fallback_favicon_if_needed(GC::R
     request->set_client(&document->relevant_settings_object());
     request->set_destination(Fetch::Infrastructure::Request::Destination::Image);
     request->set_credentials_mode(Fetch::Infrastructure::Request::CredentialsMode::Include);
+    request->set_initiator_type(Fetch::Infrastructure::Request::InitiatorType::Other);
     request->set_use_url_credentials(true);
 
     // 2. Let response be the result of fetching request.

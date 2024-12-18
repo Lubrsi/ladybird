@@ -642,6 +642,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     auto process_response_end_of_body = [&vm, &response, &fetch_params, timing_info] {
         // 1. Let unsafeEndTime be the unsafe shared current time.
         auto unsafe_end_time = HighResolutionTime::unsafe_shared_current_time();
+        dbgln("process_response_end_of_body");
 
         // 2. If fetchParams’s request’s destination is "document", then set fetchParams’s controller’s full timing
         //    info to fetchParams’s timing info.
@@ -712,7 +713,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
             // 8. If fetchParams’s request’s initiator type is not null, then mark resource timing given timingInfo,
             //    request’s URL, request’s initiator type, global, cacheState, bodyInfo, and responseStatus.
             if (fetch_params.request()->initiator_type().has_value()) {
-                ResourceTiming::PerformanceResourceTiming::mark_resource_timing(timing_info, fetch_params.request()->url().to_string(), fetch_params.request()->initiator_type().value(), global, cache_state, body_info, response_status);
+                ResourceTiming::PerformanceResourceTiming::mark_resource_timing(timing_info, fetch_params.request()->url().to_string(),  Infrastructure::initiator_type_to_string(fetch_params.request()->initiator_type().value()), global, cache_state, body_info, response_status);
             }
         });
 
@@ -734,6 +735,8 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
             if (client != nullptr && task_destination_global_object != nullptr) {
                 if (fetch_params.request()->initiator_type().has_value() && &client->global_object() == task_destination_global_object->ptr())
                     fetch_params.controller()->report_timing(client->global_object());
+                else
+                    dbgln("not reporting timing for {}", response.url());
             }
         });
 
@@ -2276,14 +2279,14 @@ static void log_load_request(auto const& load_request)
         dbgln("> {}", line);
 }
 
-static void log_response(auto const& status_code, auto const& headers, auto const&)
+static void log_response(auto const& status_code, auto const& headers, auto const& data)
 {
     dbgln("< HTTP/1.1 {}", status_code.value_or(0));
     for (auto const& [name, value] : headers.headers())
         dbgln("< {}: {}", name, value);
-    // dbgln("<");
-    // for (auto line : StringView { data }.split_view('\n', SplitBehavior::KeepEmpty))
-    //     dbgln("< {}", line);
+    dbgln("<");
+    for (auto line : StringView { data }.split_view('\n', SplitBehavior::KeepEmpty))
+        dbgln("< {}", line);
 }
 #endif
 

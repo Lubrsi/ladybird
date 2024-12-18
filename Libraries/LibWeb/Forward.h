@@ -67,6 +67,7 @@ enum class CanvasTextBaseline;
 enum class DOMParserSupportedType;
 enum class EndingType;
 enum class ImageSmoothingQuality;
+enum class NavigationTimingType;
 enum class ReadableStreamReaderMode;
 enum class ReferrerPolicy;
 enum class RenderBlockingStatusType;
@@ -713,6 +714,7 @@ class MimeType;
 
 namespace Web::NavigationTiming {
 class PerformanceNavigation;
+class PerformanceNavigationTiming;
 class PerformanceTiming;
 }
 

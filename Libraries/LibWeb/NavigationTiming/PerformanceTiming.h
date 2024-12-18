@@ -16,9 +16,7 @@ class PerformanceTiming final : public Bindings::PlatformObject {
     GC_DECLARE_ALLOCATOR(PerformanceTiming);
 
 public:
-    using AllowOwnPtr = TrueType;
-
-    ~PerformanceTiming();
+    virtual ~PerformanceTiming() override;
 
     u64 navigation_start()
     {

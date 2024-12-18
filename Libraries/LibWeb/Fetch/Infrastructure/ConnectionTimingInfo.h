@@ -7,7 +7,9 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/FlyString.h>
 #include <LibGC/Ptr.h>
+#include <LibGC/CellAllocator.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/HighResolutionTime/DOMHighResTimeStamp.h>
 

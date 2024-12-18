@@ -335,6 +335,8 @@ WebIDL::ExceptionOr<Vector<GC::Root<PerformanceTimeline::PerformanceEntry>>> Per
 {
     auto& vm = this->vm();
 
+    dbgln("GET ENTRIES");
+
     // Returns a PerformanceEntryList object returned by the filter buffer map by name and type algorithm with name and
     // type set to null.
     return TRY_OR_THROW_OOM(vm, window_or_worker().filter_buffer_map_by_name_and_type(/* name= */ Optional<String> {}, /* type= */ Optional<String> {}));

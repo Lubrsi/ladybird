@@ -124,6 +124,8 @@ JS_DEFINE_NATIVE_FUNCTION(JSONObject::stringify)
     if (!maybe_string.has_value())
         return js_undefined();
 
+    dbgln("stringified {}", maybe_string.value());
+
     return PrimitiveString::create(vm, maybe_string.release_value());
 }
 

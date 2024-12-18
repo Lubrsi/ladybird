@@ -44,7 +44,7 @@ void PerformanceResourceTiming::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://w3c.github.io/resource-timing/#dfn-convert-fetch-timestamp
-static HighResolutionTime::DOMHighResTimeStamp convert_fetch_timestamp(HighResolutionTime::DOMHighResTimeStamp time_stamp, JS::Object const& global)
+HighResolutionTime::DOMHighResTimeStamp convert_fetch_timestamp(HighResolutionTime::DOMHighResTimeStamp time_stamp, JS::Object const& global)
 {
     // 1. If ts is zero, return zero.
     if (time_stamp == 0.0)
@@ -56,7 +56,7 @@ static HighResolutionTime::DOMHighResTimeStamp convert_fetch_timestamp(HighResol
 }
 
 // https://w3c.github.io/resource-timing/#dfn-mark-resource-timing
-void PerformanceResourceTiming::mark_resource_timing(GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, String const& requested_url, Fetch::Infrastructure::Request::InitiatorType initiator_type, JS::Object& global, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type)
+void PerformanceResourceTiming::mark_resource_timing(GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, String const& requested_url, FlyString const& initiator_type, JS::Object& global, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type)
 {
     dbgln("MARK RESOURCE");
     // 1. Create a PerformanceResourceTiming object entry in global's realm.
@@ -75,43 +75,51 @@ void PerformanceResourceTiming::mark_resource_timing(GC::Ref<Fetch::Infrastructu
     // https://w3c.github.io/resource-timing/#dfn-duration
     // duration
     //  The duration getter steps are to return this's timing info's end time minus this's timing info's start time.
-    auto entry = realm.create<PerformanceResourceTiming>(realm, requested_url, convert_fetch_timestamp(timing_info->start_time(), global), timing_info->end_time() - timing_info->start_time(), timing_info);
+    auto converted_start_time = convert_fetch_timestamp(timing_info->start_time(), global);
+    auto converted_end_time = convert_fetch_timestamp(timing_info->end_time(), global);
+    auto entry = realm.create<PerformanceResourceTiming>(realm, requested_url, converted_start_time, converted_end_time - converted_start_time, timing_info);
 
+    // Setup the resource timing entry for entry, given initiatorType, requestedURL, timingInfo, cacheMode, bodyInfo, responseStatus, and deliveryType.
+    entry->setup_the_resource_timing_entry(initiator_type, requested_url, timing_info, cache_mode, move(body_info), response_status, delivery_type);
+
+    // 3. Queue entry.
+    window_or_worker->queue_performance_entry(entry);
+
+    // FIXME: 4. Add entry to global's performance entry buffer.
+}
+
+// https://www.w3.org/TR/resource-timing/#dfn-setup-the-resource-timing-entry
+void PerformanceResourceTiming::setup_the_resource_timing_entry(FlyString const& initiator_type, String const& requested_url, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> timing_info, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status, FlyString delivery_type)
+{
     // 2. Setup the resource timing entry for entry, given initiatorType, requestedURL, timingInfo, cacheMode, bodyInfo, responseStatus, and deliveryType.
     // https://w3c.github.io/resource-timing/#dfn-setup-the-resource-timing-entry
 
     // 1. Assert that cacheMode is the empty string, "local", or "validated".
 
     // 2. Set entry's initiator type to initiatorType.
-    entry->m_initiator_type = Fetch::Infrastructure::initiator_type_to_string(initiator_type);
+    m_initiator_type = initiator_type;
 
     // 3. Set entry's requested URL to requestedURL.
-    entry->m_requested_url = requested_url;
+    m_requested_url = requested_url;
 
     // 4. Set entry's timing info to timingInfo.
-    entry->m_timing_info = timing_info;
+    m_timing_info = timing_info;
 
     // 5. Set entry's response body info to bodyInfo.
-    entry->m_response_body_info = move(body_info);
+    m_response_body_info = move(body_info);
 
     // 6. Set entry's cache mode to cacheMode.
-    entry->m_cache_mode = cache_mode;
+    m_cache_mode = cache_mode;
 
     // 7. Set entry's response status to responseStatus.
-    entry->m_response_status = response_status;
+    m_response_status = response_status;
 
     // 8. If deliveryType is the empty string and cacheMode is not, then set deliveryType to "cache".
     if (delivery_type.is_empty() && cache_mode.has_value())
         delivery_type = "cache"_fly_string;
 
     // 9. Set entry's delivery type to deliveryType.
-    entry->m_delivery_type = delivery_type;
-
-    // 3. Queue entry.
-    window_or_worker->queue_performance_entry(entry);
-
-    // FIXME: 4. Add entry to global's performance entry buffer.
-
+    m_delivery_type = delivery_type;
 }
 
 // https://w3c.github.io/resource-timing/#dom-performanceresourcetiming-nexthopprotocol

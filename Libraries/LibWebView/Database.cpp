@@ -47,6 +47,8 @@ ErrorOr<NonnullRefPtr<Database>> Database::create()
 
     auto database_file = ByteString::formatted("{}/Ladybird.db", database_path);
 
+    dbgln("db file at {}", database_file);
+
     sqlite3* m_database { nullptr };
     SQL_TRY(sqlite3_open(database_file.characters(), &m_database));
 

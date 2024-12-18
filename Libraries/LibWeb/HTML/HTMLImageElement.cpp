@@ -707,6 +707,8 @@ after_step_7:
         if (uses_srcset_or_picture())
             request->set_initiator(Fetch::Infrastructure::Request::Initiator::ImageSet);
 
+        request->set_initiator_type(Fetch::Infrastructure::Request::InitiatorType::IMG);
+
         // 21. Set request's referrer policy to the current state of the element's referrerpolicy attribute.
         request->set_referrer_policy(ReferrerPolicy::from_string(get_attribute_value(HTML::AttributeNames::referrerpolicy)).value_or(ReferrerPolicy::ReferrerPolicy::EmptyString));
 
@@ -922,6 +924,7 @@ void HTMLImageElement::react_to_changes_in_the_environment()
         // 2. Set request's client to client, initiator to "imageset", and set request's synchronous flag.
         request->set_client(&client);
         request->set_initiator(Fetch::Infrastructure::Request::Initiator::ImageSet);
+        request->set_initiator_type(Fetch::Infrastructure::Request::InitiatorType::IMG);
 
         // 3. Set request's referrer policy to the current state of the element's referrerpolicy attribute.
         request->set_referrer_policy(ReferrerPolicy::from_string(get_attribute_value(HTML::AttributeNames::referrerpolicy)).value_or(ReferrerPolicy::ReferrerPolicy::EmptyString));

@@ -397,8 +397,8 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString const& metho
             set_option(CURLOPT_URL, url.to_string().to_byte_string().characters());
             set_option(CURLOPT_PORT, url.port_or_default());
             set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
-            set_option(CURLOPT_SSL_VERIFYHOST, 0);
-            set_option(CURLOPT_SSL_VERIFYPEER, 0);
+            // set_option(CURLOPT_SSL_VERIFYHOST, 0);
+            // set_option(CURLOPT_SSL_VERIFYPEER, 0);
 
             bool did_set_body = false;
 
