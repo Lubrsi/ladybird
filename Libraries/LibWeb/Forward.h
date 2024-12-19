@@ -801,6 +801,7 @@ class PerformanceMeasure;
 }
 
 namespace Web::WebAssembly {
+class Global;
 class Instance;
 class Memory;
 class Module;

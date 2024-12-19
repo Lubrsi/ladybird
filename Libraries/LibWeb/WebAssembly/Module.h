@@ -23,6 +23,7 @@ class Module : public Bindings::PlatformObject {
 
 public:
     static WebIDL::ExceptionOr<GC::Ref<Module>> construct_impl(JS::Realm&, GC::Root<WebIDL::BufferSource>& bytes);
+    static Vector<GC::Root<JS::ArrayBuffer>> custom_sections(JS::VM&, GC::Ref<Module const> module, String const& section_name);
 
     NonnullRefPtr<Detail::CompiledWebAssemblyModule> compiled_module() const { return m_compiled_module; }
 

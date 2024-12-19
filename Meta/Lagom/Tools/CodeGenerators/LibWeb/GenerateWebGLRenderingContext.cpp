@@ -239,7 +239,14 @@ static void generate_get_parameter(SourceGenerator& generator, int webgl_version
         auto array_buffer = JS::ArrayBuffer::create(m_realm, move(byte_buffer));
         return JS::@type_name@::create(m_realm, @element_count@, array_buffer);
 )~~~");
-        } else if (type_name == "WebGLProgram"sv || type_name == "WebGLBuffer"sv || type_name == "WebGLTexture"sv || type_name == "WebGLFramebuffer"sv || type_name == "WebGLRenderbuffer"sv) {
+        } else if (type_name == "WebGLBuffer"sv) {
+            impl_generator.set("stored_name", name_and_type.name.to_lowercase_string());
+            impl_generator.append(R"~~~(
+        if (!m_@stored_name@)
+            return JS::js_null();
+        return JS::Value(m_@stored_name@);
+)~~~");
+        } else if (type_name == "WebGLProgram"sv || type_name == "WebGLTexture"sv || type_name == "WebGLFramebuffer"sv || type_name == "WebGLRenderbuffer"sv) {
             impl_generator.append(R"~~~(
         GLint result;
         glGetIntegerv(GL_@parameter_name@, &result);
@@ -368,7 +375,7 @@ static void generate_get_active_uniform_block_parameter(SourceGenerator& generat
         return JS::Value(result == GL_TRUE);
     }
     default:
-        dbgln("Unknown WebGL active unform block parameter name: {:x}", pname);
+        dbgln("Unknown WebGL active uniform block parameter name: {:x}", pname);
         set_error(GL_INVALID_ENUM);
         return JS::js_null();
     }
@@ -552,7 +559,14 @@ public:
         function_impl_generator.set("class_name", class_name);
 
         ScopeGuard function_guard { [&] {
-            function_impl_generator.append("}\n"sv);
+            function_impl_generator.set("overload_index", String::number(function.overload_index));
+            function_impl_generator.append(R"~~~(
+    while (auto error = glGetError()) {
+        dbgln("error occurred in @function_name@@overload_index@: {:x}", error);
+        m_realm->vm().dump_backtrace();
+    }
+}
+)~~~"sv);
             implementation_file_generator.append(function_impl_generator.as_string_view().bytes());
         } };
 
@@ -974,7 +988,7 @@ public:
 
             if (webgl_version == 2) {
                 function_impl_generator.append(R"~~~(
-    if (src_offset + src_length > count) {
+    if (src_offset + src_length > (count * matrix_size)) {
         set_error(GL_INVALID_VALUE);
         return;
     }
@@ -1062,6 +1076,13 @@ public:
     auto& float32_array = verify_cast<JS::Float32Array>(typed_array_base);
     float const* data = float32_array.data().data();
     glVertexAttrib@number_of_vector_elements@fv(index, data);
+)~~~");
+            continue;
+        }
+
+        if (function.name == "vertexAttribIPointer"sv) {
+            function_impl_generator.append(R"~~~(
+    glVertexAttribIPointer(index, size, type, stride, reinterpret_cast<void*>(offset));
 )~~~");
             continue;
         }
@@ -1206,6 +1227,27 @@ public:
             continue;
         }
 
+        if (function.name == "bindBuffer"sv) {
+            // FIXME: Implement Buffer Object Binding restrictions.
+            generate_webgl_object_handle_unwrap(function_impl_generator, "buffer"sv, ""sv);
+            function_impl_generator.append(R"~~~(
+    switch (target) {
+    case GL_ELEMENT_ARRAY_BUFFER:
+        m_element_array_buffer_binding = buffer;
+        break;
+    case GL_ARRAY_BUFFER:
+        m_array_buffer_binding = buffer;
+        break;
+    default:
+        dbgln("Unknown WebGL buffer object binding target for storing current binding: 0x{:04x}", target);
+        break;
+    }
+
+    glBindBuffer(target, buffer_handle);
+)~~~");
+            continue;
+        }
+
         Vector<ByteString> gl_call_arguments;
         for (size_t i = 0; i < function.parameters.size(); ++i) {
             auto const& parameter = function.parameters[i];
@@ -1263,8 +1305,8 @@ public:
     size_t byte_size = 0;
     if (@buffer_source_name@->is_typed_array_base()) {
         auto& typed_array_base = static_cast<JS::TypedArrayBase&>(*@buffer_source_name@->raw_object());
-        ptr = typed_array_base.viewed_array_buffer()->buffer().data();
-        byte_size = typed_array_base.viewed_array_buffer()->byte_length();
+        ptr = typed_array_base.viewed_array_buffer()->buffer().data() + typed_array_base.byte_offset();
+        byte_size = @buffer_source_name@->byte_length();
     } else if (@buffer_source_name@->is_data_view()) {
         auto& data_view = static_cast<JS::DataView&>(*@buffer_source_name@->raw_object());
         ptr = data_view.viewed_array_buffer()->buffer().data();
@@ -1309,8 +1351,13 @@ public:
     }
 
     header_file_generator.append(R"~~~(
+protected:
+    virtual void visit_edges(JS::Cell::Visitor&) override;
+
 private:
     GC::Ref<JS::Realm> m_realm;
+    GC::Ptr<WebGLBuffer> m_array_buffer_binding;
+    GC::Ptr<WebGLBuffer> m_element_array_buffer_binding;
     NonnullOwnPtr<OpenGLContext> m_context;
 };
 
@@ -1318,6 +1365,13 @@ private:
 )~~~");
 
     implementation_file_generator.append(R"~~~(
+void @class_name@::visit_edges(JS::Cell::Visitor& visitor)
+{
+    visitor.visit(m_realm);
+    visitor.visit(m_array_buffer_binding);
+    visitor.visit(m_element_array_buffer_binding);
+}
+
 }
 )~~~");
 

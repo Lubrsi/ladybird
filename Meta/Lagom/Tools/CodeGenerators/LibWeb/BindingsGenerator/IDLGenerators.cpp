@@ -290,7 +290,7 @@ CppType idl_type_name_to_cpp_type(Type const& type, Interface const& interface)
 
 static ByteString make_input_acceptable_cpp(ByteString const& input)
 {
-    if (input.is_one_of("class", "template", "for", "default", "char", "namespace", "delete", "inline", "register", "switch")) {
+    if (input.is_one_of("class", "template", "for", "default", "char", "namespace", "delete", "inline", "register", "switch", "mutable")) {
         StringBuilder builder;
         builder.append(input);
         builder.append('_');
@@ -1847,7 +1847,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
         }
     } else if (type.is_integer()) {
         generate_from_integral(scoped_generator, type);
-    } else if (type.name() == "Location" || type.name() == "Uint8Array" || type.name() == "Uint8ClampedArray" || type.name() == "any") {
+    } else if (type.name() == "Location" || type.name() == "ArrayBuffer" || type.name() == "Uint8Array" || type.name() == "Uint8ClampedArray" || type.name() == "any") {
         scoped_generator.append(R"~~~(
     @result_expression@ @value@;
 )~~~");
@@ -4659,6 +4659,7 @@ void generate_constructor_implementation(IDL::Interface const& interface, String
     generator.append(R"~~~(
 #include <LibIDL/Types.h>
 #include <LibGC/Heap.h>
+#include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/DataView.h>
 #include <LibJS/Runtime/GlobalObject.h>

@@ -21,12 +21,22 @@
 #include <LibWeb/WebGL/WebGLShader.h>
 #include <LibWeb/WebIDL/Buffers.h>
 
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
+#include <GLES3/gl32.h>
 
 namespace Web::WebGL {
 
 GC_DEFINE_ALLOCATOR(WebGL2RenderingContext);
+
+static void GL_APIENTRY MessageCallback( GLenum,
+                 GLenum type,
+                 GLuint,
+                 GLenum severity,
+                 GLsizei,
+                 const GLchar* message,
+                 const void* )
+{
+    dbgln("GL Callback type={:04x} severity={:04x} message={}", type, severity, message);
+}
 
 JS::ThrowCompletionOr<GC::Ptr<WebGL2RenderingContext>> WebGL2RenderingContext::create(JS::Realm& realm, HTML::HTMLCanvasElement& canvas_element, JS::Value options)
 {
@@ -45,7 +55,10 @@ JS::ThrowCompletionOr<GC::Ptr<WebGL2RenderingContext>> WebGL2RenderingContext::c
     }
 
     context->set_size(canvas_element.bitmap_size_for_canvas(1, 1));
-
+    context->make_current();
+    glEnable(GL_DEBUG_OUTPUT);
+    glDebugMessageCallback(MessageCallback, 0 );
+    glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
     return realm.create<WebGL2RenderingContext>(realm, canvas_element, context.release_nonnull(), context_attributes, context_attributes);
 }
 
@@ -128,7 +141,10 @@ Optional<WebGLContextAttributes> WebGL2RenderingContext::get_context_attributes(
 
 void WebGL2RenderingContext::set_size(Gfx::IntSize const& size)
 {
-    context().set_size(size);
+    Gfx::IntSize final_size;
+    final_size.set_width(max(size.width(), 1));
+    final_size.set_height(max(size.height(), 1));
+    context().set_size(final_size);
 }
 
 void WebGL2RenderingContext::reset_to_default_state()

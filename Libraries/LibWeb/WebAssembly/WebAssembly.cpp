@@ -5,6 +5,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "Global.h"
+
 #include <AK/MemoryStream.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
@@ -246,11 +248,14 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
                         }
                         auto cast_value = TRY(to_webassembly_value(vm, import_, type.type()));
                         address = cache.abstract_machine().store().allocate({ type.type(), false }, cast_value);
+                    } else if (import_.is_object() && is<WebAssembly::Global>(import_.as_object())) {
+                        // https://webassembly.github.io/spec/js-api/#read-the-imports step 5.2
+                        // if v implements Global
+                        // 1. Let globaladdr be v.[[Global]].
+                        address = static_cast<WebAssembly::Global const&>(import_.as_object()).address();
                     } else {
-                        // FIXME: https://webassembly.github.io/spec/js-api/#read-the-imports step 5.2
-                        //        if v implements Global
-                        //            let globaladdr be v.[[Global]]
-
+                        // 3. Otherwise,
+                        //    1. Throw a LinkError exception.
                         // FIXME: Throw a LinkError instead
                         return vm.throw_completion<JS::TypeError>("LinkError: Invalid value for global type"sv);
                     }
@@ -335,7 +340,7 @@ JS::NativeFunction* create_native_function(JS::VM& vm, Wasm::FunctionAddress add
     auto function = JS::NativeFunction::create(
         realm,
         name,
-        [address, type = type.release_value(), instance](JS::VM& vm) -> JS::ThrowCompletionOr<JS::Value> {
+        [address, type = type.release_value(), instance, name](JS::VM& vm) -> JS::ThrowCompletionOr<JS::Value> {
             (void)instance;
             auto& realm = *vm.current_realm();
             Vector<Wasm::Value> values;
@@ -351,6 +356,9 @@ JS::NativeFunction* create_native_function(JS::VM& vm, Wasm::FunctionAddress add
             // FIXME: Use the convoluted mapping of errors defined in the spec.
             if (result.is_trap())
                 return vm.throw_completion<JS::TypeError>(TRY_OR_THROW_OOM(vm, String::formatted("Wasm execution trapped (WIP): {}", result.trap().reason)));
+
+            if (result.is_completion())
+                return result.completion();
 
             if (result.values().is_empty())
                 return JS::js_undefined();
@@ -451,7 +459,7 @@ Wasm::Value default_webassembly_value(JS::VM& vm, Wasm::ValueType type)
 }
 
 // https://webassembly.github.io/spec/js-api/#tojsvalue
-JS::Value to_js_value(JS::VM& vm, Wasm::Value& wasm_value, Wasm::ValueType type)
+JS::Value to_js_value(JS::VM& vm, Wasm::Value const& wasm_value, Wasm::ValueType type)
 {
     auto& realm = *vm.current_realm();
     switch (type.kind()) {

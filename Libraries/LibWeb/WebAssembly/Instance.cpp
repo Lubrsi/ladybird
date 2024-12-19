@@ -11,6 +11,7 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/InstancePrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/WebAssembly/Global.h>
 #include <LibWeb/WebAssembly/Instance.h>
 #include <LibWeb/WebAssembly/Memory.h>
 #include <LibWeb/WebAssembly/Module.h>
@@ -74,8 +75,14 @@ void Instance::initialize(JS::Realm& realm)
 
                 m_exports->define_direct_property(export_.name(), *object, JS::default_attributes);
             },
-            [&](auto const&) {
-                // FIXME: Implement other exports!
+            [&](Wasm::GlobalAddress const& address) {
+                Optional<GC::Ptr<Global>> object = m_global_instances.get(address);
+                if (!object.has_value()) {
+                    object = realm.create<Global>(realm, address);
+                    m_global_instances.set(address, *object);
+                }
+
+                m_exports->define_direct_property(export_.name(), *object, JS::default_attributes);
             });
     }
 

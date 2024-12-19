@@ -69,7 +69,7 @@ JS::ThrowCompletionOr<NonnullRefPtr<CompiledWebAssemblyModule>> compile_a_webass
 JS::NativeFunction* create_native_function(JS::VM&, Wasm::FunctionAddress address, ByteString const& name, Instance* instance = nullptr);
 JS::ThrowCompletionOr<Wasm::Value> to_webassembly_value(JS::VM&, JS::Value value, Wasm::ValueType const& type);
 Wasm::Value default_webassembly_value(JS::VM&, Wasm::ValueType type);
-JS::Value to_js_value(JS::VM&, Wasm::Value& wasm_value, Wasm::ValueType type);
+JS::Value to_js_value(JS::VM&, Wasm::Value const& wasm_value, Wasm::ValueType type);
 
 extern HashMap<GC::Ptr<JS::Object>, WebAssemblyCache> s_caches;
 
