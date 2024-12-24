@@ -1851,7 +1851,7 @@ static void generate_wrap_statement(SourceGenerator& generator, ByteString const
         }
     } else if (type.is_integer()) {
         generate_from_integral(scoped_generator, type);
-    } else if (type.name() == "Location" || type.name() == "Uint8Array" || type.name() == "Uint8ClampedArray" || type.name() == "any") {
+    } else if (type.name() == "Location" || type.name() == "ArrayBuffer" || type.name() == "Uint8Array" || type.name() == "Uint8ClampedArray" || type.name() == "any") {
         scoped_generator.append(R"~~~(
     @result_expression@ @value@;
 )~~~");
