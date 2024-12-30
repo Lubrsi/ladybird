@@ -8,6 +8,9 @@
  */
 
 #include "Interpolation.h"
+
+#include "CSSPropertyRule.h"
+
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/StyleValues/AngleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CSSColorValue.h>
@@ -80,11 +83,14 @@ ValueComparingRefPtr<CSSStyleValue const> interpolate_property(DOM::Element& ele
         if (property_id == PropertyID::BoxShadow)
             return interpolate_box_shadow(element, from, to, delta);
 
+        if (property_id == PropertyID::StrokeDasharray)
+            return interpolate_value(element, from, to, delta, RepeatableList::Yes);
+
         // FIXME: Handle all custom animatable properties
         [[fallthrough]];
     }
-    // FIXME: Handle repeatable-list animatable properties
     case AnimationType::RepeatableList:
+        return interpolate_value(element, from, to, delta, RepeatableList::Yes);
     case AnimationType::Discrete:
     default:
         return delta >= 0.5f ? to : from;
@@ -483,8 +489,9 @@ NonnullRefPtr<CSSStyleValue const> interpolate_box_shadow(DOM::Element& element,
     return StyleValueList::create(move(result_shadows), StyleValueList::Separator::Comma);
 }
 
-NonnullRefPtr<CSSStyleValue const> interpolate_value(DOM::Element& element, CSSStyleValue const& from, CSSStyleValue const& to, float delta)
+NonnullRefPtr<CSSStyleValue const> interpolate_value(DOM::Element& element, CSSStyleValue const& from, CSSStyleValue const& to, float delta, RepeatableList repeatable_list)
 {
+    // dbgln("interpolate on {} from='{}' (type={}) to='{}' (type={}) (repeat? {})", element.debug_description(), from, to_underlying(from.type()), to, to_underlying(to.type()), repeatable_list == RepeatableList::Yes);
     if (from.type() != to.type()) {
         // Handle mixed percentage and dimension types
         // https://www.w3.org/TR/css-values-4/#mixed-percentages
@@ -625,16 +632,28 @@ NonnullRefPtr<CSSStyleValue const> interpolate_value(DOM::Element& element, CSSS
     case CSSStyleValue::Type::ValueList: {
         auto const& from_list = from.as_value_list();
         auto const& to_list = to.as_value_list();
-        if (from_list.size() != to_list.size())
-            return delta >= 0.5f ? to : from;
+        auto from_list_values = from_list.values();
+        auto to_list_values = to_list.values();
+
+        if (from_list.size() != to_list.size()) {
+            if (repeatable_list == RepeatableList::No)
+                return delta >= 0.5f ? to : from;
+
+            while (from_list_values.size() != to_list_values.size()) {
+                if (from_list_values.size() < to_list_values.size())
+                    from_list_values.extend(from_list_values);
+                else if (to_list_values.size() < from_list_values.size())
+                    to_list_values.extend(to_list_values);
+            }
+        }
 
         // FIXME: If the number of components or the types of corresponding components do not match,
         // or if any component value uses discrete animation and the two corresponding values do not match,
         // then the property values combine as discrete.
         StyleValueVector interpolated_values;
-        interpolated_values.ensure_capacity(from_list.size());
-        for (size_t i = 0; i < from_list.size(); ++i)
-            interpolated_values.append(interpolate_value(element, from_list.values()[i], to_list.values()[i], delta));
+        interpolated_values.ensure_capacity(from_list_values.size());
+        for (size_t i = 0; i < from_list_values.size(); ++i)
+            interpolated_values.append(interpolate_value(element, from_list_values[i], to_list_values[i], delta));
 
         return StyleValueList::create(move(interpolated_values), from_list.separator());
     }

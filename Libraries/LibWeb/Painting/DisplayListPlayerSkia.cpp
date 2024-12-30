@@ -614,13 +614,45 @@ void DisplayListPlayerSkia::stroke_path_using_color(StrokePathUsingColor const& 
     if (!command.thickness)
         return;
 
-    // FIXME: Use .cap_style, .join_style, .miter_limit, .dash_array, .dash_offset.
+    VERIFY(command.dash_array.size() % 2 == 0);
+
     auto& canvas = surface().canvas();
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setStyle(SkPaint::kStroke_Style);
     paint.setStrokeWidth(command.thickness);
     paint.setColor(to_skia_color(command.color));
+    paint.setPathEffect(SkDashPathEffect::Make(command.dash_array.data(), command.dash_array.size(), command.dash_offset));
+    paint.setStrokeMiter(command.miter_limit);
+
+    switch (command.cap_style) {
+    case Gfx::Path::CapStyle::Butt:
+        paint.setStrokeCap(SkPaint::Cap::kButt_Cap);
+        break;
+    case Gfx::Path::CapStyle::Round:
+        paint.setStrokeCap(SkPaint::Cap::kRound_Cap);
+        break;
+    case Gfx::Path::CapStyle::Square:
+        paint.setStrokeCap(SkPaint::Cap::kSquare_Cap);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+
+    switch (command.join_style) {
+    case Gfx::Path::JoinStyle::Miter:
+        paint.setStrokeJoin(SkPaint::Join::kMiter_Join);
+        break;
+    case Gfx::Path::JoinStyle::Round:
+        paint.setStrokeJoin(SkPaint::Join::kRound_Join);
+        break;
+    case Gfx::Path::JoinStyle::Bevel:
+        paint.setStrokeJoin(SkPaint::Join::kBevel_Join);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+
     auto path = to_skia_path(command.path);
     path.offset(command.aa_translation.x(), command.aa_translation.y());
     canvas.drawPath(path, paint);
@@ -632,7 +664,9 @@ void DisplayListPlayerSkia::stroke_path_using_paint_style(StrokePathUsingPaintSt
     if (!command.thickness)
         return;
 
-    // FIXME: Use .cap_style, .join_style, .miter_limit, .dash_array, .dash_offset.
+    // FIXME: Use .join_style, .miter_limit.
+    VERIFY(command.dash_array.size() % 2 == 0);
+
     auto path = to_skia_path(command.path);
     path.offset(command.aa_translation.x(), command.aa_translation.y());
     auto paint = paint_style_to_skia_paint(*command.paint_style, command.bounding_rect().to_type<float>());
@@ -640,6 +674,37 @@ void DisplayListPlayerSkia::stroke_path_using_paint_style(StrokePathUsingPaintSt
     paint.setAlphaf(command.opacity);
     paint.setStyle(SkPaint::Style::kStroke_Style);
     paint.setStrokeWidth(command.thickness);
+    paint.setStrokeMiter(command.miter_limit);
+
+    switch (command.cap_style) {
+    case Gfx::Path::CapStyle::Butt:
+        paint.setStrokeCap(SkPaint::Cap::kButt_Cap);
+        break;
+    case Gfx::Path::CapStyle::Round:
+        paint.setStrokeCap(SkPaint::Cap::kRound_Cap);
+        break;
+    case Gfx::Path::CapStyle::Square:
+        paint.setStrokeCap(SkPaint::Cap::kSquare_Cap);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+
+    switch (command.join_style) {
+    case Gfx::Path::JoinStyle::Miter:
+        paint.setStrokeJoin(SkPaint::Join::kMiter_Join);
+        break;
+    case Gfx::Path::JoinStyle::Round:
+        paint.setStrokeJoin(SkPaint::Join::kRound_Join);
+        break;
+    case Gfx::Path::JoinStyle::Bevel:
+        paint.setStrokeJoin(SkPaint::Join::kBevel_Join);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+
+    paint.setPathEffect(SkDashPathEffect::Make(command.dash_array.data(), command.dash_array.size(), command.dash_offset));
     surface().canvas().drawPath(path, paint);
 }
 

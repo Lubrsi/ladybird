@@ -563,16 +563,25 @@ public:
         function_impl_generator.set("class_name", class_name);
 
         ScopeGuard function_guard { [&] {
-            function_impl_generator.append("}\n"sv);
+            function_impl_generator.append(R"~~~(
+}
+)~~~"sv);
             implementation_file_generator.append(function_impl_generator.as_string_view().bytes());
         } };
 
         function_impl_generator.set("function_name", function_name);
         function_impl_generator.set("function_parameters", function_parameters.string_view());
         function_impl_generator.set("function_return_type", to_cpp_type(*function.return_type, interface));
+        function_impl_generator.set("overload_index", String::number(function.overload_index));
         function_impl_generator.append(R"~~~(
 @function_return_type@ @class_name@::@function_name@(@function_parameters@)
 {
+    ScopeGuard error_guard { [&] {
+        while (auto error = glGetError()) {
+            dbgln("error occurred in @function_name@@overload_index@: {:x}", error);
+            m_realm->vm().dump_backtrace();
+        }
+    }};
     m_context->make_current();
 )~~~");
 
@@ -692,7 +701,7 @@ public:
     if (pixels) {
         auto const& viewed_array_buffer = pixels->viewed_array_buffer();
         auto const& byte_buffer = viewed_array_buffer->buffer();
-        pixels_ptr = byte_buffer.data();
+        pixels_ptr = byte_buffer.data() + pixels->byte_offset();
     }
     glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels_ptr);
 )~~~");
@@ -711,7 +720,7 @@ public:
     if (src_data) {
         auto const& viewed_array_buffer = src_data->viewed_array_buffer();
         auto const& byte_buffer = viewed_array_buffer->buffer();
-        src_data_ptr = byte_buffer.data();
+        src_data_ptr = byte_buffer.data() + src_data->byte_offset();
     }
     glTexImage3D(target, level, internalformat, width, height, depth, border, format, type, src_data_ptr);
 )~~~");
@@ -808,7 +817,7 @@ public:
     if (pixels) {
         auto const& viewed_array_buffer = pixels->viewed_array_buffer();
         auto const& byte_buffer = viewed_array_buffer->buffer();
-        pixels_ptr = byte_buffer.data();
+        pixels_ptr = byte_buffer.data() + pixels->byte_offset();
     }
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels_ptr);
 )~~~");
@@ -872,7 +881,7 @@ public:
     if (src_data) {
         auto const& viewed_array_buffer = src_data->viewed_array_buffer();
         auto const& byte_buffer = viewed_array_buffer->buffer();
-        pixels_ptr = byte_buffer.data() + src_offset;
+        pixels_ptr = byte_buffer.data() + src_data->byte_offset() + src_offset;
     }
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels_ptr);
 )~~~");
@@ -948,6 +957,22 @@ public:
 
         if (function.name == "getActiveUniformBlockParameter"sv) {
             generate_get_active_uniform_block_parameter(function_impl_generator);
+            continue;
+        }
+
+        if (function.name == "getSyncParameter"sv) {
+            // FIXME: In order to ensure consistent behavior across platforms, sync objects may only transition to the
+            //        signaled state when the user agent's event loop is not executing a task. In other words:
+            //          - A sync object must not become signaled until control has returned to the user agent's main
+            //            loop.
+            //          - Repeatedly fetching a sync object's SYNC_STATUS parameter in a loop, without returning
+            //            control to the user agent, must always return the same value.
+            // FIXME: Remove the GLsync cast once sync_handle actually returns the proper GLsync type.
+            function_impl_generator.append(R"~~~(
+    GLint result = 0;
+    glGetSynciv((GLsync)(sync ? sync->sync_handle() : nullptr), pname, 1, nullptr, &result);
+    return JS::Value(result);
+)~~~");
             continue;
         }
 

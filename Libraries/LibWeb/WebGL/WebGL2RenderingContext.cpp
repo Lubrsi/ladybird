@@ -21,12 +21,24 @@
 #include <LibWeb/WebGL/WebGLShader.h>
 #include <LibWeb/WebIDL/Buffers.h>
 
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
+#define GL_GLEXT_PROTOTYPES 1
+#include <ANGLE/GLES3/gl32.h>
+#include <ANGLE/GLES2/gl2ext.h>
 
 namespace Web::WebGL {
 
 GC_DEFINE_ALLOCATOR(WebGL2RenderingContext);
+
+static void GL_APIENTRY MessageCallback(GLenum,
+    GLenum type,
+    GLuint,
+    GLenum severity,
+    GLsizei,
+    GLchar const* message,
+    void const*)
+{
+    dbgln("WebGL2 Callback type={:04x} severity={:04x} message={}", type, severity, message);
+}
 
 JS::ThrowCompletionOr<GC::Ptr<WebGL2RenderingContext>> WebGL2RenderingContext::create(JS::Realm& realm, HTML::HTMLCanvasElement& canvas_element, JS::Value options)
 {
@@ -45,7 +57,10 @@ JS::ThrowCompletionOr<GC::Ptr<WebGL2RenderingContext>> WebGL2RenderingContext::c
     }
 
     context->set_size(canvas_element.bitmap_size_for_canvas(1, 1));
-
+    context->make_current();
+    glEnable(GL_DEBUG_OUTPUT);
+    glDebugMessageCallback(MessageCallback, 0);
+    glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
     return realm.create<WebGL2RenderingContext>(realm, canvas_element, context.release_nonnull(), context_attributes, context_attributes);
 }
 
@@ -154,8 +169,12 @@ Optional<Vector<String>> WebGL2RenderingContext::get_supported_extensions()
     return context().get_supported_extensions();
 }
 
-JS::Object* WebGL2RenderingContext::get_extension(String const&)
+JS::Object* WebGL2RenderingContext::get_extension(String const& extension)
 {
+    context().make_current();
+    auto byte_string = extension.to_byte_string();
+    dbgln("webgl2 get extension: {}", byte_string.characters());
+    glRequestExtensionANGLE(byte_string.characters());
     return nullptr;
 }
 

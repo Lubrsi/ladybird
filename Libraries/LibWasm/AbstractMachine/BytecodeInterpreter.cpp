@@ -542,6 +542,10 @@ ALWAYS_INLINE void BytecodeInterpreter::interpret_instruction(Configuration& con
         TRAP_IF_NOT(static_cast<size_t>(index) < table_instance->elements().size());
         auto element = table_instance->elements()[index];
         TRAP_IF_NOT(element.ref().has<Reference::Func>());
+        if (trap_if_not(element.ref().has<Reference::Func>(), "element.ref().has<Reference::Func>()"sv)) {
+            configuration.dump_stack();
+            return;
+        }
         auto address = element.ref().get<Reference::Func>().address;
         dbgln_if(WASM_TRACE_DEBUG, "call_indirect({} -> {})", index, address.value());
         call_address(configuration, address);

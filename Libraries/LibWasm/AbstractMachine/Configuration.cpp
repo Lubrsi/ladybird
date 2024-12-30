@@ -73,6 +73,9 @@ void Configuration::dump_stack()
     for (auto const& value : value_stack()) {
         print_value("    {}", value);
     }
+    for (auto const& frame : m_frame_stack) {
+        print_value("    {}", frame.expression());
+    }
 }
 
 }
