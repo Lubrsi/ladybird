@@ -111,7 +111,7 @@ DOMHighResTimeStamp unsafe_shared_current_time()
 {
     // The unsafe shared current time must return the current value of the shared monotonic clock.
     // Note: This is in milliseconds (stored as a double).
-    return MonotonicTime::now().nanoseconds();
+    return MonotonicTime::now().nanoseconds() / 1.0e6;
 }
 
 }

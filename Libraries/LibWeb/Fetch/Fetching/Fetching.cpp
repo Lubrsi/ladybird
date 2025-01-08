@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#define WEB_FETCH_DEBUG 1
+// #define WEB_FETCH_DEBUG 1
 
 #include <AK/Base64.h>
 #include <AK/Debug.h>

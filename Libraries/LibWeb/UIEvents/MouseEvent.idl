@@ -16,6 +16,8 @@ interface MouseEvent : UIEvent {
     readonly attribute double y;
     readonly attribute double offsetX;
     readonly attribute double offsetY;
+    [ImplementedAs=offset_x] readonly attribute double layerX;
+    [ImplementedAs=offset_y] readonly attribute double layerY;
 
     readonly attribute boolean ctrlKey;
     readonly attribute boolean shiftKey;
