@@ -82,6 +82,27 @@ private:
     bool m_is_immutable { false };
 };
 
+class CreateDisposableResource final : public Instruction {
+public:
+    CreateDisposableResource(Operand resource, Environment::InitializeBindingHint hint)
+        : Instruction(Type::CreateDisposableResource)
+        , m_resource(resource)
+        , m_hint(hint)
+    {
+    }
+
+    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
+    ByteString to_byte_string_impl(Bytecode::Executable const&) const;
+    void visit_operands_impl(Function<void(Operand&)> visitor)
+    {
+        visitor(m_resource);
+    }
+
+private:
+    Operand m_resource;
+    Environment::InitializeBindingHint m_hint;
+};
+
 class Mov final : public Instruction {
 public:
     Mov(Operand dst, Operand src)
@@ -677,10 +698,11 @@ private:
 
 class InitializeLexicalBinding final : public Instruction {
 public:
-    explicit InitializeLexicalBinding(IdentifierTableIndex identifier, Operand src)
+    explicit InitializeLexicalBinding(IdentifierTableIndex identifier, Operand src, Environment::InitializeBindingHint hint)
         : Instruction(Type::InitializeLexicalBinding)
         , m_identifier(identifier)
         , m_src(src)
+        , m_hint(hint)
     {
     }
 
@@ -697,6 +719,7 @@ public:
 private:
     IdentifierTableIndex m_identifier;
     Operand m_src;
+    Environment::InitializeBindingHint m_hint;
     mutable EnvironmentCoordinate m_cache;
 };
 
@@ -2363,7 +2386,7 @@ public:
     {
     }
 
-    void execute_impl(Bytecode::Interpreter&) const;
+    ThrowCompletionOr<void> execute_impl(Bytecode::Interpreter&) const;
     ByteString to_byte_string_impl(Bytecode::Executable const&) const;
 };
 

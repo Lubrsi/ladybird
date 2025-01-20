@@ -43,6 +43,7 @@ bool g_dump_bytecode = false;
 static ByteString format_operand(StringView name, Operand operand, Bytecode::Executable const& executable)
 {
     StringBuilder builder;
+    dbgln("{} {} {} {} {}", name, to_underlying(operand.type()), executable.local_variable_names.size(), operand.index(), executable.local_index_base);
     if (!name.is_empty())
         builder.appendff("\033[32m{}\033[0m:", name);
     switch (operand.type()) {
@@ -377,6 +378,7 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
     for (;;) {
     start:
         for (;;) {
+            // dbgln("{}", (*reinterpret_cast<Instruction const*>(&bytecode[program_counter])).to_byte_string(executable));
             goto* bytecode_dispatch_table[static_cast<size_t>((*reinterpret_cast<Instruction const*>(&bytecode[program_counter])).type())];
 
         handle_GetArgument: {
@@ -584,6 +586,7 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
             HANDLE_INSTRUCTION(CreateVariable);
             HANDLE_INSTRUCTION(CreateRestParams);
             HANDLE_INSTRUCTION(CreateArguments);
+            HANDLE_INSTRUCTION(CreateDisposableResource);
             HANDLE_INSTRUCTION(Decrement);
             HANDLE_INSTRUCTION(DeleteById);
             HANDLE_INSTRUCTION(DeleteByIdWithThis);
@@ -624,7 +627,7 @@ FLATTEN_ON_CLANG void Interpreter::run_bytecode(size_t entry_point)
             HANDLE_INSTRUCTION(IteratorNext);
             HANDLE_INSTRUCTION(IteratorToArray);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(LeaveFinally);
-            HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(LeaveLexicalEnvironment);
+            HANDLE_INSTRUCTION(LeaveLexicalEnvironment);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(LeavePrivateEnvironment);
             HANDLE_INSTRUCTION_WITHOUT_EXCEPTION_CHECK(LeaveUnwindContext);
             HANDLE_INSTRUCTION(LeftShift);
@@ -2175,20 +2178,20 @@ ThrowCompletionOr<void> GetBinding::execute_impl(Bytecode::Interpreter& interpre
     auto& vm = interpreter.vm();
     auto& executable = interpreter.current_executable();
 
-    if (m_cache.is_valid()) {
-        auto const* environment = interpreter.running_execution_context().lexical_environment.ptr();
-        for (size_t i = 0; i < m_cache.hops; ++i)
-            environment = environment->outer_environment();
-        if (!environment->is_permanently_screwed_by_eval()) {
-            interpreter.set(dst(), TRY(static_cast<DeclarativeEnvironment const&>(*environment).get_binding_value_direct(vm, m_cache.index)));
-            return {};
-        }
-        m_cache = {};
-    }
+    // if (m_cache.is_valid()) {
+    //     auto const* environment = interpreter.running_execution_context().lexical_environment.ptr();
+    //     for (size_t i = 0; i < m_cache.hops; ++i)
+    //         environment = environment->outer_environment();
+    //     if (!environment->is_permanently_screwed_by_eval()) {
+    //         interpreter.set(dst(), TRY(static_cast<DeclarativeEnvironment const&>(*environment).get_binding_value_direct(vm, m_cache.index)));
+    //         return {};
+    //     }
+    //     m_cache = {};
+    // }
 
     auto reference = TRY(vm.resolve_binding(executable.get_identifier(m_identifier)));
-    if (reference.environment_coordinate().has_value())
-        m_cache = reference.environment_coordinate().value();
+    // if (reference.environment_coordinate().has_value())
+    //     m_cache = reference.environment_coordinate().value();
     interpreter.set(dst(), TRY(reference.get_value(vm)));
     return {};
 }
@@ -2316,8 +2319,18 @@ ThrowCompletionOr<void> CreateArguments::execute_impl(Bytecode::Interpreter& int
     return {};
 }
 
+ThrowCompletionOr<void> CreateDisposableResource::execute_impl(Bytecode::Interpreter& interpreter) const
+{
+    auto& vm = interpreter.vm();
+    dbgln("type: {}", interpreter.running_execution_context().lexical_environment->class_name());
+    auto& environment = verify_cast<DeclarativeEnvironment>(*interpreter.running_execution_context().lexical_environment);
+    auto resource = interpreter.get(m_resource);
+
+    return add_disposable_resource(vm, environment.dispose_capability(), resource, m_hint);
+}
+
 template<EnvironmentMode environment_mode, BindingInitializationMode initialization_mode>
-static ThrowCompletionOr<void> initialize_or_set_binding(Interpreter& interpreter, IdentifierTableIndex identifier_index, Value value, EnvironmentCoordinate& cache)
+static ThrowCompletionOr<void> initialize_or_set_binding(Interpreter& interpreter, IdentifierTableIndex identifier_index, Value value, Environment::InitializeBindingHint hint, EnvironmentCoordinate& cache)
 {
     auto& vm = interpreter.vm();
 
@@ -2330,7 +2343,7 @@ static ThrowCompletionOr<void> initialize_or_set_binding(Interpreter& interprete
             environment = environment->outer_environment();
         if (!environment->is_permanently_screwed_by_eval()) {
             if constexpr (initialization_mode == BindingInitializationMode::Initialize) {
-                TRY(static_cast<DeclarativeEnvironment&>(*environment).initialize_binding_direct(vm, cache.index, value, Environment::InitializeBindingHint::Normal));
+                TRY(static_cast<DeclarativeEnvironment&>(*environment).initialize_binding_direct(vm, cache.index, value, hint));
             } else {
                 TRY(static_cast<DeclarativeEnvironment&>(*environment).set_mutable_binding_direct(vm, cache.index, value, vm.in_strict_mode()));
             }
@@ -2343,7 +2356,7 @@ static ThrowCompletionOr<void> initialize_or_set_binding(Interpreter& interprete
     if (reference.environment_coordinate().has_value())
         cache = reference.environment_coordinate().value();
     if constexpr (initialization_mode == BindingInitializationMode::Initialize) {
-        TRY(reference.initialize_referenced_binding(vm, value));
+        TRY(reference.initialize_referenced_binding(vm, value, hint));
     } else if (initialization_mode == BindingInitializationMode::Set) {
         TRY(reference.put_value(vm, value));
     }
@@ -2352,22 +2365,22 @@ static ThrowCompletionOr<void> initialize_or_set_binding(Interpreter& interprete
 
 ThrowCompletionOr<void> InitializeLexicalBinding::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    return initialize_or_set_binding<EnvironmentMode::Lexical, BindingInitializationMode::Initialize>(interpreter, m_identifier, interpreter.get(m_src), m_cache);
+    return initialize_or_set_binding<EnvironmentMode::Lexical, BindingInitializationMode::Initialize>(interpreter, m_identifier, interpreter.get(m_src), m_hint, m_cache);
 }
 
 ThrowCompletionOr<void> InitializeVariableBinding::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    return initialize_or_set_binding<EnvironmentMode::Var, BindingInitializationMode::Initialize>(interpreter, m_identifier, interpreter.get(m_src), m_cache);
+    return initialize_or_set_binding<EnvironmentMode::Var, BindingInitializationMode::Initialize>(interpreter, m_identifier, interpreter.get(m_src), Environment::InitializeBindingHint::Normal, m_cache);
 }
 
 ThrowCompletionOr<void> SetLexicalBinding::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    return initialize_or_set_binding<EnvironmentMode::Lexical, BindingInitializationMode::Set>(interpreter, m_identifier, interpreter.get(m_src), m_cache);
+    return initialize_or_set_binding<EnvironmentMode::Lexical, BindingInitializationMode::Set>(interpreter, m_identifier, interpreter.get(m_src), Environment::InitializeBindingHint::Normal, m_cache);
 }
 
 ThrowCompletionOr<void> SetVariableBinding::execute_impl(Bytecode::Interpreter& interpreter) const
 {
-    return initialize_or_set_binding<EnvironmentMode::Var, BindingInitializationMode::Set>(interpreter, m_identifier, interpreter.get(m_src), m_cache);
+    return initialize_or_set_binding<EnvironmentMode::Var, BindingInitializationMode::Set>(interpreter, m_identifier, interpreter.get(m_src), Environment::InitializeBindingHint::Normal, m_cache);
 }
 
 ThrowCompletionOr<void> GetById::execute_impl(Bytecode::Interpreter& interpreter) const
@@ -2765,10 +2778,21 @@ ThrowCompletionOr<void> ThrowIfTDZ::execute_impl(Bytecode::Interpreter& interpre
     return {};
 }
 
-void LeaveLexicalEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
+ThrowCompletionOr<void> LeaveLexicalEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
 {
+    auto& vm = interpreter.vm();
     auto& running_execution_context = interpreter.running_execution_context();
+
+    if (is<DeclarativeEnvironment>(*running_execution_context.lexical_environment)) {
+        auto& declarative_environment = static_cast<DeclarativeEnvironment&>(*running_execution_context.lexical_environment);
+        auto completion = dispose_resources(vm, declarative_environment.dispose_capability(), normal_completion(interpreter.accumulator()));
+        if (completion.is_abrupt())
+            return completion.release_error();
+    }
+
     running_execution_context.lexical_environment = running_execution_context.saved_lexical_environments.take_last();
+
+    return {};
 }
 
 void LeavePrivateEnvironment::execute_impl(Bytecode::Interpreter& interpreter) const
@@ -3133,6 +3157,24 @@ ByteString CreateArguments::to_byte_string_impl(Bytecode::Executable const& exec
     return builder.to_byte_string();
 }
 
+static StringView initialize_binding_hint_to_string(Environment::InitializeBindingHint hint)
+{
+    switch (hint) {
+    case Environment::InitializeBindingHint::Normal:
+        return "normal"sv;
+    case Environment::InitializeBindingHint::SyncDispose:
+        return "sync-dispose"sv;
+    case Environment::InitializeBindingHint::AsyncDispose:
+        return "async-dispose"sv;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+ByteString CreateDisposableResource::to_byte_string_impl(Bytecode::Executable const& executable) const
+{
+    return ByteString::formatted("CreateDisposableResource {}, hint:{}", format_operand("resource"sv, m_resource, executable), initialize_binding_hint_to_string(m_hint));
+}
+
 ByteString EnterObjectEnvironment::to_byte_string_impl(Executable const& executable) const
 {
     return ByteString::formatted("EnterObjectEnvironment {}",
@@ -3141,9 +3183,11 @@ ByteString EnterObjectEnvironment::to_byte_string_impl(Executable const& executa
 
 ByteString InitializeLexicalBinding::to_byte_string_impl(Bytecode::Executable const& executable) const
 {
-    return ByteString::formatted("InitializeLexicalBinding {}, {}",
+    auto hint = initialize_binding_hint_to_string(m_hint);
+    return ByteString::formatted("InitializeLexicalBinding {}, {}, hint:{}",
         executable.identifier_table->get(m_identifier),
-        format_operand("src"sv, src(), executable));
+        format_operand("src"sv, src(), executable),
+        hint);
 }
 
 ByteString InitializeVariableBinding::to_byte_string_impl(Bytecode::Executable const& executable) const

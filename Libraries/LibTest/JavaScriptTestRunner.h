@@ -251,6 +251,7 @@ inline ErrorOr<JsonValue> get_test_results(JS::Realm& realm)
 
 inline void TestRunner::do_run_single_test(ByteString const& test_path, size_t, size_t)
 {
+    dbgln("running {}" ,test_path);
     auto file_result = run_file_test(test_path);
     if (!m_print_json)
         print_file_result(file_result);

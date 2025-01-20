@@ -3927,6 +3927,7 @@ NonnullRefPtr<Statement const> Parser::parse_for_statement()
 
         if (match_for_using_declaration()) {
             auto declaration = parse_using_declaration(IsForLoopVariableDeclaration::Yes);
+            m_state.current_scope_pusher->add_declaration(declaration);
 
             if (match_of(m_state.current_token)) {
                 if (declaration->declarations().size() != 1)

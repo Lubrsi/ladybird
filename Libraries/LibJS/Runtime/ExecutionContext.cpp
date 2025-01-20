@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "AbstractOperations.h"
+
 #include <LibGC/Heap.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Runtime/ExecutionContext.h>

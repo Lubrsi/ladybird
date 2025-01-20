@@ -34,6 +34,7 @@
     O(ContinuePendingUnwind)           \
     O(CopyObjectExcludingProperties)   \
     O(CreateArguments)                 \
+    O(CreateDisposableResource)        \
     O(CreateLexicalEnvironment)        \
     O(CreatePrivateEnvironment)        \
     O(CreateRestParams)                \

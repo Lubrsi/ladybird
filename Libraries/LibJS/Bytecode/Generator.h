@@ -145,7 +145,7 @@ public:
 
     CodeGenerationErrorOr<ReferenceOperands> emit_super_reference(MemberExpression const&);
 
-    void emit_set_variable(JS::Identifier const& identifier, ScopedOperand value, Bytecode::Op::BindingInitializationMode initialization_mode = Bytecode::Op::BindingInitializationMode::Set, Bytecode::Op::EnvironmentMode mode = Bytecode::Op::EnvironmentMode::Lexical);
+    void emit_set_variable(JS::Identifier const& identifier, ScopedOperand value, Bytecode::Op::BindingInitializationMode initialization_mode = Bytecode::Op::BindingInitializationMode::Set, Bytecode::Op::EnvironmentMode mode = Bytecode::Op::EnvironmentMode::Lexical, Environment::InitializeBindingHint initialization_hint = Environment::InitializeBindingHint::Normal);
 
     void push_home_object(ScopedOperand);
     void pop_home_object();

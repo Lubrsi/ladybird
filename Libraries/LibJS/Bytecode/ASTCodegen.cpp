@@ -1038,7 +1038,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ForStatement::generate_
 
         for (size_t i = 0; i < per_iteration_bindings.size(); ++i) {
             generator.emit<Bytecode::Op::CreateVariable>(per_iteration_bindings[i], Bytecode::Op::EnvironmentMode::Lexical, false);
-            generator.emit<Bytecode::Op::InitializeLexicalBinding>(per_iteration_bindings[i], registers[i]);
+            generator.emit<Bytecode::Op::InitializeLexicalBinding>(per_iteration_bindings[i], registers[i], Environment::InitializeBindingHint::Normal);
         }
     };
 
@@ -1264,7 +1264,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> FunctionExpression::gen
     generator.emit_new_function(new_function, *this, lhs_name);
 
     if (has_name) {
-        generator.emit<Bytecode::Op::InitializeLexicalBinding>(*name_identifier, new_function);
+        generator.emit<Bytecode::Op::InitializeLexicalBinding>(*name_identifier, new_function, Environment::InitializeBindingHint::Normal);
         generator.end_variable_scope();
     }
 
@@ -1573,30 +1573,36 @@ Bytecode::CodeGenerationErrorOr<void> BindingPattern::generate_bytecode(Bytecode
     return generate_array_binding_pattern_bytecode(generator, *this, initialization_mode, input_value, create_variables);
 }
 
-static Bytecode::CodeGenerationErrorOr<void> assign_value_to_variable_declarator(Bytecode::Generator& generator, VariableDeclarator const& declarator, VariableDeclaration const& declaration, ScopedOperand value)
+static Bytecode::CodeGenerationErrorOr<void> assign_value_to_variable_declarator(Bytecode::Generator& generator, VariableDeclarator const& declarator, Declaration const& declaration, ScopedOperand value)
 {
     auto initialization_mode = declaration.is_lexical_declaration() ? Bytecode::Op::BindingInitializationMode::Initialize : Bytecode::Op::BindingInitializationMode::Set;
+    auto initialization_hint = [&] {
+        if (is<UsingDeclaration>(declaration))
+            return Environment::InitializeBindingHint::SyncDispose;
+
+        return Environment::InitializeBindingHint::Normal;
+    }();
 
     return declarator.target().visit(
         [&](NonnullRefPtr<Identifier const> const& id) -> Bytecode::CodeGenerationErrorOr<void> {
-            generator.emit_set_variable(*id, value, initialization_mode);
+            generator.emit_set_variable(*id, value, initialization_mode, Bytecode::Op::EnvironmentMode::Lexical, initialization_hint);
             return {};
         },
         [&](NonnullRefPtr<BindingPattern const> const& pattern) -> Bytecode::CodeGenerationErrorOr<void> {
+            // (await) using declarations don't support binding patterns.
+            VERIFY(initialization_hint == Environment::InitializeBindingHint::Normal);
             return pattern->generate_bytecode(generator, initialization_mode, value, false);
         });
 }
 
-Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> VariableDeclaration::generate_bytecode(Bytecode::Generator& generator, [[maybe_unused]] Optional<ScopedOperand> preferred_dst) const
+static Bytecode::CodeGenerationErrorOr<void> declare_variables(Bytecode::Generator& generator, Vector<NonnullRefPtr<VariableDeclarator const>> const& declarations, Declaration const& declaration, DeclarationKind declaration_kind)
 {
-    Bytecode::Generator::SourceLocationScope scope(generator, *this);
-
-    for (auto& declarator : m_declarations) {
+    for (auto& declarator : declarations) {
         // NOTE: `var` declarations can have duplicates, but duplicate `let` or `const` bindings are a syntax error.
         //       Because of this, we can sink `let` and `const` directly into the preferred_dst if available.
         //       This is not safe for `var` since the preferred_dst may be used in the initializer.
         Optional<ScopedOperand> init_dst;
-        if (declaration_kind() != DeclarationKind::Var) {
+        if (declaration_kind != DeclarationKind::Var) {
             if (auto const* identifier = declarator->target().get_pointer<NonnullRefPtr<Identifier const>>()) {
                 if ((*identifier)->is_local()) {
                     init_dst = generator.local((*identifier)->local_variable_index());
@@ -1612,19 +1618,38 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> VariableDeclaration::ge
                     return TRY(declarator->init()->generate_bytecode(generator, init_dst)).value();
                 }
             }());
-            (void)TRY(assign_value_to_variable_declarator(generator, declarator, *this, value));
-        } else if (m_declaration_kind != DeclarationKind::Var) {
-            (void)TRY(assign_value_to_variable_declarator(generator, declarator, *this, generator.add_constant(js_undefined())));
+            (void)TRY(assign_value_to_variable_declarator(generator, declarator, declaration, value));
+        } else if (declaration_kind != DeclarationKind::Var) {
+            (void)TRY(assign_value_to_variable_declarator(generator, declarator, declaration, generator.add_constant(js_undefined())));
         }
     }
 
-    for (auto& declarator : m_declarations) {
+    for (auto& declarator : declarations) {
         if (auto const* identifier = declarator->target().get_pointer<NonnullRefPtr<Identifier const>>()) {
             if ((*identifier)->is_local()) {
                 generator.set_local_initialized((*identifier)->local_variable_index());
             }
         }
     }
+
+    return {};
+}
+
+Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> VariableDeclaration::generate_bytecode(Bytecode::Generator& generator, [[maybe_unused]] Optional<ScopedOperand> preferred_dst) const
+{
+    Bytecode::Generator::SourceLocationScope scope(generator, *this);
+
+    TRY(declare_variables(generator, m_declarations, *this, m_declaration_kind));
+
+    // NOTE: VariableDeclaration doesn't return a completion value.
+    return Optional<ScopedOperand> {};
+}
+
+Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> UsingDeclaration::generate_bytecode(Bytecode::Generator& generator, [[maybe_unused]] Optional<ScopedOperand> preferred_dst) const
+{
+    Bytecode::Generator::SourceLocationScope scope(generator, *this);
+
+    TRY(declare_variables(generator, m_declarations, *this, DeclarationKind::Const));
 
     // NOTE: VariableDeclaration doesn't return a completion value.
     return Optional<ScopedOperand> {};
@@ -2669,7 +2694,7 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> TryStatement::generate_
                     did_create_variable_scope_for_catch_clause = true;
                     auto parameter_identifier = generator.intern_identifier(parameter);
                     generator.emit<Bytecode::Op::CreateVariable>(parameter_identifier, Bytecode::Op::EnvironmentMode::Lexical, false);
-                    generator.emit<Bytecode::Op::InitializeLexicalBinding>(parameter_identifier, caught_value);
+                    generator.emit<Bytecode::Op::InitializeLexicalBinding>(parameter_identifier, caught_value, Environment::InitializeBindingHint::Normal);
                 }
                 return {};
             },
@@ -3040,19 +3065,26 @@ static Bytecode::CodeGenerationErrorOr<ForInOfHeadEvaluationResult> for_in_of_he
     ForInOfHeadEvaluationResult result {};
 
     bool entered_lexical_scope = false;
-    if (auto* ast_ptr = lhs.get_pointer<NonnullRefPtr<ASTNode const>>(); ast_ptr && is<VariableDeclaration>(**ast_ptr)) {
+    if (auto* ast_ptr = lhs.get_pointer<NonnullRefPtr<ASTNode const>>(); ast_ptr && is<Declaration>(**ast_ptr)) {
         // Runtime Semantics: ForInOfLoopEvaluation, for any of:
         //  ForInOfStatement : for ( var ForBinding in Expression ) Statement
         //  ForInOfStatement : for ( ForDeclaration in Expression ) Statement
         //  ForInOfStatement : for ( var ForBinding of AssignmentExpression ) Statement
         //  ForInOfStatement : for ( ForDeclaration of AssignmentExpression ) Statement
 
-        auto& variable_declaration = static_cast<VariableDeclaration const&>(**ast_ptr);
-        result.is_destructuring = variable_declaration.declarations().first()->target().has<NonnullRefPtr<BindingPattern const>>();
-        result.lhs_kind = variable_declaration.is_lexical_declaration() ? LHSKind::LexicalBinding : LHSKind::VarBinding;
+        auto const& declaration = static_cast<Declaration const&>(**ast_ptr);
+        if (is<VariableDeclaration>(declaration)) {
+            auto const& variable_declaration = static_cast<VariableDeclaration const&>(declaration);
+            result.is_destructuring = variable_declaration.declarations().first()->target().has<NonnullRefPtr<BindingPattern const>>();
+        } else {
+            result.is_destructuring = false;
+        }
 
-        if (variable_declaration.declaration_kind() == DeclarationKind::Var) {
+        result.lhs_kind = declaration.is_lexical_declaration() ? LHSKind::LexicalBinding : LHSKind::VarBinding;
+
+        if (result.lhs_kind == LHSKind::VarBinding) {
             // B.3.5 Initializers in ForIn Statement Heads, https://tc39.es/ecma262/#sec-initializers-in-forin-statement-heads
+            auto const& variable_declaration = verify_cast<VariableDeclaration>(declaration);
             auto& variable = variable_declaration.declarations().first();
             if (variable->init()) {
                 VERIFY(variable->target().has<NonnullRefPtr<Identifier const>>());
@@ -3062,13 +3094,16 @@ static Bytecode::CodeGenerationErrorOr<ForInOfHeadEvaluationResult> for_in_of_he
                 generator.emit_set_variable(*identifier, value);
             }
         } else {
-            auto has_non_local_variables = false;
-            MUST(variable_declaration.for_each_bound_identifier([&](auto const& identifier) {
-                if (!identifier.is_local())
-                    has_non_local_variables = true;
-            }));
+            auto requires_lexical_environment = is<UsingDeclaration>(declaration);
 
-            if (has_non_local_variables) {
+            if (!requires_lexical_environment) {
+                MUST(declaration.for_each_bound_identifier([&](auto const& identifier) {
+                    if (!identifier.is_local())
+                        requires_lexical_environment = true;
+                }));
+            }
+
+            if (requires_lexical_environment) {
                 // 1. Let oldEnv be the running execution context's LexicalEnvironment.
                 // NOTE: 'uninitializedBoundNames' refers to the lexical bindings (i.e. Const/Let) present in the second and last form.
                 // 2. If uninitializedBoundNames is not an empty List, then
@@ -3078,7 +3113,7 @@ static Bytecode::CodeGenerationErrorOr<ForInOfHeadEvaluationResult> for_in_of_he
                 generator.begin_variable_scope();
                 // c. For each String name of uninitializedBoundNames, do
                 // NOTE: Nothing in the callback throws an exception.
-                MUST(variable_declaration.for_each_bound_identifier([&](auto const& identifier) {
+                MUST(declaration.for_each_bound_identifier([&](auto const& identifier) {
                     if (identifier.is_local())
                         return;
                     // i. Perform ! newEnv.CreateMutableBinding(name, false).
@@ -3152,6 +3187,25 @@ static Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> for_in_of_body_e
 
     // 2. Let oldEnv be the running execution context's LexicalEnvironment.
     bool has_lexical_binding = false;
+
+    // https://arai-a.github.io/ecma262-compare/?pr=3000&id=sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset
+    // 4. If IsAwaitUsingDeclaration of lhs is true, then
+    //    a. Let hint be ASYNC-DISPOSE.
+    // 5. Else if IsUsingDeclaration of lhs is true, then
+    //    a. Let hint be SYNC-DISPOSE.
+    // 6. Else,
+    //    a. Let hint be NORMAL.
+    auto hint = [&] {
+        if (!lhs.has<NonnullRefPtr<ASTNode const>>())
+            return Environment::InitializeBindingHint::Normal;
+
+        auto const& declaration = static_cast<Declaration const&>(*lhs.get<NonnullRefPtr<ASTNode const>>());
+
+        if (is<UsingDeclaration>(declaration))
+            return Environment::InitializeBindingHint::SyncDispose;
+
+        return Environment::InitializeBindingHint::Normal;
+    }();
 
     // 3. Let V be undefined.
     Optional<ScopedOperand> completion;
@@ -3246,26 +3300,29 @@ static Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> for_in_of_body_e
         // 14.7.5.4 Runtime Semantics: ForDeclarationBindingInstantiation, https://tc39.es/ecma262/#sec-runtime-semantics-fordeclarationbindinginstantiation
         // 1. Assert: environment is a declarative Environment Record.
         // NOTE: We just made it.
-        auto& variable_declaration = static_cast<VariableDeclaration const&>(*lhs.get<NonnullRefPtr<ASTNode const>>());
+        auto const& declaration = static_cast<Declaration const&>(*lhs.get<NonnullRefPtr<ASTNode const>>());
         // 2. For each element name of the BoundNames of ForBinding, do
         // NOTE: Nothing in the callback throws an exception.
 
-        auto has_non_local_variables = false;
-        MUST(variable_declaration.for_each_bound_identifier([&](auto const& identifier) {
-            if (!identifier.is_local())
-                has_non_local_variables = true;
-        }));
+        auto requires_lexical_environment = is<UsingDeclaration>(declaration);
 
-        if (has_non_local_variables) {
+        if (!requires_lexical_environment) {
+            MUST(declaration.for_each_bound_identifier([&](auto const& identifier) {
+                if (!identifier.is_local())
+                    requires_lexical_environment = true;
+            }));
+        }
+
+        if (requires_lexical_environment) {
             generator.begin_variable_scope();
             has_lexical_binding = true;
 
-            MUST(variable_declaration.for_each_bound_identifier([&](auto const& identifier) {
+            MUST(declaration.for_each_bound_identifier([&](auto const& identifier) {
                 if (identifier.is_local())
                     return;
                 auto interned_identifier = generator.intern_identifier(identifier.string());
                 // a. If IsConstantDeclaration of LetOrConst is true, then
-                if (variable_declaration.is_constant_declaration()) {
+                if (declaration.is_constant_declaration()) {
                     // i. Perform ! environment.CreateImmutableBinding(name, true).
                     generator.emit<Bytecode::Op::CreateVariable>(interned_identifier, Bytecode::Op::EnvironmentMode::Lexical, true, false, true);
                 }
@@ -3282,11 +3339,20 @@ static Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> for_in_of_body_e
         if (!destructuring) {
             // 1. Assert: lhs binds a single name.
             // 2. Let lhsName be the sole element of BoundNames of lhs.
-            auto lhs_name = variable_declaration.declarations().first()->target().get<NonnullRefPtr<Identifier const>>();
+            auto const& declarations = [&] -> Vector<NonnullRefPtr<VariableDeclarator const>> const& {
+                if (is<VariableDeclaration>(declaration)) {
+                    auto& variable_declaration = static_cast<VariableDeclaration const&>(declaration);
+                    return variable_declaration.declarations();
+                }
+
+                return verify_cast<UsingDeclaration>(declaration).declarations();
+            }();
+            auto lhs_name = declarations.first()->target().get<NonnullRefPtr<Identifier const>>();
+
             // 3. Let lhsRef be ! ResolveBinding(lhsName).
             // NOTE: We're skipping all the completion stuff that the spec does, as the unwinding mechanism will take case of doing that.
 
-            generator.emit_set_variable(*lhs_name, next_value, Bytecode::Op::BindingInitializationMode::Initialize, Bytecode::Op::EnvironmentMode::Lexical);
+            generator.emit_set_variable(*lhs_name, next_value, Bytecode::Op::BindingInitializationMode::Initialize, Bytecode::Op::EnvironmentMode::Lexical, hint);
         }
     }
     // i. If destructuring is false, then
@@ -3568,7 +3634,8 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ExportStatement::genera
         if (!static_cast<ClassExpression const&>(*m_statement).has_name()) {
             generator.emit<Bytecode::Op::InitializeLexicalBinding>(
                 generator.intern_identifier(ExportStatement::local_name_for_default),
-                value);
+                value,
+                Environment::InitializeBindingHint::Normal);
         }
 
         return value;
@@ -3579,7 +3646,8 @@ Bytecode::CodeGenerationErrorOr<Optional<ScopedOperand>> ExportStatement::genera
     auto value = TRY(generator.emit_named_evaluation_if_anonymous_function(static_cast<Expression const&>(*m_statement), generator.intern_identifier("default"sv))).value();
     generator.emit<Bytecode::Op::InitializeLexicalBinding>(
         generator.intern_identifier(ExportStatement::local_name_for_default),
-        value);
+        value,
+        Environment::InitializeBindingHint::Normal);
     return value;
 }
 

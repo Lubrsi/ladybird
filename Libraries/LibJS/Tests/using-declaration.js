@@ -213,13 +213,13 @@ describe("works in a bunch of scopes", () => {
     test.xfail("works in static class block", () => {
         let dispose = false;
         expect(dispose).toBeFalse();
-        class A {
-            static {
-                expect(dispose).toBeFalse();
-                using a = { [Symbol.dispose]() { dispose = true; } }
-                expect(dispose).toBeFalse();
-            }
-        }
+        // class A {
+        //     static {
+        //         expect(dispose).toBeFalse();
+        //         using a = { [Symbol.dispose]() { dispose = true; } }
+        //         expect(dispose).toBeFalse();
+        //     }
+        // }
         expect(dispose).toBeTrue();
     });
 

@@ -32,7 +32,7 @@ Generator::Generator(VM& vm, GC::Ptr<ECMAScriptFunctionObject const> function, M
 
 CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(ECMAScriptFunctionObject const& function)
 {
-    if (function.m_has_parameter_expressions) {
+    if (!function.m_strict && function.m_has_parameter_expressions) {
         emit<Op::CreateLexicalEnvironment>();
     }
 
@@ -41,7 +41,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(E
             auto id = intern_identifier(parameter_name.key);
             emit<Op::CreateVariable>(id, Op::EnvironmentMode::Lexical, false);
             if (function.m_has_duplicates) {
-                emit<Op::InitializeLexicalBinding>(id, add_constant(js_undefined()));
+                emit<Op::InitializeLexicalBinding>(id, add_constant(js_undefined()), Environment::InitializeBindingHint::Normal);
             }
         }
     }
@@ -99,7 +99,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(E
                 if (function.m_has_duplicates) {
                     emit<Op::SetLexicalBinding>(id, argument_reg.operand());
                 } else {
-                    emit<Op::InitializeLexicalBinding>(id, argument_reg.operand());
+                    emit<Op::InitializeLexicalBinding>(id, argument_reg.operand(), Environment::InitializeBindingHint::Normal);
                 }
             }
         } else if (auto const* binding_pattern = parameter.binding.get_pointer<NonnullRefPtr<BindingPattern const>>(); binding_pattern) {
@@ -163,12 +163,13 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(E
         }
     }
 
-    if (!function.m_strict) {
-        bool can_elide_declarative_environment = !function.m_contains_direct_call_to_eval && (!scope_body || !scope_body->has_non_local_lexical_declarations());
-        if (!can_elide_declarative_environment) {
-            emit<Op::CreateLexicalEnvironment>(function.m_lex_environment_bindings_count);
-        }
-    }
+    // if (!function.m_strict) {
+    //     bool can_elide_declarative_environment = !function.m_contains_direct_call_to_eval && (!scope_body || !scope_body->has_non_local_lexical_declarations());
+    //     dbgln("hello");
+    //     if (!can_elide_declarative_environment) {
+    //         emit<Op::CreateLexicalEnvironment>(function.m_lex_environment_bindings_count);
+    //     }
+    // }
 
     if (scope_body) {
         MUST(scope_body->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
@@ -537,6 +538,10 @@ bool Generator::emit_block_declaration_instantiation(ScopeNode const& scope_node
             needs_block_declaration_instantiation = true;
             return;
         }
+        if (is<UsingDeclaration>(declaration)) {
+            needs_block_declaration_instantiation = true;
+            return;
+        }
         MUST(declaration.for_each_bound_identifier([&](auto const& id) {
             if (!id.is_local())
                 needs_block_declaration_instantiation = true;
@@ -847,19 +852,24 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
     return add_constant(Value(true));
 }
 
-void Generator::emit_set_variable(JS::Identifier const& identifier, ScopedOperand value, Bytecode::Op::BindingInitializationMode initialization_mode, Bytecode::Op::EnvironmentMode environment_mode)
+void Generator::emit_set_variable(JS::Identifier const& identifier, ScopedOperand value, Bytecode::Op::BindingInitializationMode initialization_mode, Bytecode::Op::EnvironmentMode environment_mode, Environment::InitializeBindingHint initialization_hint)
 {
     if (identifier.is_local()) {
-        if (value.operand().is_local() && value.operand().index() == identifier.local_variable_index()) {
-            // Moving a local to itself is a no-op.
-            return;
+        auto local_operand = local(identifier.local_variable_index());
+
+        // Moving a local to itself is a no-op.
+        if (!value.operand().is_local() || value.operand().index() != identifier.local_variable_index()) {
+            emit<Bytecode::Op::Mov>(local_operand, value);
         }
-        emit<Bytecode::Op::Mov>(local(identifier.local_variable_index()), value);
+
+        if (initialization_mode == Bytecode::Op::BindingInitializationMode::Initialize && initialization_hint != Environment::InitializeBindingHint::Normal) {
+            emit<Bytecode::Op::CreateDisposableResource>(local_operand, initialization_hint);
+        }
     } else {
         auto identifier_index = intern_identifier(identifier.string());
         if (environment_mode == Bytecode::Op::EnvironmentMode::Lexical) {
             if (initialization_mode == Bytecode::Op::BindingInitializationMode::Initialize) {
-                emit<Bytecode::Op::InitializeLexicalBinding>(identifier_index, value);
+                emit<Bytecode::Op::InitializeLexicalBinding>(identifier_index, value, initialization_hint);
             } else if (initialization_mode == Bytecode::Op::BindingInitializationMode::Set) {
                 emit<Bytecode::Op::SetLexicalBinding>(identifier_index, value);
             }
@@ -1154,7 +1164,7 @@ bool Generator::fuse_compare_and_jump(ScopedOperand const& condition, Label true
         auto lhs = comparison.lhs();                                               \
         auto rhs = comparison.rhs();                                               \
         m_current_basic_block->rewind();                                           \
-        emit<Op::Jump##op_TitleCase>(lhs, rhs, true_target, false_target);         \
+        emit<Op::Jump## op_TitleCase>(lhs, rhs, true_target, false_target);         \
         return true;                                                               \
     }
 

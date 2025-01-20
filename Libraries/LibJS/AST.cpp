@@ -289,6 +289,7 @@ ThrowCompletionOr<ClassElement::ClassValue> StaticInitializer::class_element_eva
     FunctionParsingInsights parsing_insights;
     parsing_insights.uses_this_from_environment = true;
     parsing_insights.uses_this = true;
+    dbgln("func body: {}", m_function_body->class_name());
     auto body_function = ECMAScriptFunctionObject::create(realm, ByteString::empty(), ByteString::empty(), *m_function_body, {}, 0, m_function_body->local_variables_names(), lexical_environment, private_environment, FunctionKind::Normal, true, parsing_insights, false);
 
     // 6. Perform MakeMethod(bodyFunction, homeObject).
