@@ -148,9 +148,40 @@ ErrorOr<NonnullRefPtr<Web::HTML::WebWorkerClient>> launch_web_worker_process()
 {
     Vector<ByteString> arguments;
 
-    auto socket = TRY(connect_new_request_server_client());
+    auto request_server_client = TRY(launch_request_server_process());
+
+    auto new_rs_socket = request_server_client->send_sync_but_allow_failure<Messages::RequestServer::ConnectNewClient>();
+    if (!new_rs_socket)
+        return Error::from_string_literal("Failed to connect to RequestServer");
+
+    auto rs_socket = new_rs_socket->take_client_socket();
+    TRY(rs_socket.clear_close_on_exec());
+
     arguments.append("--request-server-socket"sv);
-    arguments.append(ByteString::number(socket.fd()));
+    arguments.append(ByteString::number(rs_socket.fd()));
+
+    auto image_decoder_client = TRY(launch_image_decoder_process());
+
+    auto new_id_socket = image_decoder_client->send_sync_but_allow_failure<Messages::ImageDecoderServer::ConnectNewClients>(1);
+    if (!new_id_socket)
+        return Error::from_string_literal("Failed to connect to ImageDecoder");
+
+    auto id_sockets = new_id_socket->take_sockets();
+    if (id_sockets.size() != 1)
+        return Error::from_string_literal("Failed to connect to ImageDecoder");
+
+    auto id_socket = id_sockets.take_last();
+    TRY(id_socket.clear_close_on_exec());
+
+    arguments.append("--image-decoder-socket"sv);
+    arguments.append(ByteString::number(id_socket.fd()));
+
+    auto const& web_content_options = WebView::Application::web_content_options();
+
+    if (web_content_options.log_all_js_exceptions == WebView::LogAllJSExceptions::Yes)
+        arguments.append("--log-all-js-exceptions"sv);
+    if (web_content_options.enable_idl_tracing == WebView::EnableIDLTracing::Yes)
+        arguments.append("--enable-idl-tracing"sv);
 
     return launch_server_process<Web::HTML::WebWorkerClient>("WebWorker"sv, move(arguments));
 }

@@ -74,8 +74,7 @@ ErrorOr<void> TransportSocket::transfer(ReadonlyBytes bytes_to_write, Vector<int
 
                 ErrorOr<int> result { 0 };
                 do {
-                    constexpr u32 POLL_TIMEOUT_MS = 100;
-                    result = Core::System::poll(pollfds, POLL_TIMEOUT_MS);
+                    result = Core::System::poll(pollfds, -1);
                 } while (result.is_error() && result.error().code() == EINTR);
 
                 if (!result.is_error() && result.value() != 0)
@@ -116,6 +115,7 @@ TransportSocket::ReadResult TransportSocket::read_as_much_as_possible_without_bl
             }
 
             if (error.is_syscall() && error.code() == ECONNRESET) {
+                dbgln("connection reset");
                 schedule_shutdown();
                 break;
             }
@@ -127,6 +127,7 @@ TransportSocket::ReadResult TransportSocket::read_as_much_as_possible_without_bl
 
         auto bytes_read = maybe_bytes_read.release_value();
         if (bytes_read.is_empty()) {
+            dbgln("received empty");
             schedule_shutdown();
             break;
         }

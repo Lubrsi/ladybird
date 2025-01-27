@@ -13,6 +13,7 @@
 #include <LibIPC/Encoder.h>
 #include <LibIPC/File.h>
 #include <LibIPC/Transport.h>
+#include <LibJS/Print.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/MessagePortPrototype.h>
@@ -121,6 +122,7 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_steps(HTML::TransferDataHolder& 
 WebIDL::ExceptionOr<void> MessagePort::transfer_receiving_steps(HTML::TransferDataHolder& data_holder)
 {
     // 1. Set value's has been shipped flag to true.
+    dbgln("hello");
     m_has_been_shipped = true;
 
     // FIXME 2. Move all the tasks that are to fire message events in dataHolder.[[PortMessageQueue]] to the port message queue of value,
@@ -151,6 +153,7 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_receiving_steps(HTML::TransferDa
 
 void MessagePort::disentangle()
 {
+    dbgln("disentangled...");
     if (m_remote_port)
         m_remote_port->m_remote_port = nullptr;
     m_remote_port = nullptr;
@@ -233,13 +236,31 @@ WebIDL::ExceptionOr<void> MessagePort::message_port_post_message_steps(GC::Ptr<M
     auto& realm = this->realm();
     auto& vm = this->vm();
 
+    {
+        AllocatingMemoryStream stream;
+        JS::PrintContext ctx { vm, stream, true };
+        MUST(JS::print(message, ctx));
+        auto buffer = MUST(stream.read_until_eof());
+        dbgln("messaging {}", StringView { buffer });
+    }
+
+    // {
+    //     AllocatingMemoryStream stream;
+    //     JS::PrintContext ctx { vm, stream, true };
+    //     MUST(JS::print(JS::Array::create_from<GC::Root<JS::Object>>(realm, options.transfer.span(), [](GC::Root<JS::Object> object) { return JS::Value(object.ptr()); }), ctx));
+    //     auto buffer = MUST(stream.read_until_eof());
+    //     dbgln("transferring {}", StringView { buffer });
+    // }
+
     // 1. Let transfer be options["transfer"].
     auto const& transfer = options.transfer;
 
     // 2. If transfer contains this MessagePort, then throw a "DataCloneError" DOMException.
     for (auto const& handle : transfer) {
-        if (handle == this)
+        if (handle == this) {
+            dbgln("bail1");
             return WebIDL::DataCloneError::create(realm, "Cannot transfer a MessagePort to itself"_string);
+        }
     }
 
     // 3. Let doomed be false.
@@ -262,10 +283,12 @@ WebIDL::ExceptionOr<void> MessagePort::message_port_post_message_steps(GC::Ptr<M
     // IMPLEMENTATION DEFINED: Actually check the socket here, not the target port.
     //     If there's no target message port in the same realm, we still want to send the message over IPC
     if (!m_transport.has_value() || doomed) {
+        dbgln("bail2 {} {}", m_transport.has_value(), doomed);
         return {};
     }
 
     // 7. Add a task that runs the following steps to the port message queue of targetPort:
+    dbgln("should be sending");
     post_port_message(move(serialize_with_transfer_result));
 
     return {};
@@ -341,10 +364,13 @@ ErrorOr<MessagePort::ParseDecision> MessagePort::parse_message()
 
 void MessagePort::read_from_transport()
 {
-    auto&& [bytes, fds] = m_transport->read_as_much_as_possible_without_blocking([this] {
-        queue_global_task(Task::Source::PostedMessage, relevant_global_object(*this), GC::create_function(heap(), [this] {
-            this->close();
-        }));
+    if (m_worker_event_target)
+        dbgln("worker read from transport");
+
+    auto&& [bytes, fds] = m_transport->read_as_much_as_possible_without_blocking([] {
+        // queue_global_task(Task::Source::PostedMessage, relevant_global_object(*this), GC::create_function(heap(), [this] {
+        //     this->close();
+        // }));
     });
 
     m_buffered_data.append(bytes.data(), bytes.size());
@@ -406,6 +432,12 @@ void MessagePort::post_message_task_steps(SerializedTransferRecord& serialize_wi
             new_ports.append(as<MessagePort>(*object));
         }
     }
+
+        AllocatingMemoryStream stream;
+        JS::PrintContext ctx { vm(), stream, true };
+        MUST(JS::print(message_clone, ctx));
+        auto buffer = MUST(stream.read_until_eof());
+        dbgln("received a {} message: {} ", !!m_worker_event_target ? "window" : "worker", StringView { buffer });
 
     // 6. Fire an event named message at finalTargetPort, using MessageEvent, with the data attribute initialized to messageClone and the ports attribute initialized to newPorts.
     MessageEventInit event_init {};

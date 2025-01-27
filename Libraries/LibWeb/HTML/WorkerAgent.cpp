@@ -27,6 +27,7 @@ void WorkerAgent::initialize(JS::Realm& realm)
     Base::initialize(realm);
 
     m_message_port = MessagePort::create(realm);
+    dbgln("Hello worker agent! I should be entangling now...");
     m_message_port->entangle_with(*m_outside_port);
 
     TransferDataHolder data_holder;

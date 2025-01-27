@@ -150,6 +150,7 @@ ErrorOr<size_t> PosixSocketHelper::write(ReadonlyBytes buffer, int flags)
 
 void PosixSocketHelper::close()
 {
+    dbgln("closing up shop");
     if (!is_open()) {
         return;
     }

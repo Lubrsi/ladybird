@@ -18,9 +18,11 @@
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/EventLoopPluginSerenity.h>
+#include <LibWeb/Platform/ImageCodecPlugin.h>
 #include <LibWeb/WebSockets/WebSocket.h>
 #include <LibWebView/HelperProcess.h>
 #include <LibWebView/Plugins/FontPlugin.h>
+#include <LibWebView/Plugins/ImageCodecPlugin.h>
 #include <LibWebView/Utilities.h>
 #include <WebWorker/ConnectionFromClient.h>
 
@@ -30,21 +32,36 @@
 #endif
 
 static ErrorOr<void> initialize_resource_loader(GC::Heap&, int request_server_socket);
+static ErrorOr<void> initialize_image_decoder(int image_decoder_socket);
+
+namespace JS {
+extern bool g_log_all_js_exceptions;
+}
+
+namespace Web::WebIDL {
+extern bool g_enable_idl_tracing;
+}
 
 ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     AK::set_rich_debug_enabled(true);
 
     int request_server_socket { -1 };
+    int image_decoder_socket { -1 };
     StringView serenity_resource_root;
     Vector<ByteString> certificates;
     bool wait_for_debugger = false;
+    bool log_all_js_exceptions = false;
+    bool enable_idl_tracing = false;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(request_server_socket, "File descriptor of the request server socket", "request-server-socket", 's', "request-server-socket");
+    args_parser.add_option(image_decoder_socket, "File descriptor of the socket for the ImageDecoder connection", "image-decoder-socket", 'i', "image_decoder_socket");
     args_parser.add_option(serenity_resource_root, "Absolute path to directory for serenity resources", "serenity-resource-root", 'r', "serenity-resource-root");
     args_parser.add_option(certificates, "Path to a certificate file", "certificate", 'C', "certificate");
     args_parser.add_option(wait_for_debugger, "Wait for debugger", "wait-for-debugger");
+    args_parser.add_option(log_all_js_exceptions, "Log all JavaScript exceptions", "log-all-js-exceptions");
+    args_parser.add_option(enable_idl_tracing, "Enable IDL tracing", "enable-idl-tracing");
     args_parser.parse(arguments);
 
     if (wait_for_debugger)
@@ -58,6 +75,8 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 
     WebView::platform_init();
 
+    TRY(initialize_image_decoder(image_decoder_socket));
+
     Web::Platform::EventLoopPlugin::install(*new Web::Platform::EventLoopPluginSerenity);
 
     Web::Platform::FontPlugin::install(*new WebView::FontPlugin(false));
@@ -65,6 +84,14 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     TRY(Web::Bindings::initialize_main_thread_vm(Web::HTML::EventLoop::Type::Worker));
 
     TRY(initialize_resource_loader(Web::Bindings::main_thread_vm().heap(), request_server_socket));
+
+    if (log_all_js_exceptions) {
+        JS::g_log_all_js_exceptions = true;
+    }
+
+    if (enable_idl_tracing) {
+        Web::WebIDL::g_enable_idl_tracing = true;
+    }
 
     auto client = TRY(IPC::take_over_accepted_client_from_system_server<WebWorker::ConnectionFromClient>());
 
@@ -80,6 +107,19 @@ static ErrorOr<void> initialize_resource_loader(GC::Heap& heap, int request_serv
 
     auto request_client = TRY(try_make_ref_counted<Requests::RequestClient>(IPC::Transport(move(socket))));
     Web::ResourceLoader::initialize(heap, move(request_client));
+
+    return {};
+}
+
+ErrorOr<void> initialize_image_decoder(int image_decoder_socket)
+{
+    static_assert(IsSame<IPC::Transport, IPC::TransportSocket>, "Need to handle other IPC transports here");
+    auto socket = TRY(Core::LocalSocket::adopt_fd(image_decoder_socket));
+    TRY(socket->set_blocking(true));
+
+    auto new_client = TRY(try_make_ref_counted<ImageDecoderClient::Client>(IPC::Transport(move(socket))));
+
+    Web::Platform::ImageCodecPlugin::install(*new WebView::ImageCodecPlugin(move(new_client)));
 
     return {};
 }

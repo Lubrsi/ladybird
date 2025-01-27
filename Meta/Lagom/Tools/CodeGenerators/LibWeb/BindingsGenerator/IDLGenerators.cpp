@@ -4518,6 +4518,8 @@ using namespace Web::XHR;
 )~~~"sv);
 }
 
+static void define_the_operations(SourceGenerator& generator, HashMap<ByteString, Vector<Function&>> const& operations);
+
 void generate_namespace_implementation(IDL::Interface const& interface, StringBuilder& builder)
 {
     SourceGenerator generator { builder };
@@ -4580,17 +4582,7 @@ void @namespace_class@::initialize(JS::Realm& realm)
 
 )~~~");
 
-    // https://webidl.spec.whatwg.org/#es-operations
-    for (auto const& overload_set : interface.overload_sets) {
-        auto function_generator = generator.fork();
-        function_generator.set("function.name", overload_set.key);
-        function_generator.set("function.name:snakecase", make_input_acceptable_cpp(overload_set.key.to_snakecase()));
-        function_generator.set("function.length", ByteString::number(get_shortest_function_length(overload_set.value)));
-
-        function_generator.append(R"~~~(
-    define_native_function(realm, "@function.name@", @function.name:snakecase@, @function.length@, default_attributes);
-)~~~");
-    }
+    define_the_operations(generator, interface.overload_sets);
 
     generator.append(R"~~~(
 }

@@ -31,6 +31,7 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/CustomElements/CustomElementDefinition.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/Location.h>
 #include <LibWeb/HTML/PromiseRejectionEvent.h>
 #include <LibWeb/HTML/Scripting/Agent.h>
@@ -692,9 +693,13 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
         for (auto& observer : surrounding_agent.mutation_observers)
             notify_set.append(observer);
 
-        // FIXME: 3. Let signalSet be a clone of the surrounding agent’s signal slots.
+        // 3. Let signalSet be a clone of the surrounding agent’s signal slots.
+        GC::RootVector<HTML::HTMLSlotElement*> signal_set(heap);
+        for (auto& signal_slot : surrounding_agent.signal_slots)
+            signal_set.append(signal_slot);
 
-        // FIXME: 4. Empty the surrounding agent’s signal slots.
+        // 4. Empty the surrounding agent’s signal slots.
+        surrounding_agent.signal_slots.clear();
 
         // 5. For each mo of notifySet:
         for (auto& mutation_observer : notify_set) {
@@ -731,7 +736,13 @@ void queue_mutation_observer_microtask(DOM::Document const& document)
             }
         }
 
-        // FIXME: 6. For each slot of signalSet, fire an event named slotchange, with its bubbles attribute set to true, at slot.
+        // 6. For each slot of signalSet, fire an event named slotchange, with its bubbles attribute set to true, at slot.
+        for (auto* slot : signal_set) {
+            auto slot_change_event = DOM::Event::create(slot->realm(), HTML::EventNames::slotchange);
+            slot_change_event->set_bubbles(true);
+            slot_change_event->set_is_trusted(true);
+            (void)slot->dispatch_event(slot_change_event);
+        }
     }));
 }
 

@@ -129,8 +129,10 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     args_parser.add_option(disable_scrollbar_painting, "Don't paint horizontal or vertical viewport scrollbars", "disable-scrollbar-painting");
     args_parser.add_option(echo_server_port_string_view, "Echo server port used in test internals", "echo-server-port", 0, "echo_server_port");
     args_parser.add_option(is_headless, "Report that the browser is running in headless mode", "headless");
-
     args_parser.parse(arguments);
+
+    // log_all_js_exceptions = false;
+    // enable_idl_tracing = false;
 
     if (wait_for_debugger) {
         Core::Process::wait_for_debugger_and_break();
