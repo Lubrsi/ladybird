@@ -33,16 +33,18 @@ namespace Web::HTML {
 
 GC_DEFINE_ALLOCATOR(CanvasRenderingContext2D);
 
-GC::Ref<CanvasRenderingContext2D> CanvasRenderingContext2D::create(JS::Realm& realm, HTMLCanvasElement& element)
+JS::ThrowCompletionOr<GC::Ref<CanvasRenderingContext2D>> CanvasRenderingContext2D::create(JS::Realm& realm, HTMLCanvasElement& element, JS::Value options)
 {
-    return realm.create<CanvasRenderingContext2D>(realm, element);
+    auto context_attributes = TRY(convert_value_to_settings_dictionary(realm.vm(), options));
+    return realm.create<CanvasRenderingContext2D>(realm, element, move(context_attributes));
 }
 
-CanvasRenderingContext2D::CanvasRenderingContext2D(JS::Realm& realm, HTMLCanvasElement& element)
+CanvasRenderingContext2D::CanvasRenderingContext2D(JS::Realm& realm, HTMLCanvasElement& element, CanvasRenderingContext2DSettings context_attributes)
     : PlatformObject(realm)
     , CanvasPath(static_cast<Bindings::PlatformObject&>(*this), *this)
     , m_element(element)
     , m_size(element.bitmap_size_for_canvas())
+    , m_context_attributes(move(context_attributes))
 {
 }
 

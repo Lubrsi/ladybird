@@ -30,7 +30,7 @@ public:
         No,
         Yes,
     };
-    HasOrCreatedContext create_2d_context();
+    JS::ThrowCompletionOr<HasOrCreatedContext> create_2d_context(JS::Value options);
 
     WebIDL::UnsignedLong width() const;
     WebIDL::UnsignedLong height() const;

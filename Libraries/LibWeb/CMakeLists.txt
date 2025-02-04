@@ -298,6 +298,7 @@ set(SOURCES
     HTML/BrowsingContextGroup.cpp
     HTML/Canvas/CanvasDrawImage.cpp
     HTML/Canvas/CanvasPath.cpp
+    HTML/Canvas/CanvasRenderingContext2DSettings.cpp
     HTML/Canvas/CanvasState.cpp
     HTML/CanvasGradient.cpp
     HTML/CanvasPattern.cpp

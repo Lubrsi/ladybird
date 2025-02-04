@@ -25,6 +25,7 @@
 #include <LibWeb/HTML/Canvas/CanvasPath.h>
 #include <LibWeb/HTML/Canvas/CanvasPathDrawingStyles.h>
 #include <LibWeb/HTML/Canvas/CanvasRect.h>
+#include <LibWeb/HTML/Canvas/CanvasRenderingContext2DSettings.h>
 #include <LibWeb/HTML/Canvas/CanvasShadowStyles.h>
 #include <LibWeb/HTML/Canvas/CanvasState.h>
 #include <LibWeb/HTML/Canvas/CanvasText.h>
@@ -59,7 +60,7 @@ class CanvasRenderingContext2D
     GC_DECLARE_ALLOCATOR(CanvasRenderingContext2D);
 
 public:
-    [[nodiscard]] static GC::Ref<CanvasRenderingContext2D> create(JS::Realm&, HTMLCanvasElement&);
+    [[nodiscard]] static JS::ThrowCompletionOr<GC::Ref<CanvasRenderingContext2D>> create(JS::Realm&, HTMLCanvasElement&, JS::Value);
     virtual ~CanvasRenderingContext2D() override;
 
     virtual void fill_rect(float x, float y, float width, float height) override;
@@ -125,8 +126,11 @@ public:
     RefPtr<Gfx::PaintingSurface> surface() { return m_surface; }
     void allocate_painting_surface_if_needed();
 
+    // https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-canvas-getcontextattributes
+    CanvasRenderingContext2DSettings const& get_context_attributes() const { return m_context_attributes; }
+
 private:
-    explicit CanvasRenderingContext2D(JS::Realm&, HTMLCanvasElement&);
+    explicit CanvasRenderingContext2D(JS::Realm&, HTMLCanvasElement&, CanvasRenderingContext2DSettings);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -163,6 +167,12 @@ private:
 
     Gfx::IntSize m_size;
     RefPtr<Gfx::PaintingSurface> m_surface;
+
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-alpha
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-desynchronized
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-color-space
+    CanvasRenderingContext2DSettings m_context_attributes;
 };
 
 enum class CanvasImageSourceUsability {
