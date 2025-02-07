@@ -182,7 +182,7 @@ void HTMLMetaElement::inserted()
             break;
         }
         default:
-            dbgln("FIXME: Implement '{}' http-equiv state", get_attribute_value(AttributeNames::http_equiv));
+            dbgln("FIXME: Implement '{}' http-equiv state: '{}'", get_attribute_value(AttributeNames::http_equiv), get_attribute_value(AttributeNames::content));
             break;
         }
     }

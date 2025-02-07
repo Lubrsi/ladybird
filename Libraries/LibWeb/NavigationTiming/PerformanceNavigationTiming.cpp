@@ -45,7 +45,7 @@ void PerformanceNavigationTiming::visit_edges(Cell::Visitor& visitor)
 void PerformanceNavigationTiming::create_the_navigation_timing_entry(GC::Ref<DOM::Document> document, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> fetch_timing, u16 redirect_count, Bindings::NavigationTimingType navigation_type, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, HighResolutionTime::DOMHighResTimeStamp critical_ch_restart, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status)
 {
     // 1. Let global be document's relevant global object.
-    auto& global = verify_cast<HTML::Window>(HTML::relevant_global_object(*document));
+    auto& global = as<HTML::Window>(HTML::relevant_global_object(*document));
 
     // 2. Let navigationTimingEntry be a new PerformanceNavigationTiming object in global's realm.
     // 4. Set navigationTimingEntry's document load timing to document's load timing info

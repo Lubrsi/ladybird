@@ -593,7 +593,7 @@ public:
     GC::Ptr<HTML::HTMLParser> active_parser();
 
     // https://html.spec.whatwg.org/multipage/dom.html#load-timing-info
-    GC::Ref<DocumentLoadTimingInfo> load_timing_info();
+    GC::Ref<DocumentLoadTimingInfo> load_timing_info() const;
     void set_load_timing_info(GC::Ptr<DocumentLoadTimingInfo> load_timing_info) { m_load_timing_info = load_timing_info; }
 
     // https://html.spec.whatwg.org/multipage/dom.html#previous-document-unload-timing
@@ -1027,7 +1027,7 @@ private:
     HTML::VisibilityState m_visibility_state { HTML::VisibilityState::Hidden };
 
     // https://html.spec.whatwg.org/multipage/dom.html#load-timing-info
-    GC::Ptr<DocumentLoadTimingInfo> m_load_timing_info;
+    mutable GC::Ptr<DocumentLoadTimingInfo> m_load_timing_info;
 
     // https://html.spec.whatwg.org/multipage/dom.html#previous-document-unload-timing
     GC::Ptr<DocumentUnloadTimingInfo> m_previous_document_unload_timing;

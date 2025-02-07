@@ -591,6 +591,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_session_storage_holder);
     visitor.visit(m_render_blocking_elements);
     visitor.visit(m_policy_container);
+    visitor.visit(m_load_timing_info);
+    visitor.visit(m_previous_document_unload_timing);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -4053,7 +4055,7 @@ GC::Ptr<HTML::HTMLParser> Document::active_parser()
     return m_parser;
 }
 
-GC::Ref<DocumentLoadTimingInfo> Document::load_timing_info()
+GC::Ref<DocumentLoadTimingInfo> Document::load_timing_info() const
 {
     if (!m_load_timing_info)
         m_load_timing_info = realm().heap().allocate<DocumentLoadTimingInfo>();

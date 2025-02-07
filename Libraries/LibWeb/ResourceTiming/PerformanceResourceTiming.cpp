@@ -241,8 +241,6 @@ HighResolutionTime::DOMHighResTimeStamp PerformanceResourceTiming::request_start
 {
     // The requestStart getter steps are to convert fetch timestamp for this's timing info's final network-request
     // start time and the relevant global object for this. See HTTP fetch for more info.
-    return 0.0;
-
     return convert_fetch_timestamp(m_timing_info->final_network_request_start_time(), HTML::relevant_global_object(*this));
 }
 
@@ -278,8 +276,6 @@ HighResolutionTime::DOMHighResTimeStamp PerformanceResourceTiming::response_end(
 {
     // The responseEnd getter steps are to convert fetch timestamp for this's timing info's end time and the relevant
     // global object for this. See fetch for more info.
-    return 200000.0;
-
     return convert_fetch_timestamp(m_timing_info->end_time(), HTML::relevant_global_object(*this));
 }
 
