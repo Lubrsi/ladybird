@@ -101,9 +101,9 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_steps(HTML::TransferDataHolder& 
 
         // 2. Set dataHolder.[[RemotePort]] to remotePort.
         if constexpr (IsSame<IPC::Transport, IPC::TransportSocket>) {
-            auto fd = MUST(m_transport->release_underlying_transport_for_transfer());
-            m_transport = {};
-            data_holder.fds.append(IPC::File::adopt_fd(fd));
+            auto fd = MUST(m_transport->clone_for_transfer());
+            // m_transport = {};
+            data_holder.fds.append(fd);
             data_holder.data.append(IPC_FILE_TAG);
         } else {
             VERIFY(false && "Don't know how to transfer IPC::Transport type");

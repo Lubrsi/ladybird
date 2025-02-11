@@ -510,7 +510,7 @@ String canonicalize_unicode_extension_values(StringView key, StringView value)
 
 StringView default_locale()
 {
-    return "en"sv;
+    return "en-GB"sv;
 }
 
 static void define_locales_without_scripts(HashTable<String>& locales)

@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// #define WEB_FETCH_DEBUG 1
+#define WEB_FETCH_DEBUG 1
 
 #include <AK/Base64.h>
 #include <AK/Debug.h>
@@ -642,7 +642,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     auto process_response_end_of_body = [&vm, &response, &fetch_params, timing_info] {
         // 1. Let unsafeEndTime be the unsafe shared current time.
         auto unsafe_end_time = HighResolutionTime::unsafe_shared_current_time();
-        dbgln("process_response_end_of_body");
+        dbgln("process_response_end_of_body {}", response.url());
 
         // 2. If fetchParams’s request’s destination is "document", then set fetchParams’s controller’s full timing
         //    info to fetchParams’s timing info.
@@ -719,6 +719,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
 
         // 4. Let processResponseEndOfBodyTask be the following steps:
         auto process_response_end_of_body_task = GC::create_function(vm.heap(), [&fetch_params, &response] {
+            dbgln("end of body task {}", response.url());
             // 1. Set fetchParams’s request’s done flag.
             fetch_params.request()->set_done(true);
 
@@ -737,6 +738,8 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
                     fetch_params.controller()->report_timing(client->global_object());
                 else
                     dbgln("not reporting timing for {}", response.url());
+            } else {
+                dbgln("not reporting timing for {} due to nulls: {:p} {:p}", response.url(), client.ptr(), task_destination_global_object);
             }
         });
 
@@ -2088,7 +2091,6 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
     auto returned_pending_response = PendingResponse::create(vm, request);
 
     pending_forward_response->when_loaded([&realm, &vm, &fetch_params, request, response, stored_response, initial_set_of_stored_responses, http_request, returned_pending_response, is_authentication_fetch, is_new_connection_fetch, revalidating_flag, include_credentials, response_was_null = !response, http_cache](GC::Ref<Infrastructure::Response> resolved_forward_response) mutable {
-        dbgln_if(WEB_FETCH_DEBUG, "Fetch: Running 'HTTP-network-or-cache fetch' pending_forward_response load callback");
         if (response_was_null) {
             auto forward_response = resolved_forward_response;
 
@@ -2147,58 +2149,58 @@ WebIDL::ExceptionOr<GC::Ref<PendingResponse>> http_network_or_cache_fetch(JS::Re
 
         // 14. If response’s status is 401, httpRequest’s response tainting is not "cors", includeCredentials is true,
         //     and request’s window is an environment settings object, then:
-        if (response->status() == 401
-            && http_request->response_tainting() != Infrastructure::Request::ResponseTainting::CORS
-            && include_credentials == IncludeCredentials::Yes
-            && request->window().has<GC::Ptr<HTML::EnvironmentSettingsObject>>()
-            // AD-HOC: Require at least one WWW-Authenticate header to be set before automatically retrying an authenticated
-            //         request (see rule 1 below). See: https://github.com/whatwg/fetch/issues/1766
-            && request->header_list()->contains("WWW-Authenticate"sv.bytes())) {
-            // 1. Needs testing: multiple `WWW-Authenticate` headers, missing, parsing issues.
-            // (Red box in the spec, no-op)
-
-            // 2. If request’s body is non-null, then:
-            if (!request->body().has<Empty>()) {
-                // 1. If request’s body’s source is null, then return a network error.
-                if (request->body().get<GC::Ref<Infrastructure::Body>>()->source().has<Empty>()) {
-                    returned_pending_response->resolve(Infrastructure::Response::network_error(vm, "Request has body but no body source"_string));
-                    return;
-                }
-
-                // 2. Set request’s body to the body of the result of safely extracting request’s body’s source.
-                auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
-                // NOTE: BodyInitOrReadableBytes is a superset of Body::SourceType
-                auto converted_source = source.has<ByteBuffer>()
-                    ? BodyInitOrReadableBytes { source.get<ByteBuffer>() }
-                    : BodyInitOrReadableBytes { source.get<GC::Root<FileAPI::Blob>>() };
-                auto [body, _] = safely_extract_body(realm, converted_source);
-                request->set_body(body);
-            }
-
-            // 3. If request’s use-URL-credentials flag is unset or isAuthenticationFetch is true, then:
-            if (!request->use_url_credentials() || is_authentication_fetch == IsAuthenticationFetch::Yes) {
-                // 1. If fetchParams is canceled, then return the appropriate network error for fetchParams.
-                if (fetch_params.is_canceled()) {
-                    returned_pending_response->resolve(Infrastructure::Response::appropriate_network_error(vm, fetch_params));
-                    return;
-                }
-
-                // FIXME: 2. Let username and password be the result of prompting the end user for a username and password,
-                //           respectively, in request’s window.
-                dbgln("Fetch: Username/password prompt is not implemented, using empty strings. This request will probably fail.");
-                auto username = ByteString::empty();
-                auto password = ByteString::empty();
-
-                // 3. Set the username given request’s current URL and username.
-                request->current_url().set_username(username);
-
-                // 4. Set the password given request’s current URL and password.
-                request->current_url().set_password(password);
-            }
-
-            // 4. Set response to the result of running HTTP-network-or-cache fetch given fetchParams and true.
-            inner_pending_response = TRY_OR_IGNORE(http_network_or_cache_fetch(realm, fetch_params, IsAuthenticationFetch::Yes));
-        }
+        // if (response->status() == 401
+        //     && http_request->response_tainting() != Infrastructure::Request::ResponseTainting::CORS
+        //     && include_credentials == IncludeCredentials::Yes
+        //     && request->window().has<GC::Ptr<HTML::EnvironmentSettingsObject>>()
+        //     // AD-HOC: Require at least one WWW-Authenticate header to be set before automatically retrying an authenticated
+        //     //         request (see rule 1 below). See: https://github.com/whatwg/fetch/issues/1766
+        //     && request->header_list()->contains("WWW-Authenticate"sv.bytes())) {
+        //     // 1. Needs testing: multiple `WWW-Authenticate` headers, missing, parsing issues.
+        //     // (Red box in the spec, no-op)
+        //
+        //     // 2. If request’s body is non-null, then:
+        //     if (!request->body().has<Empty>()) {
+        //         // 1. If request’s body’s source is null, then return a network error.
+        //         if (request->body().get<GC::Ref<Infrastructure::Body>>()->source().has<Empty>()) {
+        //             returned_pending_response->resolve(Infrastructure::Response::network_error(vm, "Request has body but no body source"_string));
+        //             return;
+        //         }
+        //
+        //         // 2. Set request’s body to the body of the result of safely extracting request’s body’s source.
+        //         auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
+        //         // NOTE: BodyInitOrReadableBytes is a superset of Body::SourceType
+        //         auto converted_source = source.has<ByteBuffer>()
+        //             ? BodyInitOrReadableBytes { source.get<ByteBuffer>() }
+        //             : BodyInitOrReadableBytes { source.get<GC::Root<FileAPI::Blob>>() };
+        //         auto [body, _] = safely_extract_body(realm, converted_source);
+        //         request->set_body(body);
+        //     }
+        //
+        //     // 3. If request’s use-URL-credentials flag is unset or isAuthenticationFetch is true, then:
+        //     if (!request->use_url_credentials() || is_authentication_fetch == IsAuthenticationFetch::Yes) {
+        //         // 1. If fetchParams is canceled, then return the appropriate network error for fetchParams.
+        //         if (fetch_params.is_canceled()) {
+        //             returned_pending_response->resolve(Infrastructure::Response::appropriate_network_error(vm, fetch_params));
+        //             return;
+        //         }
+        //
+        //         // FIXME: 2. Let username and password be the result of prompting the end user for a username and password,
+        //         //           respectively, in request’s window.
+        //         dbgln("Fetch: Username/password prompt is not implemented, using empty strings. This request will probably fail.");
+        //         auto username = ByteString::empty();
+        //         auto password = ByteString::empty();
+        //
+        //         // 3. Set the username given request’s current URL and username.
+        //         request->current_url().set_username(username);
+        //
+        //         // 4. Set the password given request’s current URL and password.
+        //         request->current_url().set_password(password);
+        //     }
+        //
+        //     // 4. Set response to the result of running HTTP-network-or-cache fetch given fetchParams and true.
+        //     inner_pending_response = TRY_OR_IGNORE(http_network_or_cache_fetch(realm, fetch_params, IsAuthenticationFetch::Yes));
+        // }
 
         inner_pending_response->when_loaded([&realm, &vm, &fetch_params, request, returned_pending_response, is_authentication_fetch, is_new_connection_fetch](GC::Ref<Infrastructure::Response> response) {
             dbgln_if(WEB_FETCH_DEBUG, "Fetch: Running 'HTTP network-or-cache fetch' inner_pending_response load callback");
@@ -2274,19 +2276,19 @@ static void log_load_request(auto const& load_request)
     dbgln("> {} {} HTTP/1.1", load_request.method(), load_request.url());
     for (auto const& [name, value] : load_request.headers())
         dbgln("> {}: {}", name, value);
-    dbgln(">");
-    for (auto line : StringView { load_request.body() }.split_view('\n', SplitBehavior::KeepEmpty))
-        dbgln("> {}", line);
+    // dbgln(">");
+    // for (auto line : StringView { load_request.body() }.split_view('\n', SplitBehavior::KeepEmpty))
+    //     dbgln("> {}", line);
 }
 
-static void log_response(auto const& status_code, auto const& headers, auto const& data)
+static void log_response(auto const& status_code, auto const& headers, auto const&)
 {
     dbgln("< HTTP/1.1 {}", status_code.value_or(0));
     for (auto const& [name, value] : headers.headers())
         dbgln("< {}: {}", name, value);
-    dbgln("<");
-    for (auto line : StringView { data }.split_view('\n', SplitBehavior::KeepEmpty))
-        dbgln("< {}", line);
+    // dbgln("<");
+    // for (auto line : StringView { data }.split_view('\n', SplitBehavior::KeepEmpty))
+    //     dbgln("< {}", line);
 }
 #endif
 

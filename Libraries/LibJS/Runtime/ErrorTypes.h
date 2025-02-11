@@ -73,7 +73,7 @@
     M(IntlTemporalInvalidCalendar, "Cannot format {} with calendar '{}' in locale with calendar '{}'")                              \
     M(IntlTemporalZonedDateTime, "Cannot format Temporal.ZonedDateTime, use Temporal.ZonedDateTime.prototype.toLocaleString")       \
     M(InvalidAssignToConst, "Invalid assignment to const variable")                                                                 \
-    M(InvalidCodePoint, "Invalid code point {}, must be an integer no less than 0 and no greater than 0x10FFFF")                    \
+    M(InvalidCodePoint, "Invalid code point {}")                    \
     M(InvalidEnumerationValue, "Invalid value '{}' for enumeration type '{}'")                                                      \
     M(InvalidFractionDigits, "Fraction Digits must be an integer no less than 0, and no greater than 100")                          \
     M(InvalidHint, "Invalid hint: \"{}\"")                                                                                          \
@@ -124,7 +124,7 @@
     M(ObjectPreventExtensionsReturnedFalse, "Object's [[PreventExtensions]] method returned false")                                 \
     M(ObjectPrototypeWrongType, "Prototype must be an object or null")                                                              \
     M(ObjectSealFailed, "Could not seal object")                                                                                    \
-    M(ObjectSetPrototypeOfReturnedFalse, "Object's [[SetPrototypeOf]] method returned false")                                       \
+    M(ObjectSetPrototypeOfReturnedFalse, "Cyclic __proto__ value")                                       \
     M(ObjectSetReturnedFalse, "Object's [[Set]] method returned false")                                                             \
     M(OptionIsNotValidValue, "{} is not a valid value for option {}")                                                               \
     M(OutOfMemory, "Out of memory")                                                                                                 \
