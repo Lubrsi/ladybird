@@ -218,6 +218,8 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectConstructor::define_property)
     // 3. Let desc be ? ToPropertyDescriptor(Attributes).
     auto descriptor = TRY(to_property_descriptor(vm, vm.argument(2)));
 
+    dbgln("== DEFINE PROPERTY '{}' '{}'", Value(object), key);
+
     // 4. Perform ? DefinePropertyOrThrow(O, key, desc).
     TRY(object->define_property_or_throw(key, descriptor));
 

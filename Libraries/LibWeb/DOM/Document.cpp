@@ -334,11 +334,11 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     }
 
     // 8. Let loadTimingInfo be a new document load timing info with its navigation start time set to navigationParams's response's timing info's start time.
-    DOM::DocumentLoadTimingInfo load_timing_info;
+    GC::Ref<DOM::DocumentLoadTimingInfo> load_timing_info = window->realm().heap().allocate<DocumentLoadTimingInfo>();
     // AD-HOC: The response object no longer has an associated timing info object. For now, we use response's non-standard response time property,
     //         which represents the time that the time that the response object was created.
     auto response_creation_time = navigation_params.response->response_time().nanoseconds() / 1e6;
-    load_timing_info.navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
+    load_timing_info->navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
 
     // 9. Let document be a new Document, with
     //    type: type
@@ -363,10 +363,9 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     document->set_browsing_context(browsing_context);
     document->m_policy_container = navigation_params.policy_container;
     document->m_active_sandboxing_flag_set = navigation_params.final_sandboxing_flag_set;
-    // document->m_load_timing_info = load_timing_info;
+    document->m_load_timing_info = load_timing_info;
     document->m_was_created_via_cross_origin_redirects = navigation_params.response->has_cross_origin_redirects();
     document->m_navigation_id = navigation_params.id;
-    document->set_load_timing_info(load_timing_info);
     document->set_url(*creation_url);
     document->m_readiness = HTML::DocumentReadyState::Loading;
     document->m_about_base_url = navigation_params.about_base_url;

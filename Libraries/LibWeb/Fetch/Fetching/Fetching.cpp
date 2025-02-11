@@ -110,7 +110,7 @@ WebIDL::ExceptionOr<GC::Ref<Infrastructure::FetchController>> fetch(JS::Realm& r
     //    shared current time given crossOriginIsolatedCapability, and render-blocking is set to request’s
     //    render-blocking.
     auto timing_info = Infrastructure::FetchTimingInfo::create(vm);
-    auto now = HighResolutionTime::coarsened_shared_current_time(cross_origin_isolated_capability == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
+    auto now = HighResolutionTime::current_high_resolution_time(realm.global_object());
     timing_info->set_start_time(now);
     timing_info->set_post_redirect_start_time(now);
     timing_info->set_render_blocking(request.render_blocking());

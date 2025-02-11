@@ -15,6 +15,7 @@ public:
     virtual GC::Cell const* gc_cell() const = 0;
     virtual void visit_edges(JS::Cell::Visitor&) = 0;
     virtual OpenGLContext& context() = 0;
+    virtual bool debug_renderer_info_extension_enabled() const = 0;
 };
 
 }

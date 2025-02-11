@@ -398,6 +398,25 @@ ThrowCompletionOr<Value> Console::dir()
     return js_undefined();
 }
 
+ThrowCompletionOr<Value> Console::dirxml()
+{
+    auto& vm = realm().vm();
+
+    // 1. Let object be item with generic JavaScript object formatting applied.
+    // NOTE: Generic formatting is performed by ConsoleClient::printer().
+    auto object = vm.argument(0);
+
+    // 2. Perform Printer("dir", « object », options).
+    if (m_client) {
+        GC::RootVector<Value> printer_arguments { vm.heap() };
+        TRY_OR_THROW_OOM(vm, printer_arguments.try_append(object));
+
+        return m_client->printer(LogLevel::DirXML, move(printer_arguments));
+    }
+
+    return js_undefined();
+}
+
 static ThrowCompletionOr<String> label_or_fallback(VM& vm, StringView fallback)
 {
     return vm.argument_count() > 0 && !vm.argument(0).is_undefined()

@@ -125,6 +125,7 @@ namespace JS {
     P(difference)                            \
     P(dir)                                   \
     P(direction)                             \
+    P(dirxml)                                \
     P(disabledFeatures)                      \
     P(disambiguation)                        \
     P(disposeAsync)                          \

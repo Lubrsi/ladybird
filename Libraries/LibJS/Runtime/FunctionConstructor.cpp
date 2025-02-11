@@ -260,8 +260,6 @@ ThrowCompletionOr<GC::Ref<Object>> FunctionConstructor::construct(FunctionObject
     if (!arguments.is_empty())
         body_arg = arguments.last();
 
-    dbgln("constructing Function: {}", extracted.body);
-
     // 3. Return ? CreateDynamicFunction(C, NewTarget, normal, parameterArgs, bodyArg).
     return TRY(create_dynamic_function(vm, *constructor, &new_target, FunctionKind::Normal, parameter_args, body_arg));
 }

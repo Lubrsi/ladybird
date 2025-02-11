@@ -195,4 +195,9 @@ WebIDL::Long WebGL2RenderingContext::drawing_buffer_height() const
     return size.height();
 }
 
+bool WebGL2RenderingContext::debug_renderer_info_extension_enabled() const
+{
+    return false;
+}
+
 }

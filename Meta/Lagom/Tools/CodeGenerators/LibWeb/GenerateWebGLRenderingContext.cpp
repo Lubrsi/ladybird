@@ -151,7 +151,6 @@ static void generate_get_parameter(SourceGenerator& generator, int webgl_version
         { "POLYGON_OFFSET_UNITS"sv, { "GLfloat"sv } },
         { "RED_BITS"sv, { "GLint"sv } },
         { "RENDERBUFFER_BINDING"sv, { "WebGLRenderbuffer"sv } },
-        { "RENDERER"sv, { "DOMString"sv } },
         { "SAMPLE_ALPHA_TO_COVERAGE"sv, { "GLboolean"sv } },
         { "SAMPLE_BUFFERS"sv, { "GLint"sv } },
         { "SAMPLE_COVERAGE"sv, { "GLboolean"sv } },
@@ -185,7 +184,6 @@ static void generate_get_parameter(SourceGenerator& generator, int webgl_version
         // FIXME: { "UNPACK_COLORSPACE_CONVERSION_WEBGL"sv, { "GLenum"sv } },
         // FIXME: { "UNPACK_FLIP_Y_WEBGL"sv, { "GLboolean"sv } },
         // FIXME: { "UNPACK_PREMULTIPLY_ALPHA_WEBGL"sv, { "GLboolean"sv } },
-        { "VENDOR"sv, { "DOMString"sv } },
         { "VERSION"sv, { "DOMString"sv } },
         { "VIEWPORT"sv, { "Int32Array"sv, 4 } },
         { "MAX_SAMPLES"sv, { "GLint"sv }, 2 },
@@ -302,6 +300,32 @@ static void generate_get_parameter(SourceGenerator& generator, int webgl_version
 
         generator.append(string_builder.string_view());
     }
+
+    generator.append(R"~~~(
+    case GL_VENDOR: {
+        return JS::PrimitiveString::create(m_realm->vm(), "WebKit"sv);
+    }
+    case GL_RENDERER: {
+        return JS::PrimitiveString::create(m_realm->vm(), "WebKit WebGL"sv);
+    }
+    case Extensions::Enums::UNMASKED_VENDOR_WEBGL: {
+        if (!debug_renderer_info_extension_enabled()) {
+            set_error(GL_INVALID_ENUM);
+            return JS::js_null();
+        }
+
+        auto result = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        return JS::PrimitiveString::create(m_realm->vm(), ByteString { result });
+    }
+    case Extensions::Enums::UNMASKED_RENDERER_WEBGL: {
+        if (!debug_renderer_info_extension_enabled()) {
+            set_error(GL_INVALID_ENUM);
+            return JS::js_null();
+        }
+
+        auto result = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        return JS::PrimitiveString::create(m_realm->vm(), ByteString { result });
+    })~~~");
 
     generator.appendln(R"~~~(
     default:
@@ -497,6 +521,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 #include <LibWeb/HTML/HTMLVideoElement.h>
 #include <LibWeb/HTML/ImageBitmap.h>
 #include <LibWeb/HTML/ImageData.h>
+#include <LibWeb/WebGL/Extensions/Enums.h>
 #include <LibWeb/WebGL/OpenGLContext.h>
 #include <LibWeb/WebGL/WebGLActiveInfo.h>
 #include <LibWeb/WebGL/WebGLBuffer.h>

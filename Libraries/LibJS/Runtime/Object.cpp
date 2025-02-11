@@ -7,6 +7,7 @@
 
 #include <AK/ByteString.h>
 #include <AK/TypeCasts.h>
+#include <LibCore/Process.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Accessor.h>
 #include <LibJS/Runtime/Array.h>
@@ -931,8 +932,13 @@ ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, V
 
     update_inline_cache();
 
+    // dbgln("calling getter for '{}'", property_key);
+
     // 7. Return ? Call(getter, Receiver).
-    return TRY(call(vm, *getter, receiver));
+    auto result = call(vm, *getter, receiver);
+
+    // dbgln("returning from getter for '{}'", property_key);
+    return result;
 }
 
 // 10.1.9 [[Set]] ( P, V, Receiver ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-set-p-v-receiver

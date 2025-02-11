@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Luke Wilde <lukew@serenityos.org>
+ * Copyright (c) 2022-2025, Luke Wilde <luke@ladybird.org>
  * Copyright (c) 2024, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -57,6 +57,8 @@ private:
 
     virtual void visit_edges(Cell::Visitor&) override;
 
+    virtual bool debug_renderer_info_extension_enabled() const override;
+
     GC::Ref<HTML::HTMLCanvasElement> m_canvas_element;
 
     // https://www.khronos.org/registry/webgl/specs/latest/1.0/#context-creation-parameters
@@ -84,6 +86,7 @@ private:
     GC::Ptr<Extensions::ANGLEInstancedArrays> m_angle_instanced_arrays_extension;
     GC::Ptr<Extensions::OESVertexArrayObject> m_oes_vertex_array_object_extension;
     GC::Ptr<Extensions::WebGLCompressedTextureS3tc> m_webgl_compressed_texture_s3tc_extension;
+    GC::Ptr<Extensions::WebGLDebugRendererInfo> m_webgl_debug_renderer_info_extension;
     GC::Ptr<Extensions::WebGLDrawBuffers> m_webgl_draw_buffers_extension;
 
     virtual void set_error(GLenum error) override;

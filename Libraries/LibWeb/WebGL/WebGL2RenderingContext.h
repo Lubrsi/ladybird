@@ -58,6 +58,8 @@ private:
 
     virtual void visit_edges(Cell::Visitor&) override;
 
+    virtual bool debug_renderer_info_extension_enabled() const override;
+
     GC::Ref<HTML::HTMLCanvasElement> m_canvas_element;
 
     // https://www.khronos.org/registry/webgl/specs/latest/1.0/#context-creation-parameters

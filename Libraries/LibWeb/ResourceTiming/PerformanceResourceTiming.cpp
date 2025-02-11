@@ -19,6 +19,7 @@ PerformanceResourceTiming::PerformanceResourceTiming(JS::Realm& realm, String co
     : PerformanceTimeline::PerformanceEntry(realm, name, start_time, duration)
     , m_timing_info(timing_info)
 {
+    dbgln("created resource timing '{}'", name);
 }
 
 PerformanceResourceTiming::~PerformanceResourceTiming() = default;

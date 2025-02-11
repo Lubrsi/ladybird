@@ -67,7 +67,7 @@ void HTMLLinkElement::inserted()
         return;
     }
 
-    if (m_relationship & Relationship::Stylesheet) {
+    if (m_relationship & Relationship::Stylesheet || m_relationship & Relationship::Preload) {
         // https://html.spec.whatwg.org/multipage/links.html#link-type-stylesheet:fetch-and-process-the-linked-resource
         // The appropriate times to fetch and process this type of link are:
         //  - When the external resource link is created on a link element that is already browsing-context connected.
@@ -75,17 +75,8 @@ void HTMLLinkElement::inserted()
         fetch_and_process_linked_resource();
     }
 
-    return;
-
     // FIXME: Follow spec for fetching and processing these attributes as well
-    if (m_relationship & Relationship::Preload) {
-        if (auto maybe_href = document().encoding_parse_url(get_attribute_value(HTML::AttributeNames::href)); maybe_href.has_value()) {
-            // FIXME: Respect the "as" attribute.
-            LoadRequest request;
-            request.set_url(maybe_href.value());
-            set_resource(ResourceLoader::the().load_resource(Resource::Type::Generic, request));
-        }
-    } else if (m_relationship & Relationship::DNSPrefetch) {
+    if (m_relationship & Relationship::DNSPrefetch) {
         if (auto dns_prefetch_url = document().encoding_parse_url(get_attribute_value(HTML::AttributeNames::href)); dns_prefetch_url.has_value()) {
             ResourceLoader::the().prefetch_dns(dns_prefetch_url.value());
         }
