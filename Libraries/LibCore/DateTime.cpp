@@ -631,6 +631,13 @@ Optional<DateTime> DateTime::parse(StringView format, StringView string)
         localtime_r(&utc_time_t, &tm);
     }
 
+    dbgln("tm_year: {}", tm.tm_year);
+    dbgln("tm_mon: {}", tm.tm_mon);
+    dbgln("tm_mday: {}", tm.tm_mday);
+    dbgln("tm_hour: {}", tm.tm_hour);
+    dbgln("tm_min: {}", tm.tm_min);
+    dbgln("tm_sec: {}", tm.tm_sec);
+
     auto blah = mktime(&tm);
     dbgln("blah = {}", blah);
     return DateTime::from_timestamp(blah);
