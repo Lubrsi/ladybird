@@ -200,8 +200,8 @@ WebIDL::ExceptionOr<BrowsingContext::BrowsingContextAndDocument> BrowsingContext
 
     // 14. Let loadTimingInfo be a new document load timing info with its navigation start time set to the result of calling
     //     coarsen time with unsafeContextCreationTime and the new environment settings object's cross-origin isolated capability.
-    auto load_timing_info = DOM::DocumentLoadTimingInfo();
-    load_timing_info.navigation_start_time = HighResolutionTime::coarsen_time(
+    auto load_timing_info = window->realm().heap().allocate<DOM::DocumentLoadTimingInfo>();
+    load_timing_info->navigation_start_time = HighResolutionTime::coarsen_time(
         unsafe_context_creation_time,
         as<WindowEnvironmentSettingsObject>(Bindings::principal_host_defined_environment_settings_object(window->realm())).cross_origin_isolated_capability() == CanUseCrossOriginIsolatedAPIs::Yes);
 

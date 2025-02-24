@@ -125,7 +125,13 @@ enum class UpdateLayoutReason {
 [[nodiscard]] StringView to_string(UpdateLayoutReason);
 
 // https://html.spec.whatwg.org/multipage/dom.html#document-load-timing-info
-struct DocumentLoadTimingInfo {
+struct DocumentLoadTimingInfo : public JS::Cell {
+    GC_CELL(DocumentLoadTimingInfo, JS::Cell);
+    GC_DECLARE_ALLOCATOR(DocumentLoadTimingInfo);
+
+public:
+    virtual ~DocumentLoadTimingInfo() override = default;
+
     // https://html.spec.whatwg.org/multipage/dom.html#navigation-start-time
     double navigation_start_time { 0 };
     // https://html.spec.whatwg.org/multipage/dom.html#dom-interactive-time
@@ -143,7 +149,13 @@ struct DocumentLoadTimingInfo {
 };
 
 // https://html.spec.whatwg.org/multipage/dom.html#document-unload-timing-info
-struct DocumentUnloadTimingInfo {
+struct DocumentUnloadTimingInfo : public JS::Cell {
+    GC_CELL(DocumentUnloadTimingInfo, JS::Cell);
+    GC_DECLARE_ALLOCATOR(DocumentUnloadTimingInfo);
+
+public:
+    virtual ~DocumentUnloadTimingInfo() override = default;
+
     // https://html.spec.whatwg.org/multipage/dom.html#unload-event-start-time
     double unload_event_start_time { 0 };
     // https://html.spec.whatwg.org/multipage/dom.html#unload-event-end-time
@@ -655,14 +667,12 @@ public:
     GC::Ptr<HTML::HTMLParser> active_parser();
 
     // https://html.spec.whatwg.org/multipage/dom.html#load-timing-info
-    DocumentLoadTimingInfo& load_timing_info() { return m_load_timing_info; }
-    DocumentLoadTimingInfo const& load_timing_info() const { return m_load_timing_info; }
-    void set_load_timing_info(DocumentLoadTimingInfo const& load_timing_info) { m_load_timing_info = load_timing_info; }
+    GC::Ref<DocumentLoadTimingInfo> load_timing_info() const;
+    void set_load_timing_info(GC::Ptr<DocumentLoadTimingInfo> load_timing_info) { m_load_timing_info = load_timing_info; }
 
     // https://html.spec.whatwg.org/multipage/dom.html#previous-document-unload-timing
-    DocumentUnloadTimingInfo& previous_document_unload_timing() { return m_previous_document_unload_timing; }
-    DocumentUnloadTimingInfo const& previous_document_unload_timing() const { return m_previous_document_unload_timing; }
-    void set_previous_document_unload_timing(DocumentUnloadTimingInfo const& previous_document_unload_timing) { m_previous_document_unload_timing = previous_document_unload_timing; }
+    GC::Ref<DocumentUnloadTimingInfo> previous_document_unload_timing() const;
+    void set_previous_document_unload_timing(GC::Ptr<DocumentUnloadTimingInfo> previous_document_unload_timing) { m_previous_document_unload_timing = previous_document_unload_timing; }
 
     // https://w3c.github.io/editing/docs/execCommand/
     WebIDL::ExceptionOr<bool> exec_command(FlyString const& command, bool show_ui, String const& value);
@@ -1126,10 +1136,10 @@ private:
     HTML::VisibilityState m_visibility_state { HTML::VisibilityState::Hidden };
 
     // https://html.spec.whatwg.org/multipage/dom.html#load-timing-info
-    DocumentLoadTimingInfo m_load_timing_info;
+    mutable GC::Ptr<DocumentLoadTimingInfo> m_load_timing_info;
 
     // https://html.spec.whatwg.org/multipage/dom.html#previous-document-unload-timing
-    DocumentUnloadTimingInfo m_previous_document_unload_timing;
+    mutable GC::Ptr<DocumentUnloadTimingInfo> m_previous_document_unload_timing;
 
     // https://w3c.github.io/selection-api/#dfn-selection
     GC::Ptr<Selection::Selection> m_selection;

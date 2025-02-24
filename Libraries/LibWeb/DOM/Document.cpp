@@ -175,6 +175,8 @@
 namespace Web::DOM {
 
 GC_DEFINE_ALLOCATOR(Document);
+GC_DEFINE_ALLOCATOR(DocumentLoadTimingInfo);
+GC_DEFINE_ALLOCATOR(DocumentUnloadTimingInfo);
 
 // https://html.spec.whatwg.org/multipage/origin.html#obtain-browsing-context-navigation
 static GC::Ref<HTML::BrowsingContext> obtain_a_browsing_context_to_use_for_a_navigation_response(HTML::NavigationParams const& navigation_params)
@@ -341,11 +343,11 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     }
 
     // 8. Let loadTimingInfo be a new document load timing info with its navigation start time set to navigationParams's response's timing info's start time.
-    DOM::DocumentLoadTimingInfo load_timing_info;
+    GC::Ref<DOM::DocumentLoadTimingInfo> load_timing_info = window->realm().create<DOM::DocumentLoadTimingInfo>();
     // AD-HOC: The response object no longer has an associated timing info object. For now, we use response's non-standard response time property,
     //         which represents the time that the time that the response object was created.
     auto response_creation_time = navigation_params.response->response_time().nanoseconds() / 1e6;
-    load_timing_info.navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
+    load_timing_info->navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
 
     // 9. Let document be a new Document, with
     //    type: type
@@ -622,6 +624,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_policy_container);
     visitor.visit(m_style_invalidator);
     visitor.visit(m_registered_custom_properties);
+    visitor.visit(m_load_timing_info);
+    visitor.visit(m_previous_document_unload_timing);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -2966,13 +2970,13 @@ void Document::update_readiness(HTML::DocumentReadyState readiness_value)
 
         // 2. If readinessValue is "complete", and document's load timing info's DOM complete time is 0,
         //    then set document's load timing info's DOM complete time to now.
-        if (readiness_value == HTML::DocumentReadyState::Complete && m_load_timing_info.dom_complete_time == 0) {
-            m_load_timing_info.dom_complete_time = now;
+        if (readiness_value == HTML::DocumentReadyState::Complete && load_timing_info()->dom_complete_time == 0) {
+            load_timing_info()->dom_complete_time = now;
         }
         // 3. Otherwise, if readinessValue is "interactive", and document's load timing info's DOM interactive time is 0,
         //    then set document's load timing info's DOM interactive time to now.
-        else if (readiness_value == HTML::DocumentReadyState::Interactive && m_load_timing_info.dom_interactive_time == 0) {
-            m_load_timing_info.dom_interactive_time = now;
+        else if (readiness_value == HTML::DocumentReadyState::Interactive && load_timing_info()->dom_interactive_time == 0) {
+            load_timing_info()->dom_interactive_time = now;
         }
     }
 
@@ -4240,6 +4244,20 @@ GC::Ptr<HTML::HTMLParser> Document::active_parser()
         return nullptr;
 
     return m_parser;
+}
+
+GC::Ref<DocumentLoadTimingInfo> Document::load_timing_info() const
+{
+    if (!m_load_timing_info)
+        m_load_timing_info = realm().heap().allocate<DocumentLoadTimingInfo>();
+    return *m_load_timing_info;
+}
+
+GC::Ref<DocumentUnloadTimingInfo> Document::previous_document_unload_timing() const
+{
+    if (!m_previous_document_unload_timing)
+        m_previous_document_unload_timing = realm().heap().allocate<DocumentUnloadTimingInfo>();
+    return *m_previous_document_unload_timing;
 }
 
 void Document::set_browsing_context(GC::Ptr<HTML::BrowsingContext> browsing_context)

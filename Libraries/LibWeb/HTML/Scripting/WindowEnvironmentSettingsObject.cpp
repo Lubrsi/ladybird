@@ -121,7 +121,7 @@ GC::Ref<PolicyContainer> WindowEnvironmentSettingsObject::policy_container() con
 double WindowEnvironmentSettingsObject::time_origin() const
 {
     // Return window's associated Document's load timing info's navigation start time.
-    return m_window->associated_document().load_timing_info().navigation_start_time;
+    return m_window->associated_document().load_timing_info()->navigation_start_time;
 }
 
 // https://html.spec.whatwg.org/multipage/window-object.html#script-settings-for-window-objects:concept-settings-object-cross-origin-isolated-capability

@@ -25,7 +25,7 @@ GC::Ref<DocumentTimeline> DocumentTimeline::create(JS::Realm& realm, DOM::Docume
     if (!current_time.has_value()) {
         // The document hasn't processed an animation frame yet, we use the navigation start time, which is either the time
         // that the previous document started to be unloaded or the creation time of the current document.
-        current_time = HighResolutionTime::relative_high_resolution_time(document.load_timing_info().navigation_start_time, realm.global_object());
+        current_time = HighResolutionTime::relative_high_resolution_time(document.load_timing_info()->navigation_start_time, realm.global_object());
     }
     timeline->set_current_time(current_time);
     return timeline;
