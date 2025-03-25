@@ -394,6 +394,11 @@ ErrorOr<void> LocalSocket::send_fd(int fd)
 #endif
 }
 
+static bool fd_is_valid(int fd)
+{
+    return fcntl(fd, F_GETFD) != -1 && errno != EBADF;
+}
+
 ErrorOr<ssize_t> LocalSocket::send_message(ReadonlyBytes data, int flags, Vector<int, 1> fds)
 {
     size_t const num_fds = fds.size();
@@ -422,6 +427,13 @@ ErrorOr<ssize_t> LocalSocket::send_message(ReadonlyBytes data, int flags, Vector
     msg.msg_iovlen = 1;
     msg.msg_control = header;
     msg.msg_controllen = CMSG_LEN(fd_payload_size);
+
+    dbgln("sending a message with fds in it, woah");
+
+    dbgln("is helper fd valid? {}", fd_is_valid(m_helper.fd()));
+    for (auto sending_fd : fds) {
+        dbgln("is {} fd valid? {}", sending_fd, fd_is_valid(sending_fd));
+    }
 
     return TRY(Core::System::sendmsg(m_helper.fd(), &msg, default_flags() | flags));
 }

@@ -99,6 +99,8 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_steps(HTML::TransferDataHolder& 
         // 1. Set remotePort's has been shipped flag to true.
         m_remote_port->m_has_been_shipped = true;
 
+        dbgln("transferring {}", m_transport->fd());
+
         // 2. Set dataHolder.[[RemotePort]] to remotePort.
         // TODO: Mach IPC
         auto fd = MUST(m_transport->release_underlying_transport_for_transfer());
@@ -109,6 +111,7 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_steps(HTML::TransferDataHolder& 
 
     // 4. Otherwise, set dataHolder.[[RemotePort]] to null.
     else {
+        dbgln("null :(");
         data_holder.data.append(0);
     }
 
@@ -117,6 +120,7 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_steps(HTML::TransferDataHolder& 
 
 WebIDL::ExceptionOr<void> MessagePort::transfer_receiving_steps(HTML::TransferDataHolder& data_holder)
 {
+    dbgln("transfer receiving");
     // 1. Set value's has been shipped flag to true.
     m_has_been_shipped = true;
 
@@ -130,9 +134,11 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_receiving_steps(HTML::TransferDa
     if (fd_tag == IPC_FILE_TAG) {
         // TODO: Mach IPC
         auto fd = data_holder.fds.take_first();
+        dbgln("received: {}", fd.fd());
         m_transport = IPC::Transport(MUST(Core::LocalSocket::adopt_fd(fd.take_fd())));
 
         m_transport->set_up_read_hook([strong_this = GC::make_root(this)]() {
+            dbgln("transferred transport is reading");
             strong_this->read_from_transport();
         });
     } else if (fd_tag != 0) {
@@ -190,10 +196,12 @@ void MessagePort::entangle_with(MessagePort& remote_port)
     m_remote_port->m_transport = IPC::Transport(move(sockets[1]));
 
     m_transport->set_up_read_hook([strong_this = GC::make_root(this)]() {
+        dbgln("read hook 1!");
         strong_this->read_from_transport();
     });
 
     m_remote_port->m_transport->set_up_read_hook([remote_port = GC::make_root(m_remote_port)]() {
+        dbgln("read hook 2!");
         remote_port->read_from_transport();
     });
 }
@@ -271,6 +279,8 @@ ErrorOr<void> MessagePort::send_message_on_transport(SerializedTransferRecord co
     IPC::Encoder encoder(buffer);
     MUST(encoder.encode(serialize_with_transfer_result));
 
+    // dbgln("{}", StringView { buffer.data() });
+
     TRY(buffer.transfer_message(*m_transport));
     return {};
 }
@@ -335,7 +345,9 @@ ErrorOr<MessagePort::ParseDecision> MessagePort::parse_message()
 
 void MessagePort::read_from_transport()
 {
+    // dbgln("reading in {}", relevant_global_object(*this).class_name());
     auto&& [bytes, fds] = m_transport->read_as_much_as_possible_without_blocking([this] {
+        dbgln(":(");
         queue_global_task(Task::Source::PostedMessage, relevant_global_object(*this), GC::create_function(heap(), [this] {
             this->close();
         }));

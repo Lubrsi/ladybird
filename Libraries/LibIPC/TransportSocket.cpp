@@ -148,4 +148,9 @@ ErrorOr<IPC::File> TransportSocket::clone_for_transfer()
     return IPC::File::clone_fd(m_socket->fd().value());
 }
 
+Optional<int> TransportSocket::fd() const
+{
+    return m_socket->fd();
+}
+
 }

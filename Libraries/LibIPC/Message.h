@@ -26,8 +26,8 @@ public:
 
     ~AutoCloseFileDescriptor()
     {
-        if (m_fd != -1)
-            (void)Core::System::close(m_fd);
+        // if (m_fd != -1)
+        //     (void)Core::System::close(m_fd);
     }
 
     int value() const { return m_fd; }
@@ -46,6 +46,8 @@ public:
     ErrorOr<void> append_file_descriptor(int fd);
 
     ErrorOr<void> transfer_message(Transport& transport);
+
+    Vector<u8, 1024> const& data() const { return m_data; }
 
 private:
     Vector<u8, 1024> m_data;

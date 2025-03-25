@@ -19,6 +19,7 @@ ConnectionBase::ConnectionBase(IPC::Stub& local_stub, Transport transport, u32 l
     , m_transport(move(transport))
     , m_local_endpoint_magic(local_endpoint_magic)
 {
+    dbgln("created an IPC connection");
     m_responsiveness_timer = Core::Timer::create_single_shot(3000, [this] { may_have_become_unresponsive(); });
 
     m_transport.set_up_read_hook([this] {

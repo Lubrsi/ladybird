@@ -37,6 +37,8 @@ public:
 
     ErrorOr<IPC::File> clone_for_transfer();
 
+    Optional<int> fd() const;
+
 private:
     NonnullOwnPtr<Core::LocalSocket> m_socket;
 };
