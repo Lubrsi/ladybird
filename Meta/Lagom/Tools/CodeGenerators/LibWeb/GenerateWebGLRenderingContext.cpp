@@ -220,6 +220,7 @@ static void generate_get_parameter(SourceGenerator& generator, int webgl_version
         { "MAX_PROGRAM_TEXEL_OFFSET"sv, { "GLint"sv }, 2 },
         { "MAX_VERTEX_OUTPUT_COMPONENTS"sv, { "GLint"sv }, 2 },
         { "MAX_SERVER_WAIT_TIMEOUT"sv, { "GLint64"sv }, 2 },
+        { "PIXEL_UNPACK_BUFFER_BINDING"sv, { "WebGLBuffer"sv }, 2 },
     };
 
     auto is_integer_type = [](StringView type) {
@@ -1037,6 +1038,21 @@ public:
     Vector<GLint> length;
     length.append(source.bytes().size());
     glShaderSource(shader_handle, 1, strings.data(), length.data());
+    auto error2 = glGetError();
+    if (error2 != 0) {
+        dbgln("error occurred in shaderSource: {:x}", error2);
+        GLint info_log_length = 0;
+        glGetShaderiv(shader_handle, GL_INFO_LOG_LENGTH, &info_log_length);
+        Vector<GLchar> info_log;
+        info_log.resize(info_log_length);
+        if (info_log_length) {
+            glGetShaderInfoLog(shader_handle, info_log_length, nullptr, info_log.data());
+            auto string_log = String::from_utf8_without_validation(ReadonlyBytes { info_log.data(), static_cast<size_t>(info_log_length - 1) });
+            dbgln("error: {}", string_log);
+        } else {
+            dbgln("no error log");
+        }
+    }
 )~~~");
             continue;
         }
@@ -1432,7 +1448,28 @@ public:
         }
 
         if (function.name == "drawBuffers"sv) {
+            // Since our default framebuffer has a non-zero ID due to generating our own framebuffer,
+            // we need to re-implement the default framebuffer code path ourselves, and map GL_BACK
+            // to GL_COLOR_ATTACHMENT0. This matches Chromium.
             function_impl_generator.append(R"~~~(
+    if (!m_framebuffer_binding) {
+        if (buffers.size() != 1) {
+            dbgln("WebGL/drawBuffers: Returning because the default framebuffer must only have one buffer.");
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+
+        if (buffers[0] != GL_NONE && buffers[0] != GL_BACK) {
+            dbgln("WebGL/drawBuffers: Returning because only GL_NONE AND GL_BACK are valid for the default framebuffer.");
+            set_error(GL_INVALID_OPERATION);
+            return;
+        }
+
+        if (buffers[0] == GL_BACK) {
+            buffers[0] = GL_COLOR_ATTACHMENT0;
+        }
+    }
+
     glDrawBuffers(buffers.size(), buffers.data());
 )~~~");
             continue;
@@ -1784,6 +1821,9 @@ public:
     case GL_COPY_WRITE_BUFFER:
         m_copy_write_buffer_binding = buffer;
         break;
+    case GL_PIXEL_UNPACK_BUFFER:
+        m_pixel_unpack_buffer_binding = buffer;
+        break;
 )~~~");
             }
 
@@ -2118,6 +2158,7 @@ private:
     GC::Ptr<WebGLBuffer> m_uniform_buffer_binding;
     GC::Ptr<WebGLBuffer> m_copy_read_buffer_binding;
     GC::Ptr<WebGLBuffer> m_copy_write_buffer_binding;
+    GC::Ptr<WebGLBuffer> m_pixel_unpack_buffer_binding;
     GC::Ptr<WebGLTexture> m_texture_binding_2d_array;
     GC::Ptr<WebGLTexture> m_texture_binding_3d;
 )~~~");
@@ -2148,6 +2189,7 @@ void @class_name@::visit_edges(JS::Cell::Visitor& visitor)
     visitor.visit(m_uniform_buffer_binding);
     visitor.visit(m_copy_read_buffer_binding);
     visitor.visit(m_copy_write_buffer_binding);
+    visitor.visit(m_pixel_unpack_buffer_binding);
     visitor.visit(m_texture_binding_2d_array);
     visitor.visit(m_texture_binding_3d);
 )~~~");

@@ -396,7 +396,27 @@ ErrorOr<void> LocalSocket::send_fd(int fd)
 
 static bool fd_is_valid(int fd)
 {
-    return fcntl(fd, F_GETFD) != -1 && errno != EBADF;
+    auto result = fcntl(fd, F_GETFD);
+    dbgln("result: {} errno: {}", result, errno);
+    return result != -1;
+}
+
+static int is_socket(int fd) {
+    int type;
+    socklen_t length = sizeof(type);
+    errno = 0; // Clear errno before the call
+
+    // Attempt to get the socket type
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) == -1) {
+        if (errno == ENOTSOCK) {
+            return 0; // Not a socket
+        } else if (errno == EBADF) {
+            return -1; // Invalid or closed descriptor
+        }
+        // Other errors might occur (e.g., ENOPROTOOPT), but ENOTSOCK is the key one
+        return 0;
+    }
+    return 1; // Is a socket
 }
 
 ErrorOr<ssize_t> LocalSocket::send_message(ReadonlyBytes data, int flags, Vector<int, 1> fds)
@@ -426,16 +446,18 @@ ErrorOr<ssize_t> LocalSocket::send_message(ReadonlyBytes data, int flags, Vector
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
     msg.msg_control = header;
-    msg.msg_controllen = CMSG_LEN(fd_payload_size);
+    msg.msg_controllen = CMSG_SPACE(fd_payload_size);
 
     dbgln("sending a message with fds in it, woah");
 
-    dbgln("is helper fd valid? {}", fd_is_valid(m_helper.fd()));
+    dbgln("is helper {} fd valid? {}, is socket? {}", m_helper.fd(), fd_is_valid(m_helper.fd()), is_socket(m_helper.fd()));
     for (auto sending_fd : fds) {
-        dbgln("is {} fd valid? {}", sending_fd, fd_is_valid(sending_fd));
+        dbgln("is {} fd valid? {}, is socket? {}", sending_fd, fd_is_valid(sending_fd), is_socket(m_helper.fd()));
     }
 
-    return TRY(Core::System::sendmsg(m_helper.fd(), &msg, default_flags() | flags));
+    auto maybe_error = Core::System::sendmsg(m_helper.fd(), &msg, default_flags() | flags);
+    dbgln("maybe_error: {}", maybe_error);
+    return maybe_error;
 }
 
 ErrorOr<Bytes> LocalSocket::receive_message(AK::Bytes buffer, int flags, Vector<int>& fds)

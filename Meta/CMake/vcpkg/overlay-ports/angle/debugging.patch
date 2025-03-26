@@ -1,0 +1,199 @@
+diff --git a/src/common/debug.cpp b/src/common/debug.cpp
+index 706852242b..2b17caeeb2 100644
+--- a/src/common/debug.cpp
++++ b/src/common/debug.cpp
+@@ -76,11 +76,7 @@ namespace priv
+ 
+ bool ShouldCreatePlatformLogMessage(LogSeverity severity)
+ {
+-#if defined(ANGLE_TRACE_ENABLED)
+     return true;
+-#else
+-    return severity != LOG_EVENT;
+-#endif
+ }
+ 
+ // This is never instantiated, it's just used for EAT_STREAM_PARAMETERS to an object of the correct
+@@ -90,20 +86,12 @@ std::ostream *gSwallowStream;
+ 
+ bool DebugAnnotationsActive(const gl::Context *context)
+ {
+-#if defined(ANGLE_ENABLE_DEBUG_ANNOTATIONS) || defined(ANGLE_ENABLE_DEBUG_TRACE)
+-    return g_debugAnnotator != nullptr && g_debugAnnotator->getStatus(context);
+-#else
+     return false;
+-#endif
+ }
+ 
+ bool ShouldBeginScopedEvent(const gl::Context *context)
+ {
+-#if defined(ANGLE_ENABLE_ANNOTATOR_RUN_TIME_CHECKS)
+-    return DebugAnnotationsActive(context);
+-#else
+     return true;
+-#endif  // defined(ANGLE_ENABLE_ANNOTATOR_RUN_TIME_CHECKS)
+ }
+ 
+ bool DebugAnnotationsInitialized()
+@@ -190,15 +178,7 @@ LogMessage::~LogMessage()
+         {
+             lock = std::unique_lock<angle::SimpleMutex>(*g_debugMutex);
+         }
+-
+-        if (DebugAnnotationsInitialized() && (mSeverity > LOG_INFO))
+-        {
+-            g_debugAnnotator->logMessage(*this);
+-        }
+-        else
+-        {
+-            Trace(getSeverity(), getMessage().c_str());
+-        }
++        Trace(getSeverity(), getMessage().c_str());
+     }
+ 
+     if (mSeverity == LOG_FATAL)
+@@ -238,98 +218,13 @@ void Trace(LogSeverity severity, const char *message)
+     }
+ 
+     if (severity == LOG_FATAL || severity == LOG_ERR || severity == LOG_WARN ||
+-#if defined(ANGLE_ENABLE_TRACE_ANDROID_LOGCAT) || defined(ANGLE_ENABLE_TRACE_EVENTS)
+         severity == LOG_EVENT ||
+-#endif
+         severity == LOG_INFO)
+     {
+-#if defined(ANGLE_PLATFORM_ANDROID)
+-        android_LogPriority android_priority = ANDROID_LOG_ERROR;
+-        switch (severity)
+-        {
+-            case LOG_INFO:
+-            case LOG_EVENT:
+-                android_priority = ANDROID_LOG_INFO;
+-                break;
+-            case LOG_WARN:
+-                android_priority = ANDROID_LOG_WARN;
+-                break;
+-            case LOG_ERR:
+-                android_priority = ANDROID_LOG_ERROR;
+-                break;
+-            case LOG_FATAL:
+-                android_priority = ANDROID_LOG_FATAL;
+-                break;
+-            default:
+-                UNREACHABLE();
+-        }
+-        __android_log_print(android_priority, "ANGLE", "%s: %s\n", LogSeverityName(severity),
+-                            str.c_str());
+-        // Note: we also log to stdout/stderr below.
+-#endif
+-
+-#if defined(ANGLE_PLATFORM_APPLE)
+-        if (__builtin_available(macOS 10.12, iOS 10.0, *))
+-        {
+-            os_log_type_t apple_log_type = OS_LOG_TYPE_DEFAULT;
+-            switch (severity)
+-            {
+-                case LOG_INFO:
+-                case LOG_EVENT:
+-                    apple_log_type = OS_LOG_TYPE_INFO;
+-                    break;
+-                case LOG_WARN:
+-                    apple_log_type = OS_LOG_TYPE_DEFAULT;
+-                    break;
+-                case LOG_ERR:
+-                    apple_log_type = OS_LOG_TYPE_ERROR;
+-                    break;
+-                case LOG_FATAL:
+-                    // OS_LOG_TYPE_FAULT is too severe - grabs the entire process tree.
+-                    apple_log_type = OS_LOG_TYPE_ERROR;
+-                    break;
+-                default:
+-                    UNREACHABLE();
+-            }
+-            os_log_with_type(OS_LOG_DEFAULT, apple_log_type, "ANGLE: %s: %s\n",
+-                             LogSeverityName(severity), str.c_str());
+-        }
+-#else
+         // Note: we use fprintf because <iostream> includes static initializers.
+         fprintf((severity >= LOG_WARN) ? stderr : stdout, "%s: %s\n", LogSeverityName(severity),
+                 str.c_str());
+-#endif
+-    }
+-
+-#if defined(ANGLE_PLATFORM_WINDOWS) && \
+-    (defined(ANGLE_ENABLE_DEBUG_TRACE_TO_DEBUGGER) || !defined(NDEBUG))
+-#    if !defined(ANGLE_ENABLE_DEBUG_TRACE_TO_DEBUGGER)
+-    if (severity >= LOG_ERR)
+-#    endif  // !defined(ANGLE_ENABLE_DEBUG_TRACE_TO_DEBUGGER)
+-    {
+-        OutputDebugStringA(str.c_str());
+-        OutputDebugStringA("\n");
+-    }
+-#endif
+-
+-#if defined(ANGLE_ENABLE_DEBUG_TRACE)
+-#    if defined(NDEBUG)
+-    if (severity == LOG_EVENT || severity == LOG_WARN || severity == LOG_INFO)
+-    {
+-        return;
+-    }
+-#    endif  // defined(NDEBUG)
+-    static angle::base::NoDestructor<std::ofstream> file(TRACE_OUTPUT_FILE, std::ofstream::app);
+-    if (file->good())
+-    {
+-        if (severity > LOG_EVENT)
+-        {
+-            *file << LogSeverityName(severity) << ": ";
+-        }
+-        *file << str << "\n";
+-        file->flush();
+     }
+-#endif  // defined(ANGLE_ENABLE_DEBUG_TRACE)
+ }
+ 
+ LogSeverity LogMessage::getSeverity() const
+diff --git a/src/common/log_utils.h b/src/common/log_utils.h
+index fc1aa2cccb..e88f2c1f33 100644
+--- a/src/common/log_utils.h
++++ b/src/common/log_utils.h
+@@ -19,6 +19,9 @@
+ #include <sstream>
+ #include <string>
+ 
++#define ANGLE_ENABLE_DEBUG_TRACE
++#define ANGLE_ENABLE_DEBUG_ANNOTATIONS
++
+ #include "common/angleutils.h"
+ #include "common/entry_points_enum_autogen.h"
+ #include "common/platform.h"
+diff --git a/src/libANGLE/Surface.h b/src/libANGLE/Surface.h
+index 807dea2911..97c2c815b9 100644
+--- a/src/libANGLE/Surface.h
++++ b/src/libANGLE/Surface.h
+@@ -234,6 +234,7 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
+         mRefCount--;
+     }
+     bool isReferenced() const { return mRefCount > 0; }
++    int refCount() const { return mRefCount; }
+ 
+   protected:
+     Surface(EGLint surfaceType,
+diff --git a/src/libANGLE/validationEGL.cpp b/src/libANGLE/validationEGL.cpp
+index 5aaa298e9b..39081dc99a 100644
+--- a/src/libANGLE/validationEGL.cpp
++++ b/src/libANGLE/validationEGL.cpp
+@@ -1390,10 +1390,15 @@ bool ValidateSurfaceBadAccess(const ValidationContext *val,
+                               const gl::Context *previousContext,
+                               const Surface *surface)
+ {
++    return true;
+     if (surface->isReferenced() &&
+         (previousContext == nullptr || (surface != previousContext->getCurrentDrawSurface() &&
+                                         surface != previousContext->getCurrentReadSurface())))
+     {
++        printf("refc: %d, prev: %p, surface: %p (%d) \n", surface->refCount(), previousContext, surface, reinterpret_cast<EGLSurface>(static_cast<uintptr_t>(surface->id().value)));
++        if (previousContext) {
++            printf("pid: %d, pcds: %p (%d), pcrs: %p (%d)\n", reinterpret_cast<EGLContext>(static_cast<uintptr_t>(previousContext->id().value)), previousContext->getCurrentDrawSurface(), reinterpret_cast<EGLSurface>(static_cast<uintptr_t>(previousContext->getCurrentDrawSurface()->id().value)), previousContext->getCurrentReadSurface(), reinterpret_cast<EGLSurface>(static_cast<uintptr_t>(previousContext->getCurrentReadSurface()->id().value)));
++        }
+         val->setError(EGL_BAD_ACCESS, "Surface can only be current on one thread");
+         return false;
+     }

@@ -247,6 +247,7 @@ ErrorOr<int> openat(int fd, StringView path, int options, mode_t mode)
 
 ErrorOr<void> close(int fd)
 {
+    // dbgln("closing {}", fd);
     if (::close(fd) < 0)
         return Error::from_syscall("close"sv, -errno);
     return {};

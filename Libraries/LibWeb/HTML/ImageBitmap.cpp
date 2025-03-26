@@ -47,25 +47,42 @@ WebIDL::ExceptionOr<void> ImageBitmap::deserialization_steps(ReadonlySpan<u32> c
     return {};
 }
 
-WebIDL::ExceptionOr<void> ImageBitmap::transfer_steps(HTML::TransferDataHolder&)
+WebIDL::ExceptionOr<void> ImageBitmap::transfer_steps(HTML::TransferDataHolder& data_holder)
 {
-    // FIXME: Implement this
-    dbgln("(STUBBED) ImageBitmap::transfer_steps(HTML::TransferDataHolder&)");
+    // FIXME: 1. If value's origin-clean flag is not set, then throw a "DataCloneError" DOMException.
+
+    // 2. Set dataHolder.[[BitmapData]] to value's bitmap data.
+    data_holder.data.append(m_width);
+    data_holder.data.append(m_height);
+    data_holder.data.append(m_bitmap->pitch());
+    data_holder.data.append(m_bitmap->pitch() >> 32);
+    data_holder.data.append(to_underlying(m_bitmap->format()));
+    data_holder.data.append(to_underlying(m_bitmap->alpha_type()));
+    data_holder.data.append(m_bitmap->begin(), m_bitmap->data_size());
+
+    // 3. Unset value's bitmap data.
+    m_bitmap = nullptr;
+
     return {};
 }
 
 WebIDL::ExceptionOr<void> ImageBitmap::transfer_receiving_steps(HTML::TransferDataHolder&)
 {
-    // FIXME: Implement this
-    dbgln("(STUBBED) ImageBitmap::transfer_receiving_steps(HTML::TransferDataHolder&)");
+    // 1. Set value's bitmap data to dataHolder.[[BitmapData]].
+    // m_width = data_holder.data.take_first();
+    // m_height = data_holder.data.take_first();
+    // size_t pitch = data_holder.data.take_first();
+    // pitch |= static_cast<u64>(data_holder.data.take_first()) << 32;
+    // auto format = static_cast<Gfx::BitmapFormat>(data_holder.data.take_first());
+    // auto alpha_type = static_cast<Gfx::AlphaType>(data_holder.data.take_first());
+
+
     return {};
 }
 
 HTML::TransferType ImageBitmap::primary_interface() const
 {
-    // FIXME: Implement this
-    dbgln("(STUBBED) ImageBitmap::primary_interface()");
-    return {};
+    return HTML::TransferType::ImageBitmap;
 }
 
 // https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#dom-imagebitmap-width

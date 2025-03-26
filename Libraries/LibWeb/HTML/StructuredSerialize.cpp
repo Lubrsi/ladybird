@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "ImageBitmap.h"
+
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
@@ -1291,6 +1293,9 @@ static bool is_interface_exposed_on_target_realm(TransferType name, JS::Realm& r
     case TransferType::MessagePort:
         return intrinsics.is_exposed("MessagePort"sv);
         break;
+    case TransferType::ImageBitmap:
+        return intrinsics.is_exposed("ImageBitmap"sv);
+        break;
     default:
         dbgln("Unknown interface type for transfer: {}", to_underlying(name));
         break;
@@ -1310,6 +1315,11 @@ static WebIDL::ExceptionOr<GC::Ref<Bindings::PlatformObject>> create_transferred
     case TransferType::ResizableArrayBuffer:
         dbgln("ArrayBuffer ({}) is not a platform object.", to_underlying(name));
         break;
+    case TransferType::ImageBitmap: {
+        auto image_bitmap = HTML::ImageBitmap::create(target_realm);
+        TRY(image_bitmap->transfer_receiving_steps(transfer_data_holder));
+        return image_bitmap;
+    }
     }
     VERIFY_NOT_REACHED();
 }

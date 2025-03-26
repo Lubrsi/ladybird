@@ -208,6 +208,7 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 
     eglMakeCurrent(m_impl->display, m_impl->surface, m_impl->surface, m_impl->context);
 
+    glRequestExtensionANGLE("GL_EXT_color_buffer_half_float");
     EGLint texture_target_name = 0;
     eglGetConfigAttrib(display, config, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &texture_target_name);
     VERIFY(texture_target_name == EGL_TEXTURE_RECTANGLE_ANGLE || texture_target_name == EGL_TEXTURE_2D);
