@@ -618,7 +618,8 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
 
             // 8. If targetEntry's document is null, or targetEntry's document state's reload pending is true, then:
             if (!target_entry->document() || target_entry->document_state()->reload_pending()) {
-                // FIXME: 1. Let navTimingType be "back_forward" if targetEntry's document is null; otherwise "reload".
+                // 1. Let navTimingType be "back_forward" if targetEntry's document is null; otherwise "reload".
+                auto navigation_timing_type = !target_entry->document() ? Bindings::NavigationTimingType::BackForward : Bindings::NavigationTimingType::Reload;
 
                 // 2. Let targetSnapshotParams be the result of snapshotting target snapshot params given navigable.
                 auto target_snapshot_params = navigable->snapshot_target_snapshot_params();
@@ -649,8 +650,9 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
                 //    targetSnapshotParams, userInvolvement, with allowPOST set to allowPOST and completionSteps set to
                 //    queue a global task on the navigation and traversal task source given navigable's active window to
                 //    run afterDocumentPopulated.
-                Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(this->heap(), [populated_target_entry, potentially_target_specific_source_snapshot_params, target_snapshot_params, this, allow_POST, navigable, after_document_populated = GC::create_function(this->heap(), move(after_document_populated)), user_involvement] {
-                    navigable->populate_session_history_entry_document(populated_target_entry, *potentially_target_specific_source_snapshot_params, target_snapshot_params, user_involvement, {}, Navigable::NullOrError {}, ContentSecurityPolicy::Directives::Directive::NavigationType::Other, allow_POST, GC::create_function(this->heap(), [this, after_document_populated, populated_target_entry]() mutable {
+                // FIXME: Spec Issue: It doesn't pass in navigation timing type here.
+                Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(this->heap(), [populated_target_entry, navigation_timing_type, potentially_target_specific_source_snapshot_params, target_snapshot_params, this, allow_POST, navigable, after_document_populated = GC::create_function(this->heap(), move(after_document_populated)), user_involvement] {
+                    navigable->populate_session_history_entry_document(populated_target_entry, navigation_timing_type, *potentially_target_specific_source_snapshot_params, target_snapshot_params, user_involvement, {}, Navigable::NullOrError {}, ContentSecurityPolicy::Directives::Directive::NavigationType::Other, allow_POST, GC::create_function(this->heap(), [this, after_document_populated, populated_target_entry]() mutable {
                                  VERIFY(active_window());
                                  queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(this->heap(), [after_document_populated, populated_target_entry]() mutable {
                                      after_document_populated->function()(true, populated_target_entry);

@@ -136,6 +136,7 @@ public:
 
     WebIDL::ExceptionOr<void> populate_session_history_entry_document(
         GC::Ptr<SessionHistoryEntry> entry,
+        Bindings::NavigationTimingType navigation_timing_type,
         SourceSnapshotParams const& source_snapshot_params,
         TargetSnapshotParams const& target_snapshot_params,
         UserNavigationInvolvement user_involvement,

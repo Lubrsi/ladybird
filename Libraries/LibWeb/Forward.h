@@ -80,6 +80,7 @@ enum class DOMParserSupportedType : u8;
 enum class EndingType : u8;
 enum class HdrMetadataType : u8;
 enum class ImageSmoothingQuality : u8;
+enum class NavigationTimingType : u8;
 enum class MediaDecodingType : u8;
 enum class MediaEncodingType : u8;
 enum class MediaKeysRequirement : u8;
@@ -837,6 +838,7 @@ class MimeType;
 namespace Web::NavigationTiming {
 
 class PerformanceNavigation;
+class PerformanceNavigationTiming;
 class PerformanceTiming;
 
 }

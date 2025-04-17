@@ -68,7 +68,8 @@ struct NavigationParams : GC::Cell {
     // an opener policy to use for the new Document
     OpenerPolicy opener_policy;
 
-    // FIXME: a NavigationTimingType used for creating the navigation timing entry for the new Document
+    // a NavigationTimingType used for creating the navigation timing entry for the new Document
+    Bindings::NavigationTimingType navigation_timing_type;
 
     // a URL or null used to populate the new Document's about base URL
     Optional<URL::URL> about_base_url;
@@ -135,7 +136,8 @@ struct NonFetchSchemeNavigationParams : JS::Cell {
     // an origin possibly for use in a user-facing prompt to confirm the invocation of an external software package
     URL::Origin initiator_origin;
 
-    // FIXME: a NavigationTimingType used for creating the navigation timing entry for the new Document
+    // a NavigationTimingType used for creating the navigation timing entry for the new Document
+    Bindings::NavigationTimingType navigation_timing_type;
 
     // a user navigation involvement used when obtaining a browsing context for the new Document (if one is created)
     UserNavigationInvolvement user_involvement;

@@ -15,7 +15,7 @@ class PerformanceNavigation final : public Bindings::PlatformObject {
     GC_DECLARE_ALLOCATOR(PerformanceNavigation);
 
 public:
-    ~PerformanceNavigation();
+    virtual ~PerformanceNavigation() override;
 
     u16 type() const;
     u16 redirect_count() const;

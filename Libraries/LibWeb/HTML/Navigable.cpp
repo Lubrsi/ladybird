@@ -22,6 +22,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
+#include <LibWeb/Forward.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/DocumentState.h>
@@ -742,7 +743,7 @@ static GC::Ptr<DOM::Document> attempt_to_create_a_non_fetch_scheme_document(NonF
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-from-a-srcdoc-resource
-static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, TargetSnapshotParams const& target_snapshot_params, UserNavigationInvolvement user_involvement, Optional<String> navigation_id)
+static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, TargetSnapshotParams const& target_snapshot_params, UserNavigationInvolvement user_involvement, Optional<String> navigation_id, Bindings::NavigationTimingType navigation_timing_type)
 {
     auto& vm = navigable->vm();
     VERIFY(navigable->active_window());
@@ -808,7 +809,7 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
     //    policy container: policyContainer
     //    final sandboxing flag set: targetSnapshotParams's sandboxing flags
     //    opener policy: coop
-    //    FIXME: navigation timing type: navTimingType
+    //    navigation timing type: navTimingType
     //    about base URL: entry's document state's about base URL
     //    user involvement: userInvolvement
     return vm.heap().allocate<NavigationParams>(
@@ -826,10 +827,11 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
         move(coop),
         entry->document_state()->about_base_url(),
         user_involvement);
+    navigation_params->navigation_timing_type = navigation_timing_type;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-by-fetching
-static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, SourceSnapshotParams const& source_snapshot_params, TargetSnapshotParams const& target_snapshot_params, ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type, UserNavigationInvolvement user_involvement, Optional<String> navigation_id)
+static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, SourceSnapshotParams const& source_snapshot_params, TargetSnapshotParams const& target_snapshot_params, ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type, UserNavigationInvolvement user_involvement, Optional<String> navigation_id, Bindings::NavigationTimingType navigation_timing_type)
 {
     auto& vm = navigable->vm();
     VERIFY(navigable->active_window());
@@ -1169,7 +1171,7 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
         // - target snapshot sandboxing flags: targetSnapshotParams's sandboxing flags
         // - source snapshot has transient activation: sourceSnapshotParams's has transient activation
         // - initiator origin: responseOrigin
-        // FIXME: - navigation timing type: navTimingType
+        // - navigation timing type: navTimingType
         // - user involvement: userInvolvement
         return vm.heap().allocate<NonFetchSchemeNavigationParams>(
             navigation_id,
@@ -1179,6 +1181,7 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
             source_snapshot_params.has_transient_activation,
             move(*response_origin),
             user_involvement);
+        navigation_params->navigation_timing_type = navigation_timing_type;
     }
 
     // 21. If any of the following are true:
@@ -1224,7 +1227,7 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
     //     policy container: resultPolicyContainer
     //     final sandboxing flag set: finalSandboxFlags
     //     COOP enforcement result: coopEnforcementResult
-    //     FIXME: navigation timing type: navTimingType
+    //     navigation timing type: navTimingType
     //     about base URL: entry's document state's about base URL
     //     user involvement: userInvolvement
     return vm.heap().allocate<NavigationParams>(
@@ -1242,11 +1245,13 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
         response_coop,
         entry->document_state()->about_base_url(),
         user_involvement);
+    navigation_params->navigation_timing_type = navigation_timing_type;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#populating-a-session-history-entry
 WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
     GC::Ptr<SessionHistoryEntry> entry,
+    Bindings::NavigationTimingType navigation_timing_type,
     SourceSnapshotParams const& source_snapshot_params,
     TargetSnapshotParams const& target_snapshot_params,
     UserNavigationInvolvement user_involvement,
@@ -1275,7 +1280,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
         //    from a srcdoc resource given entry, navigable, targetSnapshotParams, userInvolvement, navigationId, and
         //    navTimingType.
         if (document_resource.has<String>()) {
-            navigation_params = create_navigation_params_from_a_srcdoc_resource(entry, this, target_snapshot_params, user_involvement, navigation_id);
+            navigation_params = create_navigation_params_from_a_srcdoc_resource(entry, this, target_snapshot_params, user_involvement, navigation_id, navigation_timing_type);
         }
         // 2. Otherwise, if all of the following are true:
         //    - entry's URL's scheme is a fetch scheme; and
@@ -1285,7 +1290,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
         //    sourceSnapshotParams, targetSnapshotParams, cspNavigationType, userInvolvement, navigationId, and
         //    navTimingType.
         else if (Fetch::Infrastructure::is_fetch_scheme(entry->url().scheme()) && (document_resource.has<Empty>() || allow_POST)) {
-            navigation_params = TRY(create_navigation_params_by_fetching(entry, this, source_snapshot_params, target_snapshot_params, csp_navigation_type, user_involvement, navigation_id));
+            navigation_params = TRY(create_navigation_params_by_fetching(entry, this, source_snapshot_params, target_snapshot_params, csp_navigation_type, user_involvement, navigation_id, navigation_timing_type));
         }
         // 3. Otherwise, if entry's URL's scheme is not a fetch scheme, then set navigationParams to a new non-fetch
         //    scheme navigation params, with:
@@ -1296,7 +1301,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
             // - target snapshot sandboxing flags: targetSnapshotParams's sandboxing flags
             // - source snapshot has transient activation: sourceSnapshotParams's has transient activation
             // - initiator origin: entry's document state's initiator origin
-            // FIXME: - navigation timing type: navTimingType
+            // - navigation timing type: navTimingType
             // - user involvement: userInvolvement
             navigation_params = vm().heap().allocate<NonFetchSchemeNavigationParams>(
                 navigation_id,
@@ -1306,6 +1311,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
                 source_snapshot_params.has_transient_activation,
                 *entry->document_state()->initiator_origin(),
                 user_involvement);
+            non_fetching_scheme_navigation_params->navigation_timing_type = navigation_timing_type;
         }
     }
 
@@ -1769,7 +1775,7 @@ void Navigable::begin_navigation(NavigateParams params)
         // 9. Attempt to populate the history entry's document for historyEntry, given navigable, "navigate",
         //    sourceSnapshotParams, targetSnapshotParams, userInvolvement, navigationId, navigationParams,
         //    cspNavigationType, with allowPOST set to true and completionSteps set to the following step:
-        populate_session_history_entry_document(history_entry, source_snapshot_params, target_snapshot_params, user_involvement, navigation_id, navigation_params, csp_navigation_type, true, GC::create_function(heap(), [this, history_entry, history_handling, navigation_id, user_involvement] {
+        populate_session_history_entry_document(history_entry, Bindings::NavigationTimingType::Navigate, source_snapshot_params, target_snapshot_params, user_involvement, navigation_id, navigation_params, csp_navigation_type, true, GC::create_function(heap(), [this, history_entry, history_handling, navigation_id, user_involvement] {
             // 1. Append session history traversal steps to navigable's traversable to finalize a cross-document navigation given navigable, historyHandling, userInvolvement, and historyEntry.
             traversable_navigable()->append_session_history_traversal_steps(GC::create_function(heap(), [this, history_entry, history_handling, navigation_id, user_involvement] {
                 if (this->has_been_destroyed()) {
@@ -1959,7 +1965,7 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
     //     policy container: policyContainer
     //     final sandboxing flag set: finalSandboxFlags
     //     opener policy: coop
-    //     FIXME: navigation timing type: "navigate"
+    //     navigation timing type: "navigate"
     //     about base URL: targetNavigable's active document's about base URL
     //     user involvement: userInvolvement
     auto navigation_params = vm.heap().allocate<NavigationParams>(
@@ -1977,6 +1983,7 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
         coop,
         active_document()->about_base_url(),
         user_involvement);
+    navigation_params->navigation_timing_type = Bindings::NavigationTimingType::Navigate;
 
     // 17. Return the result of loading an HTML document given navigationParams.
     return load_document(navigation_params);

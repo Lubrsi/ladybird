@@ -921,6 +921,8 @@ public:
 
     NonnullRefPtr<CSS::CSSStyleValue const> custom_property_initial_value(FlyString const& name) const;
 
+    bool was_created_via_cross_origin_redirects() const { return m_was_created_via_cross_origin_redirects; }
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -1284,6 +1286,10 @@ private:
 
     // https://www.w3.org/TR/css-properties-values-api-1/#dom-window-registeredpropertyset-slot
     HashMap<FlyString, GC::Ref<Web::CSS::CSSPropertyRule>> m_registered_custom_properties;
+
+    // https://html.spec.whatwg.org/multipage/dom.html#was-created-via-cross-origin-redirects
+    // A Document has a boolean was created via cross-origin redirects, initially false.
+    bool m_was_created_via_cross_origin_redirects { false };
 };
 
 template<>
