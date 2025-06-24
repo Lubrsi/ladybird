@@ -30,7 +30,7 @@
       "description": "Metal support for angle",
       "supports": "ios, osx"
     },
-    "vulkan": {
+    "vulkan-backend": {
       "description": "Vulkan support for angle",
       "supports": "linux"
     }

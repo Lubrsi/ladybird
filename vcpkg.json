@@ -10,7 +10,10 @@
     },
     {
       "name": "angle",
-      "platform": "linux"
+      "platform": "linux",
+      "features": [
+        "vulkan-backend"
+      ]
     },
     {
       "name": "curl",
