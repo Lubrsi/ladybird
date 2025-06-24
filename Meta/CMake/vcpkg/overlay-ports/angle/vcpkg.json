@@ -18,6 +18,10 @@
       "name": "spirv-tools",
       "platform": "linux"
     },
+    {
+      "name": "vulkan",
+      "platform": "linux"
+    },
     "opengl-registry",
     {
       "name": "vcpkg-cmake",
