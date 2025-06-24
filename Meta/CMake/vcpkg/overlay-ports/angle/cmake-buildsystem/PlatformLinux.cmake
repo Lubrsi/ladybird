@@ -29,6 +29,7 @@ if(USE_VULKAN)
         ${angle_dma_buf_sources}
         ${angle_spirv_sources}
         ${angle_vk_mem_alloc_wrapper}
+        ${angle_vulkan_icd}
     )
 
     list(APPEND ANGLE_DEFINITIONS

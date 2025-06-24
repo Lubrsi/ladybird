@@ -17,4 +17,9 @@ if(is_android OR is_linux OR is_chromeos)
     "src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp"
     "src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.h"
   )
+
+  set(angle_vulkan_icd
+    "src/common/vulkan/vulkan_icd.cpp"
+    "src/common/vulkan/vulkan_icd.h"
+  )
 endif()
