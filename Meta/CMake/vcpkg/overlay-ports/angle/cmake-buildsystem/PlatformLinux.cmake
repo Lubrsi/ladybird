@@ -6,7 +6,25 @@ if (USE_OPENGL)
     list(APPEND ANGLE_DEFINITIONS ANGLE_ENABLE_GLSL)
 endif ()
 
-if (USE_ANGLE_EGL OR ENABLE_WEBGL)
+# Vulkan backend
+if(USE_VULKAN)
+    list(APPEND ANGLE_SOURCES
+        ${vulkan_backend_sources}
+
+        ${angle_translator_lib_spirv_sources}
+
+        ${angle_translator_glsl_base_sources}
+
+        ${angle_translator_glsl_and_vulkan_base_sources}
+    )
+
+    list(APPEND ANGLE_DEFINITIONS
+        ANGLE_ENABLE_VULKAN
+    )
+endif()
+
+# OpenGL backend
+if (USE_OPENGL OR ENABLE_WEBGL)
     list(APPEND ANGLE_SOURCES
         ${_gl_backend_sources}
 

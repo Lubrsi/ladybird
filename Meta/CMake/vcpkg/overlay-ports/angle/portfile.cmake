@@ -35,6 +35,11 @@ if ("metal" IN_LIST FEATURES)
     set(USE_METAL ON)
 endif()
 
+set(USE_VULKAN OFF)
+if ("vulkan" IN_LIST FEATURES)
+    set(USE_VULKAN ON)
+endif()
+
 # chromium/7258
 set(ANGLE_COMMIT 79ac1a8cd767a32cce6401203e20c4bd4ca4d539)
 set(ANGLE_VERSION 7258)
@@ -175,6 +180,7 @@ vcpkg_cmake_configure(
         "-DANGLE_USE_D3D11_COMPOSITOR_NATIVE_WINDOW=${ANGLE_USE_D3D11_COMPOSITOR_NATIVE_WINDOW}"
         "-DVCPKG_TARGET_IS_WINDOWS=${VCPKG_TARGET_IS_WINDOWS}"
         "-DUSE_METAL=${USE_METAL}"
+        "-DUSE_VULKAN=${USE_VULKAN}"
 )
 
 vcpkg_cmake_install()
