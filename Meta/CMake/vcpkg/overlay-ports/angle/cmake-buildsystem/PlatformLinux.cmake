@@ -17,12 +17,18 @@ if(USE_VULKAN)
     list(APPEND ANGLE_SOURCES
         ${vulkan_backend_sources}
 
+        ${libangle_gpu_info_util_sources}
+        ${libangle_gpu_info_util_linux_sources}
+        ${libangle_gpu_info_util_vulkan_sources}
+
         ${angle_translator_lib_spirv_sources}
 
         ${angle_translator_glsl_base_sources}
         ${angle_translator_glsl_and_vulkan_base_sources}
 
+        ${angle_dma_buf_sources}
         ${angle_spirv_sources}
+        ${angle_vk_mem_alloc_wrapper}
     )
 
     list(APPEND ANGLE_DEFINITIONS
