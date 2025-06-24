@@ -22,4 +22,9 @@ if(is_android OR is_linux OR is_chromeos)
     "src/common/vulkan/vulkan_icd.cpp"
     "src/common/vulkan/vulkan_icd.h"
   )
+
+  set(angle_libvulkan_loader
+    "src/common/vulkan/libvulkan_loader.cpp"
+    "src/common/vulkan/libvulkan_loader.h"
+  )
 endif()

@@ -32,6 +32,7 @@ if(USE_VULKAN)
         ${angle_vulkan_icd}
     )
 
+    # FIXME: Maybe want to add ANGLE_USE_CUSTOM_LIBVULKAN?
     list(APPEND ANGLE_DEFINITIONS
         ANGLE_ENABLE_VULKAN
     )
