@@ -36,7 +36,7 @@ if ("metal" IN_LIST FEATURES)
 endif()
 
 set(USE_VULKAN OFF)
-if ("vulkan" IN_LIST FEATURES)
+if ("vulkan-backend" IN_LIST FEATURES)
     set(USE_VULKAN ON)
 endif()
 
