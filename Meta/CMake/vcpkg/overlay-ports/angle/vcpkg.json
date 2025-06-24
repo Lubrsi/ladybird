@@ -22,6 +22,10 @@
       "name": "vulkan",
       "platform": "linux"
     },
+    {
+      "name": "vulkan-memory-allocator",
+      "platform": "linux"
+    },
     "opengl-registry",
     {
       "name": "vcpkg-cmake",

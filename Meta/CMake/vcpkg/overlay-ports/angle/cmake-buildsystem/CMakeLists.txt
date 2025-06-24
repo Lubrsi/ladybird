@@ -334,7 +334,8 @@ endif ()
 
 if (USE_VULKAN)
     find_package(Vulkan REQUIRED)
-    target_link_libraries(ANGLE PRIVATE Vulkan::Vulkan)
+    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+    target_link_libraries(ANGLE PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 endif ()
 
 if (ENABLE_WEBGL)
