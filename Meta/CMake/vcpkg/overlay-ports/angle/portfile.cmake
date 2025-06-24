@@ -56,6 +56,7 @@ vcpkg_from_github(
         001-fix-builder-error.patch
         002-disable-swiftshader.patch
         003-vulkan-dma-buf-gn-list-direct-append.patch
+        004-only-use-mock-icd-if-defined.patch
 )
 
 # Generate angle_commit.h

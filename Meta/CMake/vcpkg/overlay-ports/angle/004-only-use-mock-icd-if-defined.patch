@@ -1,0 +1,20 @@
+diff --git a/src/common/vulkan/vulkan_icd.cpp b/src/common/vulkan/vulkan_icd.cpp
+index dc0c956a74..2ded25653f 100644
+--- a/src/common/vulkan/vulkan_icd.cpp
++++ b/src/common/vulkan/vulkan_icd.cpp
+@@ -117,6 +117,7 @@ ScopedVkLoaderEnvironment::ScopedVkLoaderEnvironment(bool enableDebugLayers, vk:
+ // since this code is a part of Java application there.
+ // Android Vulkan loader doesn't need this either.
+ #if !defined(ANGLE_PLATFORM_ANDROID)
++#   if defined(ANGLE_VK_MOCK_ICD_JSON)
+     if (icd == vk::ICD::Mock)
+     {
+         if (!setICDEnvironment(WrapICDEnvironment(ANGLE_VK_MOCK_ICD_JSON).c_str()))
+@@ -124,6 +125,7 @@ ScopedVkLoaderEnvironment::ScopedVkLoaderEnvironment(bool enableDebugLayers, vk:
+             ERR() << "Error setting environment for Mock/Null Driver.";
+         }
+     }
++#   endif   // defined(ANGLE_VK_MOCK_ICD_JSON)
+ #    if defined(ANGLE_VK_SWIFTSHADER_ICD_JSON)
+     else if (icd == vk::ICD::SwiftShader)
+     {
