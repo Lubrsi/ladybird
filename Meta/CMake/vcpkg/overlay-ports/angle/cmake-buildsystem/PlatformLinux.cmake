@@ -30,6 +30,7 @@ if(USE_VULKAN)
         ${angle_spirv_sources}
         ${angle_vk_mem_alloc_wrapper}
         ${angle_vulkan_icd}
+        ${angle_libvulkan_loader}
     )
 
     # FIXME: Maybe want to add ANGLE_USE_CUSTOM_LIBVULKAN?
