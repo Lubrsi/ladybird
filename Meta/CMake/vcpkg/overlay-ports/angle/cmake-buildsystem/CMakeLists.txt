@@ -339,6 +339,11 @@ else ()
     )
 endif ()
 
+if (USE_VULKAN)
+    find_package(Vulkan REQUIRED)
+    target_link_libraries(main PRIVATE Vulkan::Vulkan)
+endif ()
+
 if (ENABLE_WEBGL)
     set(libglesv2_entry_points_headers
         src/libGLESv2/entry_points_egl_autogen.h

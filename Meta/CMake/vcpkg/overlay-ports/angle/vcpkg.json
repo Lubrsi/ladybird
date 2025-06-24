@@ -19,7 +19,7 @@
       "platform": "linux"
     },
     {
-      "name": "vulkan-headers",
+      "name": "vulkan",
       "platform": "linux"
     },
     "opengl-registry",
