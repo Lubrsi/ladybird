@@ -116,6 +116,7 @@ include(GLESv2.cmake)
 include(D3D.cmake)
 include(GL.cmake)
 include(Metal.cmake)
+include(Vulkan.cmake)
 
 set(no_gl_prototypes
     GL_GLES_PROTOTYPES=0
