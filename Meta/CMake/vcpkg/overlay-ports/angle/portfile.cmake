@@ -95,6 +95,7 @@ set(_renderer_gn_files_to_convert
   "libANGLE/renderer/d3d/BUILD.gn D3D.cmake"
   "libANGLE/renderer/gl/BUILD.gn GL.cmake"
   "libANGLE/renderer/metal/BUILD.gn Metal.cmake"
+  "libANGLE/renderer/vulkan/BUILD.gn Vulkan.cmake"
 )
 
 foreach(_root_gni_file IN LISTS _root_gni_files_to_convert)
