@@ -12,11 +12,12 @@
     "egl-registry",
     {
       "name": "spirv-headers",
-      "platform": "linux"
+      "features": ["vulkan-backend"]
+
     },
     {
       "name": "spirv-tools",
-      "platform": "linux"
+      "features": ["vulkan-backend"]
     },
     "opengl-registry",
     {

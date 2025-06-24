@@ -232,6 +232,15 @@ set(angle_gl_enum_utils # VCPKG EDIT: Update paths
     "src/common/gl_enum_utils_autogen.h"
 )
 
+set(angle_spirv_sources
+    "src/common/spirv/angle_spirv_utils.cpp"
+    "src/common/spirv/spirv_instruction_builder_autogen.cpp"
+    "src/common/spirv/spirv_instruction_builder_autogen.h"
+    "src/common/spirv/spirv_instruction_parser_autogen.cpp"
+    "src/common/spirv/spirv_instruction_parser_autogen.h"
+    "src/common/spirv/spirv_types.h"
+)
+
 WEBKIT_INCLUDE_CONFIG_FILES_IF_EXISTS()
 
 add_subdirectory(include)
