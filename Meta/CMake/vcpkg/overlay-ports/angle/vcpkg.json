@@ -10,6 +10,10 @@
   "license": "BSD-3-Clause",
   "dependencies": [
     "egl-registry",
+    {
+      "name": "spirv-headers",
+      "platform": "linux"
+    },
     "opengl-registry",
     {
       "name": "vcpkg-cmake",
