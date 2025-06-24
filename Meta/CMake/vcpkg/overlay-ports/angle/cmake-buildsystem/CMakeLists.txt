@@ -341,7 +341,7 @@ endif ()
 
 if (USE_VULKAN)
     find_package(Vulkan REQUIRED)
-    target_link_libraries(main PRIVATE Vulkan::Vulkan)
+    target_link_libraries(ANGLE PRIVATE Vulkan::Vulkan)
 endif ()
 
 if (ENABLE_WEBGL)
