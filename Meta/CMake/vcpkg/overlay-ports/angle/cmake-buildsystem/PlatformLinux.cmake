@@ -14,8 +14,12 @@ if(USE_VULKAN)
         ${angle_translator_lib_spirv_sources}
 
         ${angle_translator_glsl_base_sources}
-
         ${angle_translator_glsl_and_vulkan_base_sources}
+
+        ${angle_spirv_headers}
+        ${angle_spirv_base}
+        ${angle_spirv_builder}
+        ${angle_spirv_parser}
     )
 
     list(APPEND ANGLE_DEFINITIONS
