@@ -1,6 +1,12 @@
 list(APPEND ANGLE_DEFINITIONS ANGLE_PLATFORM_LINUX USE_SYSTEM_EGL)
 include(linux.cmake)
 
+get_cmake_property(_variableNames VARIABLES)
+list (SORT _variableNames)
+foreach (_variableName ${_variableNames})
+    message(STATUS "${_variableName}=${${_variableName}}")
+endforeach()
+
 if (USE_OPENGL)
     # Enable GLSL compiler output.
     list(APPEND ANGLE_DEFINITIONS ANGLE_ENABLE_GLSL)
