@@ -1,0 +1,12 @@
+diff --git a/src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp b/src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp
+index 04485a1bf1..7614d450f6 100644
+--- a/src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "vk_mem_alloc_wrapper.h"
+ 
++#define VMA_IMPLEMENTATION
+ #include <vk_mem_alloc.h>
+ 
+ namespace vma
