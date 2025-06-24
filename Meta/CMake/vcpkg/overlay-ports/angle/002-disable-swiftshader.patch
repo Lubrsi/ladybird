@@ -1,0 +1,13 @@
+diff --git a/src/libANGLE/renderer/vulkan/BUILD.gn b/src/libANGLE/renderer/vulkan/BUILD.gn
+index 768d58c2de..d256765d89 100644
+--- a/src/libANGLE/renderer/vulkan/BUILD.gn
++++ b/src/libANGLE/renderer/vulkan/BUILD.gn
+@@ -5,7 +5,7 @@
+ # This file houses the build configuration for the ANGLE Vulkan back-end.
+ 
+ import("//build/config/dcheck_always_on.gni")
+-import("//build_overrides/swiftshader.gni")
++#import("//build_overrides/swiftshader.gni")
+ import("vulkan_backend.gni")
+ 
+ #import("../../../../gni/angle.gni")

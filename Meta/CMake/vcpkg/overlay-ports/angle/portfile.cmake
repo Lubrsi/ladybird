@@ -54,6 +54,7 @@ vcpkg_from_github(
     # On update check headers against opengl-registry
     PATCHES
         001-fix-builder-error.patch
+        002-disable-swiftshader.patch
 )
 
 # Generate angle_commit.h
