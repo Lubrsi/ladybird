@@ -6,6 +6,12 @@ list(APPEND ANGLE_SOURCES
     ${libangle_mac_sources}
 )
 
+get_cmake_property(_variableNames VARIABLES)
+list (SORT _variableNames)
+foreach (_variableName ${_variableNames})
+    message(STATUS "${_variableName}=${${_variableName}}")
+endforeach()
+
 list(APPEND ANGLEGLESv2_LIBRARIES
     "-framework CoreGraphics"
     "-framework Foundation"

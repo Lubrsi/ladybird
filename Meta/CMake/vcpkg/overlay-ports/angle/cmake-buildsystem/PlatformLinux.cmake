@@ -9,7 +9,7 @@ endif ()
 # Vulkan backend
 if(USE_VULKAN)
     list(APPEND ANGLE_SOURCES
-        ${_vulkan_backend_sources}
+        ${vulkan_backend_sources}
 
         ${angle_translator_lib_spirv_sources}
 
