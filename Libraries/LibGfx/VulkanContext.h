@@ -8,6 +8,7 @@
 
 #ifdef USE_VULKAN
 
+#    include <AK/RefCounted.h>
 #    include <vulkan/vulkan.h>
 
 namespace Gfx {
