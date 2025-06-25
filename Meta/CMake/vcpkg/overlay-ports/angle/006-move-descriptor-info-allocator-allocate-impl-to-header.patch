@@ -38,16 +38,15 @@ index 974657a311..5a6a085177 100644
      VkDevice device) const
  {
 diff --git a/src/libANGLE/renderer/vulkan/vk_cache_utils.h b/src/libANGLE/renderer/vulkan/vk_cache_utils.h
-index 057c883fdf..7a5848dd9d 100644
+index 057c883fdf..e7f3225fc6 100644
 --- a/src/libANGLE/renderer/vulkan/vk_cache_utils.h
 +++ b/src/libANGLE/renderer/vulkan/vk_cache_utils.h
-@@ -3038,7 +3038,34 @@ class UpdateDescriptorSetsBuilder final : angle::NonCopyable
+@@ -3038,7 +3038,33 @@ class UpdateDescriptorSetsBuilder final : angle::NonCopyable
              mCurrentVector = mDescriptorInfos.begin();
              mTotalSize     = 0;
          }
 -        T *allocate(uint32_t count);
-+        
-+        template <typename T>
++
 +        T *allocate(uint32_t count)
 +        {
 +            size_t oldSize = mCurrentVector->size();
