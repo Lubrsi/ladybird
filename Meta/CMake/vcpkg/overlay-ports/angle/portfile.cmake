@@ -58,6 +58,7 @@ vcpkg_from_github(
         003-vulkan-dma-buf-gn-list-direct-append.patch
         004-only-use-mock-icd-if-defined.patch
         005-define-vma-implementation.patch
+        006-move-descriptor-info-allocator-allocate-impl-to-header.patch
 )
 
 # Generate angle_commit.h
