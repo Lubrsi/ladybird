@@ -31,8 +31,6 @@ struct VulkanContext : public RefCounted<VulkanContext> {
 
 ErrorOr<NonnullRefPtr<VulkanContext>> create_vulkan_context();
 
-}
-
 namespace Vulkan {
 
 // TODO: Make this more RAII and less C
@@ -46,6 +44,8 @@ struct Image {
 };
 
 ErrorOr<Image> create_image(VulkanContext&, VkExtent2D, VkFormat);
+
+}
 
 }
 
