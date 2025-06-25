@@ -334,7 +334,7 @@ endif ()
 
 if (USE_VULKAN)
     find_package(Vulkan REQUIRED)
-    find_package(VulkanHeaders CONFIG REQUIRED)
+    find_package(VulkanHeaders CONFIG)
     find_package(VulkanMemoryAllocator CONFIG REQUIRED)
     target_link_libraries(ANGLE PRIVATE Vulkan::Vulkan Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
 endif ()
