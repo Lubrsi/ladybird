@@ -112,7 +112,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::wrap_vkimage(Vulkan::Image image
     auto backend_render_target = GrBackendRenderTargets::MakeVk(image_info.height(), image_info.height(), vk_info);
     GrSurfaceOrigin sk_origin = origin == Origin::TopLeft ? kTopLeft_GrSurfaceOrigin : kBottomLeft_GrSurfaceOrigin;
     auto surface = SkSurfaces::WrapBackendRenderTarget(context->sk_context(), backend_render_target, sk_origin, kBGRA_8888_SkColorType, nullptr, nullptr);
-    return adopt_ref(*new PaintingSurface(make<Impl>(IntSize { image.create_info.extent.width, image.create_info.extent.height }, surface, nullptr, context)));
+    return adopt_ref(*new PaintingSurface(make<Impl>(context, IntSize { image.create_info.extent.width, image.create_info.extent.height }, surface, nullptr)));
 }
 #endif
 

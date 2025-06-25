@@ -121,7 +121,7 @@ static ErrorOr<VkDevice> create_logical_device(VkPhysicalDevice physical_device)
     return device;
 }
 
-ErrorOr<VulkanContext> create_vulkan_context()
+ErrorOr<NonnullRefPtr<VulkanContext>> create_vulkan_context()
 {
     uint32_t const api_version = VK_API_VERSION_1_0;
     auto* instance = TRY(create_instance(api_version));
