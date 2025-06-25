@@ -23,6 +23,10 @@ extern "C" {
 #include <GLES2/gl2ext_angle.h>
 }
 
+#ifdef USE_VULKAN
+#    include <drm/drm_fourcc.h>
+#endif
+
 namespace Web::WebGL {
 
 struct OpenGLContext::Impl {
