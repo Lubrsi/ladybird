@@ -19,7 +19,7 @@
       "platform": "linux"
     },
     {
-      "name": "vulkan",
+      "name": "vulkan-headers",
       "platform": "linux"
     },
     {
