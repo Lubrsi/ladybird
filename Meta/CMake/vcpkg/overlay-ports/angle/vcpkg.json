@@ -23,10 +23,6 @@
       "platform": "linux"
     },
     {
-      "name": "vulkan-headers",
-      "platform": "linux"
-    },
-    {
       "name": "vulkan-memory-allocator",
       "platform": "linux"
     },
