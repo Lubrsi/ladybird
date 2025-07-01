@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/Format.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Vector.h>
@@ -22,9 +23,14 @@ static ErrorOr<VkInstance> create_instance(uint32_t api_version)
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.apiVersion = api_version;
 
-    Array<char const*, 2> required_extensions = {
+    Array<char const*, 3> required_extensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+    };
+
+    Array<char const*, 1> required_layers = {
+        "VK_LAYER_KHRONOS_validation",
     };
 
     VkInstanceCreateInfo create_info {};
@@ -32,6 +38,8 @@ static ErrorOr<VkInstance> create_instance(uint32_t api_version)
     create_info.pApplicationInfo = &app_info;
     create_info.enabledExtensionCount = required_extensions.size();
     create_info.ppEnabledExtensionNames = required_extensions.data();
+    create_info.enabledLayerCount = required_layers.size();
+    create_info.ppEnabledLayerNames = required_layers.data();
 
     auto result = vkCreateInstance(&create_info, nullptr, &instance);
     if (result != VK_SUCCESS) {
@@ -100,10 +108,11 @@ static ErrorOr<VkDevice> create_logical_device(VkPhysicalDevice physical_device)
 
     VkPhysicalDeviceFeatures deviceFeatures {};
 
-    Array<char const*, 3> device_extensions = {
+    Array<char const*, 4> device_extensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
     };
 
     VkDeviceCreateInfo create_device_info {};
@@ -175,6 +184,7 @@ static ErrorOr<int> export_memory_to_dmabuf(VkDevice device, VkDeviceMemory memo
 
 ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat format)
 {
+    dbgln("creating image with width {} and height {}", extent.width, extent.height);
     VkImageCreateInfo image_create_info {};
     image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     image_create_info.imageType = VK_IMAGE_TYPE_2D;
@@ -183,8 +193,8 @@ ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat 
     image_create_info.mipLevels = 1;
     image_create_info.arrayLayers = 1;
     image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_create_info.tiling = VK_IMAGE_TILING_LINEAR;
-    image_create_info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_create_info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     ;
     image_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -195,7 +205,8 @@ ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat 
     image_create_info.pNext = &external_memory_image_create_info;
 
     VkImage image = VK_NULL_HANDLE;
-    if (vkCreateImage(context.logical_device, &image_create_info, nullptr, &image) != VK_SUCCESS) {
+    if (auto maybe_error = vkCreateImage(context.logical_device, &image_create_info, nullptr, &image); maybe_error != VK_SUCCESS) {
+        dbgln("error: {}", (i32)maybe_error);
         return Error::from_string_literal("Image creation failed");
     }
 
@@ -213,7 +224,8 @@ ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat 
     alloc_info.pNext = &export_memory_allocate_info;
 
     VkDeviceMemory image_memory = {};
-    if (vkAllocateMemory(context.logical_device, &alloc_info, nullptr, &image_memory) != VK_SUCCESS) {
+    if (auto maybe_error = vkAllocateMemory(context.logical_device, &alloc_info, nullptr, &image_memory); maybe_error != VK_SUCCESS) {
+        dbgln("error: {}", (i32)maybe_error);
         vkDestroyImage(context.logical_device, image, nullptr);
         return Error::from_string_literal("Image memory allocation failed");
     }
@@ -237,6 +249,40 @@ ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat 
         .create_info = image_create_info_copy,
         .exported_fd = exported_fd
     };
+}
+
+bool format_with_drm_modifier_can_be_used_as_color_render_target(VulkanContext& context, VkFormat format, u64 drm_format_modifier)
+{
+    VkFormatProperties2 format_properties {};
+    format_properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+
+    VkDrmFormatModifierPropertiesListEXT modifier_properties {};
+    modifier_properties.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT;
+    modifier_properties.drmFormatModifierCount = 0;
+    modifier_properties.pDrmFormatModifierProperties = nullptr;
+    modifier_properties.pNext = nullptr;
+    format_properties.pNext = &modifier_properties;
+
+    vkGetPhysicalDeviceFormatProperties2(context.physical_device, format, &format_properties);
+
+    auto modifier_properties_buffer = MUST(ByteBuffer::create_zeroed(modifier_properties.drmFormatModifierCount * sizeof(VkDrmFormatModifierPropertiesEXT)));
+    auto* modifier_properties_buffer_pointer = reinterpret_cast<VkDrmFormatModifierPropertiesEXT*>(modifier_properties_buffer.data());
+
+    modifier_properties.pDrmFormatModifierProperties = modifier_properties_buffer_pointer;
+
+    vkGetPhysicalDeviceFormatProperties2(context.physical_device, format, &format_properties);
+
+    for (size_t modifier_properties_index = 0; modifier_properties_index < modifier_properties.drmFormatModifierCount; ++modifier_properties_index) {
+        auto& modifier_properties_at_index = modifier_properties_buffer_pointer[modifier_properties_index];
+        if (modifier_properties_at_index.drmFormatModifier == drm_format_modifier) {
+            auto tiling_features = modifier_properties_at_index.drmFormatModifierTilingFeatures;
+            return (tiling_features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0
+                && (tiling_features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0
+                && (tiling_features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+        }
+    }
+
+    return false;
 }
 
 }

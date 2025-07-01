@@ -109,9 +109,15 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::wrap_vkimage(Vulkan::Image image
     vk_info.fSampleCount = 1;
     vk_info.fLevelCount = 0;
 
+     dbgln("format: 0x{:04x}", to_underlying(vk_info.fFormat));
+     dbgln("sampeCount: 0x{:04x}", vk_info.fSampleCount);
+     dbgln("imageUsageFlags: 0x{:04x}", image.create_info.usage);
+
+
     auto backend_render_target = GrBackendRenderTargets::MakeVk(image_info.height(), image_info.height(), vk_info);
     GrSurfaceOrigin sk_origin = origin == Origin::TopLeft ? kTopLeft_GrSurfaceOrigin : kBottomLeft_GrSurfaceOrigin;
     auto surface = SkSurfaces::WrapBackendRenderTarget(context->sk_context(), backend_render_target, sk_origin, kBGRA_8888_SkColorType, nullptr, nullptr);
+    VERIFY(surface);
     return adopt_ref(*new PaintingSurface(make<Impl>(context, IntSize { image.create_info.extent.width, image.create_info.extent.height }, surface, nullptr)));
 }
 #endif
@@ -130,20 +136,24 @@ PaintingSurface::~PaintingSurface()
 
 void PaintingSurface::read_into_bitmap(Bitmap& bitmap)
 {
+    dbgln("read into bitmap before");
     auto color_type = to_skia_color_type(bitmap.format());
     auto alpha_type = to_skia_alpha_type(bitmap.format(), bitmap.alpha_type());
     auto image_info = SkImageInfo::Make(bitmap.width(), bitmap.height(), color_type, alpha_type, SkColorSpace::MakeSRGB());
     SkPixmap const pixmap(image_info, bitmap.begin(), bitmap.pitch());
     m_impl->surface->readPixels(pixmap, 0, 0);
+    dbgln("read into bitmap after");
 }
 
 void PaintingSurface::write_from_bitmap(Bitmap const& bitmap)
 {
+    dbgln("write from bitmap before");
     auto color_type = to_skia_color_type(bitmap.format());
     auto alpha_type = to_skia_alpha_type(bitmap.format(), bitmap.alpha_type());
     auto image_info = SkImageInfo::Make(bitmap.width(), bitmap.height(), color_type, alpha_type, SkColorSpace::MakeSRGB());
     SkPixmap const pixmap(image_info, bitmap.begin(), bitmap.pitch());
     m_impl->surface->writePixels(pixmap, 0, 0);
+    dbgln("write from bitmap after");
 }
 
 IntSize PaintingSurface::size() const
@@ -181,8 +191,10 @@ sk_sp<SkImage> PaintingSurface::sk_image_snapshot() const
 
 void PaintingSurface::flush()
 {
+    dbgln("flushing before");
     if (on_flush)
         on_flush(*this);
+    dbgln("flushing after");
 }
 
 void PaintingSurface::lock_context() const

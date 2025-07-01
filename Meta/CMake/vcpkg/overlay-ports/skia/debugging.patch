@@ -1,0 +1,91 @@
+diff --git a/src/gpu/ganesh/surface/SkSurface_Ganesh.cpp b/src/gpu/ganesh/surface/SkSurface_Ganesh.cpp
+index 3f39d2d..4959074 100644
+--- a/src/gpu/ganesh/surface/SkSurface_Ganesh.cpp
++++ b/src/gpu/ganesh/surface/SkSurface_Ganesh.cpp
+@@ -706,21 +706,25 @@ sk_sp<SkSurface> WrapBackendRenderTarget(GrRecordingContext* rContext,
+     auto releaseHelper = skgpu::RefCntedCallback::Make(relProc, releaseContext);
+ 
+     if (!rContext) {
++        printf("bad1\n");
+         return nullptr;
+     }
+ 
+     GrColorType grColorType = SkColorTypeToGrColorType(colorType);
+     if (grColorType == GrColorType::kUnknown) {
++        printf("bad2\n");
+         return nullptr;
+     }
+ 
+     if (!validate_backend_render_target(rContext->priv().caps(), rt, grColorType)) {
++        printf("bad3\n");
+         return nullptr;
+     }
+ 
+     auto proxyProvider = rContext->priv().proxyProvider();
+     auto proxy = proxyProvider->wrapBackendRenderTarget(rt, std::move(releaseHelper));
+     if (!proxy) {
++        printf("bad4\n");
+         return nullptr;
+     }
+ 
+@@ -731,6 +735,7 @@ sk_sp<SkSurface> WrapBackendRenderTarget(GrRecordingContext* rContext,
+                                                 SkSurfacePropsCopyOrDefault(props),
+                                                 skgpu::ganesh::Device::InitContents::kUninit);
+     if (!device) {
++        printf("bad5\n");
+         return nullptr;
+     }
+ 
+diff --git a/src/gpu/ganesh/GrGpu.cpp b/src/gpu/ganesh/GrGpu.cpp
+index fca631a..715418e 100644
+--- a/src/gpu/ganesh/GrGpu.cpp
++++ b/src/gpu/ganesh/GrGpu.cpp
+@@ -369,6 +369,7 @@ sk_sp<GrRenderTarget> GrGpu::wrapBackendRenderTarget(const GrBackendRenderTarget
+     const GrCaps* caps = this->caps();
+ 
+     if (!caps->isFormatRenderable(backendRT.getBackendFormat(), backendRT.sampleCnt())) {
++        printf("gg bad1\n");
+         return nullptr;
+     }
+ 
+diff --git a/src/gpu/ganesh/vk/GrVkGpu.cpp b/src/gpu/ganesh/vk/GrVkGpu.cpp
+index a1131d8..c31c414 100644
+--- a/src/gpu/ganesh/vk/GrVkGpu.cpp
++++ b/src/gpu/ganesh/vk/GrVkGpu.cpp
+@@ -1346,9 +1346,11 @@ static bool check_tex_image_info(const GrVkCaps& caps, const GrVkImageInfo& info
+ 
+ static bool check_rt_image_info(const GrVkCaps& caps, const GrVkImageInfo& info, bool resolveOnly) {
+     if (!caps.isFormatRenderable(info.fFormat, info.fSampleCount)) {
++        printf("crii bad1\n");
+         return false;
+     }
+     if (!resolveOnly && !SkToBool(info.fImageUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
++        printf("crii bad2\n");
+         return false;
+     }
+     return true;
+@@ -1430,20 +1432,24 @@ sk_sp<GrTexture> GrVkGpu::onWrapRenderableBackendTexture(const GrBackendTexture&
+ sk_sp<GrRenderTarget> GrVkGpu::onWrapBackendRenderTarget(const GrBackendRenderTarget& backendRT) {
+     GrVkImageInfo info;
+     if (!GrBackendRenderTargets::GetVkImageInfo(backendRT, &info)) {
++        printf("gvg bad1\n");
+         return nullptr;
+     }
+ 
+     if (!check_image_info(this->vkCaps(), info, false, this->queueIndex())) {
++        printf("gvg bad2\n");
+         return nullptr;
+     }
+ 
+     // We will always render directly to this VkImage.
+     static bool kResolveOnly = false;
+     if (!check_rt_image_info(this->vkCaps(), info, kResolveOnly)) {
++        printf("gvg bad3\n");
+         return nullptr;
+     }
+ 
+     if (backendRT.isProtected() && (fProtectedContext == GrProtected::kNo)) {
++        printf("gvg bad4\n");
+         return nullptr;
+     }
+ 

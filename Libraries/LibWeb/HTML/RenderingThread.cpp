@@ -67,7 +67,9 @@ void RenderingThread::rendering_thread_loop()
         }
 
         auto painting_surface = painting_surface_for_backing_store(task->backing_store);
+        dbgln("before skia execute");
         m_skia_player->execute(*task->display_list, task->scroll_state_snapshot, painting_surface);
+        dbgln("after skia execute");
         if (m_exit)
             break;
         m_main_thread_event_loop.deferred_invoke([callback = move(task->callback)] {

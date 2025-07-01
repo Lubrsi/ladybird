@@ -124,6 +124,7 @@ void DisplayListPlayerSkia::fill_rect(FillRect const& command)
 
 void DisplayListPlayerSkia::draw_painting_surface(DrawPaintingSurface const& command)
 {
+    dbgln("painting surface before src: {} dst: {}", command.src_rect, command.dst_rect);
     auto src_rect = to_skia_rect(command.src_rect);
     auto dst_rect = to_skia_rect(command.dst_rect);
     auto& sk_surface = command.surface->sk_surface();
@@ -131,6 +132,7 @@ void DisplayListPlayerSkia::draw_painting_surface(DrawPaintingSurface const& com
     auto image = sk_surface.makeImageSnapshot();
     SkPaint paint;
     canvas.drawImageRect(image, src_rect, dst_rect, to_skia_sampling_options(command.scaling_mode), &paint, SkCanvas::kStrict_SrcRectConstraint);
+    dbgln("painting surface after");
 }
 
 void DisplayListPlayerSkia::draw_scaled_immutable_bitmap(DrawScaledImmutableBitmap const& command)

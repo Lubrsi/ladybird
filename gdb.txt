@@ -1,0 +1,58 @@
+Continuing.
+[Thread 0x7ffff23a46c0 (LWP 19816) exited]
+[Thread 0x7ffff1ba36c0 (LWP 19817) exited]
+[Thread 0x7ffff2ba56c0 (LWP 19815) exited]
+[Thread 0x7ffff33a66c0 (LWP 19814) exited]
+[Thread 0x7ffff13a26c0 (LWP 19818) exited]
+[New Thread 0x7ffff13a26c0 (LWP 20051)]
+[Attaching after Thread 0x7ffff13a26c0 (LWP 20051) fork to child process 20052]
+[New inferior 2 (process 20052)]
+[Detaching after fork from parent process 19810]
+[Inferior 1 (process 19810) detached]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+
+Thread 2.1 "ExecuteAndInjec" received signal SIGSTOP, Stopped (signal).
+[Switching to Thread 0x7ffff13a26c0 (LWP 20052)]
+__pthread_kill_implementation (no_tid=0, signo=19, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+warning: 44	./nptl/pthread_kill.c: No such file or directory
+Continuing.
+
+Thread 2.1 "ExecuteAndInjec" received signal SIGSTOP, Stopped (signal).
+__pthread_kill_implementation (no_tid=0, signo=19, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+44	in ./nptl/pthread_kill.c
+Continuing.
+process 20052 is executing new program: /media/luke/52a7aa58-0d06-4ee3-af35-3160c2531a6e/home/lukew/ladybird/Build/release/bin/Ladybird
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libQt6Gui.so.6
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libglib-2.0.so.0
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libpulse.so.0
+warning: could not find '.gnu_debugaltlink' file for /usr/lib/x86_64-linux-gnu/pulseaudio/libpulsecommon-16.1.so
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libcap.so.2
+[New Thread 0x7fffe5b736c0 (LWP 20055)]
+
+Thread 2.2 "Ladybird" received signal SIGSTOP, Stopped (signal).
+[Switching to Thread 0x7fffe5b736c0 (LWP 20055)]
+clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:62
+warning: 62	../sysdeps/unix/sysv/linux/x86_64/clone3.S: No such file or directory
+Continuing.
+
+Thread 2.1 "Ladybird" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7fffe9b0d480 (LWP 20052)]
+0x0000000000000000 in ?? ()
+warning: Could not find DWO CU obj/libEGL/libEGL_autogen.dwo(0x581d5ee2303de6bb) referenced by CU at offset 0x0 [in module /media/luke/52a7aa58-0d06-4ee3-af35-3160c2531a6e/home/lukew/ladybird/Build/release/vcpkg_installed/x64-linux-dynamic/lib/libEGL.so]
+#0  0x0000000000000000 in ?? ()
+#1  0x00007ffff0e7e3ee in eglGetProcAddress () at ../../src/libEGL/libEGL_autogen.cpp:172
+#2  0x00007ffff6c62437 in ?? () from /home/luke/Downloads/renderdoc_1.39/bin/../lib/librenderdoc.so
+#3  0x00007ffff77d9fe2 in ?? () from /home/luke/Downloads/renderdoc_1.39/bin/../lib/librenderdoc.so
+#4  0x00007ffff781d1e2 in ?? () from /home/luke/Downloads/renderdoc_1.39/bin/../lib/librenderdoc.so
+#5  0x00007ffff7fca71f in call_init (l=<optimized out>, argc=argc@entry=2, argv=argv@entry=0x7fffffffd9e8, env=env@entry=0x7fffffffda00) at ./elf/dl-init.c:74
+#6  0x00007ffff7fca824 in call_init (env=<optimized out>, argv=<optimized out>, argc=<optimized out>, l=<optimized out>) at ./elf/dl-init.c:120
+#7  _dl_init (main_map=0x7ffff7ffe2e0, argc=2, argv=0x7fffffffd9e8, env=0x7fffffffda00) at ./elf/dl-init.c:121
+#8  0x00007ffff7fe45a0 in _dl_start_user () from /lib64/ld-linux-x86-64.so.2
+#9  0x0000000000000002 in ?? ()
+#10 0x00007fffffffddd3 in ?? ()
+#11 0x00007fffffffde33 in ?? ()
+#12 0x0000000000000000 in ?? ()
+quit

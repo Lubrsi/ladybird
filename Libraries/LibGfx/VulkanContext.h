@@ -45,6 +45,7 @@ struct Image {
 };
 
 ErrorOr<Image> create_image(VulkanContext&, VkExtent2D, VkFormat);
+bool format_with_drm_modifier_can_be_used_as_color_render_target(VulkanContext&, VkFormat, u64);
 
 }
 

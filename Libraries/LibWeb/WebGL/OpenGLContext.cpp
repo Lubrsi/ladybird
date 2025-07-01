@@ -151,6 +151,7 @@ void OpenGLContext::notify_content_will_change()
 
 void OpenGLContext::clear_buffer_to_default_values()
 {
+    return;
     Array<GLfloat, 4> current_clear_color;
     glGetFloatv(GL_COLOR_CLEAR_VALUE, current_clear_color.data());
 
@@ -205,6 +206,8 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 #ifdef AK_OS_MACOS
     EGLint target = 0;
     eglGetConfigAttrib(display, config, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &target);
+#else
+    EGLint target = EGL_TEXTURE_2D;
 #endif
 
     EGLint const surface_attributes[] = {
@@ -215,16 +218,16 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 #ifdef AK_OS_MACOS
         EGL_IOSURFACE_PLANE_ANGLE,
         0,
-        EGL_TEXTURE_TARGET,
-        target,
         EGL_TEXTURE_INTERNAL_FORMAT_ANGLE,
         GL_BGRA_EXT,
-        EGL_TEXTURE_FORMAT,
-        EGL_TEXTURE_RGBA,
         EGL_TEXTURE_TYPE_ANGLE,
         GL_UNSIGNED_BYTE,
-        EGL_NONE,
 #endif
+        EGL_TEXTURE_TARGET,
+        target,
+        EGL_TEXTURE_FORMAT,
+        EGL_TEXTURE_RGBA,
+        EGL_NONE,
         EGL_NONE,
     };
 
@@ -236,19 +239,93 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 
     ScopeGuard close_dma_buf_fd = [&] { ::close(dma_buf_fd); };
 
+    EGLint num_formats = 0;
+    auto format_query_success = eglQueryDmaBufFormatsEXT(m_impl->display, 0, nullptr, &num_formats);
+    if (format_query_success != EGL_TRUE) {
+        dbgln("Failed to query supported DMA buffer formats.");
+        VERIFY_NOT_REACHED();
+    }
+
+    auto formats_buffer = MUST(ByteBuffer::create_zeroed(num_formats * sizeof(EGLint)));
+    auto* format_buffers_pointer = reinterpret_cast<EGLint*>(formats_buffer.data());
+    format_query_success = eglQueryDmaBufFormatsEXT(m_impl->display, num_formats, format_buffers_pointer, &num_formats);
+    if (format_query_success != EGL_TRUE) {
+        dbgln("Failed to query supported DMA buffer formats.");
+        VERIFY_NOT_REACHED();
+    }
+
+    bool drm_supports_abgr8888 = false;
+
+    for (EGLint format_index = 0; format_index < num_formats; ++format_index) {
+        if (format_buffers_pointer[format_index] == DRM_FORMAT_ABGR8888) {
+            drm_supports_abgr8888 = true;
+            break;
+        }
+    }
+
+    if (!drm_supports_abgr8888) {
+        dbgln("DRM reports that it does not support the ABGR8888 format, which is an unsupported configuration.");
+        VERIFY_NOT_REACHED();
+    }
+
+    EGLint num_modifiers = 0;
+    auto modifiers_query_success = eglQueryDmaBufModifiersEXT(m_impl->display, DRM_FORMAT_ABGR8888, 0, nullptr, nullptr, &num_modifiers);
+    if (modifiers_query_success != EGL_TRUE) {
+        dbgln("Failed to query supported DMA buffer format modifiers.");
+        VERIFY_NOT_REACHED();
+    }
+
+    auto format_modifiers_buffer = MUST(ByteBuffer::create_zeroed(num_modifiers * sizeof(EGLuint64KHR)));
+    auto* format_modifiers_pointer = reinterpret_cast<EGLuint64KHR*>(format_modifiers_buffer.data());
+    modifiers_query_success = eglQueryDmaBufModifiersEXT(m_impl->display, DRM_FORMAT_ABGR8888, num_modifiers, format_modifiers_pointer, nullptr, &num_modifiers);
+    if (modifiers_query_success != EGL_TRUE) {
+        dbgln("Failed to query supported DMA buffer format modifiers.");
+        VERIFY_NOT_REACHED();
+    }
+
+    Optional<EGLuint64KHR> modifier_to_use;
+
+    for (EGLint modifier_index = 0; modifier_index < num_modifiers; ++modifier_index) {
+        auto drm_format_modifier = format_modifiers_pointer[modifier_index];
+
+        if (Gfx::Vulkan::format_with_drm_modifier_can_be_used_as_color_render_target(m_skia_backend_context->vulkan_context(), VK_FORMAT_B8G8R8A8_UNORM, drm_format_modifier)) {
+            modifier_to_use = drm_format_modifier;
+            break;
+        }
+    }
+
+    if (!modifier_to_use.has_value()) {
+        dbgln("Failed to find compatible DRM format that Vulkan can use as a color render target.");
+        VERIFY_NOT_REACHED();
+    }
+
+    dbgln("Picked modifier: 0x{:10x}", modifier_to_use.value());
+
     EGLint image_attribs[] = {
         EGL_WIDTH, width,
         EGL_HEIGHT, height,
-        EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888,
+        EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ABGR8888,
         EGL_DMA_BUF_PLANE0_FD_EXT, dma_buf_fd,
         EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
         EGL_DMA_BUF_PLANE0_PITCH_EXT, width * 4,
+        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>((modifier_to_use.value() >> 32) & 0xffffffff),
+        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(modifier_to_use.value() & 0xffffffff),
         EGL_NONE
     };
+    dbgln("== before create image");
     EGLImageKHR egl_image = eglCreateImageKHR(m_impl->display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, image_attribs);
+    dbgln("== after create image");
+    if (auto error = eglGetError(); error != EGL_SUCCESS) {
+        dbgln("error3: 0x{:04x}", error);
+        VERIFY_NOT_REACHED();
+    }
     VERIFY(egl_image != EGL_NO_IMAGE_KHR);
-
-    m_impl->surface = eglCreatePbufferFromClientBuffer(m_impl->display, EGL_LINUX_DMA_BUF_EXT, egl_image, config, surface_attributes);
+    
+    m_impl->surface = eglCreatePbufferSurface(m_impl->display, config, surface_attributes);
+    if (auto error = eglGetError(); error != EGL_SUCCESS) {
+        dbgln("error1: 0x{:04x}", error);
+        VERIFY_NOT_REACHED();
+    }
 
     m_painting_surface = Gfx::PaintingSurface::wrap_vkimage(vulkan_image, m_skia_backend_context, Gfx::PaintingSurface::Origin::BottomLeft);
 #endif
@@ -259,14 +336,35 @@ void OpenGLContext::allocate_painting_surface_if_needed()
     }
 
     eglMakeCurrent(m_impl->display, m_impl->surface, m_impl->surface, m_impl->context);
+    if (auto error = eglGetError(); error != EGL_SUCCESS) {
+        dbgln("error2: 0x{:04x}", error);
+        VERIFY_NOT_REACHED();
+    }
 
+#ifdef AK_OS_MACOS
     EGLint texture_target_name = 0;
     eglGetConfigAttrib(display, config, EGL_BIND_TO_TEXTURE_TARGET_ANGLE, &texture_target_name);
     VERIFY(texture_target_name == EGL_TEXTURE_RECTANGLE_ANGLE || texture_target_name == EGL_TEXTURE_2D);
+    auto texture_target_binding = texture_target_name == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D;
+#else
+    auto texture_target_binding = GL_TEXTURE_2D;
+#endif
 
     GLuint texture = 0;
     glGenTextures(1, &texture);
-    glBindTexture(texture_target_name == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D, texture);
+    glBindTexture(texture_target_binding, texture);
+
+#ifdef USE_VULKAN
+    glRequestExtensionANGLE("GL_OES_EGL_image");
+    glRequestExtensionANGLE("GL_OES_EGL_image_external");
+    glEGLImageTargetTexture2DOES(texture_target_binding, egl_image);
+    if (auto error = glGetError(); error != 0) {
+        dbgln("error4: 0x{:04x}", error);
+        VERIFY_NOT_REACHED();
+    }
+
+#endif
+
     auto result = eglBindTexImage(display, m_impl->surface, EGL_BACK_BUFFER);
     if (result == EGL_FALSE) {
         dbgln("Failed to bind texture image to EGL surface: {:x}", eglGetError());
@@ -275,7 +373,7 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 
     glGenFramebuffers(1, &m_impl->framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, m_impl->framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture_target_name == EGL_TEXTURE_RECTANGLE_ANGLE ? GL_TEXTURE_RECTANGLE_ANGLE : GL_TEXTURE_2D, texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture_target_binding, texture, 0);
 
     // NOTE: ANGLE doesn't allocate depth buffer for us, so we need to do it manually
     // FIXME: Depth buffer only needs to be allocated if it's configured in WebGL context attributes
@@ -301,6 +399,7 @@ void OpenGLContext::make_current()
 
 void OpenGLContext::present(bool preserve_drawing_buffer)
 {
+    dbgln("present before");
     make_current();
 
     // "Before the drawing buffer is presented for compositing the implementation shall ensure that all rendering operations have been flushed to the drawing buffer."
@@ -319,6 +418,7 @@ void OpenGLContext::present(bool preserve_drawing_buffer)
     if (!preserve_drawing_buffer) {
         clear_buffer_to_default_values();
     }
+    dbgln("present after");
 }
 
 RefPtr<Gfx::PaintingSurface> OpenGLContext::surface()
