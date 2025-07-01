@@ -239,67 +239,13 @@ void OpenGLContext::allocate_painting_surface_if_needed()
 
     ScopeGuard close_dma_buf_fd = [&] { ::close(dma_buf_fd); };
 
-    EGLint num_formats = 0;
-    auto format_query_success = eglQueryDmaBufFormatsEXT(m_impl->display, 0, nullptr, &num_formats);
-    if (format_query_success != EGL_TRUE) {
-        dbgln("Failed to query supported DMA buffer formats.");
-        VERIFY_NOT_REACHED();
-    }
-
-    auto formats_buffer = MUST(ByteBuffer::create_zeroed(num_formats * sizeof(EGLint)));
-    auto* format_buffers_pointer = reinterpret_cast<EGLint*>(formats_buffer.data());
-    format_query_success = eglQueryDmaBufFormatsEXT(m_impl->display, num_formats, format_buffers_pointer, &num_formats);
-    if (format_query_success != EGL_TRUE) {
-        dbgln("Failed to query supported DMA buffer formats.");
-        VERIFY_NOT_REACHED();
-    }
-
-    bool drm_supports_abgr8888 = false;
-
-    for (EGLint format_index = 0; format_index < num_formats; ++format_index) {
-        if (format_buffers_pointer[format_index] == DRM_FORMAT_ABGR8888) {
-            drm_supports_abgr8888 = true;
-            break;
-        }
-    }
-
-    if (!drm_supports_abgr8888) {
-        dbgln("DRM reports that it does not support the ABGR8888 format, which is an unsupported configuration.");
-        VERIFY_NOT_REACHED();
-    }
-
-    EGLint num_modifiers = 0;
-    auto modifiers_query_success = eglQueryDmaBufModifiersEXT(m_impl->display, DRM_FORMAT_ABGR8888, 0, nullptr, nullptr, &num_modifiers);
-    if (modifiers_query_success != EGL_TRUE) {
-        dbgln("Failed to query supported DMA buffer format modifiers.");
-        VERIFY_NOT_REACHED();
-    }
-
-    auto format_modifiers_buffer = MUST(ByteBuffer::create_zeroed(num_modifiers * sizeof(EGLuint64KHR)));
-    auto* format_modifiers_pointer = reinterpret_cast<EGLuint64KHR*>(format_modifiers_buffer.data());
-    modifiers_query_success = eglQueryDmaBufModifiersEXT(m_impl->display, DRM_FORMAT_ABGR8888, num_modifiers, format_modifiers_pointer, nullptr, &num_modifiers);
-    if (modifiers_query_success != EGL_TRUE) {
-        dbgln("Failed to query supported DMA buffer format modifiers.");
-        VERIFY_NOT_REACHED();
-    }
-
-    Optional<EGLuint64KHR> modifier_to_use;
-
-    for (EGLint modifier_index = 0; modifier_index < num_modifiers; ++modifier_index) {
-        auto drm_format_modifier = format_modifiers_pointer[modifier_index];
-
-        if (Gfx::Vulkan::format_with_drm_modifier_can_be_used_as_color_render_target(m_skia_backend_context->vulkan_context(), VK_FORMAT_B8G8R8A8_UNORM, drm_format_modifier)) {
-            modifier_to_use = drm_format_modifier;
-            break;
-        }
-    }
-
-    if (!modifier_to_use.has_value()) {
+    auto drm_modifier_to_use = Gfx::Vulkan::first_drm_modifier_for_format_that_can_be_used_as_color_render_target(m_skia_backend_context->vulkan_context(), VK_FORMAT_B8G8R8A8_UNORM);
+    if (!drm_modifier_to_use.has_value()) {
         dbgln("Failed to find compatible DRM format that Vulkan can use as a color render target.");
         VERIFY_NOT_REACHED();
     }
 
-    dbgln("Picked modifier: 0x{:10x}", modifier_to_use.value());
+    dbgln("Picked modifier: 0x{:10x}", drm_modifier_to_use.value());
 
     EGLint image_attribs[] = {
         EGL_WIDTH, width,
@@ -308,8 +254,8 @@ void OpenGLContext::allocate_painting_surface_if_needed()
         EGL_DMA_BUF_PLANE0_FD_EXT, dma_buf_fd,
         EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
         EGL_DMA_BUF_PLANE0_PITCH_EXT, width * 4,
-        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>((modifier_to_use.value() >> 32) & 0xffffffff),
-        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(modifier_to_use.value() & 0xffffffff),
+        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>((drm_modifier_to_use.value() >> 32) & 0xffffffff),
+        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(drm_modifier_to_use.value() & 0xffffffff),
         EGL_NONE
     };
     dbgln("== before create image");

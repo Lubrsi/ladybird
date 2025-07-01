@@ -251,7 +251,7 @@ ErrorOr<Image> create_image(VulkanContext& context, VkExtent2D extent, VkFormat 
     };
 }
 
-bool format_with_drm_modifier_can_be_used_as_color_render_target(VulkanContext& context, VkFormat format, u64 drm_format_modifier)
+Optional<u64> first_drm_modifier_for_format_that_can_be_used_as_color_render_target(VulkanContext& context, VkFormat format)
 {
     VkFormatProperties2 format_properties {};
     format_properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
@@ -274,15 +274,16 @@ bool format_with_drm_modifier_can_be_used_as_color_render_target(VulkanContext& 
 
     for (size_t modifier_properties_index = 0; modifier_properties_index < modifier_properties.drmFormatModifierCount; ++modifier_properties_index) {
         auto& modifier_properties_at_index = modifier_properties_buffer_pointer[modifier_properties_index];
-        if (modifier_properties_at_index.drmFormatModifier == drm_format_modifier) {
-            auto tiling_features = modifier_properties_at_index.drmFormatModifierTilingFeatures;
-            return (tiling_features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0
+        auto tiling_features = modifier_properties_at_index.drmFormatModifierTilingFeatures;
+        bool can_be_used_as_color_render_target = (tiling_features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0
                 && (tiling_features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0
                 && (tiling_features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
-        }
+
+        if (can_be_used_as_color_render_target)
+            return modifier_properties_at_index.drmFormatModifier;
     }
 
-    return false;
+    return OptionalNone {};
 }
 
 }
