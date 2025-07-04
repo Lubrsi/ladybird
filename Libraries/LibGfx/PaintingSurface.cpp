@@ -10,12 +10,10 @@
 
 #include <core/SkColorSpace.h>
 #include <core/SkSurface.h>
-#include <gpu/GrBackendSurface.h>
-#include <gpu/GrDirectContext.h>
-#include <gpu/ganesh/SkSurfaceGanesh.h>
+#include <gpu/graphite/Surface.h>
 
 #ifdef AK_OS_MACOS
-#    include <gpu/ganesh/mtl/GrMtlBackendSurface.h>
+#    include <gpu/graphite/mtl/MtlGraphiteTypes_cpp.h>
 #endif
 
 namespace Gfx {
@@ -41,7 +39,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::create_with_size(RefPtr<SkiaBack
     }
 
     context->lock();
-    auto surface = SkSurfaces::RenderTarget(context->sk_context(), skgpu::Budgeted::kNo, image_info);
+    auto surface = SkSurfaces::RenderTarget(context->sk_recorder(), image_info);
     VERIFY(surface);
     context->unlock();
     return adopt_ref(*new PaintingSurface(make<Impl>(context, size, surface, nullptr)));
@@ -58,7 +56,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::wrap_bitmap(Bitmap& bitmap)
 }
 
 #ifdef AK_OS_MACOS
-NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_iosurface(Core::IOSurfaceHandle&& iosurface_handle, NonnullRefPtr<SkiaBackendContext> context, Origin origin)
+NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_iosurface(Core::IOSurfaceHandle const& iosurface_handle, NonnullRefPtr<SkiaBackendContext> context)
 {
     context->lock();
     ScopeGuard unlock_guard([&context] {
@@ -68,21 +66,12 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_iosurface(Core::IOSu
     auto metal_texture = context->metal_context().create_texture_from_iosurface(iosurface_handle);
     IntSize const size { metal_texture->width(), metal_texture->height() };
     auto image_info = SkImageInfo::Make(size.width(), size.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-    GrMtlTextureInfo mtl_info;
-    mtl_info.fTexture = sk_ret_cfp(metal_texture->texture());
-    auto backend_render_target = GrBackendRenderTargets::MakeMtl(metal_texture->width(), metal_texture->height(), mtl_info);
-    GrSurfaceOrigin sk_origin;
-    switch (origin) {
-    case Origin::TopLeft:
-        sk_origin = kTopLeft_GrSurfaceOrigin;
-        break;
-    case Origin::BottomLeft:
-        sk_origin = kBottomLeft_GrSurfaceOrigin;
-        break;
-    default:
-        VERIFY_NOT_REACHED();
-    }
-    auto surface = SkSurfaces::WrapBackendRenderTarget(context->sk_context(), backend_render_target, sk_origin, kBGRA_8888_SkColorType, nullptr, nullptr);
+    SkISize skia_size {
+        .fWidth = static_cast<i32>(metal_texture->width()),
+        .fHeight = static_cast<i32>(metal_texture->height()),
+    };
+    auto backend_render_target = skgpu::graphite::BackendTextures::MakeMetal(skia_size, metal_texture->texture());
+    auto surface = SkSurfaces::WrapBackendTexture(context->sk_recorder(), backend_render_target, kBGRA_8888_SkColorType, nullptr, nullptr);
     return adopt_ref(*new PaintingSurface(make<Impl>(context, size, surface, nullptr)));
 }
 #endif

@@ -4,13 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/NonnullOwnPtr.h>
-#include <AK/RefPtr.h>
-#include <LibGfx/Bitmap.h>
-#include <LibGfx/SkiaBackendContext.h>
+#include <AK/Platform.h>
 
 #include <core/SkSurface.h>
-#include <gpu/GrDirectContext.h>
+
+#include <gpu/graphite/Context.h>
+#include <gpu/graphite/ContextOptions.h>
 
 #ifdef USE_VULKAN
 #    include <gpu/ganesh/vk/GrVkDirectContext.h>
@@ -19,11 +18,13 @@
 #endif
 
 #ifdef AK_OS_MACOS
-#    include <gpu/GrBackendSurface.h>
-#    include <gpu/ganesh/mtl/GrMtlBackendContext.h>
-#    include <gpu/ganesh/mtl/GrMtlBackendSurface.h>
-#    include <gpu/ganesh/mtl/GrMtlDirectContext.h>
+#    include <gpu/graphite/mtl/MtlBackendContext.h>
 #endif
+
+#include <AK/NonnullOwnPtr.h>
+#include <AK/RefPtr.h>
+#include <LibGfx/Bitmap.h>
+#include <LibGfx/SkiaBackendContext.h>
 
 namespace Gfx {
 
@@ -90,37 +91,41 @@ class SkiaMetalBackendContext final : public SkiaBackendContext {
     AK_MAKE_NONMOVABLE(SkiaMetalBackendContext);
 
 public:
-    SkiaMetalBackendContext(sk_sp<GrDirectContext> context, NonnullRefPtr<MetalContext> metal_context)
+    SkiaMetalBackendContext(std::unique_ptr<skgpu::graphite::Context> context, std::unique_ptr<skgpu::graphite::Recorder> recorder, NonnullRefPtr<MetalContext> metal_context)
         : m_context(move(context))
+        , m_recorder(move(recorder))
         , m_metal_context(move(metal_context))
     {
     }
 
     ~SkiaMetalBackendContext() override { }
 
-    void flush_and_submit(SkSurface* surface) override
+    void flush_and_submit() override
     {
-        GrFlushInfo const flush_info {};
-        m_context->flush(surface, SkSurfaces::BackendSurfaceAccess::kPresent, flush_info);
-        m_context->submit(GrSyncCpu::kYes);
+        m_context->submit(skgpu::graphite::SyncToCpu::kYes);
     }
 
-    GrDirectContext* sk_context() const override { return m_context.get(); }
-
+    skgpu::graphite::Context* sk_context() const override { return m_context.get(); }
+    skgpu::graphite::Recorder* sk_recorder() const override { return m_recorder.get(); }
     MetalContext& metal_context() override { return m_metal_context; }
 
 private:
-    sk_sp<GrDirectContext> m_context;
+    std::unique_ptr<skgpu::graphite::Context> m_context;
+    std::unique_ptr<skgpu::graphite::Recorder> m_recorder;
     NonnullRefPtr<MetalContext> m_metal_context;
 };
 
 RefPtr<SkiaBackendContext> SkiaBackendContext::create_metal_context(NonnullRefPtr<MetalContext> metal_context)
 {
-    GrMtlBackendContext backend_context;
+    skgpu::graphite::MtlBackendContext backend_context;
     backend_context.fDevice.retain(metal_context->device());
     backend_context.fQueue.retain(metal_context->queue());
-    sk_sp<GrDirectContext> ctx = GrDirectContexts::MakeMetal(backend_context);
-    return adopt_ref(*new SkiaMetalBackendContext(move(ctx), move(metal_context)));
+
+    skgpu::graphite::ContextOptions context_options {};
+
+    std::unique_ptr<skgpu::graphite::Context> ctx = skgpu::graphite::ContextFactory::MakeMetal(backend_context, context_options);
+    std::unique_ptr<skgpu::graphite::Recorder> recorder = ctx->makeRecorder();
+    return adopt_ref(*new SkiaMetalBackendContext(move(ctx), move(recorder), move(metal_context)));
 }
 #endif
 

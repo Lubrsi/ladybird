@@ -244,7 +244,7 @@ void PainterSkia::stroke_path(Gfx::Path const& path, Gfx::PaintStyle const& pain
     paint.setStrokeCap(to_skia_cap(cap_style));
     paint.setStrokeJoin(to_skia_join(join_style));
     paint.setStrokeMiter(miter_limit);
-    paint.setPathEffect(SkDashPathEffect::Make(dash_array.data(), dash_array.size(), dash_offset));
+    paint.setPathEffect(SkDashPathEffect::Make({ dash_array.data(), dash_array.size() }, dash_offset));
     paint.setBlender(to_skia_blender(compositing_and_blending_operator));
     impl().with_canvas([&](auto& canvas) {
         canvas.drawPath(sk_path, paint);

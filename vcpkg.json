@@ -107,7 +107,8 @@
         "metal",
         "fontconfig",
         "harfbuzz",
-        "icu"
+        "icu",
+        "graphite"
       ]
     },
     {
@@ -118,7 +119,8 @@
         "fontconfig",
         "harfbuzz",
         "icu",
-        "vulkan"
+        "vulkan",
+        "graphite"
       ]
     },
     {
@@ -218,7 +220,7 @@
     },
     {
       "name": "skia",
-      "version": "129#0"
+      "version": "139#0"
     },
     {
       "name": "sqlite3",
