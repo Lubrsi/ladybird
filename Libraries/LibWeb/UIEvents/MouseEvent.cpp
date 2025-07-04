@@ -5,9 +5,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/MouseEventPrototype.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/UIEvents/EventNames.h>
 #include <LibWeb/UIEvents/KeyCode.h>
 #include <LibWeb/UIEvents/MouseButton.h>
@@ -150,6 +152,7 @@ WebIDL::ExceptionOr<GC::Ref<MouseEvent>> MouseEvent::create_from_platform_event(
     }
     event_init.button = mouse_button_to_button_code(static_cast<MouseButton>(button));
     event_init.buttons = buttons;
+    event_init.view = as<HTML::WindowProxy>(realm.global_environment().global_this_value());
     auto event = MouseEvent::create(realm, event_name, event_init, page.x().to_double(), page.y().to_double(), offset.x().to_double(), offset.y().to_double());
     event->set_is_trusted(true);
     event->set_bubbles(true);

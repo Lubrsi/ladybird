@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<input id="testinput" />
+<iframe id="iframe" style="width: 200px; height: 200px;" srcdoc="
+    <input id='testinput' />
+"></iframe>
+<script src="../include.js"></script>
+<script>
+    test(() => {
+        function runTestsForWindow(windowObject, windowLabel) {
+            function eventHandler(event) {
+                println(`${event.type}: event.view === ${windowLabel}: ${event.view === windowObject}`);
+            }
+
+            const testInput = windowObject.document.getElementById("testinput");
+            const documentBody = windowObject.document.body;
+
+            documentBody.onkeydown = eventHandler;
+            documentBody.onkeypress = eventHandler;
+            documentBody.onkeyup = eventHandler;
+            documentBody.onbeforeinput = eventHandler;
+            documentBody.onmousedown = eventHandler;
+            documentBody.onmousemove = eventHandler;
+            documentBody.onmouseup = eventHandler;
+            documentBody.onclick = eventHandler;
+            documentBody.onauxclick = eventHandler;
+            documentBody.ondblclick = eventHandler;
+            documentBody.oncontextmenu = eventHandler;
+            documentBody.onpointerdown = eventHandler;
+            documentBody.onpointermove = eventHandler;
+            documentBody.onpointerup = eventHandler;
+            documentBody.onwheel = eventHandler;
+        }
+
+        const iframe = document.getElementById("iframe");
+
+
+    });
+</script>

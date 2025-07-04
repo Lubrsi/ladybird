@@ -9,6 +9,7 @@
 
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Segmenter.h>
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/Editing/Internal/Algorithms.h>
 #include <LibWeb/HTML/CloseWatcherManager.h>
@@ -20,6 +21,7 @@
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLMediaElement.h>
 #include <LibWeb/HTML/HTMLVideoElement.h>
+#include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/Layout/Label.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Page/DragAndDropEventHandler.h>
@@ -1130,6 +1132,7 @@ EventResult EventHandler::input_event(FlyString const& event_name, FlyString con
         input_event_init.data = String::from_code_point(code_point);
     }
     input_event_init.input_type = input_type;
+    input_event_init.view = as<HTML::WindowProxy>(document->realm().global_environment().global_this_value());
 
     if (auto* focused_element = document->focused_element()) {
         if (is<HTML::NavigableContainer>(*focused_element)) {

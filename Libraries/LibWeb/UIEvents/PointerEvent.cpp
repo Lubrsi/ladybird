@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibWeb/Bindings/PointerEventPrototype.h>
+#include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/UIEvents/PointerEvent.h>
 
 namespace Web::UIEvents {
@@ -28,6 +30,7 @@ WebIDL::ExceptionOr<GC::Ref<PointerEvent>> PointerEvent::create_from_platform_ev
     }
     event_init.button = mouse_button_to_button_code(static_cast<MouseButton>(button));
     event_init.buttons = buttons;
+    event_init.view = as<HTML::WindowProxy>(realm.global_environment().global_this_value());
     auto event = PointerEvent::create(realm, event_name, event_init, page.x().to_double(), page.y().to_double(), offset.x().to_double(), offset.y().to_double());
     event->set_is_trusted(true);
     event->set_bubbles(true);

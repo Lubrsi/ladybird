@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/WheelEventPrototype.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/UIEvents/EventNames.h>
 #include <LibWeb/UIEvents/KeyCode.h>
 #include <LibWeb/UIEvents/WheelEvent.h>
@@ -59,6 +61,8 @@ WebIDL::ExceptionOr<GC::Ref<WheelEvent>> WheelEvent::create_from_platform_event(
     event_init.delta_x = delta_x;
     event_init.delta_y = delta_y;
     event_init.delta_mode = WheelDeltaMode::DOM_DELTA_PIXEL;
+    event_init.view = as<HTML::WindowProxy>(realm.global_environment().global_this_value());
+
     auto event = WheelEvent::create(realm, event_name, event_init, page.x().to_double(), page.y().to_double(), offset.x().to_double(), offset.y().to_double());
     event->set_is_trusted(true);
     event->set_bubbles(true);

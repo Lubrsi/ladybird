@@ -6,8 +6,10 @@
 
 #include <AK/CharacterTypes.h>
 #include <LibUnicode/CharacterTypes.h>
+#include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/KeyboardEventPrototype.h>
+#include <LibWeb/HTML/WindowProxy.h>
 #include <LibWeb/UIEvents/EventNames.h>
 #include <LibWeb/UIEvents/KeyboardEvent.h>
 
@@ -690,6 +692,7 @@ GC::Ref<KeyboardEvent> KeyboardEvent::create_from_platform_event(JS::Realm& real
     event_init.bubbles = true;
     event_init.cancelable = true;
     event_init.composed = true;
+    event_init.view = as<HTML::WindowProxy>(realm.global_environment().global_this_value());
 
     auto event = KeyboardEvent::create(realm, event_name, event_init);
     event->set_is_trusted(true);
