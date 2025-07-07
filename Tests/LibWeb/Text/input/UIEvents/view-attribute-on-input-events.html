@@ -5,7 +5,7 @@
 "></iframe>
 <script src="../include.js"></script>
 <script>
-    test(() => {
+    asyncTest((done) => {
         function runTestsForWindow(windowObject, windowLabel) {
             function eventHandler(event) {
                 println(`${event.type}: event.view === ${windowLabel}: ${event.view === windowObject}`);
@@ -29,10 +29,15 @@
             documentBody.onpointermove = eventHandler;
             documentBody.onpointerup = eventHandler;
             documentBody.onwheel = eventHandler;
+
+            internals.sendText(testInput, "a", { sendKeyUpEvents: true })
         }
 
-        const iframe = document.getElementById("iframe");
-
-
+        iframe.onload = () => {
+            const iframe = document.getElementById("iframe");
+            runTestsForWindow(window, "window");
+            runTestsForWindow(iframe.contentWindow, "iframe.contentWindow");
+            done();
+        };
     });
 </script>

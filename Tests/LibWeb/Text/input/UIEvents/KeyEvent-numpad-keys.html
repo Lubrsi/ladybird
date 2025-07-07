@@ -33,7 +33,7 @@
         });
 
         NUMPAD_KEYS.forEach(key => {
-            internals.sendText(input, key, internals.MOD_KEYPAD);
+            internals.sendText(input, key, { modifiers: internals.MOD_KEYPAD });
         });
     });
 </script>

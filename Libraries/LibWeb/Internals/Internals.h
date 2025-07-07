@@ -13,6 +13,11 @@
 
 namespace Web::Internals {
 
+struct TextSendingOptions {
+    WebIDL::UnsignedShort modifiers { 0 };
+    bool send_key_up_events { false };
+};
+
 class Internals final : public InternalsBase {
     WEB_PLATFORM_OBJECT(Internals, InternalsBase);
     GC_DECLARE_ALLOCATOR(Internals);
@@ -28,8 +33,8 @@ public:
     void gc();
     JS::Object* hit_test(double x, double y);
 
-    void send_text(HTML::HTMLElement&, String const&, WebIDL::UnsignedShort modifiers);
-    void send_key(HTML::HTMLElement&, String const&, WebIDL::UnsignedShort modifiers);
+    void send_text(HTML::HTMLElement&, String const&, TextSendingOptions const& options);
+    void send_key(HTML::HTMLElement&, String const&, TextSendingOptions const& options);
     void commit_text();
 
     void click(double x, double y);

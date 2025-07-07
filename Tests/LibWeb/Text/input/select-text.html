@@ -16,10 +16,10 @@
 
         const text = document.getElementById("text");
 
-        let modifiers = 1 << 2; // Mod_Shift
-        internals.sendKey(text, "Right", modifiers);
-        internals.sendKey(text, "Right", modifiers);
-        internals.sendKey(text, "Right", modifiers);
+        let modifiers = internals.MOD_SHIFT;
+        internals.sendKey(text, "Right", { modifiers });
+        internals.sendKey(text, "Right", { modifiers });
+        internals.sendKey(text, "Right", { modifiers });
         // Should be equal to "Lorem ip"
         println(window.getSelection());
     });

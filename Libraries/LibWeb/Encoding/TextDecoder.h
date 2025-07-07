@@ -33,11 +33,11 @@ class TextDecoder : public Bindings::PlatformObject {
     GC_DECLARE_ALLOCATOR(TextDecoder);
 
 public:
-    static WebIDL::ExceptionOr<GC::Ref<TextDecoder>> construct_impl(JS::Realm&, FlyString encoding, Optional<TextDecoderOptions> const& options = {});
+    static WebIDL::ExceptionOr<GC::Ref<TextDecoder>> construct_impl(JS::Realm&, FlyString encoding, TextDecoderOptions const& options);
 
     virtual ~TextDecoder() override;
 
-    WebIDL::ExceptionOr<String> decode(Optional<GC::Root<WebIDL::BufferSource>> const&, Optional<TextDecodeOptions> const& options = {}) const;
+    WebIDL::ExceptionOr<String> decode(Optional<GC::Root<WebIDL::BufferSource>> const&, TextDecodeOptions const& options) const;
 
     FlyString const& encoding() const { return m_encoding; }
     bool fatal() const { return m_fatal; }

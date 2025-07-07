@@ -83,21 +83,29 @@ JS::Object* Internals::hit_test(double x, double y)
     return nullptr;
 }
 
-void Internals::send_text(HTML::HTMLElement& target, String const& text, WebIDL::UnsignedShort modifiers)
+void Internals::send_text(HTML::HTMLElement& target, String const& text, TextSendingOptions const& options)
 {
     auto& page = this->page();
     target.focus();
 
-    for (auto code_point : text.code_points())
-        page.handle_keydown(UIEvents::code_point_to_key_code(code_point), modifiers, code_point, false);
+    for (auto code_point : text.code_points()) {
+        page.handle_keydown(UIEvents::code_point_to_key_code(code_point), options.modifiers, code_point, false);
+
+        if (options.send_key_up_events) {
+            page.handle_keyup(UIEvents::code_point_to_key_code(code_point), options.modifiers, code_point, false);
+        }
+    }
 }
 
-void Internals::send_key(HTML::HTMLElement& target, String const& key_name, WebIDL::UnsignedShort modifiers)
+void Internals::send_key(HTML::HTMLElement& target, String const& key_name, TextSendingOptions const& options)
 {
     auto key_code = UIEvents::key_code_from_string(key_name);
     target.focus();
 
-    page().handle_keydown(key_code, modifiers, 0, false);
+    page().handle_keydown(key_code, options.modifiers, 0, false);
+
+    if (options.send_key_up_events)
+        page().handle_keyup(key_code, options.modifiers, 0, false);
 }
 
 void Internals::commit_text()

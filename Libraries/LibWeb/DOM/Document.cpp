@@ -707,11 +707,11 @@ WebIDL::ExceptionOr<Document*> Document::open(Optional<String> const&, Optional<
     // If document belongs to a child navigable, we need to make sure its initial navigation is done,
     // because subsequent steps will modify "initial about:blank" to false, which would cause
     // initial navigation to fail in case it was "about:blank".
-    if (auto navigable = this->navigable(); navigable && navigable->container() && !navigable->container()->content_navigable_has_session_history_entry_and_ready_for_navigation()) {
-        HTML::main_thread_event_loop().spin_processing_tasks_with_source_until(HTML::Task::Source::NavigationAndTraversal, GC::create_function(heap(), [navigable_container = navigable->container()] {
-            return navigable_container->content_navigable_has_session_history_entry_and_ready_for_navigation();
-        }));
-    }
+    // if (auto navigable = this->navigable(); navigable && navigable->container() && !navigable->container()->content_navigable_has_session_history_entry_and_ready_for_navigation()) {
+    //     HTML::main_thread_event_loop().spin_processing_tasks_with_source_until(HTML::Task::Source::NavigationAndTraversal, GC::create_function(heap(), [navigable_container = navigable->container()] {
+    //         return navigable_container->content_navigable_has_session_history_entry_and_ready_for_navigation();
+    //     }));
+    // }
 
     // 1. If document is an XML document, then throw an "InvalidStateError" DOMException.
     if (m_type == Type::XML)

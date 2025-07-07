@@ -18,7 +18,7 @@ namespace Web::Encoding {
 GC_DEFINE_ALLOCATOR(TextDecoder);
 
 // https://encoding.spec.whatwg.org/#dom-textdecoder
-WebIDL::ExceptionOr<GC::Ref<TextDecoder>> TextDecoder::construct_impl(JS::Realm& realm, FlyString label, Optional<TextDecoderOptions> const& options)
+WebIDL::ExceptionOr<GC::Ref<TextDecoder>> TextDecoder::construct_impl(JS::Realm& realm, FlyString label, TextDecoderOptions const& options)
 {
     auto& vm = realm.vm();
 
@@ -35,10 +35,10 @@ WebIDL::ExceptionOr<GC::Ref<TextDecoder>> TextDecoder::construct_impl(JS::Realm&
     auto lowercase_encoding_name = encoding.value().to_ascii_lowercase_string();
 
     // 4. If options["fatal"] is true, then set this’s error mode to "fatal".
-    auto fatal = options.value_or({}).fatal;
+    auto fatal = options.fatal;
 
     // 5. Set this’s ignore BOM to options["ignoreBOM"].
-    auto ignore_bom = options.value_or({}).ignore_bom;
+    auto ignore_bom = options.ignore_bom;
 
     // NOTE: This should happen in decode(), but we don't support streaming yet and share decoders across calls.
     auto decoder = TextCodec::decoder_for_exact_name(encoding.value());
@@ -66,7 +66,7 @@ void TextDecoder::initialize(JS::Realm& realm)
 }
 
 // https://encoding.spec.whatwg.org/#dom-textdecoder-decode
-WebIDL::ExceptionOr<String> TextDecoder::decode(Optional<GC::Root<WebIDL::BufferSource>> const& input, Optional<TextDecodeOptions> const&) const
+WebIDL::ExceptionOr<String> TextDecoder::decode(Optional<GC::Root<WebIDL::BufferSource>> const& input, TextDecodeOptions const&) const
 {
     if (!input.has_value())
         return TRY_OR_THROW_OOM(vm(), m_decoder.to_utf8({}));

@@ -29,15 +29,10 @@
 
         internals.sendKey(input, "Return");
 
-        let modifiers = 1 << 0; // Mod_Alt
-        internals.sendKey(input, "Return", modifiers);
-        modifiers = 1 << 1; // Mod_Ctrl
-        internals.sendKey(input, "Return", modifiers);
-        modifiers = 1 << 2; // Mod_Shift
-        internals.sendKey(input, "Return", modifiers);
-        modifiers = 1 << 3; // Mod_Super
-        internals.sendKey(input, "Return", modifiers);
-        modifiers = 1 << 4; // Mod_Keypad
-        internals.sendKey(input, "Return", modifiers);
+        internals.sendKey(input, "Return", { modifiers: internals.MOD_ALT });
+        internals.sendKey(input, "Return", { modifiers: internals.MOD_CTRL });
+        internals.sendKey(input, "Return", { modifiers: internals.MOD_SHIFT });
+        internals.sendKey(input, "Return", { modifiers: internals.MOD_SUPER });
+        internals.sendKey(input, "Return", { modifiers: internals.MOD_KEYPAD });
     });
 </script>

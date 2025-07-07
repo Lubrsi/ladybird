@@ -1,1 +1,7 @@
-Expected println() output
+keydown: event.view === window: true
+keypress: event.view === window: true
+beforeinput: event.view === window: true
+keyup: event.view === window: true
+keydown: event.view === iframe.contentWindow: true
+keypress: event.view === iframe.contentWindow: true
+keyup: event.view === iframe.contentWindow: true

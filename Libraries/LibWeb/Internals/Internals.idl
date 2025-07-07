@@ -2,6 +2,11 @@
 #import <HTML/HTMLElement.idl>
 #import <Internals/InternalAnimationTimeline.idl>
 
+dictionary TextSendingOptions {
+    unsigned short modifiers = 0;
+    boolean sendKeyUpEvents = false;
+};
+
 [Exposed=Nobody]
 interface Internals {
 
@@ -20,8 +25,8 @@ interface Internals {
     const unsigned short MOD_SUPER = 8;
     const unsigned short MOD_KEYPAD = 16;
 
-    undefined sendText(HTMLElement target, DOMString text, optional unsigned short modifiers = 0);
-    undefined sendKey(HTMLElement target, DOMString keyName, optional unsigned short modifiers = 0);
+    undefined sendText(HTMLElement target, DOMString text, optional TextSendingOptions options = {});
+    undefined sendKey(HTMLElement target, DOMString keyName, optional TextSendingOptions options = {});
     undefined commitText();
 
     undefined click(double x, double y);
