@@ -194,7 +194,7 @@ static NonnullOwnPtr<PathImpl> place_text_along_impl(SkPath const& path, Font co
         sk_font.getPath(glyph, &glyph_path);
 
         SkScalar advance;
-        sk_font.getWidths(&glyph, 1, &advance);
+        sk_font.getWidths({ &glyph, 1 }, { &advance, 1 });
 
         SkPoint position;
         SkVector tangent;
@@ -219,7 +219,7 @@ NonnullOwnPtr<PathImpl> PathImplSkia::place_text_along(Utf8View const& text, Fon
     auto length_in_code_points = text.length();
 
     return place_text_along_impl(*m_path, font, length_in_code_points, [&](auto const& sk_font, auto const& run_buffer) {
-        sk_font.textToGlyphs(text.as_string().characters_without_null_termination(), text.as_string().length(), SkTextEncoding::kUTF8, run_buffer.glyphs, length_in_code_points);
+        sk_font.textToGlyphs(text.as_string().characters_without_null_termination(), text.as_string().length(), SkTextEncoding::kUTF8, { run_buffer.glyphs, length_in_code_points });
     });
 }
 
@@ -231,7 +231,7 @@ NonnullOwnPtr<PathImpl> PathImplSkia::place_text_along(Utf16View const& text, Fo
     auto length_in_code_points = text.length_in_code_points();
 
     return place_text_along_impl(*m_path, font, length_in_code_points, [&](auto const& sk_font, auto const& run_buffer) {
-        sk_font.textToGlyphs(text.utf16_span().data(), text.length_in_code_units() * sizeof(char16_t), SkTextEncoding::kUTF16, run_buffer.glyphs, length_in_code_points);
+        sk_font.textToGlyphs(text.utf16_span().data(), text.length_in_code_units() * sizeof(char16_t), SkTextEncoding::kUTF16, { run_buffer.glyphs, length_in_code_points });
     });
 }
 

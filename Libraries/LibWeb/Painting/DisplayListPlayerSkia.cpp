@@ -18,7 +18,7 @@
 #include <effects/SkGradientShader.h>
 #include <effects/SkImageFilters.h>
 #include <effects/SkRuntimeEffect.h>
-#include <gpu/GrDirectContext.h>
+#include <gpu/ganesh/GrDirectContext.h>
 #include <gpu/ganesh/SkSurfaceGanesh.h>
 #include <pathops/SkPathOps.h>
 
@@ -105,13 +105,13 @@ void DisplayListPlayerSkia::draw_glyph_run(DrawGlyphRun const& command)
     auto& canvas = surface().canvas();
     switch (command.orientation) {
     case Gfx::Orientation::Horizontal:
-        canvas.drawGlyphs(glyphs.size(), glyphs.data(), positions.data(), to_skia_point(command.translation), sk_font, paint);
+        canvas.drawGlyphs({ glyphs.data(), glyphs.size() }, { positions.data(), positions.size() }, to_skia_point(command.translation), sk_font, paint);
         break;
     case Gfx::Orientation::Vertical:
         canvas.save();
         canvas.translate(command.rect.width(), 0);
         canvas.rotate(90, command.rect.top_left().x(), command.rect.top_left().y());
-        canvas.drawGlyphs(glyphs.size(), glyphs.data(), positions.data(), to_skia_point(command.translation), sk_font, paint);
+        canvas.drawGlyphs({ glyphs.data(), glyphs.size() }, { positions.data(), positions.size() }, to_skia_point(command.translation), sk_font, paint);
         canvas.restore();
         break;
     }
@@ -673,7 +673,7 @@ void DisplayListPlayerSkia::stroke_path(StrokePath const& command)
     paint.setStrokeCap(to_skia_cap(command.cap_style));
     paint.setStrokeJoin(to_skia_join(command.join_style));
     paint.setStrokeMiter(command.miter_limit);
-    paint.setPathEffect(SkDashPathEffect::Make(command.dash_array.data(), command.dash_array.size(), command.dash_offset));
+    paint.setPathEffect(SkDashPathEffect::Make({ command.dash_array.data(), command.dash_array.size() }, command.dash_offset));
     surface().canvas().drawPath(path, paint);
 }
 
@@ -718,7 +718,7 @@ void DisplayListPlayerSkia::draw_line(DrawLine const& command)
         auto dot_count = floor(length / (static_cast<float>(command.thickness) * 2));
         auto interval = length / dot_count;
         SkScalar intervals[] = { 0, interval };
-        paint.setPathEffect(SkDashPathEffect::Make(intervals, 2, 0));
+        paint.setPathEffect(SkDashPathEffect::Make({ intervals, 2 }, 0));
         paint.setStrokeCap(SkPaint::Cap::kRound_Cap);
 
         // NOTE: As Skia doesn't render a dot exactly at the end of a line, we need
@@ -733,7 +733,7 @@ void DisplayListPlayerSkia::draw_line(DrawLine const& command)
         auto dash_count = floor(length / static_cast<float>(command.thickness) / 4) * 2 + 1;
         auto interval = length / dash_count;
         SkScalar intervals[] = { interval, interval };
-        paint.setPathEffect(SkDashPathEffect::Make(intervals, 2, 0));
+        paint.setPathEffect(SkDashPathEffect::Make({ intervals, 2 }, 0));
 
         auto direction = to - from;
         direction.normalize();
@@ -792,7 +792,9 @@ void DisplayListPlayerSkia::paint_radial_gradient(PaintRadialGradient const& com
         auto const& stop = stops_with_replaced_transition_hints[stop_index];
         if (stop_index > 0 && stop == stops_with_replaced_transition_hints[stop_index - 1])
             continue;
+        dbgln("trying to add color: {}", stop.color);
         colors.append(to_skia_color4f(stop.color));
+        dbgln("trying to add position: {}", stop.position);
         positions.append(stop.position);
     }
 
