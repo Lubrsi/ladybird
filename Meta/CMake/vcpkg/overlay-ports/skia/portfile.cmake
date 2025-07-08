@@ -3,8 +3,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/skia-functions.cmake")
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO google/skia
-    REF "541fadf13c2e29b5563282a32f0011db1cdc31bd"
-    SHA512 e8121a9fbb0949829af49204a0c8cad40c35c5d515ee876aa34c3870728a7ed475d8d0454e94bf5321b4fbb606e9ce8a6631fe18404f6ff0d48183b5f322c41d
+    REF "cb4ee9d86204b42a8e097319e1c9d26717906c59"
+    SHA512 746edc3b124d7900a8e905a7df689ac601eba567ef3adcbdb5d2ac4d28e05b9817dfb5b20e882b13b0b4ec09fbdfe8e6eb623dc698a332133d5ca4026f5da37a
     PATCHES
         # disable-dev-test.patch
         skia-include-string.patch
@@ -13,6 +13,9 @@ vcpkg_from_github(
         vulkan-headers.patch
         pdfsubsetfont-uwp.diff
         skparagraph-dllexport.patch
+        add-core-sources-to-pathops.patch
+        #make-skcms-non-static.patch
+        Revert-Reland-Remove-TODOs-in-GNI-exporter-tool.patch
 )
 
 # De-vendor
@@ -111,6 +114,7 @@ string(JOIN " " OPTIONS
 set(OPTIONS_DBG "is_debug=true")
 set(OPTIONS_REL "is_official_build=true")
 vcpkg_list(SET SKIA_TARGETS :skia :modules)
+message("skia targets: ${SKIA_TARGETS}")
 
 if(VCPKG_TARGET_IS_ANDROID)
     string(APPEND OPTIONS " target_os=\"android\"")

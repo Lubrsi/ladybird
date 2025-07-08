@@ -1,0 +1,21 @@
+diff --git a/modules/skcms/BUILD.gn b/modules/skcms/BUILD.gn
+index 5d037a94c9..227700ccac 100644
+--- a/modules/skcms/BUILD.gn
++++ b/modules/skcms/BUILD.gn
+@@ -3,6 +3,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("../../gn/skia.gni")
+ import("skcms.gni")
+ 
+ # Use for CPU-specific skcms transform code that needs particular compiler flags.
+@@ -80,7 +81,7 @@ arch("skcms_TransformSkx") {
+   }
+ }
+ 
+-static_library("skcms") {
++skia_component("skcms") {
+   cflags = []
+   if (!is_win || is_clang) {
+     cflags += [ "-std=c11" ]
