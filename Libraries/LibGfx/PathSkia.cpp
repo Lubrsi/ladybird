@@ -163,7 +163,7 @@ NonnullOwnPtr<PathImpl> PathImplSkia::place_text_along(Utf8View text, Font const
     SkScalar y = 0;
     SkTextBlobBuilder builder;
     SkTextBlobBuilder::RunBuffer runBuffer = builder.allocRun(sk_font, text_length, x, y, nullptr);
-    sk_font.textToGlyphs(text.as_string().characters_without_null_termination(), text.as_string().length(), SkTextEncoding::kUTF8, runBuffer.glyphs, text_length);
+    sk_font.textToGlyphs(text.as_string().characters_without_null_termination(), text.as_string().length(), SkTextEncoding::kUTF8, { runBuffer.glyphs, text_length });
     SkPathMeasure pathMeasure(*m_path, false);
     SkScalar accumulated_distance = 0;
     auto output_path = PathImplSkia::create();
@@ -173,7 +173,7 @@ NonnullOwnPtr<PathImpl> PathImplSkia::place_text_along(Utf8View text, Font const
         sk_font.getPath(glyph, &glyphPath);
 
         SkScalar advance;
-        sk_font.getWidths(&glyph, 1, &advance);
+        sk_font.getWidths({ &glyph, 1 }, { &advance, 1 });
 
         SkPoint position;
         SkVector tangent;

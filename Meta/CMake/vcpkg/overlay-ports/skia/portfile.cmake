@@ -3,17 +3,17 @@ include("${CMAKE_CURRENT_LIST_DIR}/skia-functions.cmake")
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO google/skia
-    REF "501e9efaa2fc929ec67c44da6dbaf9335264b559"
-    SHA512 978af9894d23d7b97d95d402bbf6c0c1401d63990361aae80166b620b0aa06d9dc2c75537850ff4c2df539735b4a12713cb29840613a15cbbff68590c48c4fac
+    REF "cb4ee9d86204b42a8e097319e1c9d26717906c59"
+    SHA512 746edc3b124d7900a8e905a7df689ac601eba567ef3adcbdb5d2ac4d28e05b9817dfb5b20e882b13b0b4ec09fbdfe8e6eb623dc698a332133d5ca4026f5da37a
     PATCHES
-        disable-msvc-env-setup.patch
         # disable-dev-test.patch
         skia-include-string.patch
         bentleyottmann-build.patch
-        graphite.patch
+        # graphite.patch
         vulkan-headers.patch
         pdfsubsetfont-uwp.diff
-        skparagraph-gni.diff
+        skparagraph-dllexport.patch
+        make-skia-core-apis-visible-for-pathops.patch
 	    fix-freebsd.patch
 )
 
@@ -24,7 +24,7 @@ file(REMOVE_RECURSE "${SOURCE_PATH}/include/third_party/vulkan")
 # to update, visit the DEPS file in Skia's root directory
 declare_external_from_git(abseil-cpp
     URL "https://github.com/abseil/abseil-cpp.git"
-    REF "65a55c2ba891f6d2492477707f4a2e327a0b40dc"
+    REF "04dc59d2c83238cb1fcb49083e5e416643a899ce"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(d3d12allocator
@@ -34,12 +34,12 @@ declare_external_from_git(d3d12allocator
 )
 declare_external_from_git(dawn
     URL "https://dawn.googlesource.com/dawn.git"
-    REF "db1fa936ad0a58846f179c81cdf60f55267099b9"
+    REF "d03fe7eda12dfce1578bf69da2814f89fd78c1e9"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(dng_sdk
     URL "https://android.googlesource.com/platform/external/dng_sdk.git"
-    REF "679499cc9b92cfb0ae1dccbfd7e97ce719d23576"
+    REF "dbe0a676450d9b8c71bf00688bb306409b779e90"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(jinja2
@@ -50,6 +50,11 @@ declare_external_from_git(jinja2
 declare_external_from_git(markupsafe
     URL "https://chromium.googlesource.com/chromium/src/third_party/markupsafe"
     REF "0bad08bb207bbfc1d6f3bbc82b9242b0c50e5794"
+    LICENSE_FILE LICENSE
+)
+declare_external_from_git(partition_alloc
+    URL "https://chromium.googlesource.com/chromium/src/base/allocator/partition_allocator.git"
+    REF "ce13777cb731e0a60c606d1741091fd11a0574d7"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(piex
@@ -64,12 +69,12 @@ declare_external_from_git(spirv-cross
 )
 declare_external_from_git(spirv-headers
     URL "https://github.com/KhronosGroup/SPIRV-Headers.git"
-    REF "1b75a4ae0b4289014b4c369301dc925c366f78a6"
+    REF "2a611a970fdbc41ac2e3e328802aed9985352dca"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(spirv-tools
     URL "https://github.com/KhronosGroup/SPIRV-Tools.git"
-    REF "87fcbaf1bc8346469e178711eff27cfd20aa1960"
+    REF "108b19e5c6979f496deffad4acbe354237afa7d3"
     LICENSE_FILE LICENSE
 )
 declare_external_from_git(wuffs
@@ -236,6 +241,7 @@ They can be installed on Debian based systems via
 ## Remove
         abseil-cpp
 ## REMOVE ^
+        partition_alloc
         dawn
     )
     file(REMOVE_RECURSE "${SOURCE_PATH}/third_party/externals/opengl-registry")

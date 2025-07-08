@@ -120,7 +120,7 @@ find_package(WebP REQUIRED)
 find_package(harfbuzz REQUIRED)
 
 target_link_libraries(LibGfx PRIVATE PkgConfig::WOFF2 JPEG::JPEG PNG::PNG avif WebP::webp WebP::webpdecoder
-            WebP::webpdemux WebP::libwebpmux skia harfbuzz)
+            WebP::webpdemux WebP::libwebpmux skia::modules::pathops harfbuzz)
 
 if (HAS_FONTCONFIG)
     target_link_libraries(LibGfx PRIVATE Fontconfig::Fontconfig)
