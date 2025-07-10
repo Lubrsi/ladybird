@@ -126,6 +126,11 @@ SkSurface& PaintingSurface::sk_surface() const
     return *m_impl->surface;
 }
 
+skgpu::graphite::Recorder* PaintingSurface::sk_recorder() const
+{
+    return m_impl->context->sk_recorder();
+}
+
 void PaintingSurface::notify_content_will_change()
 {
     lock_context();

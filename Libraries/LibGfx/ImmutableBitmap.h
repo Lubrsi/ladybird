@@ -16,6 +16,10 @@
 
 class SkImage;
 
+namespace skgpu::graphite {
+class Recorder;
+}
+
 namespace Gfx {
 
 struct ImmutableBitmapImpl;
@@ -35,7 +39,7 @@ public:
 
     Gfx::AlphaType alpha_type() const;
 
-    SkImage const* sk_image() const;
+    SkImage const* sk_image(skgpu::graphite::Recorder* sk_recorder) const;
 
     Color get_pixel(int x, int y) const;
 

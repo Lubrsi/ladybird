@@ -49,6 +49,7 @@ public:
 
     SkCanvas& canvas() const;
     SkSurface& sk_surface() const;
+    skgpu::graphite::Recorder* sk_recorder() const;
 
     template<typename T>
     T sk_image_snapshot() const;

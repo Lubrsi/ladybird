@@ -152,7 +152,7 @@ void PainterSkia::draw_bitmap(Gfx::FloatRect const& dst_rect, Gfx::ImmutableBitm
 
     impl().with_canvas([&](auto& canvas) {
         canvas.drawImageRect(
-            src_bitmap.sk_image(),
+            src_bitmap.sk_image(impl().painting_surface->sk_recorder()),
             to_skia_rect(src_rect),
             to_skia_rect(dst_rect),
             to_skia_sampling_options(scaling_mode),

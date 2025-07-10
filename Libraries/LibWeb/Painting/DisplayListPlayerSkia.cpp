@@ -143,7 +143,7 @@ void DisplayListPlayerSkia::draw_scaled_immutable_bitmap(DrawScaledImmutableBitm
     SkPaint paint;
     canvas.save();
     canvas.clipRect(clip_rect);
-    canvas.drawImageRect(command.bitmap->sk_image(), dst_rect, to_skia_sampling_options(command.scaling_mode), &paint);
+    canvas.drawImageRect(command.bitmap->sk_image(m_context->sk_recorder()), dst_rect, to_skia_sampling_options(command.scaling_mode), &paint);
     canvas.restore();
 }
 
@@ -158,7 +158,7 @@ void DisplayListPlayerSkia::draw_repeated_immutable_bitmap(DrawRepeatedImmutable
 
     auto tile_mode_x = command.repeat.x ? SkTileMode::kRepeat : SkTileMode::kDecal;
     auto tile_mode_y = command.repeat.y ? SkTileMode::kRepeat : SkTileMode::kDecal;
-    auto shader = command.bitmap->sk_image()->makeShader(tile_mode_x, tile_mode_y, sampling_options, matrix);
+    auto shader = command.bitmap->sk_image(m_context->sk_recorder())->makeShader(tile_mode_x, tile_mode_y, sampling_options, matrix);
 
     SkPaint paint;
     paint.setShader(shader);
@@ -1078,7 +1078,7 @@ void DisplayListPlayerSkia::apply_mask_bitmap(ApplyMaskBitmap const& command)
 {
     auto& canvas = surface().canvas();
 
-    auto const* mask_image = command.bitmap->sk_image();
+    auto const* mask_image = command.bitmap->sk_image(m_context->sk_recorder());
 
     auto compile_effect = [](char const* sksl_shader) {
         auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(sksl_shader));

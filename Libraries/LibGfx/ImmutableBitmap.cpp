@@ -4,13 +4,15 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibGfx/ImmutableBitmap.h>
-#include <LibGfx/PaintingSurface.h>
-#include <LibGfx/SkiaUtils.h>
-
 #include <core/SkBitmap.h>
 #include <core/SkColorSpace.h>
 #include <core/SkImage.h>
+#include <gpu/graphite/Image.h>
+#include <gpu/graphite/Recorder.h>
+
+#include <LibGfx/ImmutableBitmap.h>
+#include <LibGfx/PaintingSurface.h>
+#include <LibGfx/SkiaUtils.h>
 
 namespace Gfx {
 
@@ -19,6 +21,7 @@ struct ImmutableBitmapImpl {
     SkBitmap sk_bitmap;
     Variant<NonnullRefPtr<Gfx::Bitmap>, NonnullRefPtr<Gfx::PaintingSurface>, Empty> source;
     ColorSpace color_space;
+    bool sk_image_has_been_converted_to_graphite { false };
 };
 
 int ImmutableBitmap::width() const
@@ -46,8 +49,16 @@ Gfx::AlphaType ImmutableBitmap::alpha_type() const
     return m_impl->sk_image->alphaType() == kPremul_SkAlphaType ? Gfx::AlphaType::Premultiplied : Gfx::AlphaType::Unpremultiplied;
 }
 
-SkImage const* ImmutableBitmap::sk_image() const
+SkImage const* ImmutableBitmap::sk_image(skgpu::graphite::Recorder* sk_recorder) const
 {
+    if (!m_impl->sk_image_has_been_converted_to_graphite) {
+        SkImage::RequiredProperties required_properties {};
+        required_properties.fMipmapped = false;
+
+        m_impl->sk_image = SkImages::TextureFromImage(sk_recorder, m_impl->sk_image, required_properties);
+        m_impl->sk_image_has_been_converted_to_graphite = true;
+    }
+
     return m_impl->sk_image.get();
 }
 

@@ -5,6 +5,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <core/SkColorSpace.h>
+#include <core/SkColorType.h>
+#include <core/SkImage.h>
+#include <core/SkPixmap.h>
+#include <gpu/graphite/Recorder.h>
+
 #define GL_GLEXT_PROTOTYPES 1
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -35,11 +41,6 @@ extern "C" {
 #include <LibWeb/WebGL/WebGLUniformLocation.h>
 #include <LibWeb/WebGL/WebGLVertexArrayObject.h>
 #include <LibWeb/WebIDL/Buffers.h>
-
-#include <core/SkColorSpace.h>
-#include <core/SkColorType.h>
-#include <core/SkImage.h>
-#include <core/SkPixmap.h>
 
 namespace Web::WebGL {
 
@@ -140,7 +141,7 @@ struct ConvertedTexture {
     int height { 0 };
 };
 
-static Optional<ConvertedTexture> read_and_pixel_convert_texture_image_source(TexImageSource const& source, WebIDL::UnsignedLong format, WebIDL::UnsignedLong type, Optional<int> destination_width = OptionalNone {}, Optional<int> destination_height = OptionalNone {})
+static Optional<ConvertedTexture> read_and_pixel_convert_texture_image_source(skgpu::graphite::Recorder* sk_recorder, TexImageSource const& source, WebIDL::UnsignedLong format, WebIDL::UnsignedLong type, Optional<int> destination_width = OptionalNone {}, Optional<int> destination_height = OptionalNone {})
 {
     // FIXME: If this function is called with an ImageData whose data attribute has been neutered,
     //        an INVALID_VALUE error is generated.
@@ -210,7 +211,10 @@ static Optional<ConvertedTexture> read_and_pixel_convert_texture_image_source(Te
     auto color_space = SkColorSpace::MakeSRGB();
     auto image_info = SkImageInfo::Make(width, height, skia_format, SkAlphaType::kPremul_SkAlphaType, color_space);
     SkPixmap const pixmap(image_info, buffer.data(), buffer_pitch.value());
-    bitmap->sk_image()->readPixels(pixmap, 0, 0);
+
+    // FIXME: This is using the deprecated readPixels API.
+    bitmap->sk_image(sk_recorder)->readPixels(pixmap, 0, 0);
+
     return ConvertedTexture {
         .buffer = move(buffer),
         .width = width,
@@ -328,7 +332,7 @@ void WebGLRenderingContextImpl::tex_image2d(WebIDL::UnsignedLong target, WebIDL:
 {
     m_context->make_current();
 
-    auto maybe_converted_texture = read_and_pixel_convert_texture_image_source(source, format, type);
+    auto maybe_converted_texture = read_and_pixel_convert_texture_image_source(m_context->surface()->sk_recorder(), source, format, type);
     if (!maybe_converted_texture.has_value())
         return;
     auto converted_texture = maybe_converted_texture.release_value();
@@ -354,7 +358,7 @@ void WebGLRenderingContextImpl::tex_sub_image2d(WebIDL::UnsignedLong target, Web
 {
     m_context->make_current();
 
-    auto maybe_converted_texture = read_and_pixel_convert_texture_image_source(source, format, type);
+    auto maybe_converted_texture = read_and_pixel_convert_texture_image_source(m_context->surface()->sk_recorder(), source, format, type);
 
     if (!maybe_converted_texture.has_value())
         return;

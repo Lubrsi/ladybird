@@ -102,6 +102,8 @@ public:
 
     void flush_and_submit() override
     {
+        auto recording = m_recorder->snap();
+        m_context->insertRecording({ recording.get() });
         m_context->submit(skgpu::graphite::SyncToCpu::kYes);
     }
 
