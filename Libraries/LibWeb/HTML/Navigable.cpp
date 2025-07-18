@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/PerformanceNavigationTimingPrototype.h>
 #include <LibWeb/CSS/SystemColor.h>
 #include <LibWeb/ContentSecurityPolicy/BlockingAlgorithms.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/DirectiveOperations.h>
@@ -22,7 +23,6 @@
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
-#include <LibWeb/Forward.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/DocumentState.h>
@@ -825,9 +825,9 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
         *policy_container,
         target_snapshot_params.sandboxing_flags,
         move(coop),
+        navigation_timing_type,
         entry->document_state()->about_base_url(),
         user_involvement);
-    navigation_params->navigation_timing_type = navigation_timing_type;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-by-fetching
@@ -1180,8 +1180,8 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
             target_snapshot_params.sandboxing_flags,
             source_snapshot_params.has_transient_activation,
             move(*response_origin),
+            navigation_timing_type,
             user_involvement);
-        navigation_params->navigation_timing_type = navigation_timing_type;
     }
 
     // 21. If any of the following are true:
@@ -1243,9 +1243,9 @@ static WebIDL::ExceptionOr<Navigable::NavigationParamsVariant> create_navigation
         result_policy_container,
         final_sandbox_flags,
         response_coop,
+        navigation_timing_type,
         entry->document_state()->about_base_url(),
         user_involvement);
-    navigation_params->navigation_timing_type = navigation_timing_type;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#populating-a-session-history-entry
@@ -1310,8 +1310,8 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
                 target_snapshot_params.sandboxing_flags,
                 source_snapshot_params.has_transient_activation,
                 *entry->document_state()->initiator_origin(),
+                navigation_timing_type,
                 user_involvement);
-            non_fetching_scheme_navigation_params->navigation_timing_type = navigation_timing_type;
         }
     }
 
@@ -1320,7 +1320,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
         return {};
 
     // 5. Queue a global task on the navigation and traversal task source, given navigable's active window, to run these steps:
-    queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(heap(), [this, entry, navigation_params = move(navigation_params), navigation_id, user_involvement, completion_steps, csp_navigation_type]() mutable {
+    queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(heap(), [this, entry, navigation_params = move(navigation_params), navigation_id, navigation_timing_type, user_involvement, completion_steps, csp_navigation_type]() mutable {
         // NOTE: This check is not in the spec but we should not continue navigation if navigable has been destroyed.
         if (has_been_destroyed())
             return;
@@ -1371,7 +1371,7 @@ WebIDL::ExceptionOr<void> Navigable::populate_session_history_entry_document(
             auto error_message = navigation_params.has<NullOrError>() ? navigation_params.get<NullOrError>().value_or("Unknown error"_string) : "The request was denied."_string;
 
             auto error_html = load_error_page(entry->url(), error_message).release_value_but_fixme_should_propagate_errors();
-            entry->document_state()->set_document(create_document_for_inline_content(this, navigation_id, user_involvement, [this, error_html](auto& document) {
+            entry->document_state()->set_document(create_document_for_inline_content(this, navigation_id, navigation_timing_type, user_involvement, [this, error_html](auto& document) {
                 auto parser = HTML::HTMLParser::create(document, error_html, "utf-8"sv);
                 document.set_url(URL::about_error());
                 parser->run();
@@ -1981,9 +1981,9 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
         policy_container,
         final_sandbox_flags,
         coop,
+        Bindings::NavigationTimingType::Navigate,
         active_document()->about_base_url(),
         user_involvement);
-    navigation_params->navigation_timing_type = Bindings::NavigationTimingType::Navigate;
 
     // 17. Return the result of loading an HTML document given navigationParams.
     return load_document(navigation_params);

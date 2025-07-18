@@ -431,7 +431,14 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
 
         // 3. Create the navigation timing entry for document, given fullTimingInfo, redirectCount, navigationTimingType,
         //    navigationParams's response's service worker timing info, and navigationParams's response's body info.
-        NavigationTiming::PerformanceNavigationTiming::create_the_navigation_timing_entry(document, final_timing_info, redirect_count, navigation_params.)
+        NavigationTiming::PerformanceNavigationTiming::create_the_navigation_timing_entry(document,
+            final_timing_info,
+            redirect_count,
+            navigation_params.navigation_timing_type,
+            navigation_params.response->cache_state(),
+            /* FIXME: critical_ch_restart= */ 0,
+            navigation_params.response->body_info(),
+            navigation_params.response->status());
     }
 
     // FIXME: 14. Create the navigation timing entry for document, with navigationParams's response's timing info, redirectCount, navigationParams's navigation timing type, and

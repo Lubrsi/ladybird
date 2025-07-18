@@ -42,7 +42,7 @@ void PerformanceNavigationTiming::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_previous_document_unloading_timing);
 }
 
-void PerformanceNavigationTiming::create_the_navigation_timing_entry(GC::Ref<DOM::Document> document, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> fetch_timing, u8 redirect_count, Bindings::NavigationTimingType navigation_type, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, HighResolutionTime::DOMHighResTimeStamp critical_ch_restart, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status)
+void PerformanceNavigationTiming::create_the_navigation_timing_entry(GC::Ref<DOM::Document> document, GC::Ref<Fetch::Infrastructure::FetchTimingInfo> fetch_timing, u16 redirect_count, Bindings::NavigationTimingType navigation_type, Optional<Fetch::Infrastructure::Response::CacheState> const& cache_mode, HighResolutionTime::DOMHighResTimeStamp critical_ch_restart, Fetch::Infrastructure::Response::BodyInfo body_info, Fetch::Infrastructure::Status response_status)
 {
     // 1. Let global be document's relevant global object.
     auto& global = as<HTML::Window>(HTML::relevant_global_object(*document));

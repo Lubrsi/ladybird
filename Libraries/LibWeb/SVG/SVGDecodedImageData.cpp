@@ -6,6 +6,7 @@
 
 #include <LibGfx/Bitmap.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/Bindings/PerformanceNavigationTimingPrototype.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
@@ -50,6 +51,7 @@ ErrorOr<GC::Ref<SVGDecodedImageData>> SVGDecodedImageData::create(JS::Realm& rea
         navigable->heap().allocate<HTML::PolicyContainer>(realm.heap()),
         HTML::SandboxingFlagSet {},
         HTML::OpenerPolicy {},
+        Bindings::NavigationTimingType::Navigate,
         OptionalNone {},
         HTML::UserNavigationInvolvement::None);
 

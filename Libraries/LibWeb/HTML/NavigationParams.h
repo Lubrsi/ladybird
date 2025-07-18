@@ -93,6 +93,7 @@ protected:
         GC::Ptr<PolicyContainer> policy_container,
         SandboxingFlagSet final_sandboxing_flag_set,
         OpenerPolicy opener_policy,
+        Bindings::NavigationTimingType navigation_timing_type,
         Optional<URL::URL> about_base_url,
         UserNavigationInvolvement user_involvement)
         : id(move(id))
@@ -107,6 +108,7 @@ protected:
         , policy_container(policy_container)
         , final_sandboxing_flag_set(final_sandboxing_flag_set)
         , opener_policy(opener_policy)
+        , navigation_timing_type(navigation_timing_type)
         , about_base_url(move(about_base_url))
         , user_involvement(user_involvement)
     {
@@ -150,6 +152,7 @@ protected:
         SandboxingFlagSet target_snapshot_sandboxing_flags,
         bool source_snapshot_has_transient_activation,
         URL::Origin initiator_origin,
+        Bindings::NavigationTimingType navigation_timing_type,
         UserNavigationInvolvement user_involvement)
         : id(move(id))
         , navigable(navigable)
@@ -157,6 +160,7 @@ protected:
         , target_snapshot_sandboxing_flags(target_snapshot_sandboxing_flags)
         , source_snapshot_has_transient_activation(source_snapshot_has_transient_activation)
         , initiator_origin(move(initiator_origin))
+        , navigation_timing_type(navigation_timing_type)
         , user_involvement(user_involvement)
     {
     }
