@@ -164,6 +164,12 @@ void HTMLCanvasElement::notify_context_about_canvas_size_change()
 
 WebIDL::ExceptionOr<void> HTMLCanvasElement::set_width(unsigned value)
 {
+    // When setting the value of the width or height attribute, if the context mode of the canvas element is set to
+    // placeholder, the user agent must throw an "InvalidStateError" DOMException and leave the attribute's value
+    // unchanged.
+    if (m_is_placeholder_context)
+        return WebIDL::InvalidStateError::create(realm(), "Cannot change width when canvas has been transferred to an OffscreenCanvas"_string);
+
     if (value > 2147483647)
         value = 300;
 
@@ -175,6 +181,12 @@ WebIDL::ExceptionOr<void> HTMLCanvasElement::set_width(unsigned value)
 
 WebIDL::ExceptionOr<void> HTMLCanvasElement::set_height(WebIDL::UnsignedLong value)
 {
+    // When setting the value of the width or height attribute, if the context mode of the canvas element is set to
+    // placeholder, the user agent must throw an "InvalidStateError" DOMException and leave the attribute's value
+    // unchanged.
+    if (m_is_placeholder_context)
+        return WebIDL::InvalidStateError::create(realm(), "Cannot change height when canvas has been transferred to an OffscreenCanvas"_string);
+
     if (value > 2147483647)
         value = 150;
 
@@ -242,6 +254,11 @@ JS::ThrowCompletionOr<HTMLCanvasElement::RenderingContext> HTMLCanvasElement::ge
     // NOTE: No-op.
 
     // 3. Run the steps in the cell of the following table whose column header matches this canvas element's canvas context mode and whose row header matches contextId:
+    // -> placeholder
+    //      Throw an "InvalidStateError" DOMException.
+    if (m_is_placeholder_context)
+        return JS::throw_completion(WebIDL::InvalidStateError::create(realm(), "Cannot get context for canvas that has been transferred to an OffscreenCanvas"_string));
+
     // NOTE: See the spec for the full table.
     if (type == "2d"sv) {
         if (TRY(create_2d_context(options)) == HasOrCreatedContext::Yes)
@@ -366,6 +383,31 @@ WebIDL::ExceptionOr<void> HTMLCanvasElement::to_blob(GC::Ref<WebIDL::CallbackTyp
         });
     }));
     return {};
+}
+
+// https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-transfercontroltooffscreen
+WebIDL::ExceptionOr<GC::Ref<OffscreenCanvas>> HTMLCanvasElement::transfer_control_to_offscreen()
+{
+    auto& realm = this->realm();
+
+    // 1. If this canvas element's context mode is not set to none, throw an "InvalidStateError" DOMException.
+    if (!m_context.has<Empty>() || m_is_placeholder_context)
+        return WebIDL::InvalidStateError::create(realm, "Cannot transfer a canvas that already has a context to an OffscreenCanvas"_string);
+
+    // 2. Let offscreenCanvas be a new OffscreenCanvas object with its width and height equal to the values of the
+    //    width and height content attributes of this canvas element.
+    auto offscreen_canvas = OffscreenCanvas::create(realm, width(), height());
+
+    // FIXME: 3. Set the offscreenCanvas's placeholder canvas element to a weak reference to this canvas element.
+
+    // 4. Set this canvas element's context mode to placeholder.
+    m_is_placeholder_context = true;
+
+    // FIXME: 5. Set the offscreenCanvas's inherited language to the language of this canvas element.
+    // FIXME: 6. Set the offscreenCanvas's inherited direction to the directionality of this canvas element.
+
+    // 7. Return offscreenCanvas.
+    return offscreen_canvas;
 }
 
 RefPtr<Gfx::Bitmap> HTMLCanvasElement::get_bitmap_from_surface()

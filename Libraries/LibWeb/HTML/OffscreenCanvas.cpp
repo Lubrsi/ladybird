@@ -364,8 +364,8 @@ GC::Ptr<WebIDL::CallbackType> OffscreenCanvas::oncontextrestored()
 
 void OffscreenCanvas::initialize(JS::Realm& realm)
 {
-    Base::initialize(realm);
     WEB_SET_PROTOTYPE_FOR_INTERFACE(OffscreenCanvas);
+    Base::initialize(realm);
 }
 
 void OffscreenCanvas::visit_edges(Cell::Visitor& visitor)

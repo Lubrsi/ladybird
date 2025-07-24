@@ -41,6 +41,7 @@ public:
 
     String to_data_url(StringView type, JS::Value quality);
     WebIDL::ExceptionOr<void> to_blob(GC::Ref<WebIDL::CallbackType> callback, StringView type, JS::Value quality);
+    WebIDL::ExceptionOr<GC::Ref<OffscreenCanvas>> transfer_control_to_offscreen();
     RefPtr<Gfx::Bitmap> get_bitmap_from_surface();
 
     void present();
@@ -66,6 +67,7 @@ private:
     void notify_context_about_canvas_size_change();
 
     Variant<GC::Ref<HTML::CanvasRenderingContext2D>, GC::Ref<WebGL::WebGLRenderingContext>, GC::Ref<WebGL::WebGL2RenderingContext>, Empty> m_context;
+    bool m_is_placeholder_context { false };
 };
 
 }

@@ -11,6 +11,7 @@
 #import <HTML/Canvas/CanvasPathDrawingStyles.idl>
 #import <HTML/Canvas/CanvasTextDrawingStyles.idl>
 #import <HTML/Canvas/CanvasRect.idl>
+#import <HTML/Canvas/CanvasSettings.idl>
 #import <HTML/Canvas/CanvasShadowStyles.idl>
 #import <HTML/Canvas/CanvasState.idl>
 #import <HTML/Canvas/CanvasText.idl>

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    test(() => {
+        function runAndPrintException(func) {
+            try {
+                func();
+            } catch (e) {
+                println(e.toString());
+            }
+        }
+
+        const canvas = document.createElement("canvas");
+
+        println(canvas.getContext("2d").toString());
+
+        runAndPrintException(() => {
+            canvas.transferControlToOffscreen();
+        });
+
+        println(canvas.getContext("2d").toString());
+
+        const canvas2 = document.createElement("canvas");
+        const offscreen = canvas2.transferControlToOffscreen();
+        println(offscreen.toString());
+
+        runAndPrintException(() => {
+            canvas2.transferControlToOffscreen();
+        });
+
+        println(offscreen.getContext("2d").toString());
+
+        runAndPrintException(() => {
+            canvas2.getContext("2d");
+        });
+
+        runAndPrintException(() => {
+            canvas2.width = 100;
+        });
+
+        runAndPrintException(() => {
+            canvas2.height = 100;
+        });
+    });
+</script>

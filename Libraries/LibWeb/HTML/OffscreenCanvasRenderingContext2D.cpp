@@ -50,8 +50,8 @@ OffscreenCanvasRenderingContext2D::~OffscreenCanvasRenderingContext2D() = defaul
 
 void OffscreenCanvasRenderingContext2D::initialize(JS::Realm& realm)
 {
+    WEB_SET_PROTOTYPE_FOR_INTERFACE(OffscreenCanvasRenderingContext2D);
     Base::initialize(realm);
-    set_prototype(&Bindings::ensure_web_prototype<Bindings::OffscreenCanvasRenderingContext2DPrototype>(realm, "OffscreenCanvasRenderingContext2D"_string));
 }
 
 void OffscreenCanvasRenderingContext2D::visit_edges(Cell::Visitor& visitor)

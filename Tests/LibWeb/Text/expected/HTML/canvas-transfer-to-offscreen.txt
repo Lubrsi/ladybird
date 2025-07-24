@@ -1,0 +1,9 @@
+[object CanvasRenderingContext2D]
+InvalidStateError: Cannot transfer a canvas that already has a context to an OffscreenCanvas
+[object CanvasRenderingContext2D]
+[object OffscreenCanvas]
+InvalidStateError: Cannot transfer a canvas that already has a context to an OffscreenCanvas
+[object OffscreenCanvasRenderingContext2D]
+InvalidStateError: Cannot get context for canvas that has been transferred to an OffscreenCanvas
+InvalidStateError: Cannot change width when canvas has been transferred to an OffscreenCanvas
+InvalidStateError: Cannot change height when canvas has been transferred to an OffscreenCanvas
