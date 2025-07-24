@@ -72,6 +72,12 @@ WebIDL::ExceptionOr<GC::Ref<OffscreenCanvas>> OffscreenCanvas::construct_impl(
 }
 
 // https://html.spec.whatwg.org/multipage/canvas.html#dom-offscreencanvas
+OffscreenCanvas::OffscreenCanvas(JS::Realm& realm)
+    : EventTarget(realm)
+{
+}
+
+// https://html.spec.whatwg.org/multipage/canvas.html#dom-offscreencanvas
 OffscreenCanvas::OffscreenCanvas(JS::Realm& realm, RefPtr<Gfx::Bitmap> bitmap)
     : EventTarget(realm)
     , m_bitmap { move(bitmap) }
@@ -96,9 +102,7 @@ WebIDL::ExceptionOr<void> OffscreenCanvas::transfer_receiving_steps(HTML::Transf
 
 HTML::TransferType OffscreenCanvas::primary_interface() const
 {
-    // FIXME: Implement this
-    dbgln("(STUBBED) OffscreenCanvas::primary_interface()");
-    return {};
+    return TransferType::OffscreenCanvas;
 }
 
 WebIDL::UnsignedLong OffscreenCanvas::width() const

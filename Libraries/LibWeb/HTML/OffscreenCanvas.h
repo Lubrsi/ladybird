@@ -68,6 +68,7 @@ public:
     GC::Ptr<WebIDL::CallbackType> oncontextrestored();
 
 private:
+    OffscreenCanvas(JS::Realm&);
     OffscreenCanvas(JS::Realm&, RefPtr<Gfx::Bitmap> bitmap);
 
     virtual void initialize(JS::Realm&) override;

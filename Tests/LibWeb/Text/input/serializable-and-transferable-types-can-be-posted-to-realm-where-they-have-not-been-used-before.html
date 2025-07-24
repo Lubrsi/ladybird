@@ -41,6 +41,8 @@
 
                 const messageChannel = new MessageChannel();
 
+                const canvas = document.createElement("canvas");
+
                 const transferableTypes = [
                     messageChannel.port2,
                     new ArrayBuffer(1),
@@ -48,6 +50,7 @@
                     new ReadableStream(),
                     new WritableStream(),
                     new TransformStream(),
+                    canvas.transferControlToOffscreen(),
                 ];
 
                 for (const serializableType of serializableTypes) {
