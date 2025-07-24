@@ -75,7 +75,7 @@ static SkMatrix to_skia_matrix(Gfx::AffineTransform const& affine_transform)
 void DisplayListPlayerSkia::flush()
 {
     if (m_context)
-        m_context->flush_and_submit(&surface().sk_surface());
+        m_context->flush_and_submit();
     surface().flush();
 }
 
