@@ -18,7 +18,11 @@
 #    include <LibGfx/MetalContext.h>
 #endif
 
-class GrDirectContext;
+namespace skgpu::graphite {
+class Context;
+class Recorder;
+}
+
 class SkSurface;
 
 namespace Gfx {
@@ -41,8 +45,9 @@ public:
     SkiaBackendContext() { }
     virtual ~SkiaBackendContext() { }
 
-    virtual void flush_and_submit(SkSurface*) { }
-    virtual GrDirectContext* sk_context() const = 0;
+    virtual void flush_and_submit() { }
+    virtual skgpu::graphite::Context* sk_context() const = 0;
+    virtual skgpu::graphite::Recorder* sk_recorder() const = 0;
 
     virtual MetalContext& metal_context() = 0;
 
