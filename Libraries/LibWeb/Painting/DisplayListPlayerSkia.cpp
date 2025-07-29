@@ -18,8 +18,6 @@
 #include <effects/SkGradientShader.h>
 #include <effects/SkImageFilters.h>
 #include <effects/SkRuntimeEffect.h>
-#include <gpu/ganesh/GrDirectContext.h>
-#include <gpu/ganesh/SkSurfaceGanesh.h>
 #include <pathops/SkPathOps.h>
 
 #include <LibGfx/Font/Font.h>

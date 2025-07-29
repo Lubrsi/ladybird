@@ -139,7 +139,8 @@
         "metal",
         "fontconfig",
         "harfbuzz",
-        "icu"
+        "icu",
+        "graphite"
       ]
     },
     {
@@ -150,7 +151,8 @@
         "fontconfig",
         "harfbuzz",
         "icu",
-        "vulkan"
+        "vulkan",
+        "graphite"
       ]
     },
     {
