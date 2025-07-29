@@ -5,6 +5,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <core/SkColorSpace.h>
+#include <core/SkColorType.h>
+#include <core/SkImage.h>
+#include <core/SkPixmap.h>
+
 #define GL_GLEXT_PROTOTYPES 1
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -35,11 +40,6 @@ extern "C" {
 #include <LibWeb/WebGL/WebGLUniformLocation.h>
 #include <LibWeb/WebGL/WebGLVertexArrayObject.h>
 #include <LibWeb/WebIDL/Buffers.h>
-
-#include <core/SkColorSpace.h>
-#include <core/SkColorType.h>
-#include <core/SkImage.h>
-#include <core/SkPixmap.h>
 
 namespace Web::WebGL {
 
@@ -210,7 +210,10 @@ static Optional<ConvertedTexture> read_and_pixel_convert_texture_image_source(Te
     auto color_space = SkColorSpace::MakeSRGB();
     auto image_info = SkImageInfo::Make(width, height, skia_format, SkAlphaType::kPremul_SkAlphaType, color_space);
     SkPixmap const pixmap(image_info, buffer.data(), buffer_pitch.value());
+
+    // FIXME: This is using the deprecated readPixels API.
     bitmap->sk_image()->readPixels(pixmap, 0, 0);
+
     return ConvertedTexture {
         .buffer = move(buffer),
         .width = width,

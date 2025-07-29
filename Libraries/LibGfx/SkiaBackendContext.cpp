@@ -4,12 +4,15 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Platform.h>
-
 #include <core/SkSurface.h>
 
 #include <gpu/graphite/Context.h>
 #include <gpu/graphite/ContextOptions.h>
+#include <gpu/graphite/Image.h>
+#include <gpu/graphite/ImageProvider.h>
+
+#include <AK/Platform.h>
+#include <AK/HashMap.h>
 
 #ifdef USE_VULKAN
 #    include <gpu/ganesh/vk/GrVkDirectContext.h>
@@ -27,6 +30,42 @@
 #include <LibGfx/SkiaBackendContext.h>
 
 namespace Gfx {
+
+class GraphiteImageProvider final : public skgpu::graphite::ImageProvider {
+public:
+    struct CacheKey {
+        skgpu::graphite::Recorder const* sk_recorder;
+        SkImage const* sk_image;
+        SkImage::RequiredProperties required_properties;
+    };
+
+    static sk_sp<GraphiteImageProvider> create()
+    {
+        return sk_sp(new GraphiteImageProvider());
+    }
+
+    virtual sk_sp<SkImage> findOrCreate(skgpu::graphite::Recorder* sk_recorder, SkImage const* sk_image, SkImage::RequiredProperties required_properties) override
+    {
+        auto cache_key = CacheKey {
+            .sk_recorder = sk_recorder,
+            .sk_image = sk_image,
+            .required_properties = required_properties,
+        };
+
+        auto image_cache_iterator = m_image_cache.find(cache_key);
+        if (image_cache_iterator != m_image_cache.end())
+            return image_cache_iterator->value;
+
+        auto graphite_backed_image = SkImages::TextureFromImage(sk_recorder, sk_image, required_properties);
+        m_image_cache.set(cache_key, graphite_backed_image);
+        return graphite_backed_image;
+    }
+
+private:
+    GraphiteImageProvider() = default;
+
+    HashMap<CacheKey, sk_sp<SkImage>> m_image_cache;
+};
 
 #ifdef USE_VULKAN
 class SkiaVulkanBackendContext final : public SkiaBackendContext {
@@ -102,6 +141,8 @@ public:
 
     void flush_and_submit() override
     {
+        auto recording = m_recorder->snap();
+        m_context->insertRecording({ recording.get() });
         m_context->submit(skgpu::graphite::SyncToCpu::kYes);
     }
 
@@ -122,11 +163,35 @@ RefPtr<SkiaBackendContext> SkiaBackendContext::create_metal_context(NonnullRefPt
     backend_context.fQueue.retain(metal_context->queue());
 
     skgpu::graphite::ContextOptions context_options {};
-
     std::unique_ptr<skgpu::graphite::Context> ctx = skgpu::graphite::ContextFactory::MakeMetal(backend_context, context_options);
-    std::unique_ptr<skgpu::graphite::Recorder> recorder = ctx->makeRecorder();
+
+    skgpu::graphite::RecorderOptions recorder_options {};
+    recorder_options.fImageProvider = GraphiteImageProvider::create();
+    std::unique_ptr<skgpu::graphite::Recorder> recorder = ctx->makeRecorder(recorder_options);
+
     return adopt_ref(*new SkiaMetalBackendContext(move(ctx), move(recorder), move(metal_context)));
 }
 #endif
+
+}
+
+namespace AK {
+
+template<>
+struct Traits<Gfx::GraphiteImageProvider::CacheKey> : public AK::DefaultTraits<Gfx::GraphiteImageProvider::CacheKey> {
+    static unsigned hash(Gfx::GraphiteImageProvider::CacheKey const& cache_key)
+    {
+        return pair_int_hash(
+            Traits<bool>::hash(cache_key.required_properties.fMipmapped),
+            pair_int_hash(ptr_hash(cache_key.sk_recorder), ptr_hash(cache_key.sk_image)));
+    }
+
+    static bool equals(Gfx::GraphiteImageProvider::CacheKey const& a, Gfx::GraphiteImageProvider::CacheKey const& b)
+    {
+        return a.sk_recorder == b.sk_recorder
+            && a.sk_image == b.sk_image
+            && a.required_properties == b.required_properties;
+    }
+};
 
 }

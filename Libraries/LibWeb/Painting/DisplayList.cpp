@@ -191,7 +191,6 @@ void DisplayListPlayer::execute_impl(DisplayList& display_list, ScrollStateSnaps
 
 #define HANDLE_COMMAND(command_type, executor_method) \
     if (command.has<command_type>()) {                \
-        dbgln("executing command: {}", #executor_method); \
         executor_method(command.get<command_type>()); \
     }
 
