@@ -163,6 +163,7 @@ public:
     void did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, String const&);
 
     ErrorOr<LexicalPath> dump_gc_graph();
+    ErrorOr<LexicalPath> dump_skia_memory_trace();
 
     void set_user_style_sheet(String const& source);
     // Load Native.css as the User style sheet, which attempts to make WebView content look as close to

@@ -679,6 +679,9 @@
     [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Dump GC Graph"
                                                 action:@selector(dumpGCGraph:)
                                          keyEquivalent:@""]];
+    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Dump Skia Memory Trace"
+                                                action:@selector(dumpSkiaMemoryTrace:)
+                                         keyEquivalent:@""]];
     [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Clear Cache"
                                                 action:@selector(clearCache:)
                                          keyEquivalent:@""]];

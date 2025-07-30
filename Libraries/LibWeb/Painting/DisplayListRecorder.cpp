@@ -289,18 +289,21 @@ void DisplayListRecorder::translate(Gfx::IntPoint delta)
 void DisplayListRecorder::save()
 {
     ++m_save_nesting_level;
+    dbgln("save level up to {}", m_save_nesting_level);
     APPEND(Save {});
 }
 
 void DisplayListRecorder::save_layer()
 {
     ++m_save_nesting_level;
+    dbgln("save level up to {} (layer)", m_save_nesting_level);
     APPEND(SaveLayer {});
 }
 
 void DisplayListRecorder::restore()
 {
     --m_save_nesting_level;
+    dbgln("save level down to {}", m_save_nesting_level);
     APPEND(Restore {});
 }
 

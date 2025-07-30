@@ -58,6 +58,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::wrap_bitmap(Bitmap& bitmap)
 #ifdef AK_OS_MACOS
 NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_iosurface(Core::IOSurfaceHandle&& iosurface_handle, NonnullRefPtr<SkiaBackendContext> context)
 {
+    dbgln("create from iosurface");
     context->lock();
     ScopeGuard unlock_guard([&context] {
         context->unlock();
@@ -71,7 +72,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_iosurface(Core::IOSu
         .fHeight = static_cast<i32>(metal_texture->height()),
     };
     auto backend_render_target = skgpu::graphite::BackendTextures::MakeMetal(skia_size, metal_texture->texture());
-    auto surface = SkSurfaces::WrapBackendTexture(context->sk_recorder(), backend_render_target, kBGRA_8888_SkColorType, nullptr, nullptr);
+    auto surface = SkSurfaces::WrapBackendTexture(context->sk_recorder(), backend_render_target, kBGRA_8888_SkColorType, nullptr, nullptr, nullptr, nullptr, "PaintingSurface_IOSurfaceWrapper");
     return adopt_ref(*new PaintingSurface(make<Impl>(context, size, surface, nullptr)));
 }
 #endif
