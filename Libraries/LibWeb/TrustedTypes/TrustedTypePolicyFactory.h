@@ -21,13 +21,17 @@ public:
 
     virtual ~TrustedTypePolicyFactory() override { }
 
+    GC::Ref<TrustedHTML> empty_html();
+
     Optional<String> get_attribute_type(String const& tag_name, String& attribute, Optional<String> element_ns, Optional<String> attr_ns);
 
 private:
     explicit TrustedTypePolicyFactory(JS::Realm&);
     virtual void initialize(JS::Realm&) override;
+    virtual void visit_edges(Cell::Visitor&) override;
 
     Vector<String> m_created_policy_names;
+    GC::Ptr<TrustedHTML> m_empty_html;
 };
 
 struct TrustedTypeData {

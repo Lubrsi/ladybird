@@ -15,6 +15,7 @@
 #include <LibWeb/HTML/WindowEventHandlers.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/SVG/TagNames.h>
+#include <LibWeb/TrustedTypes/TrustedHTML.h>
 
 namespace Web::TrustedTypes {
 
@@ -23,6 +24,19 @@ GC_DEFINE_ALLOCATOR(TrustedTypePolicyFactory);
 GC::Ref<TrustedTypePolicyFactory> TrustedTypePolicyFactory::create(JS::Realm& realm)
 {
     return realm.create<TrustedTypePolicyFactory>(realm);
+}
+
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-emptyhtml
+GC::Ref<TrustedHTML> TrustedTypePolicyFactory::empty_html()
+{
+    auto& realm = this->realm();
+
+    // emptyHTML, of type TrustedHTML, readonly
+    //      is a TrustedHTML object with its data value set to an empty string.
+    if (!m_empty_html)
+        m_empty_html = realm.create<TrustedHTML>(realm, ""_utf16);
+
+    return *m_empty_html;
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-getattributetype
@@ -81,6 +95,12 @@ void TrustedTypePolicyFactory::initialize(JS::Realm& realm)
 {
     WEB_SET_PROTOTYPE_FOR_INTERFACE(TrustedTypePolicyFactory);
     Base::initialize(realm);
+}
+
+void TrustedTypePolicyFactory::visit_edges(Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_empty_html);
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-get-trusted-type-data-for-attribute

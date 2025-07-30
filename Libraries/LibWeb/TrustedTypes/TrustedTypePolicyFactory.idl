@@ -1,3 +1,5 @@
+#import <TrustedTypes/TrustedHTML.idl>
+
 // https://w3c.github.io/trusted-types/dist/spec/#trustedtypepolicyfactory
 [Exposed=(Window,Worker)]
 interface TrustedTypePolicyFactory {
@@ -6,7 +8,7 @@ interface TrustedTypePolicyFactory {
     [FIXME] boolean isHTML(any value);
     [FIXME] boolean isScript(any value);
     [FIXME] boolean isScriptURL(any value);
-    [FIXME] readonly attribute TrustedHTML emptyHTML;
+    readonly attribute TrustedHTML emptyHTML;
     [FIXME] readonly attribute TrustedScript emptyScript;
     DOMString? getAttributeType(
         DOMString tagName,
