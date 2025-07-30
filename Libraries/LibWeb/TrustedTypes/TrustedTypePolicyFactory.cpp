@@ -10,6 +10,9 @@
 #include <LibGC/Ptr.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/ContentSecurityPolicy/PolicyList.h>
+#include <LibWeb/ContentSecurityPolicy/Directives/Names.h>
+#include <LibWeb/ContentSecurityPolicy/Violation.h>
 #include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/GlobalEventHandlers.h>
 #include <LibWeb/HTML/TagNames.h>
@@ -19,6 +22,7 @@
 #include <LibWeb/TrustedTypes/TrustedHTML.h>
 #include <LibWeb/TrustedTypes/TrustedScript.h>
 #include <LibWeb/TrustedTypes/TrustedScriptURL.h>
+#include <LibWeb/TrustedTypes/TrustedTypePolicy.h>
 
 namespace Web::TrustedTypes {
 
@@ -27,6 +31,134 @@ GC_DEFINE_ALLOCATOR(TrustedTypePolicyFactory);
 GC::Ref<TrustedTypePolicyFactory> TrustedTypePolicyFactory::create(JS::Realm& realm)
 {
     return realm.create<TrustedTypePolicyFactory>(realm);
+}
+
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-createpolicy
+WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_policy(Utf16String const& name, TrustedTypePolicyOptions const& options)
+{
+    // Returns the result of executing a Create a Trusted Type Policy algorithm, with the following arguments:
+    // factory
+    //      this value
+    // policyName
+    //      policyName
+    // options
+    //      policyOptions
+    // global
+    //      this value’s relevant global object
+    return create_a_trusted_type_policy(name, options, HTML::relevant_global_object(*this));
+}
+
+// https://www.w3.org/TR/trusted-types/#abstract-opdef-should-trusted-type-policy-creation-be-blocked-by-content-security-policy
+static ContentSecurityPolicy::Directives::Directive::Result should_trusted_type_policy_creation_be_blocked_by_content_security_policy(JS::Realm& realm, JS::Object& global, Utf16String const& policy_name, Vector<Utf16String> const& created_policy_names)
+{
+    // 1. Let result be "Allowed".
+    auto result = ContentSecurityPolicy::Directives::Directive::Result::Allowed;
+
+    // 2. For each policy in global’s CSP list:
+    auto csp_list = ContentSecurityPolicy::PolicyList::from_object(global);
+    VERIFY(csp_list);
+    for (auto const policy : csp_list->policies()) {
+        // 1. Let createViolation be false.
+        bool create_violation = false;
+
+        // 2. If policy’s directive set does not contain a directive which name is "trusted-types", skip to the next
+        //    policy.
+        auto maybe_trusted_types = policy->directives().find_if([](auto const& directive) {
+            return directive->name() == ContentSecurityPolicy::Directives::Names::TrustedTypes;
+        });
+
+        if (maybe_trusted_types.is_end())
+            continue;
+
+        // 3. Let directive be the policy’s directive set’s directive which name is "trusted-types"
+        auto trusted_types_directive = *maybe_trusted_types;
+
+        // 4. If directive’s value only contains a tt-keyword which is a match for a value 'none', set createViolation
+        //    to true.
+        // Spec Note: Like in other CSP directives, 'none' keyword will be ignored if other keywords or policy names
+        //            are present.
+        // https://www.w3.org/TR/trusted-types/#tt-keyword
+        // tt-keyword = "'allow-duplicates'" / "'none'"
+        if (trusted_types_directive->value().size() == 1 && trusted_types_directive->value().first().equals_ignoring_ascii_case("'none'"sv)) {
+            create_violation = true;
+        }
+
+        // 5. If createdPolicyNames contains policyName and directive’s value does not contain a tt-keyword which is a
+        //    match for a value 'allow-duplicates', set createViolation to true.
+        // Spec Note: trusted-types policyA policyB 'allow-duplicates' allows authors to create policies with
+        //            duplicated names.
+        if (created_policy_names.contains_slow(policy_name)) {
+            auto maybe_allow_duplicates = trusted_types_directive->value().find_if([](auto const& directive_value) {
+                return directive_value.equals_ignoring_ascii_case("'allow-duplicates'"sv);
+            });
+
+            if (maybe_allow_duplicates.is_end()) {
+                create_violation = true;
+            }
+        }
+
+        // FIXME: 6. If directive’s value does not contain a tt-policy-name, which value is policyName, and directive’s
+        //           value does not contain a tt-wildcard, set createViolation to true.
+
+        // 7. If createViolation is false, skip to the next policy.
+        if (!create_violation)
+            continue;
+
+        // 8. Let violation be the result of executing Create a violation object for global, policy, and directive on
+        //    global, policy and "trusted-types"
+        auto violation = ContentSecurityPolicy::Violation::create_a_violation_object_for_global_policy_and_directive(realm, global, policy, ContentSecurityPolicy::Directives::Names::TrustedTypes.to_string());
+
+        // 9. Set violation’s resource to "trusted-types-policy".
+        violation->set_resource(ContentSecurityPolicy::Violation::Resource::TrustedTypesPolicy);
+
+        // 10. Set violation’s sample to the substring of policyName, containing its first 40 characters.
+        auto name_sample = policy_name.substring_view(0, 40).to_utf8_but_should_be_ported_to_utf16();
+        violation->set_sample(move(name_sample));
+
+        // 11. Execute Report a violation on violation.
+        violation->report_a_violation(realm);
+
+        // 12. If policy’s disposition is "enforce", then set result to "Blocked".
+        if (policy->disposition() == ContentSecurityPolicy::Policy::Disposition::Enforce)
+            result = ContentSecurityPolicy::Directives::Directive::Result::Blocked;
+    }
+
+    // 3. Return result.
+    return result;
+}
+
+// https://www.w3.org/TR/trusted-types/#abstract-opdef-create-a-trusted-type-policy
+WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> TrustedTypePolicyFactory::create_a_trusted_type_policy(Utf16String const& policy_name, TrustedTypePolicyOptions const& options, JS::Object& global)
+{
+    auto& realm = this->realm();
+
+    // 1. Let allowedByCSP be the result of executing Should Trusted Type policy creation be blocked by Content
+    //    Security Policy? algorithm with global, policyName and factory’s created policy names value.
+    auto allowed_by_csp = should_trusted_type_policy_creation_be_blocked_by_content_security_policy(realm, global, policy_name, m_created_policy_names);
+
+    // 2. If allowedByCSP is "Blocked", throw a TypeError and abort further steps.
+    if (allowed_by_csp == ContentSecurityPolicy::Directives::Directive::Result::Blocked)
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Blocked by Content Security Policy"sv };
+
+    // 3. If policyName is default and the factory’s default policy value is not null, throw a TypeError and abort
+    //    further steps.
+    if (m_default_policy && policy_name == "default"sv)
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "A default policy has already been defined"sv };
+
+    // 4. Let policy be a new TrustedTypePolicy object.
+    // 5. Set policy’s name property value to policyName.
+    // 6. Set policy’s options value to «[ "createHTML" -> options["createHTML", "createScript" -> options["createScript", "createScriptURL" -> options["createScriptURL" ]».
+    auto policy = realm.create<TrustedTypePolicy>(realm, policy_name, options);
+
+    // 7. If the policyName is default, set the factory’s default policy value to policy.
+    if (policy_name == "default"sv)
+        m_default_policy = policy;
+
+    // 8. Append policyName to factory’s created policy names.
+    m_created_policy_names.append(policy_name);
+
+    // 9. Return policy.
+    return policy;
 }
 
 // https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-ishtml
@@ -148,6 +280,7 @@ void TrustedTypePolicyFactory::visit_edges(Cell::Visitor& visitor)
     Base::visit_edges(visitor);
     visitor.visit(m_empty_html);
     visitor.visit(m_empty_script);
+    visitor.visit(m_default_policy);
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-get-trusted-type-data-for-attribute

@@ -10,6 +10,8 @@
 #include <LibJS/Forward.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/Bindings/TrustedTypePolicyFactoryPrototype.h>
+#include <LibWeb/TrustedTypes/TrustedTypePolicyOptions.h>
+#include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::TrustedTypes {
 
@@ -21,6 +23,8 @@ public:
     [[nodiscard]] static GC::Ref<TrustedTypePolicyFactory> create(JS::Realm&);
 
     virtual ~TrustedTypePolicyFactory() override { }
+
+    WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> create_policy(Utf16String const& name, TrustedTypePolicyOptions const& options);
 
     bool is_html(JS::Value value);
     bool is_script(JS::Value value);
@@ -36,9 +40,12 @@ private:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
 
-    Vector<String> m_created_policy_names;
+    WebIDL::ExceptionOr<GC::Ref<TrustedTypePolicy>> create_a_trusted_type_policy(Utf16String const& policy_name, TrustedTypePolicyOptions const& options, JS::Object& global);
+
+    Vector<Utf16String> m_created_policy_names;
     GC::Ptr<TrustedHTML> m_empty_html;
     GC::Ptr<TrustedScript> m_empty_script;
+    GC::Ptr<TrustedTypePolicy> m_default_policy;
 };
 
 struct TrustedTypeData {

@@ -882,7 +882,9 @@ set(SOURCES
     TrustedTypes/TrustedHTML.cpp
     TrustedTypes/TrustedScript.cpp
     TrustedTypes/TrustedScriptURL.cpp
+    TrustedTypes/TrustedTypePolicy.cpp
     TrustedTypes/TrustedTypePolicyFactory.cpp
+    TrustedTypes/TrustedTypesDirective.cpp
     UIEvents/CompositionEvent.cpp
     UIEvents/EventNames.cpp
     UIEvents/FocusEvent.cpp

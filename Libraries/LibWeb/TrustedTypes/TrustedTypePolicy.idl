@@ -1,0 +1,8 @@
+// https://www.w3.org/TR/trusted-types/#trusted-type-policy
+[Exposed=(Window,Worker)]
+interface TrustedTypePolicy {
+    readonly attribute Utf16DOMString name;
+    [FIXME] TrustedHTML createHTML(Utf16DOMString input, any... arguments);
+    [FIXME] TrustedScript createScript(Utf16DOMString input, any... arguments);
+    [FIXME] TrustedScriptURL createScriptURL(Utf16DOMString input, any... arguments);
+};

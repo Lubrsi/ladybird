@@ -1,11 +1,28 @@
 #import <TrustedTypes/TrustedHTML.idl>
 #import <TrustedTypes/TrustedScript.idl>
+#import <TrustedTypes/TrustedTypePolicy.idl>
+
+// https://www.w3.org/TR/trusted-types/#dictdef-trustedtypepolicyoptions
+dictionary TrustedTypePolicyOptions {
+   CreateHTMLCallback createHTML;
+   CreateScriptCallback createScript;
+   CreateScriptURLCallback createScriptURL;
+};
+
+// https://www.w3.org/TR/trusted-types/#callbackdef-createhtmlcallback
+callback CreateHTMLCallback = Utf16DOMString? (DOMString input, any... arguments);
+
+// https://www.w3.org/TR/trusted-types/#callbackdef-createscriptcallback
+callback CreateScriptCallback = Utf16DOMString? (DOMString input, any... arguments);
+
+// https://www.w3.org/TR/trusted-types/#callbackdef-createscripturlcallback
+callback CreateScriptURLCallback = Utf16USVString? (DOMString input, any... arguments);
 
 // https://w3c.github.io/trusted-types/dist/spec/#trustedtypepolicyfactory
 [Exposed=(Window,Worker)]
 interface TrustedTypePolicyFactory {
-    [FIXME] TrustedTypePolicy createPolicy(
-        DOMString policyName, optional TrustedTypePolicyOptions policyOptions = {});
+    TrustedTypePolicy createPolicy(
+        Utf16DOMString policyName, optional TrustedTypePolicyOptions policyOptions = {});
     boolean isHTML(any value);
     boolean isScript(any value);
     boolean isScriptURL(any value);

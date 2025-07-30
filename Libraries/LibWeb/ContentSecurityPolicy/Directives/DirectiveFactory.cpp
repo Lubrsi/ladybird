@@ -24,6 +24,7 @@
 #include <LibWeb/ContentSecurityPolicy/Directives/StyleSourceDirective.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/StyleSourceElementDirective.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/WorkerSourceDirective.h>
+#include <LibWeb/TrustedTypes/TrustedTypesDirective.h>
 
 namespace Web::ContentSecurityPolicy::Directives {
 
@@ -73,6 +74,9 @@ GC::Ref<Directive> create_directive(GC::Heap& heap, String name, Vector<String> 
 
     if (name == Names::StyleSrcElem)
         return heap.allocate<StyleSourceElementDirective>(move(name), move(value));
+
+    if (name == Names::TrustedTypes)
+        return heap.allocate<TrustedTypes::TrustedTypesDirective>(move(name), move(value));
 
     if (name == Names::WorkerSrc)
         return heap.allocate<WorkerSourceDirective>(move(name), move(value));
