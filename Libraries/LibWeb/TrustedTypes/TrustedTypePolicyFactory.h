@@ -21,6 +21,8 @@ public:
 
     virtual ~TrustedTypePolicyFactory() override { }
 
+    bool is_html(JS::Value value);
+
     GC::Ref<TrustedHTML> empty_html();
     GC::Ref<TrustedScript> empty_script();
 

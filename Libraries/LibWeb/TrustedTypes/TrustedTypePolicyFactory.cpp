@@ -27,6 +27,16 @@ GC::Ref<TrustedTypePolicyFactory> TrustedTypePolicyFactory::create(JS::Realm& re
     return realm.create<TrustedTypePolicyFactory>(realm);
 }
 
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-ishtml
+bool TrustedTypePolicyFactory::is_html(JS::Value value)
+{
+    // Returns true if value is an instance of TrustedHTML and has an associated data value set, false otherwise.
+    if (!value.is_object())
+        return false;
+
+    return is<TrustedHTML>(value.as_object());
+}
+
 // https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-emptyhtml
 GC::Ref<TrustedHTML> TrustedTypePolicyFactory::empty_html()
 {

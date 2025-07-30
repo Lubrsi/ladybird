@@ -1,0 +1,9 @@
+Harness status: OK
+
+Found 4 tests
+
+4 Fail
+Fail	TrustedTypePolicyFactory.isHTML requires the object to be created via policy.
+Fail	TrustedTypePolicyFactory.isScript requires the object to be created via policy.
+Fail	TrustedTypePolicyFactory.isScriptURL requires the object to be created via policy.
+Fail	TrustedTypePolicyFactory.isXXX should accept anything without throwing.
