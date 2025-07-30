@@ -1,0 +1,6 @@
+// https://www.w3.org/TR/trusted-types/#trusted-script
+[Exposed=(Window,Worker)]
+interface TrustedScript {
+    stringifier;
+    Utf16DOMString toJSON();
+};

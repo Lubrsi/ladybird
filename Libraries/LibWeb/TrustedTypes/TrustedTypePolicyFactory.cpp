@@ -16,6 +16,7 @@
 #include <LibWeb/Namespace.h>
 #include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/TrustedTypes/TrustedHTML.h>
+#include <LibWeb/TrustedTypes/TrustedScript.h>
 
 namespace Web::TrustedTypes {
 
@@ -37,6 +38,19 @@ GC::Ref<TrustedHTML> TrustedTypePolicyFactory::empty_html()
         m_empty_html = realm.create<TrustedHTML>(realm, ""_utf16);
 
     return *m_empty_html;
+}
+
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-emptyhtml
+GC::Ref<TrustedScript> TrustedTypePolicyFactory::empty_script()
+{
+    auto& realm = this->realm();
+
+    // emptyScript, of type TrustedScript, readonly
+    //      is a TrustedScript object with its data value set to an empty string.
+    if (!m_empty_script)
+        m_empty_script = realm.create<TrustedScript>(realm, ""_utf16);
+
+    return *m_empty_script;
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#dom-trustedtypepolicyfactory-getattributetype
@@ -101,6 +115,7 @@ void TrustedTypePolicyFactory::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_empty_html);
+    visitor.visit(m_empty_script);
 }
 
 // https://w3c.github.io/trusted-types/dist/spec/#abstract-opdef-get-trusted-type-data-for-attribute

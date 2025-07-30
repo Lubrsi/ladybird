@@ -22,6 +22,7 @@ public:
     virtual ~TrustedTypePolicyFactory() override { }
 
     GC::Ref<TrustedHTML> empty_html();
+    GC::Ref<TrustedScript> empty_script();
 
     Optional<String> get_attribute_type(String const& tag_name, String& attribute, Optional<String> element_ns, Optional<String> attr_ns);
 
@@ -32,6 +33,7 @@ private:
 
     Vector<String> m_created_policy_names;
     GC::Ptr<TrustedHTML> m_empty_html;
+    GC::Ptr<TrustedScript> m_empty_script;
 };
 
 struct TrustedTypeData {
