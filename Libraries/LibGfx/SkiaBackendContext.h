@@ -49,6 +49,8 @@ public:
     virtual skgpu::graphite::Context* sk_context() const = 0;
     virtual skgpu::graphite::Recorder* sk_recorder() const = 0;
 
+    virtual JsonObject dump_memory_trace() = 0;
+
     virtual MetalContext& metal_context() = 0;
 
     void lock() { m_mutex.lock(); }

@@ -986,6 +986,18 @@ static void append_gc_graph(StringBuilder& builder)
     gc_graph.serialize(builder);
 }
 
+static void append_skia_memory_trace(Web::Page& page, StringBuilder& builder)
+{
+    auto skia_backend_context = page.top_level_traversable()->skia_backend_context();
+    if (!skia_backend_context) {
+        builder.append("(no Skia context)"sv);
+        return;
+    }
+
+    auto skia_memory_trace = skia_backend_context->dump_memory_trace();
+    skia_memory_trace.serialize(builder);
+}
+
 void ConnectionFromClient::request_internal_page_info(u64 page_id, WebView::PageInfoType type)
 {
     auto page = this->page(page_id);
@@ -1022,6 +1034,12 @@ void ConnectionFromClient::request_internal_page_info(u64 page_id, WebView::Page
         if (!builder.is_empty())
             builder.append("\n"sv);
         append_gc_graph(builder);
+    }
+
+    if (has_flag(type, WebView::PageInfoType::SkiaMemoryTrace)) {
+        if (!builder.is_empty())
+            builder.append("\n"sv);
+        append_skia_memory_trace(page->page(), builder);
     }
 
     async_did_get_internal_page_info(page_id, type, MUST(builder.to_string()));

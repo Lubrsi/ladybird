@@ -403,6 +403,13 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     warnln("\033[33;1mDumped GC-graph into {}\033[0m", gc_graph_path);
 }
 
+- (void)dumpSkiaMemoryTrace:(id)sender
+{
+    auto& view_impl = [[[self tab] web_view] view];
+    auto skia_memory_trace_path = view_impl.dump_skia_memory_trace();
+    warnln("\033[33;1mDumped Skia memory trace into {}\033[0m", skia_memory_trace_path);
+}
+
 - (void)clearCache:(id)sender
 {
     [self debugRequest:"clear-cache" argument:""];

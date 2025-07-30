@@ -5,6 +5,7 @@
  */
 
 #include <core/SkSurface.h>
+#include <core/SkTraceMemoryDump.h>
 
 #include <gpu/graphite/Context.h>
 #include <gpu/graphite/ContextOptions.h>
@@ -13,6 +14,7 @@
 
 #include <AK/Platform.h>
 #include <AK/HashMap.h>
+#include <AK/JsonObject.h>
 
 #ifdef USE_VULKAN
 #    include <gpu/ganesh/vk/GrVkDirectContext.h>
@@ -65,6 +67,122 @@ private:
     GraphiteImageProvider() = default;
 
     HashMap<CacheKey, sk_sp<SkImage>> m_image_cache;
+};
+
+class SkiaMemoryTracer : public SkTraceMemoryDump {
+public:
+    virtual void dumpNumericValue(const char* dump_name, const char* value_name, const char* units, uint64_t value) override
+    {
+        auto& dump_object = get_dump_by_name(StringView { dump_name, strlen(dump_name) });
+        auto& values_array = get_values_array_for_dump(dump_object);
+
+        JsonObject numeric_value_object;
+        numeric_value_object.set("name"sv, StringView { value_name, strlen(value_name) });
+        numeric_value_object.set("units"sv, StringView { units, strlen(units) });
+        numeric_value_object.set("value"sv, value);
+        MUST(values_array.append(move(numeric_value_object)));
+    }
+
+    virtual void dumpStringValue(const char* dump_name, const char* value_name, const char* value) override
+    {
+        auto& dump_object = get_dump_by_name(StringView { dump_name, strlen(dump_name) });
+        auto& values_array = get_values_array_for_dump(dump_object);
+
+        JsonObject string_value_object;
+        string_value_object.set("name"sv, StringView { value_name, strlen(value_name) });
+        string_value_object.set("value"sv, StringView { value, strlen(value) });
+        MUST(values_array.append(move(string_value_object)));
+    }
+
+    virtual void setMemoryBacking(const char* dump_name, const char* backing_type, const char* backing_object_id) override
+    {
+        auto& dump_object = get_dump_by_name(StringView { dump_name, strlen(dump_name) });
+
+        auto maybe_backing_object = dump_object.get("backing"sv);
+        if (!maybe_backing_object.has_value()) {
+            dump_object.set("backing"sv, JsonObject());
+            maybe_backing_object = dump_object.get("backing"sv);
+        }
+
+        auto& backing_object = maybe_backing_object.value().as_object();
+        backing_object.set("type"sv, StringView { backing_type, strlen(backing_type) });
+        backing_object.set("objectID"sv, StringView { backing_object_id, strlen(backing_object_id) });
+    }
+
+    virtual bool shouldDumpWrappedObjects() const override
+    {
+        return true;
+    }
+
+    virtual void setDiscardableMemoryBacking(const char* dump_name, SkDiscardableMemory const& discardable_memory_object) override
+    {
+        // FIXME: What do we do with this?
+        (void)dump_name;
+        (void)discardable_memory_object;
+    }
+
+    virtual LevelOfDetail getRequestedDetails() const override
+    {
+        return LevelOfDetail::kObjectsBreakdowns_LevelOfDetail;
+    }
+
+    virtual void dumpWrappedState(const char* dump_name, bool is_wrapped_object) override
+    {
+        auto& dump_object = get_dump_by_name(StringView { dump_name, strlen(dump_name) });
+        dump_object.set("isWrappedObject"sv, is_wrapped_object);
+    }
+
+    virtual bool shouldDumpUnbudgetedObjects() const override
+    {
+        return true;
+    }
+
+    virtual void dumpBudgetedState(const char* dump_name, bool is_budgeted) override
+    {
+        auto& dump_object = get_dump_by_name(StringView { dump_name, strlen(dump_name) });
+        dump_object.set("isBudgeted"sv, is_budgeted);
+    }
+
+    virtual bool shouldDumpSizelessObjects() const override
+    {
+        return true;
+    }
+
+    JsonObject&& take_top_level_of_dump()
+    {
+        return move(m_top_level_of_dump);
+    }
+
+private:
+    JsonObject m_top_level_of_dump;
+
+    JsonObject& get_dump_by_name(StringView dump_name)
+    {
+        auto levels = dump_name.split_view('/');
+
+        JsonObject* dump_object = &m_top_level_of_dump;
+        for (auto level : levels) {
+            auto level_object = dump_object->get(level);
+            if (!level_object.has_value()) {
+                dump_object->set(level, JsonObject());
+                level_object = dump_object->get(level);
+            }
+
+            dump_object = &level_object.value().as_object();
+        }
+
+        VERIFY(dump_object);
+        return *dump_object;
+    }
+
+    JsonArray& get_values_array_for_dump(JsonObject& dump_object)
+    {
+        if (auto maybe_array = dump_object.get("values"sv); maybe_array.has_value())
+            return maybe_array.value().as_array();
+
+        dump_object.set("values"sv, JsonArray());
+        return dump_object.get("values"sv).value().as_array();
+    }
 };
 
 #ifdef USE_VULKAN
@@ -148,6 +266,15 @@ public:
 
     skgpu::graphite::Context* sk_context() const override { return m_context.get(); }
     skgpu::graphite::Recorder* sk_recorder() const override { return m_recorder.get(); }
+
+    JsonObject dump_memory_trace() override
+    {
+        SkiaMemoryTracer skia_memory_tracer;
+        m_context->dumpMemoryStatistics(&skia_memory_tracer);
+        m_recorder->dumpMemoryStatistics(&skia_memory_tracer);
+        return skia_memory_tracer.take_top_level_of_dump();
+    }
+
     MetalContext& metal_context() override { return m_metal_context; }
 
 private:
