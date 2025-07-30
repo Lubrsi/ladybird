@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2025, Miguel Sacristán Izcue <miguel_tete17@hotmail.com>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -22,6 +23,7 @@ public:
     virtual ~TrustedTypePolicyFactory() override { }
 
     bool is_html(JS::Value value);
+    bool is_script(JS::Value value);
 
     GC::Ref<TrustedHTML> empty_html();
     GC::Ref<TrustedScript> empty_script();

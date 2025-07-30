@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2025, Miguel Sacristán Izcue <miguel_tete17@hotmail.com>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -35,6 +36,16 @@ bool TrustedTypePolicyFactory::is_html(JS::Value value)
         return false;
 
     return is<TrustedHTML>(value.as_object());
+}
+
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-isscript
+bool TrustedTypePolicyFactory::is_script(JS::Value value)
+{
+    // Returns true if value is an instance of TrustedScript and has an associated data value set, false otherwise.
+    if (!value.is_object())
+        return false;
+
+    return is<TrustedScript>(value.as_object());
 }
 
 // https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-emptyhtml
