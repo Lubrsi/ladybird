@@ -18,6 +18,7 @@
 #include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/TrustedTypes/TrustedHTML.h>
 #include <LibWeb/TrustedTypes/TrustedScript.h>
+#include <LibWeb/TrustedTypes/TrustedScriptURL.h>
 
 namespace Web::TrustedTypes {
 
@@ -46,6 +47,16 @@ bool TrustedTypePolicyFactory::is_script(JS::Value value)
         return false;
 
     return is<TrustedScript>(value.as_object());
+}
+
+// https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-isscripturl
+bool TrustedTypePolicyFactory::is_script_url(JS::Value value)
+{
+    // Returns true if value is an instance of TrustedScriptURL and has an associated data value set, false otherwise.
+    if (!value.is_object())
+        return false;
+
+    return is<TrustedScriptURL>(value.as_object());
 }
 
 // https://www.w3.org/TR/trusted-types/#dom-trustedtypepolicyfactory-emptyhtml

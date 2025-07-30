@@ -881,6 +881,7 @@ set(SOURCES
     SVG/ViewBox.cpp
     TrustedTypes/TrustedHTML.cpp
     TrustedTypes/TrustedScript.cpp
+    TrustedTypes/TrustedScriptURL.cpp
     TrustedTypes/TrustedTypePolicyFactory.cpp
     UIEvents/CompositionEvent.cpp
     UIEvents/EventNames.cpp

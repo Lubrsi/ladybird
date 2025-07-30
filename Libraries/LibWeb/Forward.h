@@ -1189,6 +1189,7 @@ namespace Web::TrustedTypes {
 
 class TrustedHTML;
 class TrustedScript;
+class TrustedScriptURL;
 class TrustedTypePolicyFactory;
 
 }

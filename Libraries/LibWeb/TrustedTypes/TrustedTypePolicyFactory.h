@@ -24,6 +24,7 @@ public:
 
     bool is_html(JS::Value value);
     bool is_script(JS::Value value);
+    bool is_script_url(JS::Value value);
 
     GC::Ref<TrustedHTML> empty_html();
     GC::Ref<TrustedScript> empty_script();
