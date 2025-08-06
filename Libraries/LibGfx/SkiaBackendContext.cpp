@@ -17,7 +17,7 @@
 #include <AK/JsonObject.h>
 
 #ifdef USE_VULKAN
-#    include <gpu/ganesh/vk/GrVkDirectContext.h>
+#    include <gpu/graphite/vk/VulkanBackendContext.h>
 #    include <gpu/vk/VulkanBackendContext.h>
 #    include <gpu/vk/VulkanExtensions.h>
 #endif
@@ -191,29 +191,40 @@ class SkiaVulkanBackendContext final : public SkiaBackendContext {
     AK_MAKE_NONMOVABLE(SkiaVulkanBackendContext);
 
 public:
-    SkiaVulkanBackendContext(sk_sp<GrDirectContext> context, NonnullOwnPtr<skgpu::VulkanExtensions> extensions)
+    SkiaVulkanBackendContext(std::unique_ptr<skgpu::graphite::Context> context, std::unique_ptr<skgpu::graphite::Recorder> recorder, NonnullOwnPtr<skgpu::VulkanExtensions> extensions)
         : m_context(move(context))
+        , m_recorder(move(recorder))
         , m_extensions(move(extensions))
     {
     }
 
     ~SkiaVulkanBackendContext() override { }
 
-    void flush_and_submit(SkSurface* surface) override
+    void flush_and_submit() override
     {
-        GrFlushInfo const flush_info {};
-        m_context->flush(surface, SkSurfaces::BackendSurfaceAccess::kPresent, flush_info);
-        m_context->submit(GrSyncCpu::kYes);
+        auto recording = m_recorder->snap();
+        m_context->insertRecording({ recording.get() });
+        m_context->submit(skgpu::graphite::SyncToCpu::kYes);
     }
 
     skgpu::VulkanExtensions const* extensions() const { return m_extensions.ptr(); }
 
-    GrDirectContext* sk_context() const override { return m_context.get(); }
+    skgpu::graphite::Context* sk_context() const override { return m_context.get(); }
+    skgpu::graphite::Recorder* sk_recorder() const override { return m_recorder.get(); }
+
+    JsonObject dump_memory_trace() override
+    {
+        SkiaMemoryTracer skia_memory_tracer;
+        m_context->dumpMemoryStatistics(&skia_memory_tracer);
+        m_recorder->dumpMemoryStatistics(&skia_memory_tracer);
+        return skia_memory_tracer.take_top_level_of_dump();
+    }
 
     MetalContext& metal_context() override { VERIFY_NOT_REACHED(); }
 
 private:
-    sk_sp<GrDirectContext> m_context;
+    std::unique_ptr<skgpu::graphite::Context> m_context;
+    std::unique_ptr<skgpu::graphite::Recorder> m_recorder;
     NonnullOwnPtr<skgpu::VulkanExtensions> m_extensions;
 };
 
@@ -236,9 +247,14 @@ RefPtr<SkiaBackendContext> SkiaBackendContext::create_vulkan_context(Gfx::Vulkan
     auto extensions = make<skgpu::VulkanExtensions>();
     backend_context.fVkExtensions = extensions.ptr();
 
-    sk_sp<GrDirectContext> ctx = GrDirectContexts::MakeVulkan(backend_context);
-    VERIFY(ctx);
-    return adopt_ref(*new SkiaVulkanBackendContext(ctx, move(extensions)));
+    skgpu::graphite::ContextOptions context_options {};
+    std::unique_ptr<skgpu::graphite::Context> ctx = skgpu::graphite::ContextFactory::MakeVulkan(backend_context, context_options);
+
+    skgpu::graphite::RecorderOptions recorder_options {};
+    recorder_options.fImageProvider = GraphiteImageProvider::create();
+    std::unique_ptr<skgpu::graphite::Recorder> recorder = ctx->makeRecorder(recorder_options);
+
+    return adopt_ref(*new SkiaVulkanBackendContext(move(ctx), move(recorder), move(extensions)));
 }
 #endif
 
