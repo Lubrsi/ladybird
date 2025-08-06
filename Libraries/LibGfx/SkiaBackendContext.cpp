@@ -17,7 +17,7 @@
 #include <AK/JsonObject.h>
 
 #ifdef USE_VULKAN
-#    include <gpu/graphite/vk/VulkanBackendContext.h>
+#    include <gpu/graphite/vk/VulkanGraphiteContext.h>
 #    include <gpu/vk/VulkanBackendContext.h>
 #    include <gpu/vk/VulkanExtensions.h>
 #endif
