@@ -46,6 +46,10 @@
 #    include <LibCore/Platform/ProcessStatisticsMach.h>
 #endif
 
+#include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_init.h>
+
 static ErrorOr<void> load_content_filters(StringView config_path);
 
 static ErrorOr<void> initialize_resource_loader(GC::Heap&, int request_server_socket);
@@ -75,6 +79,17 @@ extern bool g_http_cache_enabled;
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
     AK::set_rich_debug_enabled(true);
+
+    // FIXME: Should we hint to SDL that we want Gamepad events whilst in the background?
+    //        Firefox and Chrome take Gamepad events whilst in the background, but Safari doesn't.
+
+    // SDL is used for the Gamepad API.
+    if (!SDL_Init(SDL_INIT_GAMEPAD)) {
+        dbgln("Failed to initialize SDL3: {}", SDL_GetError());
+        return -1;
+    }
+
+    dbgln("Any gamepad connected? {}", SDL_HasGamepad());
 
 #if defined(HAVE_QT_MULTIMEDIA)
     QCoreApplication app(arguments.argc, arguments.argv);

@@ -514,9 +514,12 @@ class FileList;
 
 }
 
-namespace Web::Gamepad {
+namespace Web::GamepadAPI {
 
+class NavigatorGamepadPartial;
 class Gamepad;
+class GamepadButton;
+class GamepadEvent;
 
 }
 

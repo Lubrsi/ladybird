@@ -1,6 +1,7 @@
 include(libweb_generators)
 include(vulkan)
 include(skia)
+include(SDL3)
 
 find_package(unofficial-angle CONFIG)
 if(unofficial-angle_FOUND)
@@ -362,8 +363,11 @@ set(SOURCES
     FileAPI/FileList.cpp
     FileAPI/FileReader.cpp
     FileAPI/FileReaderSync.cpp
-    Gamepad/Gamepad.cpp
-    Gamepad/NavigatorGamepad.cpp
+    GamepadAPI/EventNames.cpp
+    GamepadAPI/Gamepad.cpp
+    GamepadAPI/GamepadButton.cpp
+    GamepadAPI/GamepadEvent.cpp
+    GamepadAPI/NavigatorGamepad.cpp
     Geolocation/Geolocation.cpp
     Serial/Serial.cpp
     Serial/SerialPort.cpp
@@ -1061,7 +1065,7 @@ set(GENERATED_SOURCES
 
 ladybird_lib(LibWeb web)
 
-target_link_libraries(LibWeb PRIVATE LibCore LibCompress LibCrypto LibJS LibHTTP LibGfx LibIPC LibRegex LibSyntax LibTextCodec LibUnicode LibMedia LibWasm LibXML LibIDL LibURL LibTLS LibRequests LibGC LibThreading skia ${ANGLE_TARGETS})
+target_link_libraries(LibWeb PRIVATE LibCore LibCompress LibCrypto LibJS LibHTTP LibGfx LibIPC LibRegex LibSyntax LibTextCodec LibUnicode LibMedia LibWasm LibXML LibIDL LibURL LibTLS LibRequests LibGC LibThreading skia ${ANGLE_TARGETS} SDL3::SDL3)
 
 # FIXME: https://github.com/microsoft/vcpkg/issues/42324
 target_include_directories(LibWeb PRIVATE ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include)

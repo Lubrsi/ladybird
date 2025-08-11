@@ -68,6 +68,8 @@ static bool is_platform_object(Type const& type)
         "FileList"sv,
         "FontFace"sv,
         "FormData"sv,
+        "Gamepad"sv,
+        "GamepadButton"sv,
         "HTMLCollection"sv,
         "IDBCursor"sv,
         "IDBCursorWithValue"sv,
@@ -4861,7 +4863,7 @@ using namespace Web::EntriesAPI;
 using namespace Web::EventTiming;
 using namespace Web::Fetch;
 using namespace Web::FileAPI;
-using namespace Web::Gamepad;
+using namespace Web::GamepadAPI;
 using namespace Web::Geolocation;
 using namespace Web::Geometry;
 using namespace Web::HighResolutionTime;
