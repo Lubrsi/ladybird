@@ -28,7 +28,7 @@ public:
 private:
     GamepadEvent(JS::Realm&, FlyString const& event_name, GamepadEventInit const& event_init);
     virtual void initialize(JS::Realm&) override;
-    virtual void visit_edges(JS::Cell::Visitor&) override;
+    virtual void visit_edges(Cell::Visitor&) override;
 
     GC::Ref<Gamepad> m_gamepad;
 };

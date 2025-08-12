@@ -25,4 +25,19 @@ void GamepadButton::initialize(JS::Realm& realm)
     Base::initialize(realm);
 }
 
+void GamepadButton::set_pressed(Badge<Gamepad>, bool value)
+{
+    m_pressed = value;
+}
+
+void GamepadButton::set_touched(Badge<Gamepad>, bool value)
+{
+    m_touched = value;
+}
+
+void GamepadButton::set_value(Badge<Gamepad>, double value)
+{
+    m_value = value;
+}
+
 }

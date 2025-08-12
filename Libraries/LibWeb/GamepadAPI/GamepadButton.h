@@ -18,12 +18,18 @@ class GamepadButton final : public Bindings::PlatformObject {
 public:
     virtual ~GamepadButton() override;
 
+    bool pressed() const { return m_pressed; }
+    bool touched() const { return m_touched; }
+    double value() const { return m_value; }
+
+    void set_pressed(Badge<Gamepad>, bool);
+    void set_touched(Badge<Gamepad>, bool);
+    void set_value(Badge<Gamepad>, double);
+
 private:
     GamepadButton(JS::Realm&);
 
     virtual void initialize(JS::Realm&) override;
-
-    SDL_GamepadButton m_sdl_button { SDL_GAMEPAD_BUTTON_INVALID };
 
     // https://w3c.github.io/gamepad/#dfn-pressed
     // A flag indicating that the button is pressed

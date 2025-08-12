@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <LibWeb/Bindings/GamepadPrototype.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/HighResolutionTime/DOMHighResTimeStamp.h>
 #include <SDL3/SDL_gamepad.h>
@@ -33,11 +34,21 @@ public:
     bool exposed() const { return m_exposed; }
     void set_exposed(Badge<NavigatorGamepadPartial>, bool);
 
+    Bindings::GamepadMappingType mapping() const { return m_mapping; }
+
+    Vector<double> const& axes() const { return m_axes; }
+    Vector<GC::Ref<GamepadButton>> const& buttons() const { return m_buttons; }
+
+    void update_gamepad_state();
+
 private:
     explicit Gamepad(JS::Realm&, SDL_JoystickID);
 
     virtual void initialize(JS::Realm&) override;
+    virtual void visit_edges(Cell::Visitor&) override;
     virtual void finalize() override;
+
+    void initialize_buttons();
 
     // https://w3c.github.io/gamepad/#dom-gamepad-id
     // An identification string for the gamepad. This string identifies the brand or style of connected gamepad device.
@@ -64,12 +75,49 @@ private:
     HighResolutionTime::DOMHighResTimeStamp m_timestamp { 0.0 };
 
     // https://w3c.github.io/gamepad/#dfn-axes
-    // A sequence of double values representing the current state of axes exposed by this device
+    // A sequence of double values representing the current state of axes exposed by this device.
+    // https://w3c.github.io/gamepad/#dom-gamepad-axes
+    // Array of values for all axes of the gamepad. All axis values MUST be linearly normalized to the range [-1 .. 1].
+    // If the controller is perpendicular to the ground with the directional stick pointing up, -1 SHOULD correspond to
+    // "forward" or "left", and 1 SHOULD correspond to "backward" or "right". Axes that are drawn from a 2D input
+    // device SHOULD appear next to each other in the axes array, X then Y. It is RECOMMENDED that axes appear in
+    // decreasing order of importance, such that element 0 and 1 typically represent the X and Y axis of a directional
+    // stick. The same object MUST be returned until the user agent needs to return different values (or values in a
+    // different order).
+    // FIXME: Our current FrozenArray implementation only supports returning new objects everytime.
     Vector<double> m_axes;
+
+    // https://w3c.github.io/gamepad/#dfn-buttons
+    // A sequence of GamepadButton objects representing the current state of buttons exposed by this device
+    // Array of button states for all buttons of the gamepad. It is RECOMMENDED that buttons appear in decreasing
+    // importance such that the primary button, secondary button, tertiary button, and so on appear as elements 0, 1,
+    // 2, ... in the buttons array. The same object MUST be returned until the user agent needs to return different
+    // values (or values in a different order).
+    // FIXME: Our current FrozenArray implementation only supports returning new objects everytime.
+    Vector<GC::Ref<GamepadButton>> m_buttons;
+
+    // https://w3c.github.io/gamepad/#dfn-buttonminimums
+    // A list containing the minimum logical value for each button.
+    // NOTE: While the Gamepad API internally uses u32 to represent raw button values, SDL uses bool for buttons and
+    //       i16 for axes. The left and right triggers are buttons in the Gamepad API.
+    Vector<i16> m_button_minimums;
+
+    // https://w3c.github.io/gamepad/#dfn-buttonmaximums
+    // A list containing the maximum logical value for each button
+    Vector<i16> m_button_maximums;
+
+    // https://w3c.github.io/gamepad/#dfn-buttonmapping
+    // Mapping from unmapped button index to an index in the buttons array
+    HashMap<size_t, size_t> m_button_mapping;
 
     // https://w3c.github.io/gamepad/#dfn-exposed
     // A flag indicating that the Gamepad object has been exposed to script
     bool m_exposed { false };
+
+    // NOTE: Non-standard attribute to determine if this is a standard layout gamepad.
+    //       We consider gamepads to be standard layout until we figure out otherwise.
+    //       See initialize_axes and initialize_buttons.
+    Bindings::GamepadMappingType m_mapping { Bindings::GamepadMappingType::Standard };
 
     SDL_JoystickID m_sdl_joystick_id { 0 };
     SDL_Gamepad* m_sdl_gamepad { nullptr };
