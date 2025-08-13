@@ -23,6 +23,7 @@ public:
     static GC::Ref<Gamepad> create(JS::Realm&, SDL_JoystickID);
 
     SDL_JoystickID sdl_joystick_id() const { return m_sdl_joystick_id; }
+    SDL_Gamepad* sdl_gamepad() const { return m_sdl_gamepad; }
 
     Utf16String const& id() const { return m_id; }
 
@@ -41,6 +42,8 @@ public:
 
     Vector<double> const& axes() const { return m_axes; }
     Vector<GC::Ref<GamepadButton>> const& buttons() const { return m_buttons; }
+
+    GC::Ref<GamepadHapticActuator> vibration_actuator() const;
 
     void update_gamepad_state(Badge<NavigatorGamepadPartial>);
 
@@ -135,6 +138,9 @@ private:
     // https://w3c.github.io/gamepad/#dfn-exposed
     // A flag indicating that the Gamepad object has been exposed to script
     bool m_exposed { false };
+
+    // https://w3c.github.io/gamepad/#dfn-vibrationactuator
+    GC::Ptr<GamepadHapticActuator> m_vibration_actuator;
 
     // https://w3c.github.io/gamepad/#dom-gamepad-mapping
     // The mapping in use for this device. If the user agent has knowledge of the layout of the device, then it SHOULD

@@ -367,6 +367,7 @@ set(SOURCES
     GamepadAPI/Gamepad.cpp
     GamepadAPI/GamepadButton.cpp
     GamepadAPI/GamepadEvent.cpp
+    GamepadAPI/GamepadHapticActuator.cpp
     GamepadAPI/NavigatorGamepad.cpp
     Geolocation/Geolocation.cpp
     Serial/Serial.cpp

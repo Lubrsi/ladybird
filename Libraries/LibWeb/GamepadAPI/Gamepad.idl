@@ -1,5 +1,6 @@
 #import <HighResolutionTime/DOMHighResTimeStamp.idl>
 #import <GamepadAPI/GamepadButton.idl>
+#import <GamepadAPI/GamepadHapticActuator.idl>
 
 // https://w3c.github.io/gamepad/#dom-gamepadmappingtype
 enum GamepadMappingType {
@@ -19,7 +20,7 @@ interface Gamepad {
     readonly attribute FrozenArray<double> axes;
     readonly attribute FrozenArray<GamepadButton> buttons;
     [FIXME] readonly attribute FrozenArray<GamepadTouch> touches;
-    [FIXME, SameObject] readonly attribute GamepadHapticActuator vibrationActuator;
+    [SameObject] readonly attribute GamepadHapticActuator vibrationActuator;
 };
 
 // https://w3c.github.io/gamepad/#idl-def-navigator-partial-1

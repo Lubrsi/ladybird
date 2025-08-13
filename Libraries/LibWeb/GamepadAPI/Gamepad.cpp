@@ -5,6 +5,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "GamepadHapticActuator.h"
+
+
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/GamepadAPI/Gamepad.h>
 #include <LibWeb/GamepadAPI/GamepadButton.h>
@@ -110,6 +113,9 @@ GC::Ref<Gamepad> Gamepad::create(JS::Realm& realm, SDL_JoystickID sdl_joystick_i
     //    7. Set gamepad.[[buttons]] to the result of initializing buttons for gamepad.
     gamepad->initialize_buttons();
 
+    //    8. Set gamepad.[[vibrationActuator]] to the result of constructing a GamepadHapticActuator for gamepad.
+    gamepad->m_vibration_actuator = GamepadHapticActuator::create(realm, gamepad);
+
     // 2. Return gamepad.
     return gamepad;
 }
@@ -131,6 +137,7 @@ void Gamepad::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_buttons);
+    visitor.visit(m_vibration_actuator);
 }
 
 void Gamepad::finalize()
@@ -300,6 +307,12 @@ void Gamepad::initialize_buttons()
         auto gamepad_button = realm.create<GamepadButton>(realm);
         m_buttons.append(gamepad_button);
     }
+}
+
+GC::Ref<GamepadHapticActuator> Gamepad::vibration_actuator() const
+{
+    VERIFY(m_vibration_actuator);
+    return *m_vibration_actuator;
 }
 
 void Gamepad::set_connected(Badge<NavigatorGamepadPartial>, bool value)
@@ -479,6 +492,5 @@ void Gamepad::update_gamepad_state(Badge<NavigatorGamepadPartial>)
     // FIXME: 7. If navigator.[[hasGamepadGesture]] is false and gamepad contains a gamepad user gesture:
 
 }
-
 
 }
