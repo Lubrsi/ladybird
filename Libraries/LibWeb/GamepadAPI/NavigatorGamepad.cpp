@@ -89,6 +89,7 @@ size_t NavigatorGamepadPartial::select_an_unused_gamepad_index(Badge<Gamepad>)
 // https://w3c.github.io/gamepad/#event-gamepadconnected
 void NavigatorGamepadPartial::handle_gamepad_connected(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id)
 {
+    // When a gamepad becomes available on the system, run the following steps:
     // 1. Let document be the current global object's associated Document; otherwise null.
     // FIXME: We can't use the current global object here, since it's not executing in a scripting context.
     // NOTE: NavigatorGamepad is only available on Window.
@@ -131,5 +132,72 @@ void NavigatorGamepadPartial::handle_gamepad_connected(Badge<EventHandler>, SDL_
         }
     }));
 }
+
+// https://w3c.github.io/gamepad/#dfn-receives-new-button-or-axis-input-values
+void NavigatorGamepadPartial::handle_gamepad_updated(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id)
+{
+    // When the system receives new button or axis input values, run the following steps:
+    // 1. Let gamepad be the Gamepad object representing the device that received new button or axis input values.
+    auto gamepad = m_gamepads.find_if([&sdl_joystick_id](GC::Ptr<Gamepad> gamepad) {
+        return gamepad && gamepad->sdl_joystick_id() == sdl_joystick_id;
+    });
+
+    if (gamepad.is_end())
+        return;
+
+    // 2. Queue a global task on the gamepad task source with gamepad's relevant global object to update gamepad state
+    //    for gamepad.
+    auto& global = HTML::relevant_global_object(**gamepad);
+    HTML::queue_global_task(HTML::Task::Source::Gamepad, global, GC::create_function(global.heap(), [gamepad = GC::Ref { **gamepad }] {
+        gamepad->update_gamepad_state({});
+    }));
+}
+
+void NavigatorGamepadPartial::handle_gamepad_disconnected(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id)
+{
+    // When a gamepad becomes unavailable on the system, run the following steps:
+    // 1. Let gamepad be the Gamepad representing the unavailable device.
+    auto gamepad = m_gamepads.find_if([&sdl_joystick_id](GC::Ptr<Gamepad> gamepad) {
+        return gamepad && gamepad->sdl_joystick_id() == sdl_joystick_id;
+    });
+
+    if (gamepad.is_end())
+        return;
+
+    // 2. Queue a global task on the gamepad task source with gamepad's relevant global object to perform the
+    //    following steps:
+    auto& window = as<HTML::Window>(HTML::relevant_global_object(**gamepad));
+    HTML::queue_global_task(HTML::Task::Source::Gamepad, window, GC::create_function(window.heap(), [gamepad = GC::Ref { **gamepad }, &window] {
+        // 1. Set gamepad.[[connected]] to false.
+        gamepad->set_connected({}, false);
+
+        // 2. Let document be gamepad's relevant global object's associated Document; otherwise null.
+        auto& document = window.associated_document();
+
+        // 3. If gamepad.[[exposed]] is true and document is not null and is fully active, then fire an event named
+        //    gamepaddisconnected at gamepad's relevant global object using GamepadEvent with its gamepad attribute
+        //    initialized to gamepad.
+        if (gamepad->exposed() && document.is_fully_active()) {
+            auto gamepad_disconnected_event_init = GamepadEventInit {
+                .gamepad = gamepad,
+            };
+            auto gamepad_disconnected_event = MUST(GamepadEvent::construct_impl(window.realm(), EventNames::gamepaddisconnected, gamepad_disconnected_event_init));
+            window.dispatch_event(gamepad_disconnected_event);
+        }
+
+        // 4. Let navigator be gamepad's relevant global object's Navigator object.
+        auto navigator = window.navigator();
+
+        // 5. Set navigator.[[gamepads]][gamepad.index] to null.
+        navigator->m_gamepads[gamepad->index()] = nullptr;
+
+        // 6. While navigator.[[gamepads]] is not empty and the last item of navigator.[[gamepads]] is null, remove the
+        //    last item of navigator.[[gamepads]].
+        while (!navigator->m_gamepads.is_empty() && navigator->m_gamepads.last() == nullptr) {
+            (void)navigator->m_gamepads.take_last();
+        }
+    }));
+}
+
 
 }

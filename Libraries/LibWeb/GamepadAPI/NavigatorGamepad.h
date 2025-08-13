@@ -22,6 +22,8 @@ public:
     size_t select_an_unused_gamepad_index(Badge<Gamepad>);
 
     void handle_gamepad_connected(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id);
+    void handle_gamepad_updated(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id);
+    void handle_gamepad_disconnected(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id);
 
 protected:
     void visit_edges(GC::Cell::Visitor& visitor);

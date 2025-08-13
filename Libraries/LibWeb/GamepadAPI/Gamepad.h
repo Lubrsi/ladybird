@@ -22,11 +22,14 @@ class Gamepad final : public Bindings::PlatformObject {
 public:
     static GC::Ref<Gamepad> create(JS::Realm&, SDL_JoystickID);
 
+    SDL_JoystickID sdl_joystick_id() const { return m_sdl_joystick_id; }
+
     Utf16String const& id() const { return m_id; }
 
     size_t index() const { return m_index; }
 
     bool connected() const { return m_connected; }
+    void set_connected(Badge<NavigatorGamepadPartial>, bool);
 
     HighResolutionTime::DOMHighResTimeStamp timestamp() const { return m_timestamp; }
     void set_timestamp(Badge<NavigatorGamepadPartial>, HighResolutionTime::DOMHighResTimeStamp);
@@ -39,7 +42,7 @@ public:
     Vector<double> const& axes() const { return m_axes; }
     Vector<GC::Ref<GamepadButton>> const& buttons() const { return m_buttons; }
 
-    void update_gamepad_state();
+    void update_gamepad_state(Badge<NavigatorGamepadPartial>);
 
 private:
     explicit Gamepad(JS::Realm&, SDL_JoystickID);
@@ -48,7 +51,12 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
     virtual void finalize() override;
 
+    void select_a_mapping();
+    void initialize_axes();
     void initialize_buttons();
+
+    void map_and_normalize_axes();
+    void map_and_normalize_buttons();
 
     // https://w3c.github.io/gamepad/#dom-gamepad-id
     // An identification string for the gamepad. This string identifies the brand or style of connected gamepad device.
@@ -87,6 +95,20 @@ private:
     // FIXME: Our current FrozenArray implementation only supports returning new objects everytime.
     Vector<double> m_axes;
 
+    // https://w3c.github.io/gamepad/#dfn-axismapping
+    // Mapping from unmapped axis index to an index in the axes array
+    HashMap<size_t, size_t> m_axis_mapping;
+
+    // https://w3c.github.io/gamepad/#dfn-axisminimums
+    // A list containing the minimum logical value for each axis
+    // NOTE: While the Gamepad API internally uses u32 to represent raw axis values, SDL uses i16 for axes.
+    Vector<i16> m_axis_minimums;
+
+    // https://w3c.github.io/gamepad/#dfn-axismaximums
+    // A list containing the maximum logical value for each axis
+    // NOTE: While the Gamepad API internally uses u32 to represent raw axis values, SDL uses i16 for axes.
+    Vector<i16> m_axis_maximums;
+
     // https://w3c.github.io/gamepad/#dfn-buttons
     // A sequence of GamepadButton objects representing the current state of buttons exposed by this device
     // Array of button states for all buttons of the gamepad. It is RECOMMENDED that buttons appear in decreasing
@@ -95,6 +117,10 @@ private:
     // values (or values in a different order).
     // FIXME: Our current FrozenArray implementation only supports returning new objects everytime.
     Vector<GC::Ref<GamepadButton>> m_buttons;
+
+    // https://w3c.github.io/gamepad/#dfn-buttonmapping
+    // Mapping from unmapped button index to an index in the buttons array
+    HashMap<size_t, size_t> m_button_mapping;
 
     // https://w3c.github.io/gamepad/#dfn-buttonminimums
     // A list containing the minimum logical value for each button.
@@ -106,17 +132,13 @@ private:
     // A list containing the maximum logical value for each button
     Vector<i16> m_button_maximums;
 
-    // https://w3c.github.io/gamepad/#dfn-buttonmapping
-    // Mapping from unmapped button index to an index in the buttons array
-    HashMap<size_t, size_t> m_button_mapping;
-
     // https://w3c.github.io/gamepad/#dfn-exposed
     // A flag indicating that the Gamepad object has been exposed to script
     bool m_exposed { false };
 
-    // NOTE: Non-standard attribute to determine if this is a standard layout gamepad.
-    //       We consider gamepads to be standard layout until we figure out otherwise.
-    //       See initialize_axes and initialize_buttons.
+    // https://w3c.github.io/gamepad/#dom-gamepad-mapping
+    // The mapping in use for this device. If the user agent has knowledge of the layout of the device, then it SHOULD
+    // indicate that a mapping is in use by setting mapping to the corresponding GamepadMappingType value.
     Bindings::GamepadMappingType m_mapping { Bindings::GamepadMappingType::Standard };
 
     SDL_JoystickID m_sdl_joystick_id { 0 };

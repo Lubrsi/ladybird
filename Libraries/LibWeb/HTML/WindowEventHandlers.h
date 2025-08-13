@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Luke Wilde <lukew@serenityos.org>
+ * Copyright (c) 2022-2025, Luke Wilde <lukew@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +8,9 @@
 
 #include <AK/Forward.h>
 #include <LibWeb/Forward.h>
+
+// FIXME: ongamepadconnected, GamepadAPI::EventNames::gamepadconnected
+// FIXME: ongamepaddisconnected, GamepadAPI::EventNames::gamepaddisconnected
 
 #define ENUMERATE_WINDOW_EVENT_HANDLERS(E)                        \
     E(onafterprint, HTML::EventNames::afterprint)                 \

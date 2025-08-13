@@ -71,7 +71,9 @@ private:
 
     bool should_ignore_device_input_event() const;
 
-    void handle_gamepad_connected(SDL_JoystickID) const;
+    void handle_gamepad_connected(SDL_JoystickID);
+    void handle_gamepad_updated(SDL_JoystickID);
+    void handle_gamepad_disconnected(SDL_JoystickID);
 
     GC::Ref<HTML::Navigable> m_navigable;
 
