@@ -46,8 +46,7 @@ WebIDL::ExceptionOr<GC::RootVector<GC::Ptr<Gamepad>>> NavigatorGamepadPartial::g
     // NOTE: Already done.
 
     // 7. For each gamepad of this.[[gamepads]]:
-    for (auto gamepad : m_gamepads)
-    {
+    for (auto gamepad : m_gamepads) {
         // 1. If gamepad is not null and gamepad.[[exposed]] is false:
         if (gamepad && !gamepad->exposed()) {
             // 1. Set gamepad.[[exposed]] to true.
@@ -212,6 +211,5 @@ GC::RootVector<GC::Ptr<Gamepad>> NavigatorGamepadPartial::gamepads(Badge<Gamepad
     auto& realm = navigator.realm();
     return { realm.heap(), m_gamepads };
 }
-
 
 }

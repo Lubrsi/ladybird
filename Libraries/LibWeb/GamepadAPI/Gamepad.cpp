@@ -5,12 +5,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/GamepadAPI/EventNames.h>
-#include <LibWeb/GamepadAPI/GamepadEvent.h>
-#include <LibWeb/GamepadAPI/GamepadHapticActuator.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/GamepadAPI/EventNames.h>
 #include <LibWeb/GamepadAPI/Gamepad.h>
 #include <LibWeb/GamepadAPI/GamepadButton.h>
+#include <LibWeb/GamepadAPI/GamepadEvent.h>
+#include <LibWeb/GamepadAPI/GamepadHapticActuator.h>
 #include <LibWeb/HTML/Navigator.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Window.h>
@@ -279,8 +279,7 @@ void Gamepad::initialize_buttons()
             },
             [](Empty) {
                 VERIFY_NOT_REACHED();
-            }
-        );
+            });
     }
 
     for (auto const non_standard_gamepad_button : non_standard_gamepad_button_layout) {
@@ -403,8 +402,7 @@ void Gamepad::select_a_mapping()
             },
             [](Empty) -> bool {
                 VERIFY_NOT_REACHED();
-            }
-        );
+            });
 
         if (!has_standard_button) {
             m_mapping = Bindings::GamepadMappingType::Empty;
@@ -481,8 +479,7 @@ void Gamepad::map_and_normalize_buttons()
             },
             [](Empty) {
                 VERIFY_NOT_REACHED();
-            }
-        );
+            });
     }
 
     for (auto const non_standard_gamepad_button : non_standard_gamepad_button_layout) {
@@ -608,7 +605,7 @@ bool Gamepad::contains_gamepad_user_gesture()
     // NOTE: This roughly follows Chrome, where it exposes gamepads if a button is pressed (even if it's held acrosss
     //       a refresh) or an absolute axis is above 0.5.
     auto pressed_button = m_buttons.find_if([](GC::Ref<GamepadButton> gamepad_button) {
-       return gamepad_button->pressed();
+        return gamepad_button->pressed();
     });
 
     if (!pressed_button.is_end())

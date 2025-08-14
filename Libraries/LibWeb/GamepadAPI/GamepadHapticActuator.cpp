@@ -6,14 +6,14 @@
 
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/DocumentObserver.h>
-#include <LibWeb/HTML/Scripting/Environments.h>
-#include <LibWeb/HTML/Window.h>
 #include <LibWeb/GamepadAPI/Gamepad.h>
 #include <LibWeb/GamepadAPI/GamepadHapticActuator.h>
+#include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
-#include <SDL3/SDL_gamepad.h>
+#include <LibWeb/HTML/Window.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/Timer.h>
+#include <SDL3/SDL_gamepad.h>
 
 namespace Web::GamepadAPI {
 
