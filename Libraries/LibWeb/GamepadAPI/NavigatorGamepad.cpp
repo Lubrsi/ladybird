@@ -33,7 +33,7 @@ WebIDL::ExceptionOr<GC::RootVector<GC::Ptr<Gamepad>>> NavigatorGamepadPartial::g
 
     // 3. If doc is not allowed to use the "gamepad" permission, then throw a "SecurityError" DOMException and abort these steps.
     if (!document.is_allowed_to_use_feature(DOM::PolicyControlledFeature::Gamepad))
-        return WebIDL::SecurityError::create(realm, "Not allowed to use gamepads"_string);
+        return WebIDL::SecurityError::create(realm, "Not allowed to use gamepads"_utf16);
 
     // FIXME: 4. If this.[[hasGamepadGesture]] is false, then return an empty list.
 

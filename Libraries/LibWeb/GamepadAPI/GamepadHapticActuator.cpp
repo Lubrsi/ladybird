@@ -153,7 +153,7 @@ GC::Ref<WebIDL::Promise> GamepadHapticActuator::play_effect(Bindings::GamepadHap
     // 3. If document is null or document is not fully active or document's visibility state is "hidden", return a
     //    promise rejected with an "InvalidStateError" DOMException.
     if (!document.is_fully_active() || document.visibility_state_value() == HTML::VisibilityState::Hidden)
-        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::InvalidStateError::create(realm, "Haptics are not allowed in a hidden document"_string));
+        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::InvalidStateError::create(realm, "Haptics are not allowed in a hidden document"_utf16));
 
     // 4. If this.[[playingEffectPromise]] is not null:
     if (m_playing_effect_promise) {
@@ -182,7 +182,7 @@ GC::Ref<WebIDL::Promise> GamepadHapticActuator::play_effect(Bindings::GamepadHap
     // https://w3c.github.io/gamepad/#ref-for-dfn-play-effects-with-type-1
     // A GamepadHapticActuator can play effects with type type if type can be found in the [[effects]] list.
     if (!m_effects.contains_slow(type))
-        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::NotSupportedError::create(realm, "Gamepad does not support this effect"_string));
+        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::NotSupportedError::create(realm, "Gamepad does not support this effect"_utf16));
 
     // 6. Let [[playingEffectPromise]] be a new promise.
     m_playing_effect_promise = WebIDL::create_promise(realm);
@@ -233,7 +233,7 @@ GC::Ref<WebIDL::Promise> GamepadHapticActuator::reset()
     // 2. If document is null or document is not fully active or document's visibility state is "hidden", return a
     //    promise rejected with an "InvalidStateError" DOMException.
     if (!document.is_fully_active() || document.visibility_state_value() == HTML::VisibilityState::Hidden)
-        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::InvalidStateError::create(realm, "Haptics are not allowed in a hidden document"_string));
+        return WebIDL::create_rejected_promise_from_exception(realm, WebIDL::InvalidStateError::create(realm, "Haptics are not allowed in a hidden document"_utf16));
 
     // 3. Let resetResultPromise be a new promise.
     auto reset_result_promise = WebIDL::create_promise(realm);
