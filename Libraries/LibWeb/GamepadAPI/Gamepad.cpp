@@ -59,6 +59,20 @@ static Array<Variant<SDL_GamepadButton, SDL_GamepadAxis, Empty>, 17> standard_ga
     SDL_GAMEPAD_BUTTON_GUIDE,
 };
 
+static Array<SDL_GamepadButton, 11> non_standard_gamepad_button_layout {
+    SDL_GAMEPAD_BUTTON_MISC1,
+    SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1,
+    SDL_GAMEPAD_BUTTON_LEFT_PADDLE1,
+    SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2,
+    SDL_GAMEPAD_BUTTON_LEFT_PADDLE2,
+    SDL_GAMEPAD_BUTTON_TOUCHPAD,
+    SDL_GAMEPAD_BUTTON_MISC2,
+    SDL_GAMEPAD_BUTTON_MISC3,
+    SDL_GAMEPAD_BUTTON_MISC4,
+    SDL_GAMEPAD_BUTTON_MISC5,
+    SDL_GAMEPAD_BUTTON_MISC6,
+};
+
 // axes     0       Horizontal axis for left stick (negative left/positive right)
 //          1       Vertical axis for left stick (negative up/positive down)
 //          2       Horizontal axis for right stick (negative left/positive right)
@@ -215,19 +229,25 @@ void Gamepad::initialize_buttons()
     auto& realm = this->realm();
 
     // 1. Let inputCount be the number of button inputs exposed by the device represented by gamepad.
+    Vector<Variant<SDL_GamepadButton, SDL_GamepadAxis>> inputs;
+
     // 2. Set gamepad.[[buttonMinimums]] to be a list of unsigned long values with size equal to inputCount containing minimum logical values for each of the button inputs.
     // 3. Set gamepad.[[buttonMaximums]] to be a list of unsigned long values with size equal to inputCount containing maximum logical values for each of the button inputs.
     for (auto const& standard_gamepad_button : standard_gamepad_button_layout) {
         standard_gamepad_button.visit(
-            [this](SDL_GamepadButton button) {
+            [this, &inputs](SDL_GamepadButton button) {
                 if (SDL_GamepadHasButton(m_sdl_gamepad, button)) {
+                    inputs.append(button);
+
                     // Buttons are binary inputs with SDL.
                     m_button_minimums.append(0);
                     m_button_maximums.append(1);
                 }
             },
-            [this](SDL_GamepadAxis axis) {
+            [this, &inputs](SDL_GamepadAxis axis) {
                 if (SDL_GamepadHasAxis(m_sdl_gamepad, axis)) {
+                    inputs.append(axis);
+
                     // "Trigger axis values range from 0 (released) to SDL_JOYSTICK_AXIS_MAX (fully
                     // pressed) when reported by SDL_GetGamepadAxis(). Note that this is not the
                     // same range that will be reported by the lower-level SDL_GetJoystickAxis()."
@@ -241,69 +261,84 @@ void Gamepad::initialize_buttons()
         );
     }
 
-    // FIXME: Support non-standard gamepad buttons.
-    // 4. Let unmappedInputList be an empty list.
+    for (auto const non_standard_gamepad_button : non_standard_gamepad_button_layout) {
+        if (SDL_GamepadHasButton(m_sdl_gamepad, non_standard_gamepad_button)) {
+            inputs.append(non_standard_gamepad_button);
 
-    // FIXME: Because we don't support non-standard gamepad buttons, this would go unused.
+            // Buttons are binary inputs with SDL.
+            m_button_minimums.append(0);
+            m_button_maximums.append(1);
+        }
+    }
+
+    // 4. Let unmappedInputList be an empty list.
+    Vector<size_t> unmapped_input_list;
+
     // 5. Let mappedIndexList be an empty list.
+    Vector<size_t> mapped_index_list;
 
     // 6. Let buttonsSize be 0.
     size_t buttons_size = 0;
 
-    // FIXME: Support non-standard gamepad buttons.
     // 7. For each rawInputIndex of the range from 0 to inputCount − 1:
-    for (size_t raw_input_index = 0; raw_input_index < standard_gamepad_button_layout.size(); ++raw_input_index) {
+    for (size_t raw_input_index = 0; raw_input_index < inputs.size(); ++raw_input_index) {
+        auto const& input = inputs[raw_input_index];
+
         // 1. If the gamepad button at index rawInputIndex represents a Standard Gamepad button:
-        // auto const& standard_gamepad_button = standard_gamepad_layout[raw_input_index];
-        //
-        // bool is_standard_gamepad_button = standard_gamepad_button.visit(
-        //     [this](SDL_GamepadButton button) -> bool {
-        //         return SDL_GamepadHasButton(m_sdl_gamepad, button);
-        //     },
-        //     [this](SDL_GamepadAxis axis) -> bool {
-        //         return SDL_GamepadHasAxis(m_sdl_gamepad, axis);
-        //     },
-        //     [](Empty) -> bool {
-        //         VERIFY_NOT_REACHED();
-        //     }
-        // );
+        if (auto maybe_index = standard_gamepad_button_layout.first_index_of(input); maybe_index.has_value()) {
+            // 1. Let canonicalIndex be the canonical index for the button.
+            auto canonical_index = maybe_index.value();
 
-        // 1. Let canonicalIndex be the canonical index for the button.
-        // FIXME: canonicalIndex is always the same as rawInputIndex because we don't support non-standard gamepad buttons.
-        auto canonical_index = raw_input_index;
+            // 2. If mappedIndexList contains canonicalIndex, then append rawInputIndex to unmappedInputList.
+            if (mapped_index_list.contains_slow(canonical_index)) {
+                unmapped_input_list.append(raw_input_index);
+            } else {
+                // Otherwise:
+                // 1. Set gamepad.[[buttonMapping]][rawInputIndex] to canonicalIndex.
+                m_button_mapping.set(raw_input_index, canonical_index);
 
-        // 2. If mappedIndexList contains canonicalIndex, then append rawInputIndex to unmappedInputList.
-        // FIXME: Support duplicated standard buttons.
+                // 2. Append canonicalIndex to mappedIndexList.
+                mapped_index_list.append(canonical_index);
 
-        // Otherwise:
-        // 1. Set gamepad.[[buttonMapping]][rawInputIndex] to canonicalIndex.
-        m_button_mapping.set(raw_input_index, canonical_index);
-
-        // FIXME: 2. Append canonicalIndex to mappedIndexList.
-
-        // 3. If canonicalIndex + 1 is greater than buttonsSize, then set buttonsSize to canonicalIndex + 1.
-        if (canonical_index + 1 > buttons_size)
-            buttons_size = canonical_index + 1;
-
-        // FIXME: Otherwise, append rawInputIndex to unmappedInputList.
+                // 3. If canonicalIndex + 1 is greater than buttonsSize, then set buttonsSize to canonicalIndex + 1.
+                if (canonical_index + 1 > buttons_size)
+                    buttons_size = canonical_index + 1;
+            }
+        } else {
+            // Otherwise, append rawInputIndex to unmappedInputList.
+            unmapped_input_list.append(raw_input_index);
+        }
 
         // 2. Increment rawInputIndex.
     }
 
-    // FIXME: Support non-standard gamepad buttons.
-    //        8. Let buttonIndex be 0.
-    //        9. For each rawInputIndex of unmappedInputList:
-    //           1. While mappedIndexList contains buttonIndex:
-    //              1. Increment buttonIndex.
-    //           2. Set gamepad.[[buttonMapping]][rawInputIndex] to buttonIndex.
-    //           3. Append buttonIndex to mappedIndexList.
-    //           4. If buttonIndex + 1 is greater than buttonsSize, then set buttonsSize to buttonIndex + 1.
+    // 8. Let buttonIndex be 0.
+    size_t button_index = 0;
+
+    // 9. For each rawInputIndex of unmappedInputList:
+    for (size_t raw_input_index : unmapped_input_list) {
+        // 1. While mappedIndexList contains buttonIndex:
+        while (mapped_index_list.contains_slow(button_index)) {
+            // 1. Increment buttonIndex.
+            ++button_index;
+        }
+
+        // 2. Set gamepad.[[buttonMapping]][rawInputIndex] to buttonIndex.
+        m_button_mapping.set(raw_input_index, button_index);
+
+        // 3. Append buttonIndex to mappedIndexList.
+        mapped_index_list.append(button_index);
+
+        // 4. If buttonIndex + 1 is greater than buttonsSize, then set buttonsSize to buttonIndex + 1.
+        if (button_index + 1 > buttons_size)
+            buttons_size = button_index + 1;
+    }
 
     // NOTE: Instead of returning a list (and thus needing to use RootVector), we can just directly update m_buttons.
     // 10. Let buttons be an empty list.
     // 11. For each buttonIndex of the range from 0 to buttonsSize − 1, append a new GamepadButton to buttons.
     // 12. Return buttons.
-    for (size_t button_index = 0; button_index < buttons_size; ++button_index) {
+    for (size_t final_button_index = 0; final_button_index < buttons_size; ++final_button_index) {
         auto gamepad_button = realm.create<GamepadButton>(realm);
         m_buttons.append(gamepad_button);
     }
@@ -426,6 +461,13 @@ void Gamepad::map_and_normalize_buttons()
                 VERIFY_NOT_REACHED();
             }
         );
+    }
+
+    for (auto const non_standard_gamepad_button : non_standard_gamepad_button_layout) {
+        if (SDL_GamepadHasButton(m_sdl_gamepad, non_standard_gamepad_button)) {
+            bool button_pressed = SDL_GetGamepadButton(m_sdl_gamepad, non_standard_gamepad_button);
+            button_values.append(button_pressed ? 1 : 0);
+        }
     }
 
     // 2. Let maxRawButtonIndex be the size of buttonValues − 1.

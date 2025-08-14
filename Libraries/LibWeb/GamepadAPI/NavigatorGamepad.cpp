@@ -35,7 +35,9 @@ WebIDL::ExceptionOr<GC::RootVector<GC::Ptr<Gamepad>>> NavigatorGamepadPartial::g
     if (!document.is_allowed_to_use_feature(DOM::PolicyControlledFeature::Gamepad))
         return WebIDL::SecurityError::create(realm, "Not allowed to use gamepads"_utf16);
 
-    // FIXME: 4. If this.[[hasGamepadGesture]] is false, then return an empty list.
+    // 4. If this.[[hasGamepadGesture]] is false, then return an empty list.
+    // if (!m_has_gamepad_gesture)
+    //     return gamepads;
 
     // 5. Let now be the current high resolution time given the current global object.
     auto now = HighResolutionTime::current_high_resolution_time(window);
