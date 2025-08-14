@@ -163,63 +163,83 @@ void Gamepad::finalize()
 void Gamepad::initialize_axes()
 {
     // 1. Let inputCount be the number of axis inputs exposed by the device represented by gamepad.
+    Vector<SDL_GamepadAxis> inputs;
+
     // 2. Set gamepad.[[axisMinimums]] to a list of unsigned long values with size equal to inputCount containing minimum logical values for each of the axis inputs.
     // 3. Set gamepad.[[axisMaximums]] to a list of unsigned long values with size equal to inputCount containing maximum logical values for each of the axis inputs.
     for (auto const standard_gamepad_axis : standard_gamepad_axes_layout) {
         if (SDL_GamepadHasAxis(m_sdl_gamepad, standard_gamepad_axis)) {
+            inputs.append(standard_gamepad_axis);
             m_axis_minimums.append(SDL_JOYSTICK_AXIS_MIN);
             m_axis_maximums.append(SDL_JOYSTICK_AXIS_MAX);
         }
     }
 
-    // FIXME: Support non-standard gamepad axes.
     // 4. Let unmappedInputList be an empty list.
+    Vector<size_t> unmapped_input_list;
 
-    // FIXME: Because we don't support non-standard gamepad axes, this would go unused.
     // 5. Let mappedIndexList be an empty list.
+    Vector<size_t> mapped_index_list;
 
     // 6. Let axesSize be 0.
     size_t axes_size = 0;
 
-    // FIXME: Support non-standard gamepad axes.
     // 7. For each rawInputIndex of the range from 0 to inputCount − 1:
-    for (size_t raw_input_index = 0; raw_input_index < standard_gamepad_axes_layout.size(); ++raw_input_index) {
+    for (size_t raw_input_index = 0; raw_input_index < inputs.size(); ++raw_input_index) {
         // 1. If the gamepad axis at index rawInputIndex represents a Standard Gamepad axis:
+        auto const axis = inputs[raw_input_index];
+        if (auto maybe_index = standard_gamepad_axes_layout.first_index_of(axis); maybe_index.has_value()) {
+            // 1. Let canonicalIndex be the canonical index for the axis.
+            auto canonical_index = maybe_index.value();
 
-        // 1. Let canonicalIndex be the canonical index for the axis.
-        // FIXME: canonicalIndex is always the same as rawInputIndex because we don't support non-standard gamepad axes.
-        auto canonical_index = raw_input_index;
+            // 2. If mappedIndexList contains canonicalIndex, then append rawInputIndex to unmappedInputList.
+            if (mapped_index_list.contains_slow(canonical_index)) {
+                unmapped_input_list.append(raw_input_index);
+            } else {
+                // Otherwise:
+                // 1. Set gamepad.[[axisMapping]][rawInputIndex] to canonicalIndex.
+                m_axis_mapping.set(raw_input_index, canonical_index);
 
-        // 2. If mappedIndexList contains canonicalIndex, then append rawInputIndex to unmappedInputList.
-        // FIXME: Support duplicated standard axes.
+                // 2. Append canonicalIndex to mappedIndexList.
+                mapped_index_list.append(canonical_index);
 
-        // Otherwise:
-        // 1. Set gamepad.[[axisMapping]][rawInputIndex] to canonicalIndex.
-        m_axis_mapping.set(raw_input_index, canonical_index);
-
-        // FIXME: 2. Append canonicalIndex to mappedIndexList.
-
-        // 3. If canonicalIndex + 1 is greater than axesSize, then set axesSize to canonicalIndex + 1.
-        if (canonical_index + 1 > axes_size)
-            axes_size = canonical_index + 1;
-
-        // FIXME: Otherwise, append rawInputIndex to unmappedInputList.
+                // 3. If canonicalIndex + 1 is greater than axesSize, then set axesSize to canonicalIndex + 1.
+                if (canonical_index + 1 > axes_size)
+                    axes_size = canonical_index + 1;
+            }
+        } else {
+            // Otherwise, append rawInputIndex to unmappedInputList.
+            unmapped_input_list.append(raw_input_index);
+        }
     }
 
-    // FIXME: Support non-standard gamepad axes.
-    //        8. Let axisIndex be 0.
-    //        9. For each rawInputIndex of unmappedInputList:
-    //           1. While mappedIndexList contains axisIndex:
-    //              1. Increment axisIndex.
-    //           2. Set gamepad.[[axisMapping]][rawInputIndex] to axisIndex.
-    //           3. Append axisIndex to mappedIndexList.
-    //           4. If axisIndex + 1 is greater than axesSize, then set axesSize to axisIndex + 1.
+    // 8. Let axisIndex be 0.
+    size_t axis_index = 0;
+
+    // 9. For each rawInputIndex of unmappedInputList:
+    for (size_t raw_input_index : unmapped_input_list) {
+        // 1. While mappedIndexList contains axisIndex:
+        while (mapped_index_list.contains_slow(axis_index)) {
+            // 1. Increment axisIndex.
+            ++axis_index;
+        }
+
+        // 2. Set gamepad.[[axisMapping]][rawInputIndex] to axisIndex.
+        m_axis_mapping.set(raw_input_index, axis_index);
+
+        // 3. Append axisIndex to mappedIndexList.
+        mapped_index_list.append(axis_index);
+
+        // 4. If axisIndex + 1 is greater than axesSize, then set axesSize to axisIndex + 1.
+        if (axis_index + 1 > axes_size)
+            axes_size = axis_index + 1;
+    }
 
     // NOTE: Instead of returning a list, we can just directly update m_buttons.
     // 10. Let axes be an empty list.
     // 11. For each axisIndex of the range from 0 to axesSize − 1, append 0 to axes.
     // 12. Return axes.
-    for (size_t axis_index = 0; axis_index < axes_size; ++axis_index)
+    for (size_t final_axis_index = 0; final_axis_index < axes_size; ++final_axis_index)
         m_axes.append(0.0);
 }
 
