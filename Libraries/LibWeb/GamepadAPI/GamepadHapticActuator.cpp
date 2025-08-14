@@ -245,26 +245,27 @@ GC::Ref<WebIDL::Promise> GamepadHapticActuator::reset()
             auto effect_promise = m_playing_effect_promise;
 
             // 2. Stop haptic effects on this's gamepad's actuator.
-            stop_haptic_effects();
+            bool stopped_all = stop_haptic_effects();
 
-            // FIXME: 3. If the effect has been successfully stopped, do:
+            // 3. If the effect has been successfully stopped, do:
+            if (stopped_all) {
+                // 1. If effectPromise and this.[[playingEffectPromise]] are still the same,
+                //    set this.[[playingEffectPromise]] to null.
+                if (effect_promise == m_playing_effect_promise)
+                    m_playing_effect_promise = nullptr;
 
-            // 1. If effectPromise and this.[[playingEffectPromise]] are still the same,
-            //    set this.[[playingEffectPromise]] to null.
-            if (effect_promise == m_playing_effect_promise)
-                m_playing_effect_promise = nullptr;
+                // 2. Queue a global task on the gamepad task source with the relevant global object of this to resolve
+                //    effectPromise with "preempted".
+                // AD-HOC: With doing this in parallel, there is a chance effect_promise is null. Don't try to resolve it
+                //         if so.
+                if (effect_promise) {
+                    HTML::queue_global_task(HTML::Task::Source::Gamepad, HTML::relevant_global_object(*this), GC::create_function(realm.heap(), [&realm, effect_promise = GC::Ref { *effect_promise }] {
+                        HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
-            // 2. Queue a global task on the gamepad task source with the relevant global object of this to resolve
-            //    effectPromise with "preempted".
-            // AD-HOC: With doing this in parallel, there is a chance effect_promise is null. Don't try to resolve it
-            //         if so.
-            if (effect_promise) {
-                HTML::queue_global_task(HTML::Task::Source::Gamepad, HTML::relevant_global_object(*this), GC::create_function(realm.heap(), [&realm, effect_promise = GC::Ref { *effect_promise }] {
-                    HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
-
-                    auto preempted_string = JS::PrimitiveString::create(realm.vm(), Bindings::idl_enum_to_string(Bindings::GamepadHapticsResult::Preempted));
-                    WebIDL::resolve_promise(realm, effect_promise, preempted_string);
-                }));
+                        auto preempted_string = JS::PrimitiveString::create(realm.vm(), Bindings::idl_enum_to_string(Bindings::GamepadHapticsResult::Preempted));
+                        WebIDL::resolve_promise(realm, effect_promise, preempted_string);
+                    }));
+                }
             }
 
             // 4. Resolve resetResultPromise with "complete"
@@ -344,23 +345,32 @@ void GamepadHapticActuator::issue_haptic_effect(Bindings::GamepadHapticEffectTyp
 }
 
 // https://w3c.github.io/gamepad/#dfn-stop-haptic-effects
-void GamepadHapticActuator::stop_haptic_effects()
+bool GamepadHapticActuator::stop_haptic_effects()
 {
     // To stop haptic effects on an actuator, the user agent MUST send a command to the device to abort any effects
     // currently being played. If a haptic effect was interrupted, the actuator SHOULD return to a motionless state
     // as quickly as possible.
+    bool stopped_all = false;
 
     // https://wiki.libsdl.org/SDL3/SDL_RumbleGamepad
     // "Each call to this function cancels any previous rumble effect, and calling it with 0 intensity stops any
     // rumbling."
-    if (m_effects.contains_slow(Bindings::GamepadHapticEffectType::DualRumble))
-        SDL_RumbleGamepad(m_gamepad->sdl_gamepad(), 0, 0, 0);
+    if (m_effects.contains_slow(Bindings::GamepadHapticEffectType::DualRumble)) {
+        bool success = SDL_RumbleGamepad(m_gamepad->sdl_gamepad(), 0, 0, 0);
+        if (!success)
+            stopped_all = false;
+    }
 
     // https://wiki.libsdl.org/SDL3/SDL_RumbleGamepadTriggers
     // "Each call to this function cancels any previous trigger rumble effect, and calling it with 0 intensity stops
     // any rumbling."
-    if (m_effects.contains_slow(Bindings::GamepadHapticEffectType::TriggerRumble))
-        SDL_RumbleGamepadTriggers(m_gamepad->sdl_gamepad(), 0, 0, 0);
+    if (m_effects.contains_slow(Bindings::GamepadHapticEffectType::TriggerRumble)) {
+        bool success = SDL_RumbleGamepadTriggers(m_gamepad->sdl_gamepad(), 0, 0, 0);
+        if (!success)
+            stopped_all = false;
+    }
+
+    return stopped_all;
 }
 
 void GamepadHapticActuator::clear_playing_effect_timers()

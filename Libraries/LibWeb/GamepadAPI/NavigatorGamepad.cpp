@@ -36,8 +36,8 @@ WebIDL::ExceptionOr<GC::RootVector<GC::Ptr<Gamepad>>> NavigatorGamepadPartial::g
         return WebIDL::SecurityError::create(realm, "Not allowed to use gamepads"_utf16);
 
     // 4. If this.[[hasGamepadGesture]] is false, then return an empty list.
-    // if (!m_has_gamepad_gesture)
-    //     return gamepads;
+    if (!m_has_gamepad_gesture)
+        return gamepads;
 
     // 5. Let now be the current high resolution time given the current global object.
     auto now = HighResolutionTime::current_high_resolution_time(window);
@@ -49,7 +49,7 @@ WebIDL::ExceptionOr<GC::RootVector<GC::Ptr<Gamepad>>> NavigatorGamepadPartial::g
     for (auto gamepad : m_gamepads)
     {
         // 1. If gamepad is not null and gamepad.[[exposed]] is false:
-        if (gamepad && gamepad->exposed()) {
+        if (gamepad && !gamepad->exposed()) {
             // 1. Set gamepad.[[exposed]] to true.
             gamepad->set_exposed({}, true);
 
@@ -199,6 +199,18 @@ void NavigatorGamepadPartial::handle_gamepad_disconnected(Badge<EventHandler>, S
             (void)navigator->m_gamepads.take_last();
         }
     }));
+}
+
+void NavigatorGamepadPartial::set_has_gamepad_gesture(Badge<Gamepad>, bool value)
+{
+    m_has_gamepad_gesture = value;
+}
+
+GC::RootVector<GC::Ptr<Gamepad>> NavigatorGamepadPartial::gamepads(Badge<Gamepad>) const
+{
+    auto& navigator = as<HTML::Navigator>(*this);
+    auto& realm = navigator.realm();
+    return { realm.heap(), m_gamepads };
 }
 
 

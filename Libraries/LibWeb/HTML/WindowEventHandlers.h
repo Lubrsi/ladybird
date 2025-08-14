@@ -9,13 +9,12 @@
 #include <AK/Forward.h>
 #include <LibWeb/Forward.h>
 
-// FIXME: ongamepadconnected, GamepadAPI::EventNames::gamepadconnected
-// FIXME: ongamepaddisconnected, GamepadAPI::EventNames::gamepaddisconnected
-
 #define ENUMERATE_WINDOW_EVENT_HANDLERS(E)                        \
     E(onafterprint, HTML::EventNames::afterprint)                 \
     E(onbeforeprint, HTML::EventNames::beforeprint)               \
     E(onbeforeunload, HTML::EventNames::beforeunload)             \
+    E(ongamepadconnected, GamepadAPI::EventNames::gamepadconnected) \
+    E(ongamepaddisconnected, GamepadAPI::EventNames::gamepaddisconnected) \
     E(onhashchange, HTML::EventNames::hashchange)                 \
     E(onlanguagechange, HTML::EventNames::languagechange)         \
     E(onmessage, HTML::EventNames::message)                       \

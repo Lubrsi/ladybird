@@ -130,6 +130,6 @@ interface mixin WindowEventHandlers {
     attribute EventHandler onunload;
 
     // https://w3c.github.io/gamepad/#extensions-to-the-windoweventhandlers-interface-mixin
-    // FIXME: attribute EventHandler ongamepadconnected;
-    // FIXME: attribute EventHandler ongamepaddisconnected;
+    attribute EventHandler ongamepadconnected;
+    attribute EventHandler ongamepaddisconnected;
 };

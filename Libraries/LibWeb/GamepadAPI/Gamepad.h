@@ -61,6 +61,8 @@ private:
     void map_and_normalize_axes();
     void map_and_normalize_buttons();
 
+    bool contains_gamepad_user_gesture();
+
     // https://w3c.github.io/gamepad/#dom-gamepad-id
     // An identification string for the gamepad. This string identifies the brand or style of connected gamepad device.
     // The exact format of the id string is left unspecified. It is RECOMMENDED that the user agent select a string

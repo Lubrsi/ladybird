@@ -25,6 +25,11 @@ public:
     void handle_gamepad_updated(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id);
     void handle_gamepad_disconnected(Badge<EventHandler>, SDL_JoystickID sdl_joystick_id);
 
+    bool has_gamepad_gesture() const { return m_has_gamepad_gesture; }
+    void set_has_gamepad_gesture(Badge<Gamepad>, bool);
+
+    GC::RootVector<GC::Ptr<Gamepad>> gamepads(Badge<Gamepad>) const;
+
 protected:
     void visit_edges(GC::Cell::Visitor& visitor);
 
