@@ -1,6 +1,7 @@
 {
   "builtin-baseline": "ee0973d8090e4e3e452244bb50d34c25fe907dc2",
   "dependencies": [
+    "asmjit",
     {
       "name": "angle",
       "platform": "osx",
@@ -173,6 +174,10 @@
     "zlib"
   ],
   "overrides": [
+    {
+      "name": "asmjit",
+      "version": "2025-06-28"
+    },
     {
       "name": "angle",
       "version": "chromium_7258#0"

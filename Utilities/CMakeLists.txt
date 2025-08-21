@@ -37,6 +37,10 @@ endif()
 lagom_utility(wasm SOURCES wasm.cpp LIBS LibFileSystem LibWasm LibLine LibMain)
 lagom_utility(xml SOURCES xml.cpp LIBS LibFileSystem LibMain LibXML LibURL)
 
+find_package(asmjit REQUIRED)
+lagom_utility(jit SOURCES jit.cpp LIBS LibMain asmjit::asmjit)
+
+
 if (NOT CMAKE_SKIP_INSTALL_RULES)
     install(TARGETS js COMPONENT js)
     install(TARGETS wasm COMPONENT wasm)
