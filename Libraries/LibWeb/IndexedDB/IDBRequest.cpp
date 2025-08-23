@@ -39,7 +39,7 @@ GC::Ref<IDBRequest> IDBRequest::create(JS::Realm& realm, IDBRequestSource source
 void IDBRequest::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_result);
+    // visitor.visit(m_result);
     visitor.visit(m_transaction);
 
     if (m_error.has_value())

@@ -14,7 +14,7 @@
 
 namespace Web::IndexedDB {
 
-using IDBRequestSource = Variant<Empty, GC::Ref<IDBObjectStore>, GC::Ref<IDBIndex>, GC::Ref<IDBCursor>>;
+using IDBRequestSource = Variant<GC::Ref<IDBObjectStore>, GC::Ref<IDBIndex>, GC::Ref<IDBCursor>, Empty>;
 
 // https://w3c.github.io/IndexedDB/#request-api
 class IDBRequest : public DOM::EventTarget {

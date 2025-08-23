@@ -90,6 +90,7 @@ enum class OuterType {
     Root,
     Ptr,
     Ref,
+    JSValue,
 };
 
 struct QualTypeGCInfo {
@@ -133,6 +134,12 @@ static std::optional<QualTypeGCInfo> validate_qualified_type(clang::QualType con
             return {};
 
         return QualTypeGCInfo { outer_type, record_inherits_from_cell(*record_decl) };
+    } else if (auto const* record = type->getAs<clang::RecordType>(); record && record->getDecl()->isClass()) {
+        auto class_name = record->getDecl()->getQualifiedNameAsString();
+        if (class_name != "JS::Value")
+            return {};
+
+        return QualTypeGCInfo { OuterType::JSValue, false };
     }
 
     return {};
@@ -216,6 +223,8 @@ bool LibJSGCVisitor::VisitCXXRecordDecl(clang::CXXRecordDecl* record)
                 auto builder = diag_engine.Report(field->getLocation(), diag_id);
                 builder << "GC::Root";
             }
+        } else if (outer_type == OuterType::JSValue) {
+            fields_that_need_visiting.push_back(field);
         }
     }
 

@@ -40,7 +40,7 @@ void IDBKeyRange::initialize(JS::Realm& realm)
 void IDBKeyRange::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_lower_bound);
+    // visitor.visit(m_lower_bound);
     visitor.visit(m_upper_bound);
 }
 

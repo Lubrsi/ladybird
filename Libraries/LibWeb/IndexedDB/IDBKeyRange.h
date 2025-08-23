@@ -16,6 +16,8 @@
 
 namespace Web::IndexedDB {
 
+using testtest = Variant<GC::Ptr<Key>, double, Empty>;
+    
 // https://w3c.github.io/IndexedDB/#keyrange
 class IDBKeyRange : public Bindings::PlatformObject {
     WEB_PLATFORM_OBJECT(IDBKeyRange, Bindings::PlatformObject);
@@ -63,6 +65,7 @@ private:
     // A key range has an associated upper bound (null or a key).
     GC::Ptr<Key> m_upper_bound;
 
+    JS::Value m_keys;
     // A key range has an associated lower open flag. Unless otherwise stated it is false.
     bool m_lower_open { false };
 
