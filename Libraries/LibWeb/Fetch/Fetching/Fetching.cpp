@@ -9,6 +9,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#define WEB_FETCH_DEBUG 1
+
 #include <AK/Base64.h>
 #include <AK/Debug.h>
 #include <AK/ScopeGuard.h>
@@ -2341,41 +2343,20 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     //        user-agent-defined limit (or not). However, we will need to fully use stream operations throughout the
     //        fetch process to enable this (e.g. Body::fully_read must use streams for this to work).
     if (request->buffer_policy() == Infrastructure::Request::BufferPolicy::DoNotBufferResponse) {
-        HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
-
         // 10. Let stream be a new ReadableStream.
         auto stream = realm.create<Streams::ReadableStream>(realm);
         auto fetched_data_receiver = realm.create<FetchedDataReceiver>(fetch_params, stream);
 
-        // 11. Let pullAlgorithm be the following steps:
-        auto pull_algorithm = GC::create_function(realm.heap(), [&realm, fetched_data_receiver]() {
-            // 1. Let promise be a new promise.
-            auto promise = WebIDL::create_promise(realm);
-
-            // 2. Run the following steps in parallel:
-            // NOTE: This is handled by FetchedDataReceiver.
-            fetched_data_receiver->set_pending_promise(promise);
-
-            // 3. Return promise.
-            return promise;
-        });
-
-        // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s controller with reason, given reason.
-        auto cancel_algorithm = GC::create_function(realm.heap(), [&realm, &fetch_params](JS::Value reason) {
-            fetch_params.controller()->abort(realm, reason);
-            return WebIDL::create_resolved_promise(realm, JS::js_undefined());
-        });
-
-        // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
-        stream->set_up_with_byte_reading_support(pull_algorithm, cancel_algorithm);
-
-        auto on_headers_received = GC::create_function(vm.heap(), [&vm, request, pending_response, stream](HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase) {
+        auto on_headers_received = GC::create_function(vm.heap(), [&vm, &realm, stream, fetched_data_receiver, fetch_controller = fetch_params.controller(), request, pending_response](HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase) {
+            dbgln("fetch headers received");
             (void)request;
             if (pending_response->is_resolved()) {
                 // RequestServer will send us the response headers twice, the second time being for HTTP trailers. This
                 // fetch algorithm is not interested in trailers, so just drop them here.
                 return;
             }
+
+            HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
             auto response = Infrastructure::Response::create(vm);
             response->set_status(status_code.value_or(200));
@@ -2396,6 +2377,30 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
                 response->header_list()->append(move(header));
             }
 
+            // 11. Let pullAlgorithm be the following steps:
+            auto pull_algorithm = GC::create_function(realm.heap(), [&realm, fetched_data_receiver]() {
+                dbgln("fetch pull");
+                // 1. Let promise be a new promise.
+                auto promise = WebIDL::create_promise(realm);
+
+                // 2. Run the following steps in parallel:
+                // NOTE: This is handled by FetchedDataReceiver.
+                fetched_data_receiver->set_pending_promise(promise);
+
+                // 3. Return promise.
+                return promise;
+            });
+
+            // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s controller with reason, given reason.
+            auto cancel_algorithm = GC::create_function(realm.heap(), [&realm, fetch_controller](JS::Value reason) {
+                dbgln("fetch cancel");
+                fetch_controller->abort(realm, reason);
+                return WebIDL::create_resolved_promise(realm, JS::js_undefined());
+            });
+
+            // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
+            stream->set_up_with_byte_reading_support(pull_algorithm, cancel_algorithm);
+
             // 14. Set response’s body to a new body whose stream is stream.
             response->set_body(Infrastructure::Body::create(vm, stream));
 
@@ -2407,6 +2412,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         // 16. Run these steps in parallel:
         //    FIXME: 1. Run these steps, but abort when fetchParams is canceled:
         auto on_data_received = GC::create_function(vm.heap(), [fetched_data_receiver](ReadonlyBytes bytes) {
+            dbgln("fetch data received");
             // 1. If one or more bytes have been transmitted from response’s message body, then:
             if (!bytes.is_empty()) {
                 // 1. Let bytes be the transmitted bytes.
@@ -2425,15 +2431,20 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
             }
         });
 
-        auto on_complete = GC::create_function(vm.heap(), [&vm, &realm, pending_response, stream](bool success, Requests::RequestTimingInfo const&, Optional<StringView> error_message) {
+        auto on_complete = GC::create_function(vm.heap(), [&vm, &realm, pending_response, stream, fetched_data_receiver](bool success, Requests::RequestTimingInfo const&, Optional<StringView> error_message) {
             dbgln("FIXME: Implement on_complete timing info for unbuffered requests");
+            dbgln("on complete {} {}", success, stream->is_readable());
             HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+
+            fetched_data_receiver->on_complete();
 
             // 16.1.1.2. Otherwise, if the bytes transmission for response’s message body is done normally and stream is readable,
             //           then close stream, and abort these in-parallel steps.
             if (success) {
-                if (stream->is_readable())
+                if (stream->is_readable()) {
+                    dbgln("closing");
                     stream->close();
+                }
             }
             // 16.1.2.2. Otherwise, if stream is readable, error stream with a TypeError.
             else {

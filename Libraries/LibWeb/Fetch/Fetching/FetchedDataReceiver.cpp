@@ -68,6 +68,7 @@ void FetchedDataReceiver::on_data_received(ReadonlyBytes bytes)
             HTML::TemporaryExecutionContext execution_context { m_stream->realm(), HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
             // 1. Pull from bytes buffer into stream.
+            dbgln("pulling bytes");
             if (auto result = m_stream->pull_from_bytes(move(bytes)); result.is_error()) {
                 auto throw_completion = Bindings::exception_to_throw_completion(m_stream->vm(), result.release_error());
 
@@ -78,12 +79,24 @@ void FetchedDataReceiver::on_data_received(ReadonlyBytes bytes)
             }
 
             // 2. If stream is errored, then terminate fetchParams’s controller.
-            if (m_stream->is_errored())
+            if (m_stream->is_errored()) {
+                dbgln("errored, terminating");
                 m_fetch_params->controller()->terminate();
+            }
 
             // 3. Resolve promise with undefined.
+            dbgln("resolving promise");
             WebIDL::resolve_promise(m_stream->realm(), *m_pending_promise, JS::js_undefined());
         }));
+}
+
+void FetchedDataReceiver::on_complete()
+{
+    if (!m_pending_promise)
+        return;
+
+    dbgln("pending promise: {:p}", m_pending_promise.ptr());
+    WebIDL::resolve_promise(m_stream->realm(), *m_pending_promise, JS::js_undefined());
 }
 
 }

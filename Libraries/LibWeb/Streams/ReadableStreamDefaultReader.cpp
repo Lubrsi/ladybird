@@ -92,6 +92,9 @@ void ReadLoopReadRequest::on_chunk(JS::Value chunk)
     auto const& buffer = array.viewed_array_buffer()->buffer();
 
     // 2. Append the bytes represented by chunk to bytes.
+    dbgln("got a chunk {}", StringView { buffer });
+    dump_backtrace();
+
     m_bytes.append(buffer);
 
     if (m_chunk_steps) {
@@ -104,6 +107,7 @@ void ReadLoopReadRequest::on_chunk(JS::Value chunk)
     //        up more than one chunk at a time, we may run into stack overflow problems.
     //
     // 3. Read-loop given reader, bytes, successSteps, and failureSteps.
+    dbgln("read loop");
     readable_stream_default_reader_read(m_reader, *this);
 }
 
@@ -111,6 +115,7 @@ void ReadLoopReadRequest::on_chunk(JS::Value chunk)
 void ReadLoopReadRequest::on_close()
 {
     // 1. Call successSteps with bytes.
+    dbgln("calling success steps");
     m_success_steps->function()(move(m_bytes));
 }
 

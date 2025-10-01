@@ -92,6 +92,17 @@ void RequestClient::headers_became_available(i32 request_id, HTTP::HeaderMap res
     request->did_receive_headers({}, response_headers, status_code, reason_phrase);
 }
 
+void RequestClient::interim_response_received(i32 request_id, HTTP::HeaderMap interim_response, u32 status_code)
+{
+    dbgln("got an interim response");
+    auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr));
+    if (!request) {
+        warnln("Received headers for non-existent request {}", request_id);
+        return;
+    }
+    request->did_receive_interim_response({}, interim_response, status_code);
+}
+
 void RequestClient::certificate_requested(i32 request_id)
 {
     if (auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr))) {

@@ -113,7 +113,7 @@ struct ConnectionFromClient::ActiveRequest : public Weakable<ActiveRequest> {
     WeakPtr<ConnectionFromClient> client;
     int writer_fd { 0 };
     HTTP::HeaderMap headers;
-    bool got_all_headers { false };
+    HTTP::HeaderMap interim_response;
     bool is_connect_only { false };
     size_t downloaded_so_far { 0 };
     String url;
@@ -197,13 +197,21 @@ struct ConnectionFromClient::ActiveRequest : public Weakable<ActiveRequest> {
 
     void flush_headers_if_needed()
     {
-        if (got_all_headers)
+        if (headers.is_empty())
             return;
-        got_all_headers = true;
         long http_status_code = 0;
         auto result = curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &http_status_code);
         VERIFY(result == CURLE_OK);
         client->async_headers_became_available(request_id, headers, http_status_code, reason_phrase);
+        headers.clear();
+    }
+
+    void flush_interim_response_if_needed(long http_status_code)
+    {
+        if (interim_response.is_empty())
+            return;
+        client->async_interim_response_received(request_id, interim_response, http_status_code);
+        interim_response.clear();
     }
 };
 
@@ -213,19 +221,28 @@ size_t ConnectionFromClient::on_header_received(void* buffer, size_t size, size_
     size_t total_size = size * nmemb;
     auto header_line = StringView { static_cast<char const*>(buffer), total_size };
 
+    long http_status_code = 0;
+    auto result = curl_easy_getinfo(request->easy, CURLINFO_RESPONSE_CODE, &http_status_code);
+    VERIFY(result == CURLE_OK);
+
+    bool receiving_interim_response = http_status_code >= 100 && http_status_code <= 199;
+    bool final_header = header_line == "\r\n"sv;
+
     // NOTE: We need to extract the HTTP reason phrase since it can be a custom value.
     //       Fetching infrastructure needs this value for setting the status message.
-    if (!request->reason_phrase.has_value() && header_line.starts_with("HTTP/"sv)) {
-        if (auto const space_positions = header_line.find_all(" "sv); space_positions.size() > 1) {
-            auto const second_space_offset = space_positions.at(1);
-            auto const reason_phrase_string_view = header_line.substring_view(second_space_offset + 1).trim_whitespace();
+    if (!receiving_interim_response) {
+        if (!request->reason_phrase.has_value() && header_line.starts_with("HTTP/"sv)) {
+            if (auto const space_positions = header_line.find_all(" "sv); space_positions.size() > 1) {
+                auto const second_space_offset = space_positions.at(1);
+                auto const reason_phrase_string_view = header_line.substring_view(second_space_offset + 1).trim_whitespace();
 
-            if (!reason_phrase_string_view.is_empty()) {
-                auto decoder = TextCodec::decoder_for_exact_name("ISO-8859-1"sv);
-                VERIFY(decoder.has_value());
+                if (!reason_phrase_string_view.is_empty()) {
+                    auto decoder = TextCodec::decoder_for_exact_name("ISO-8859-1"sv);
+                    VERIFY(decoder.has_value());
 
-                request->reason_phrase = MUST(decoder->to_utf8(reason_phrase_string_view));
-                return total_size;
+                    request->reason_phrase = MUST(decoder->to_utf8(reason_phrase_string_view));
+                    return total_size;
+                }
             }
         }
     }
@@ -233,7 +250,18 @@ size_t ConnectionFromClient::on_header_received(void* buffer, size_t size, size_
     if (auto colon_index = header_line.find(':'); colon_index.has_value()) {
         auto name = header_line.substring_view(0, colon_index.value()).trim_whitespace();
         auto value = header_line.substring_view(colon_index.value() + 1, header_line.length() - colon_index.value() - 1).trim_whitespace();
-        request->headers.set(name, value);
+
+        if (!receiving_interim_response)
+            request->headers.set(name, value);
+        else
+            request->interim_response.set(name, value);
+    }
+
+    if (final_header) {
+        if (!receiving_interim_response)
+            request->flush_headers_if_needed();
+        else
+            request->flush_interim_response_if_needed(http_status_code);
     }
 
     return total_size;
@@ -572,6 +600,8 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
             set_option(CURLOPT_HEADERFUNCTION, &on_header_received);
             set_option(CURLOPT_HEADERDATA, reinterpret_cast<void*>(request.ptr()));
 
+            set_option(CURLOPT_VERBOSE, 1L);
+
             auto formatted_address = build_curl_resolve_list(*dns_result, host, url.port_or_default());
             if (curl_slist* resolve_list = curl_slist_append(nullptr, formatted_address.characters())) {
                 set_option(CURLOPT_RESOLVE, resolve_list);
@@ -789,6 +819,7 @@ void ConnectionFromClient::ensure_connection(URL::URL url, ::RequestServer::Cach
         set_option(CURLOPT_PORT, url.port_or_default());
         set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
         set_option(CURLOPT_CONNECT_ONLY, 1L);
+        set_option(CURLOPT_VERBOSE, 1L);
 
         auto const result = curl_multi_add_handle(m_curl_multi, easy);
         VERIFY(result == CURLM_OK);

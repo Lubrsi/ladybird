@@ -73,6 +73,7 @@ static WebIDL::ExceptionOr<GC::Ref<DOM::Document>> load_html_document(HTML::Navi
     //        default to an "about:blank" url. Is this a spec bug?
     if (document->url_string() == "about:blank"_string
         && navigation_params.response->body()->length().value_or(0) == 0) {
+        dbgln("about:blank");
         TRY(document->populate_with_html_head_and_body());
         // Nothing else is added to the document, so mark it as loaded.
         HTML::HTMLParser::the_end(document);
@@ -92,8 +93,11 @@ static WebIDL::ExceptionOr<GC::Ref<DOM::Document>> load_html_document(HTML::Navi
     //    causes a load event to be fired.
     else {
         // FIXME: Parse as we receive the document data, instead of waiting for the whole document to be fetched first.
+        dbgln("going to parse body");
         auto process_body = GC::create_function(document->heap(), [document, url = navigation_params.response->url().value(), mime_type = navigation_params.response->header_list()->extract_mime_type()](ByteBuffer data) {
+            dbgln("process body");
             Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(document->heap(), [document = document, data = move(data), url = url, mime_type] {
+                dbgln("hello");
                 auto parser = HTML::HTMLParser::create_with_uncertain_encoding(document, data, mime_type);
                 parser->run(url);
             }));

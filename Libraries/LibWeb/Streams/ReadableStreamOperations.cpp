@@ -835,6 +835,7 @@ GC::Ref<WebIDL::Promise> readable_stream_cancel(ReadableStream& stream, JS::Valu
 // https://streams.spec.whatwg.org/#readable-stream-close
 void readable_stream_close(ReadableStream& stream)
 {
+    dbgln("close stream");
     auto& realm = stream.realm();
 
     // 1. Assert: stream.[[state]] is "readable".
@@ -861,8 +862,11 @@ void readable_stream_close(ReadableStream& stream)
         // 2. Set reader.[[readRequests]] to an empty list.
         auto read_requests = move((*default_reader)->read_requests());
 
+        dbgln("there's {} read requests to close", read_requests.size());
+
         // 3. For each readRequest of readRequests,
         for (auto read_request : read_requests) {
+            dbgln("- {}", read_request->class_name());
             // 1. Perform readRequest’s close steps.
             read_request->on_close();
         }
@@ -1200,6 +1204,7 @@ void readable_stream_default_reader_read(ReadableStreamDefaultReader& reader, Re
 
         // 2. Perform ! stream.[[controller]].[[PullSteps]](readRequest).
         stream->controller()->visit([&](auto const& controller) {
+            dbgln("going to pull");
             return controller->pull_steps(read_request);
         });
     }
@@ -1382,6 +1387,7 @@ void readable_stream_default_controller_close(ReadableStreamDefaultController& c
 // https://streams.spec.whatwg.org/#readable-stream-default-controller-enqueue
 WebIDL::ExceptionOr<void> readable_stream_default_controller_enqueue(ReadableStreamDefaultController& controller, JS::Value chunk)
 {
+    dbgln("default enqueue {}", chunk);
     auto& vm = controller.vm();
 
     // 1. If ! ReadableStreamDefaultControllerCanCloseOrEnqueue(controller) is false, return.
@@ -1641,6 +1647,8 @@ void readable_byte_stream_controller_call_pull_if_needed(ReadableByteStreamContr
     // 5. Set controller.[[pulling]] to true.
     controller.set_pulling(true);
 
+    dbgln("calling pull algo");
+
     // 6. Let pullPromise be the result of performing controller.[[pullAlgorithm]].
     auto pull_promise = controller.pull_algorithm()->function()();
 
@@ -1705,6 +1713,7 @@ WebIDL::ExceptionOr<void> readable_byte_stream_controller_close(ReadableByteStre
 
     // 3. If controller.[[queueTotalSize]] > 0,
     if (controller.queue_total_size() > 0.0) {
+        dbgln("close requested, there's queued stuff");
         // 1. Set controller.[[closeRequested]] to true.
         controller.set_close_requested(true);
 
@@ -1714,6 +1723,7 @@ WebIDL::ExceptionOr<void> readable_byte_stream_controller_close(ReadableByteStre
 
     // 4. If controller.[[pendingPullIntos]] is not empty,
     if (!controller.pending_pull_intos().is_empty()) {
+        dbgln("pending pull intos");
         // 1. Let firstPendingPullInto be controller.[[pendingPullIntos]][0].
         auto first_pending_pull_into = controller.pending_pull_intos().first();
 

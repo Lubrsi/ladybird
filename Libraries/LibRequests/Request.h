@@ -44,6 +44,7 @@ public:
     void set_buffered_request_finished_callback(BufferedRequestFinished);
 
     using HeadersReceived = Function<void(HTTP::HeaderMap const& response_headers, Optional<u32> response_code, Optional<String> const& reason_phrase)>;
+    using InterimResponseReceived = Function<void(HTTP::HeaderMap const& interim_response, u32 status_code)>;
     using DataReceived = Function<void(ReadonlyBytes data)>;
     using RequestFinished = Function<void(u64 total_size, RequestTimingInfo const& timing_info, Optional<NetworkError> network_error)>;
 
@@ -56,6 +57,7 @@ public:
     void did_finish(Badge<RequestClient>, u64 total_size, RequestTimingInfo const& timing_info, Optional<NetworkError> const& network_error);
     void did_receive_headers(Badge<RequestClient>, HTTP::HeaderMap const& response_headers, Optional<u32> response_code, Optional<String> const& reason_phrase);
     void did_request_certificates(Badge<RequestClient>);
+    void did_receive_interim_response(Badge<RequestClient>, HTTP::HeaderMap const& interim_response, u32 status_code);
 
     RefPtr<Core::Notifier>& write_notifier(Badge<RequestClient>) { return m_write_notifier; }
     void set_request_fd(Badge<RequestClient>, int fd);
@@ -77,8 +79,9 @@ private:
     };
     Mode m_mode { Mode::Unknown };
 
-    HeadersReceived on_headers_received;
-    RequestFinished on_finish;
+    HeadersReceived m_on_headers_received;
+    InterimResponseReceived m_on_interim_response_received;
+    RequestFinished m_on_finish;
 
     struct InternalBufferedData {
         AllocatingMemoryStream payload_stream;

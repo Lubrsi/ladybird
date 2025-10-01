@@ -121,6 +121,7 @@ GC::Ref<WebIDL::Promise> ReadableByteStreamController::cancel_steps(JS::Value re
 // https://streams.spec.whatwg.org/#rbs-controller-private-pull
 void ReadableByteStreamController::pull_steps(GC::Ref<ReadRequest> read_request)
 {
+    dbgln("rbsc pull_steps");
     auto& realm = this->realm();
 
     // 1. Let stream be this.[[stream]].
@@ -132,6 +133,8 @@ void ReadableByteStreamController::pull_steps(GC::Ref<ReadRequest> read_request)
     if (m_queue_total_size > 0) {
         // 1. Assert: ! ReadableStreamGetNumReadRequests(stream) is 0.
         VERIFY(readable_stream_get_num_read_requests(*m_stream) == 0);
+
+        dbgln("rbsc read from queue");
 
         // 2. Perform ! ReadableByteStreamControllerFillReadRequestFromQueue(this, readRequest).
         readable_byte_stream_controller_fill_read_request_from_queue(*this, read_request);
@@ -169,9 +172,12 @@ void ReadableByteStreamController::pull_steps(GC::Ref<ReadRequest> read_request)
             *realm.intrinsics().uint8_array_constructor(),
             ReaderType::Default);
 
+        dbgln("rbsc made pending pull into");
         // 4. Append pullIntoDescriptor to this.[[pendingPullIntos]].
         m_pending_pull_intos.append(pull_into_descriptor);
     }
+
+    dbgln("rbsc make request");
 
     // 6. Perform ! ReadableStreamAddReadRequest(stream, readRequest).
     readable_stream_add_read_request(*m_stream, read_request);

@@ -91,6 +91,8 @@ void ReadableStreamDefaultController::pull_steps(Web::Streams::ReadRequest& read
         // 1. Let chunk be ! DequeueValue(this).
         auto chunk = dequeue_value(*this);
 
+        dbgln("rsdc queued chunk: {}", chunk);
+
         // 2. If this.[[closeRequested]] is true and this.[[queue]] is empty,
         if (m_close_requested && m_queue.is_empty()) {
             // 1. Perform ! ReadableStreamDefaultControllerClearAlgorithms(this).
@@ -109,6 +111,7 @@ void ReadableStreamDefaultController::pull_steps(Web::Streams::ReadRequest& read
     }
     // 3. Otherwise,
     else {
+        dbgln("rsdc making a request");
         // 1. Perform ! ReadableStreamAddReadRequest(stream, readRequest).
         readable_stream_add_read_request(stream, read_request);
 

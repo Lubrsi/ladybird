@@ -207,6 +207,7 @@ void ReadableStream::close()
     controller()->visit(
         // 1. If stream.[[controller]] implements ReadableByteStreamController
         [&](GC::Ref<ReadableByteStreamController> controller) {
+            dbgln("closing an rbsc");
             // 1. Perform ! ReadableByteStreamControllerClose(stream.[[controller]]).
             MUST(readable_byte_stream_controller_close(controller));
 
@@ -217,6 +218,7 @@ void ReadableStream::close()
 
         // 2. Otherwise, perform ! ReadableStreamDefaultControllerClose(stream.[[controller]]).
         [&](GC::Ref<ReadableStreamDefaultController> controller) {
+            dbgln("closing an rsdc");
             readable_stream_default_controller_close(*controller);
         });
 }

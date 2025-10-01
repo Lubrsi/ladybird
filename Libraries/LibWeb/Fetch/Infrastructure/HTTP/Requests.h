@@ -533,7 +533,7 @@ private:
     // Non-standard
     Vector<GC::Ref<Fetching::PendingResponse>> m_pending_responses;
 
-    BufferPolicy m_buffer_policy { BufferPolicy::BufferResponse };
+    BufferPolicy m_buffer_policy { BufferPolicy::DoNotBufferResponse };
 };
 
 WEB_API StringView request_destination_to_string(Request::Destination);

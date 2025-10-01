@@ -17,8 +17,9 @@ Request::Request(RequestClient& client, i32 request_id)
 
 bool Request::stop()
 {
-    on_headers_received = nullptr;
-    on_finish = nullptr;
+    m_on_headers_received = nullptr;
+    m_on_interim_response_received = nullptr;
+    m_on_finish = nullptr;
     on_certificate_requested = nullptr;
 
     m_internal_buffered_data = nullptr;
@@ -51,13 +52,13 @@ void Request::set_buffered_request_finished_callback(BufferedRequestFinished on_
 
     m_internal_buffered_data = make<InternalBufferedData>();
 
-    on_headers_received = [this](auto& headers, auto response_code, auto const& reason_phrase) {
+    m_on_headers_received = [this](auto& headers, auto response_code, auto const& reason_phrase) {
         m_internal_buffered_data->response_headers = headers;
         m_internal_buffered_data->response_code = move(response_code);
         m_internal_buffered_data->reason_phrase = reason_phrase;
     };
 
-    on_finish = [this, on_buffered_request_finished = move(on_buffered_request_finished)](auto total_size, auto& timing_info, auto network_error) {
+    m_on_finish = [this, on_buffered_request_finished = move(on_buffered_request_finished)](auto total_size, auto& timing_info, auto network_error) {
         auto output_buffer = ByteBuffer::create_uninitialized(m_internal_buffered_data->payload_stream.used_buffer_size()).release_value_but_fixme_should_propagate_errors();
         m_internal_buffered_data->payload_stream.read_until_filled(output_buffer).release_value_but_fixme_should_propagate_errors();
 
@@ -82,22 +83,22 @@ void Request::set_unbuffered_request_callbacks(HeadersReceived on_headers_receiv
     VERIFY(m_mode == Mode::Unknown);
     m_mode = Mode::Unbuffered;
 
-    this->on_headers_received = move(on_headers_received);
-    this->on_finish = move(on_finish);
+    this->m_on_headers_received = move(on_headers_received);
+    this->m_on_finish = move(on_finish);
 
     set_up_internal_stream_data(move(on_data_received));
 }
 
 void Request::did_finish(Badge<RequestClient>, u64 total_size, RequestTimingInfo const& timing_info, Optional<NetworkError> const& network_error)
 {
-    if (on_finish)
-        on_finish(total_size, timing_info, network_error);
+    if (m_on_finish)
+        m_on_finish(total_size, timing_info, network_error);
 }
 
 void Request::did_receive_headers(Badge<RequestClient>, HTTP::HeaderMap const& response_headers, Optional<u32> response_code, Optional<String> const& reason_phrase)
 {
-    if (on_headers_received)
-        on_headers_received(response_headers, response_code, reason_phrase);
+    if (m_on_headers_received)
+        m_on_headers_received(response_headers, response_code, reason_phrase);
 }
 
 void Request::did_request_certificates(Badge<RequestClient>)
@@ -110,6 +111,12 @@ void Request::did_request_certificates(Badge<RequestClient>)
     }
 }
 
+void Request::did_receive_interim_response(Badge<RequestClient>, HTTP::HeaderMap const& interim_response, u32 status_code)
+{
+    if (m_on_interim_response_received)
+        m_on_interim_response_received(interim_response, status_code);
+}
+
 void Request::set_up_internal_stream_data(DataReceived on_data_available)
 {
     VERIFY(!m_internal_stream_data);
@@ -119,8 +126,8 @@ void Request::set_up_internal_stream_data(DataReceived on_data_available)
     if (fd() != -1)
         m_internal_stream_data->read_stream = MUST(Core::File::adopt_fd(fd(), Core::File::OpenMode::Read));
 
-    auto user_on_finish = move(on_finish);
-    on_finish = [this](auto total_size, auto const& timing_info, auto network_error) {
+    auto user_on_finish = move(m_on_finish);
+    m_on_finish = [this](auto total_size, auto const& timing_info, auto network_error) {
         // If the request was stopped while this IPC was in-flight, just bail.
         if (!m_internal_stream_data)
             return;

@@ -22,6 +22,7 @@ public:
 
     void set_pending_promise(GC::Ref<WebIDL::Promise>);
     void on_data_received(ReadonlyBytes);
+    void on_complete();
 
 private:
     FetchedDataReceiver(GC::Ref<Infrastructure::FetchParams const>, GC::Ref<Streams::ReadableStream>);
