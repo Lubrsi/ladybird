@@ -403,7 +403,7 @@ void XMLDocumentBuilder::document_end()
     // FIXME: If the Document's print when loaded flag is set, then run the printing steps.
 
     // The Document is now ready for post-load tasks.
-    m_document->set_ready_for_post_load_tasks(true);
+    m_document->set_ready_for_post_load_tasks();
 }
 
 Optional<FlyString> XMLDocumentBuilder::namespace_for_name(XML::Name const& name)

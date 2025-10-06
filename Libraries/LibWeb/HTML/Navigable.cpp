@@ -155,7 +155,7 @@ static RefPtr<Gfx::SkiaBackendContext> get_skia_backend_context()
 #elif USE_VULKAN
         auto maybe_vulkan_context = Gfx::create_vulkan_context();
         if (maybe_vulkan_context.is_error()) {
-            dbgln("Vulkan context creation failed: {}", maybe_vulkan_context.error());
+            // dbgln("Vulkan context creation failed: {}", maybe_vulkan_context.error());
             return {};
         }
 
@@ -247,12 +247,20 @@ bool Navigable::is_script_closable()
 
 void Navigable::set_delaying_load_events(bool value)
 {
+    // dbgln("set_delaying_load_events {}", value);
+    // dump_backtrace();
     if (value) {
         auto document = container_document();
         VERIFY(document);
         m_delaying_the_load_event.emplace(*document);
     } else {
         m_delaying_the_load_event.clear();
+    }
+
+    for (auto& navigation_observer : m_navigation_observers) {
+        // dbgln("should be notifying {:p}", navigation_observer);
+        if (navigation_observer.delaying_load_events_changed())
+            navigation_observer.delaying_load_events_changed()->function()();
     }
 }
 
@@ -495,13 +503,13 @@ Navigable::ChosenNavigable Navigable::choose_a_navigable(StringView name, Tokeni
         //     not show popups (i.e., the user agent has a "popup blocker" enabled)
         if (active_window() && !active_window()->has_transient_activation() && traversable_navigable()->page().should_block_pop_ups()) {
             // FIXME: The user agent may inform the user that a popup has been blocked.
-            dbgln("Pop-up blocked!");
+            // dbgln("Pop-up blocked!");
         }
 
         // --> If sandboxingFlagSet has the sandboxed auxiliary navigation browsing context flag set
         else if (has_flag(sandboxing_flag_set, SandboxingFlagSet::SandboxedAuxiliaryNavigation)) {
             // FIXME: The user agent may report to a developer console that a popup has been blocked.
-            dbgln("Pop-up blocked!");
+            // dbgln("Pop-up blocked!");
         }
 
         // --> If the user agent has been configured such that in this instance it will create a new top-level traversable
@@ -678,11 +686,13 @@ Vector<GC::Ref<SessionHistoryEntry>>& Navigable::get_session_history_entries() c
         doc_states.append(entry->document_state());
 
     // 6. For each docState of docStates:
+    // dbgln("===");
     for (size_t i = 0; i < doc_states.size(); ++i) {
         auto doc_state = doc_states[i];
 
         // 1. For each nestedHistory of docState's nested histories:
         for (auto& nested_history : doc_state->nested_histories()) {
+            // dbgln("looking at {} == {}", nested_history.id, id());
             // 1. If nestedHistory's id equals navigable's id, return nestedHistory's entries.
             if (nested_history.id == id())
                 return nested_history.entries;
@@ -692,6 +702,7 @@ Vector<GC::Ref<SessionHistoryEntry>>& Navigable::get_session_history_entries() c
                 doc_states.append(entry->document_state());
         }
     }
+    // dbgln("===");
 
     VERIFY_NOT_REACHED();
 }

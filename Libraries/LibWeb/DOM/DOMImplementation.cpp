@@ -53,7 +53,7 @@ WebIDL::ExceptionOr<GC::Ref<XMLDocument>> DOMImplementation::create_document(Opt
     // 1. Let document be a new XMLDocument
     auto xml_document = XMLDocument::create(realm());
 
-    xml_document->set_ready_for_post_load_tasks(true);
+    xml_document->set_ready_for_post_load_tasks();
 
     // 2. Let element be null.
     GC::Ptr<Element> element;
@@ -99,7 +99,7 @@ GC::Ref<Document> DOMImplementation::create_html_document(Optional<Utf16String> 
     html_document->set_content_type("text/html"_string);
     html_document->set_document_type(DOM::Document::Type::HTML);
 
-    html_document->set_ready_for_post_load_tasks(true);
+    html_document->set_ready_for_post_load_tasks();
 
     // 3. Append a new doctype, with "html" as its name and with its node document set to doc, to doc.
     auto doctype = realm().create<DocumentType>(html_document);

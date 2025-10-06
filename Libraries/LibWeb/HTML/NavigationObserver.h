@@ -27,6 +27,12 @@ public:
     [[nodiscard]] GC::Ptr<GC::Function<void()>> ongoing_navigation_changed() const { return m_ongoing_navigation_changed; }
     void set_ongoing_navigation_changed(Function<void()>);
 
+    [[nodiscard]] GC::Ptr<GC::Function<void()>> delaying_load_events_changed() const { return m_delaying_load_events_changed; }
+    void set_delaying_load_events_changed(Function<void()>);
+
+    GC::Ref<Navigable> navigable() const { return m_navigable; }
+    void set_navigable(GC::Ref<Navigable>);
+
 private:
     NavigationObserver(JS::Realm&, Navigable&);
 
@@ -37,6 +43,7 @@ private:
     GC::Ref<Navigable> m_navigable;
     GC::Ptr<GC::Function<void()>> m_navigation_complete;
     GC::Ptr<GC::Function<void()>> m_ongoing_navigation_changed;
+    GC::Ptr<GC::Function<void()>> m_delaying_load_events_changed;
 
 public:
     using NavigationObserversList = IntrusiveList<&NavigationObserver::m_list_node>;

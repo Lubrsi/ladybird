@@ -268,7 +268,7 @@ WebIDL::ExceptionOr<BrowsingContext::BrowsingContextAndDocument> BrowsingContext
     VERIFY(document->relevant_settings_object().creation_url == URL::about_blank());
 
     // 18. Mark document as ready for post-load tasks.
-    document->set_ready_for_post_load_tasks(true);
+    document->set_ready_for_post_load_tasks();
 
     // 19. Populate with html/head/body given document.
     populate_with_html_head_body(*document);

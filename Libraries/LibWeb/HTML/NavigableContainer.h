@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibWeb/Export.h>
+#include <LibWeb/DOM/DocumentLoadEventDelayer.h>
 #include <LibWeb/HTML/HTMLElement.h>
 #include <LibWeb/HTML/InitialInsertion.h>
 
@@ -36,11 +37,6 @@ public:
 
     void destroy_the_child_navigable();
 
-    // All elements that extend NavigableContainer "potentially delay the load event".
-    // (embed, frame, iframe, and object)
-    // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#potentially-delays-the-load-event
-    bool currently_delays_the_load_event() const;
-
     bool content_navigable_has_session_history_entry_and_ready_for_navigation() const;
 
 protected:
@@ -59,9 +55,16 @@ protected:
     // https://html.spec.whatwg.org/multipage/document-sequences.html#content-navigable
     GC::Ptr<Navigable> m_content_navigable { nullptr };
 
-    void set_potentially_delays_the_load_event(bool value) { m_potentially_delays_the_load_event = value; }
+    void set_potentially_delays_the_load_event(bool value);
 
     void set_content_navigable_has_session_history_entry_and_ready_for_navigation();
+
+    // All elements that extend NavigableContainer "potentially delay the load event".
+    // (embed, frame, iframe, and object)
+    // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#potentially-delays-the-load-event
+    void check_if_currently_delays_the_load_event();
+    void delay_load_event();
+    void do_not_delay_load_event();
 
 private:
     virtual bool is_navigable_container() const override { return true; }
@@ -69,6 +72,9 @@ private:
     virtual void finalize() override;
 
     bool m_potentially_delays_the_load_event { true };
+    Optional<DOM::DocumentLoadEventDelayer> m_document_load_event_delayer;
+    GC::Ptr<DOM::DocumentObserver> m_document_observer;
+    GC::Ptr<NavigationObserver> m_navigation_observer;
 };
 
 }

@@ -25,6 +25,7 @@ void NavigationObserver::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_navigable);
     visitor.visit(m_navigation_complete);
     visitor.visit(m_ongoing_navigation_changed);
+    visitor.visit(m_delaying_load_events_changed);
 }
 
 void NavigationObserver::finalize()
@@ -47,6 +48,22 @@ void NavigationObserver::set_ongoing_navigation_changed(Function<void()> callbac
         m_ongoing_navigation_changed = GC::create_function(vm().heap(), move(callback));
     else
         m_ongoing_navigation_changed = nullptr;
+}
+
+void NavigationObserver::set_delaying_load_events_changed(Function<void()> callback)
+{
+    if (callback)
+        m_delaying_load_events_changed = GC::create_function(vm().heap(), move(callback));
+    else
+        m_delaying_load_events_changed = nullptr;
+}
+
+void NavigationObserver::set_navigable(GC::Ref<Navigable> navigable)
+{
+    VERIFY(navigable != m_navigable);
+    m_navigable->unregister_navigation_observer({}, *this);
+    m_navigable = navigable;
+    navigable->register_navigation_observer({}, *this);
 }
 
 }

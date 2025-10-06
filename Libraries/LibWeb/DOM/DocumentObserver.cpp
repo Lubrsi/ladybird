@@ -29,11 +29,13 @@ void DocumentObserver::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_document_readiness_observer);
     visitor.visit(m_document_visibility_state_observer);
     visitor.visit(m_document_page_showing_observer);
+    visitor.visit(m_document_has_no_load_delays);
 }
 
 void DocumentObserver::finalize()
 {
     Base::finalize();
+    // dbgln("{:p} document observer gone", this);
     m_document->unregister_document_observer({}, *this);
 }
 
@@ -91,6 +93,22 @@ void DocumentObserver::set_document_page_showing_observer(Function<void(bool)> c
         m_document_page_showing_observer = GC::create_function(vm().heap(), move(callback));
     else
         m_document_page_showing_observer = nullptr;
+}
+
+void DocumentObserver::set_document_has_no_load_delays(Function<void()> callback)
+{
+    if (callback)
+        m_document_has_no_load_delays = GC::create_function(vm().heap(), move(callback));
+    else
+        m_document_has_no_load_delays = nullptr;
+}
+
+void DocumentObserver::set_document_is_ready_for_post_load_tasks(Function<void()> callback)
+{
+    if (callback)
+        m_document_is_ready_for_post_load_tasks = GC::create_function(vm().heap(), move(callback));
+    else
+        m_document_is_ready_for_post_load_tasks = nullptr;
 }
 
 }

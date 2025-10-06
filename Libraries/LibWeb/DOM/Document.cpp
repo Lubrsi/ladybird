@@ -3326,6 +3326,15 @@ EventTarget* Document::get_parent(Event const& event)
     return m_window;
 }
 
+void Document::set_ready_for_post_load_tasks()
+{
+    dbgln("{:p} ready for post load", this);
+    m_ready_for_post_load_tasks = true;
+    notify_each_document_observer([&](auto const& document_observer) {
+        return document_observer.document_is_ready_for_post_load_tasks();
+    });
+}
+
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#completely-loaded
 bool Document::is_completely_loaded() const
 {
@@ -3955,6 +3964,8 @@ void Document::unregister_document_observer(Badge<DocumentObserver>, DocumentObs
 void Document::increment_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>)
 {
     ++m_number_of_things_delaying_the_load_event;
+    // dbgln("{:p} increased to {}", this, m_number_of_things_delaying_the_load_event);
+    // dump_backtrace();
 
     page().client().page_did_update_resource_count(m_number_of_things_delaying_the_load_event);
 }
@@ -3963,23 +3974,24 @@ void Document::decrement_number_of_things_delaying_the_load_event(Badge<Document
 {
     VERIFY(m_number_of_things_delaying_the_load_event);
     --m_number_of_things_delaying_the_load_event;
+    // dbgln("{:p} decreased to {}", this, m_number_of_things_delaying_the_load_event);
+    // dump_backtrace();
+
+    if (m_number_of_things_delaying_the_load_event == 0) {
+        // dbgln("should be notifying");
+        notify_each_document_observer([](auto const& document_observer) {
+            // dbgln("hello");
+            return document_observer.document_has_no_load_delays();
+        });
+    }
 
     page().client().page_did_update_resource_count(m_number_of_things_delaying_the_load_event);
 }
 
 bool Document::anything_is_delaying_the_load_event() const
 {
-    if (m_number_of_things_delaying_the_load_event > 0)
-        return true;
-
-    for (auto& navigable : descendant_navigables()) {
-        if (navigable->container()->currently_delays_the_load_event())
-            return true;
-    }
-
     // FIXME: Track down anything else that is supposed to delay the load event.
-
-    return false;
+    return m_number_of_things_delaying_the_load_event > 0;
 }
 
 void Document::set_page_showing(bool page_showing)

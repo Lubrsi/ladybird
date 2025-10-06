@@ -9,6 +9,7 @@
 #include <LibURL/Origin.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/DocumentObserver.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/HTML/BrowsingContext.h>
@@ -17,6 +18,7 @@
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/NavigableContainer.h>
+#include <LibWeb/HTML/NavigationObserver.h>
 #include <LibWeb/HTML/NavigationParams.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
@@ -36,6 +38,7 @@ NavigableContainer::NavigableContainer(DOM::Document& document, DOM::QualifiedNa
     : HTMLElement(document, move(qualified_name))
 {
     all_instances().set(this);
+    check_if_currently_delays_the_load_event();
 }
 
 NavigableContainer::~NavigableContainer() = default;
@@ -50,6 +53,8 @@ void NavigableContainer::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_content_navigable);
+    visitor.visit(m_document_observer);
+    visitor.visit(m_navigation_observer);
 }
 
 GC::Ptr<NavigableContainer> NavigableContainer::navigable_container_with_content_navigable(GC::Ref<Navigable> navigable)
@@ -105,6 +110,8 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(GC::Ptr
 
     // 9. Set element's content navigable to navigable.
     m_content_navigable = navigable;
+    // dbgln("{:p} create new child navigable", this);
+    check_if_currently_delays_the_load_event();
 
     // 10. Let historyEntry be navigable's active session history entry.
     auto history_entry = navigable->active_session_history_entry();
@@ -315,6 +322,7 @@ void NavigableContainer::destroy_the_child_navigable()
 
         // Not in the spec:
         HTML::all_navigables().remove(*navigable);
+        check_if_currently_delays_the_load_event();
 
         // 6. Let parentDocState be container's node navigable's active session history entry's document state.
         auto parent_doc_state = this->navigable()->active_session_history_entry()->document_state();
@@ -340,33 +348,127 @@ void NavigableContainer::destroy_the_child_navigable()
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#potentially-delays-the-load-event
-bool NavigableContainer::currently_delays_the_load_event() const
+void NavigableContainer::check_if_currently_delays_the_load_event()
 {
-    if (!content_navigable_has_session_history_entry_and_ready_for_navigation())
-        return true;
+    if (!content_navigable_has_session_history_entry_and_ready_for_navigation()) {
+        // dbgln("{:p} 1", this);
+        delay_load_event();
+        return;
+    }
 
-    if (!m_potentially_delays_the_load_event)
-        return false;
+    if (!m_potentially_delays_the_load_event) {
+        // dbgln("{:p} 2", this);
+        do_not_delay_load_event();
+        return;
+    }
 
     // If an element type potentially delays the load event, then for each element element of that type,
     // the user agent must delay the load event of element's node document if element's content navigable is non-null
     // and any of the following are true:
-    if (!m_content_navigable)
-        return false;
+    if (!m_content_navigable) {
+        // dbgln("{:p} 3", this);
+        do_not_delay_load_event();
+        return;
+    }
+
+    // dbgln("{:p} navigable: {:p} doc: {:p} {}", this, m_content_navigable.ptr(), m_content_navigable->active_document().ptr(), m_content_navigable->active_document()->url_string());
 
     // - element's content navigable's active document is not ready for post-load tasks;
-    if (!m_content_navigable->active_document()->ready_for_post_load_tasks())
-        return true;
+    if (!m_content_navigable->active_document()->ready_for_post_load_tasks()) {
+        // dbgln("{:p} 4", this);
+        delay_load_event();
+        return;
+    }
 
     // - element's content navigable's is delaying load events is true; or
-    if (m_content_navigable->is_delaying_load_events())
-        return true;
+    if (m_content_navigable->is_delaying_load_events()) {
+        // dbgln("{:p} 5", this);
+        delay_load_event();
+        return;
+    }
 
     // - anything is delaying the load event of element's content navigable's active document.
-    if (m_content_navigable->active_document()->anything_is_delaying_the_load_event())
-        return true;
+    if (m_content_navigable->active_document()->anything_is_delaying_the_load_event()) {
+        // dbgln("{:p} 6", this);
+        delay_load_event();
+        return;
+    }
 
-    return false;
+    // dbgln("{:p} 7", this);
+    do_not_delay_load_event();
+}
+
+void NavigableContainer::delay_load_event()
+{
+    auto& realm = this->realm();
+
+    // dbgln("{:p} delaying load", this);
+    if (m_content_navigable) {
+        if (!m_document_observer) {
+            m_document_observer = realm.create<DOM::DocumentObserver>(realm, m_content_navigable->active_document().as_nonnull());
+
+            m_document_observer->set_document_has_no_load_delays([this] {
+                check_if_currently_delays_the_load_event();
+            });
+
+            m_document_observer->set_document_is_ready_for_post_load_tasks([this] {
+                check_if_currently_delays_the_load_event();
+            });
+        } else if (m_document_observer->document() != m_content_navigable->active_document()) {
+            m_document_observer->set_document(m_content_navigable->active_document().as_nonnull());
+        }
+
+        if (!m_navigation_observer) {
+            m_navigation_observer = realm.create<NavigationObserver>(realm, *m_content_navigable);
+
+            m_navigation_observer->set_delaying_load_events_changed([this] {
+                queue_an_element_task(Task::Source::NavigationAndTraversal, [this] {
+                    check_if_currently_delays_the_load_event();
+                });
+            });
+        } else if (m_navigation_observer->navigable() != m_content_navigable) {
+            m_navigation_observer->set_navigable(*m_content_navigable);
+        }
+    }
+
+    if (!m_document_load_event_delayer.has_value())
+        m_document_load_event_delayer.emplace(document());
+}
+
+void NavigableContainer::do_not_delay_load_event()
+{
+    // dbgln("{:p} not delaying load", this);
+    if (m_document_observer) {
+        m_document_observer->set_document_has_no_load_delays({});
+        m_document_observer->set_document_is_ready_for_post_load_tasks({});
+        m_document_observer = nullptr;
+    }
+
+    if (m_navigation_observer) {
+        m_navigation_observer->set_delaying_load_events_changed({});
+        m_navigation_observer = nullptr;
+    }
+
+    if (m_document_load_event_delayer.has_value())
+        m_document_load_event_delayer.clear();
+}
+
+void NavigableContainer::set_potentially_delays_the_load_event(bool value)
+{
+    m_potentially_delays_the_load_event = value;
+    check_if_currently_delays_the_load_event();
+}
+
+void NavigableContainer::set_content_navigable_has_session_history_entry_and_ready_for_navigation()
+{
+    // dbgln("{:p} set_content_navigable_has_session_history_entry_and_ready_for_navigation", this);
+    ScopeGuard check_if_delaying_load_event_guard = [this] {
+        check_if_currently_delays_the_load_event();
+    };
+
+    if (!content_navigable())
+        return;
+    content_navigable()->set_has_session_history_entry_and_ready_for_navigation();
 }
 
 bool NavigableContainer::content_navigable_has_session_history_entry_and_ready_for_navigation() const
@@ -374,13 +476,6 @@ bool NavigableContainer::content_navigable_has_session_history_entry_and_ready_f
     if (!content_navigable())
         return false;
     return m_content_navigable->has_session_history_entry_and_ready_for_navigation();
-}
-
-void NavigableContainer::set_content_navigable_has_session_history_entry_and_ready_for_navigation()
-{
-    if (!content_navigable())
-        return;
-    content_navigable()->set_has_session_history_entry_and_ready_for_navigation();
 }
 
 }

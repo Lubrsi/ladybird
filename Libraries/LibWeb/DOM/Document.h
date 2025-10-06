@@ -516,7 +516,7 @@ public:
     String input_encoding() const { return encoding_or_default(); }
 
     bool ready_for_post_load_tasks() const { return m_ready_for_post_load_tasks; }
-    void set_ready_for_post_load_tasks(bool ready) { m_ready_for_post_load_tasks = ready; }
+    void set_ready_for_post_load_tasks();
 
     void completely_finish_loading();
 
