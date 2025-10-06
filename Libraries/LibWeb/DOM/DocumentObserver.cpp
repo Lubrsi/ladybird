@@ -93,4 +93,12 @@ void DocumentObserver::set_document_page_showing_observer(Function<void(bool)> c
         m_document_page_showing_observer = nullptr;
 }
 
+void DocumentObserver::set_document_has_no_load_delays(Function<void()> callback)
+{
+    if (callback)
+        m_document_has_no_load_delays = GC::create_function(vm().heap(), move(callback));
+    else
+        m_document_has_no_load_delays = nullptr;
+}
+
 }

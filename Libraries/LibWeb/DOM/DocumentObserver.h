@@ -39,6 +39,9 @@ public:
     [[nodiscard]] GC::Ptr<GC::Function<void(bool)>> document_page_showing_observer() const { return m_document_page_showing_observer; }
     void set_document_page_showing_observer(Function<void(bool)>);
 
+    [[nodiscard]] GC::Ptr<GC::Function<void()>> document_has_no_load_delays() const { return m_document_has_no_load_delays; }
+    void set_document_has_no_load_delays(Function<void()>);
+
     GC::Ref<Document> document() { return m_document; }
     void set_document(GC::Ref<Document>);
 
@@ -55,6 +58,7 @@ private:
     GC::Ptr<GC::Function<void(HTML::DocumentReadyState)>> m_document_readiness_observer;
     GC::Ptr<GC::Function<void(HTML::VisibilityState)>> m_document_visibility_state_observer;
     GC::Ptr<GC::Function<void(bool)>> m_document_page_showing_observer;
+    GC::Ptr<GC::Function<void()>> m_document_has_no_load_delays;
 };
 
 }

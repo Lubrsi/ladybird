@@ -3632,22 +3632,19 @@ void Document::decrement_number_of_things_delaying_the_load_event(Badge<Document
     VERIFY(m_number_of_things_delaying_the_load_event);
     --m_number_of_things_delaying_the_load_event;
 
+    if (m_number_of_things_delaying_the_load_event == 0) {
+        notify_each_document_observer([](auto const& document_observer) {
+            return document_observer.document_has_no_load_delays();
+        });
+    }
+
     page().client().page_did_update_resource_count(m_number_of_things_delaying_the_load_event);
 }
 
 bool Document::anything_is_delaying_the_load_event() const
 {
-    if (m_number_of_things_delaying_the_load_event > 0)
-        return true;
-
-    for (auto& navigable : descendant_navigables()) {
-        if (navigable->container()->currently_delays_the_load_event())
-            return true;
-    }
-
     // FIXME: Track down anything else that is supposed to delay the load event.
-
-    return false;
+    return m_number_of_things_delaying_the_load_event > 0;
 }
 
 void Document::set_page_showing(bool page_showing)
