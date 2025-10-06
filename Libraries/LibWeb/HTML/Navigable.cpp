@@ -977,6 +977,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
     }
 
     state_holder->continuation_steps = GC::create_function(realm.heap(), [&realm, state_holder, ongoing_navigation_changed_observer, top_level_completion_steps, fetch_completion_steps](NavigationParamsFetchStateHolder::ContinuationReason continuation_reason) {
+        dbgln("continuation steps: {}", to_underlying(continuation_reason));
         // If the latter condition occurs, then abort fetchController, and return. Otherwise, proceed onward.
         if (state_holder->navigation_id.has_value()) {
             VERIFY(ongoing_navigation_changed_observer);
