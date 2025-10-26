@@ -22,7 +22,7 @@
 
 namespace Web::WebDriver {
 
-using RouteHandler = Response (*)(Client&, Parameters, JsonValue);
+using RouteHandler = void (*)(Client&, Parameters, JsonValue, Function<void(Response)>);
 
 struct Route {
     HTTP::HttpRequest::Method method {};
@@ -40,8 +40,8 @@ struct MatchedRoute {
     {                                                             \
         HTTP::HttpRequest::method,                                \
             path,                                                 \
-            [](auto& client, auto parameters, auto payload) {     \
-                return client.handler(parameters, move(payload)); \
+            [](auto& client, auto parameters, auto payload, Function<void>(Response) on_complete) {     \
+                client.handler(parameters, move(payload), move(on_complete));        \
             }                                                     \
     }
 
