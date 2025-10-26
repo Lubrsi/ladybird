@@ -4,6 +4,7 @@
  * Copyright (c) 2022, Tobias Christiansen <tobyase@serenityos.org>
  * Copyright (c) 2022, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2022-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -207,7 +208,7 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
     auto server = Core::LocalServer::construct();
     server->listen(*m_web_content_socket_path);
 
-    server->on_accept = [this, promise](auto client_socket) {
+    server->on_accept = [this_ref = NonnullRefPtr { *this }, promise](auto client_socket) {
         auto maybe_connection = adopt_nonnull_ref_or_enomem(new (nothrow) WebContentConnection(make<IPC::Transport>(move(client_socket))));
         if (maybe_connection.is_error()) {
             promise->resolve(maybe_connection.release_error());
@@ -217,33 +218,37 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
         dbgln("WebDriver is connected to WebContent socket");
         auto web_content_connection = maybe_connection.release_value();
 
-        auto maybe_window_handle = web_content_connection->get_window_handle();
-        if (maybe_window_handle.is_error()) {
-            promise->reject(Error::from_string_literal("Window was closed immediately"));
-            return;
-        }
+        auto after_getting_window_handle = [this_ref, promise, web_content_connection](Web::WebDriver::Response maybe_window_handle) -> void {
+            if (maybe_window_handle.is_error()) {
+                promise->reject(Error::from_string_literal("Window was closed immediately"));
+                return;
+            }
 
-        auto const& window_handle = maybe_window_handle.value().as_string();
+            auto const& window_handle = maybe_window_handle.value().as_string();
 
-        web_content_connection->on_close = [this, window_handle]() {
-            dbgln_if(WEBDRIVER_DEBUG, "Window {} was closed remotely.", window_handle);
-            m_windows.remove(window_handle);
-            if (m_windows.is_empty())
-                close();
+            web_content_connection->on_close = [this_ref, window_handle]() {
+                dbgln_if(WEBDRIVER_DEBUG, "Window {} was closed remotely.", window_handle);
+                this_ref->m_windows.remove(window_handle);
+                if (this_ref->m_windows.is_empty())
+                    this_ref->close();
+            };
+
+            web_content_connection->async_set_page_load_strategy(this_ref->m_page_load_strategy);
+            web_content_connection->async_set_strict_file_interactability(this_ref->m_strict_file_interactiblity);
+            web_content_connection->async_set_user_prompt_handler(Web::WebDriver::user_prompt_handler());
+            if (this_ref->m_timeouts_configuration.has_value())
+                web_content_connection->async_set_timeouts(*this_ref->m_timeouts_configuration);
+
+            this_ref->m_windows.set(window_handle, Session::Window { window_handle, move(web_content_connection) });
+
+            if (this_ref->m_current_window_handle.is_empty())
+                this_ref->m_current_window_handle = window_handle;
+
+            promise->resolve({});
         };
 
-        web_content_connection->async_set_page_load_strategy(m_page_load_strategy);
-        web_content_connection->async_set_strict_file_interactability(m_strict_file_interactiblity);
-        web_content_connection->async_set_user_prompt_handler(Web::WebDriver::user_prompt_handler());
-        if (m_timeouts_configuration.has_value())
-            web_content_connection->async_set_timeouts(*m_timeouts_configuration);
-
-        m_windows.set(window_handle, Session::Window { window_handle, move(web_content_connection) });
-
-        if (m_current_window_handle.is_empty())
-            m_current_window_handle = window_handle;
-
-        promise->resolve({});
+        auto request_id = web_content_connection->create_pending_request(move(after_getting_window_handle));
+        web_content_connection->async_get_window_handle(request_id);
     };
 
     server->on_accept_error = [promise](auto error) {
@@ -269,50 +274,77 @@ ErrorOr<void> Session::start(LaunchBrowserCallback const& launch_browser_callbac
     return {};
 }
 
-Web::WebDriver::Response Session::set_timeouts(JsonValue payload)
+void Session::set_timeouts(JsonValue payload, Function<void(Web::WebDriver::Response)> on_complete)
 {
-    m_timeouts_configuration = TRY(web_content_connection().set_timeouts(move(payload)));
-    return JsonValue {};
+    perform_async_action([payload = move(payload)](auto& connection, auto request_id) {
+        connection.async_set_timeouts(request_id, move(payload));
+    }, [this_ref = NonnullRefPtr { *this }, on_complete = move(on_complete)](Web::WebDriver::Response response) {
+        if (response.is_error()) [[unlikely]] {
+            on_complete(response.release_error());
+            return;
+        }
+
+        this_ref->m_timeouts_configuration = response.release_value();
+        on_complete(JsonValue {});
+    });
 }
 
 // 11.2 Close Window, https://w3c.github.io/webdriver/#dfn-close-window
-Web::WebDriver::Response Session::close_window()
+void Session::close_window(Function<void(Web::WebDriver::Response)> on_complete)
 {
     // 3. Close the current top-level browsing context.
-    TRY(perform_async_action([&](auto& connection) {
-        return connection.close_window();
-    }));
+    perform_async_action([](auto& connection, auto request_id) {
+        connection.async_close_window(request_id);
+    }, [this_ref = NonnullRefPtr { *this }, on_complete = move(on_complete)](Web::WebDriver::Response response) {
+        if (response.is_error()) [[unlikely]] {
+            on_complete(response.release_error());
+            return;
+        }
 
-    {
-        // Defer removing the window handle from this session until after we know we are done with its connection.
-        ScopeGuard guard { [this] { m_windows.remove(m_current_window_handle); m_current_window_handle = "NoSuchWindowPleaseSelectANewOne"_string; } };
+        {
+            // Defer removing the window handle from this session until after we know we are done with its connection.
+            ScopeGuard guard([this_ref] {
+                this_ref->m_windows.remove(this_ref->m_current_window_handle);
+                this_ref->m_current_window_handle = "NoSuchWindowPleaseSelectANewOne"_string;
+            });
 
-        // 4. If there are no more open top-level browsing contexts, then close the session.
-        if (m_windows.size() == 1)
-            close();
-    }
+            // 4. If there are no more open top-level browsing contexts, then close the session.
+            if (this_ref->m_windows.size() == 1)
+                this_ref->close();
+        }
 
-    // 5. Return the result of running the remote end steps for the Get Window Handles command.
-    return get_window_handles();
+        // 5. Return the result of running the remote end steps for the Get Window Handles command.
+        on_complete(this_ref->get_window_handles());
+    });
 }
 
 // 11.3 Switch to Window, https://w3c.github.io/webdriver/#dfn-switch-to-window
-Web::WebDriver::Response Session::switch_to_window(StringView handle)
+void Session::switch_to_window(StringView handle, Function<void(Web::WebDriver::Response)> on_complete)
 {
     // 4. If handle is equal to the associated window handle for some top-level browsing context, let context be the that
     //    browsing context, and set the current top-level browsing context with session and context.
     //    Otherwise, return error with error code no such window.
-    if (auto it = m_windows.find(handle); it != m_windows.end())
+    if (auto it = m_windows.find(handle); it != m_windows.end()) {
         m_current_window_handle = it->key;
-    else
-        return Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::NoSuchWindow, "Window not found"sv);
+    } else {
+        on_complete(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::NoSuchWindow, "Window not found"sv));
+        return;
+    }
 
     // 5. Update any implementation-specific state that would result from the user selecting the current
     //    browsing context for interaction, without altering OS-level focus.
-    TRY(web_content_connection().switch_to_window(m_current_window_handle));
 
-    // 6. Return success with data null.
-    return JsonValue {};
+    perform_async_action([this](auto& connection, auto request_id) {
+        connection.async_switch_to_window(request_id, m_current_window_handle);
+    }, [on_complete = move(on_complete)](Web::WebDriver::Response response) {
+        if (response.is_error()) [[unlikely]] {
+            on_complete(response.release_error());
+            return;
+        }
+
+        // 6. Return success with data null.
+        on_complete(JsonValue {});
+    });
 }
 
 // 11.4 Get Window Handles, https://w3c.github.io/webdriver/#dfn-get-window-handles
