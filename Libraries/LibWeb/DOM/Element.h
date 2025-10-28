@@ -520,6 +520,10 @@ public:
 
     GC::Ref<CSS::StylePropertyMapReadOnly> computed_style_map();
 
+    bool is_fullscreen() const { return m_fullscreen; }
+    void fullscreen();
+    virtual void unfullscreen();
+
 protected:
     Element(Document&, DOM::QualifiedName);
     virtual void initialize(JS::Realm&) override;
@@ -653,6 +657,10 @@ private:
     // https://html.spec.whatwg.org/multipage/grouping-content.html#ordinal-value
     Optional<i32> m_ordinal_value;
     bool m_is_contained_in_list_subtree { false };
+
+    // https://fullscreen.spec.whatwg.org/#fullscreen-flag
+    // All elements have an associated fullscreen flag. Unless stated otherwise it is unset.
+    bool m_fullscreen { false };
 };
 
 template<>

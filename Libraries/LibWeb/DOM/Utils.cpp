@@ -38,4 +38,11 @@ EventTarget* retarget(EventTarget* a, EventTarget* b)
     }
 }
 
+
+// https://dom.spec.whatwg.org/#retarget
+EventTarget const* retarget(EventTarget const* a, EventTarget const* b)
+{
+    return retarget(const_cast<EventTarget*>(a), const_cast<EventTarget*>(b));
+}
+
 }

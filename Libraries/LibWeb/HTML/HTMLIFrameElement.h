@@ -40,6 +40,10 @@ public:
 
     virtual void visit_edges(Cell::Visitor&) override;
 
+    virtual void unfullscreen() override;
+
+    bool is_iframe_fullscreen() const { return m_iframe_fullscreen; }
+
 private:
     HTMLIFrameElement(DOM::Document&, DOM::QualifiedName);
 
@@ -72,6 +76,10 @@ private:
 
     // https://html.spec.whatwg.org/multipage/browsers.html#iframe-sandboxing-flag-set
     SandboxingFlagSet m_iframe_sandboxing_flag_set {};
+
+    // https://fullscreen.spec.whatwg.org/#iframe-fullscreen-flag
+    // All iframe elements have an associated iframe fullscreen flag. Unless stated otherwise it is unset.
+    bool m_iframe_fullscreen { false };
 };
 
 void run_iframe_load_event_steps(HTML::HTMLIFrameElement&);

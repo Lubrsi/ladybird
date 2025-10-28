@@ -12,5 +12,6 @@
 namespace Web::DOM {
 
 EventTarget* retarget(EventTarget* a, EventTarget* b);
+EventTarget const* retarget(EventTarget const* a, EventTarget const* b);
 
 }

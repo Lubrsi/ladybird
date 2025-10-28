@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/DOM/Utils.h>
 #include <LibWeb/SVG/SVGAElement.h>
 
 namespace Web::SelectorEngine {
@@ -543,6 +544,21 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
     case CSS::PseudoClass::FocusWithin: {
         auto focused_area = element.document().focused_area();
         return focused_area && element.is_inclusive_ancestor_of(*focused_area);
+    }
+    case CSS::PseudoClass::Fullscreen: {
+        // https://fullscreen.spec.whatwg.org/#:fullscreen-pseudo-class
+        // The :fullscreen pseudo-class must match any element element for which one of the following conditions is true:
+        // Spec Note: This makes it different from the fullscreenElement API, which returns the topmost fullscreen element.
+        // - element’s fullscreen flag is set.
+        if (element.is_fullscreen())
+            return true;
+
+        // - element is a shadow host and the result of retargeting its node document’s fullscreen element against
+        //   element is element.
+        if (!element.is_shadow_host())
+            return false;
+
+        return DOM::retarget(element.document().fullscreen_element().ptr(), &element) == &element;
     }
     case CSS::PseudoClass::FirstChild:
         if (context.collect_per_element_selector_involvement_metadata) {

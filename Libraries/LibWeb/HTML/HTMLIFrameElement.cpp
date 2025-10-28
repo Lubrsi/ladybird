@@ -305,4 +305,12 @@ void HTMLIFrameElement::set_current_navigation_was_lazy_loaded(bool value)
     set_potentially_delays_the_load_event(!value);
 }
 
+// https://fullscreen.spec.whatwg.org/#unfullscreen-an-element
+void HTMLIFrameElement::unfullscreen()
+{
+    // To unfullscreen an element, unset element’s [...] iframe fullscreen flag (if any) [...]
+    m_iframe_fullscreen = false;
+    Base::unfullscreen();
+}
+
 }

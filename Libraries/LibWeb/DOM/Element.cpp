@@ -4282,4 +4282,47 @@ GC::Ptr<Element const> Element::element_to_inherit_style_from(Optional<CSS::Pseu
     return parent_or_shadow_host_element();
 }
 
+// https://fullscreen.spec.whatwg.org/#fullscreen-an-element
+// With https://whatpr.org/fullscreen/247/1c324ee...16a6593.html
+void Element::fullscreen()
+{
+    // 1. Let document be element’s node document.
+    auto document = m_document;
+
+    // 2. Let hideUntil be the result of running topmost popover ancestor given element, document’s showing hint
+    //    popover list, null, and false.
+    Variant<GC::Ptr<HTML::HTMLElement>, GC::Ptr<DOM::Document>> hide_until = HTML::HTMLElement::topmost_popover_ancestor(this, document->showing_hint_popover_list(), nullptr, HTML::IsPopover::No);
+
+    // 3. If hideUntil is null, then set hideUntil to the result of running topmost popover ancestor, given element,
+    //    document’s node showing auto popover list, null, and false.
+    if (!hide_until.get<GC::Ptr<HTML::HTMLElement>>())
+        hide_until = HTML::HTMLElement::topmost_popover_ancestor(this, document->showing_auto_popover_list(), nullptr, HTML::IsPopover::No);
+
+    // 4. If hideUntil is null, then set hideUntil to document.
+    if (!hide_until.get<GC::Ptr<HTML::HTMLElement>>())
+        hide_until = document;
+
+    // 5. Run hide all popovers until given hideUntil, false, and true.
+    HTML::HTMLElement::hide_all_popovers_until(hide_until, HTML::FocusPreviousElement::No, HTML::FireEvents::Yes);
+
+    // 6. Set element’s fullscreen flag.
+    m_fullscreen = true;
+
+    // 7. Remove from the top layer immediately given element.
+    document->remove_an_element_from_the_top_layer_immediately(*this);
+
+    // 8. Add to the top layer given element.
+    document->add_an_element_to_the_top_layer(*this);
+}
+
+// https://fullscreen.spec.whatwg.org/#unfullscreen-an-element
+void Element::unfullscreen()
+{
+    // To unfullscreen an element, unset element’s fullscreen flag and iframe fullscreen flag (if any), and remove
+    // from the top layer immediately given element.
+    // NOTE: Unsetting iframe fullscreen flag is handled in HTMLIFrameElement's override.
+    m_fullscreen = false;
+    document().remove_an_element_from_the_top_layer_immediately(*this);
+}
+
 }

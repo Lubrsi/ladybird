@@ -56,6 +56,7 @@ static bool can_selector_use_fast_matches(Selector const& selector)
                         PseudoClass::Focus,
                         PseudoClass::FocusVisible,
                         PseudoClass::FocusWithin,
+                        PseudoClass::Fullscreen,
                         PseudoClass::Hover,
                         PseudoClass::LastChild,
                         PseudoClass::Link,

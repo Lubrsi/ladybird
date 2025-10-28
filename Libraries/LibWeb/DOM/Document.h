@@ -950,6 +950,12 @@ public:
 
     NonnullRefPtr<CSS::StyleValue const> custom_property_initial_value(FlyString const& name) const;
 
+    GC::Ptr<Element> fullscreen_element() const;
+    void unfullscreen();
+    void fully_exit_fullscreen();
+    GC::Ref<WebIDL::Promise> exit_fullscreen();
+    bool is_simple_fullscreen_document() const;
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -1002,6 +1008,8 @@ private:
     }
 
     void run_csp_initialization() const;
+
+    Vector<GC::Root<Document>> collect_documents_to_unfullscreen();
 
     GC::Ref<Page> m_page;
     GC::Ptr<CSS::StyleComputer> m_style_computer;
@@ -1346,6 +1354,9 @@ private:
 
     // https://www.w3.org/TR/css-properties-values-api-1/#dom-window-registeredpropertyset-slot
     HashMap<FlyString, GC::Ref<Web::CSS::CSSPropertyRule>> m_registered_custom_properties;
+
+    // https://fullscreen.spec.whatwg.org/#list-of-pending-fullscreen-events
+    OrderedHashMap<FlyString, GC::Ref<Element>> m_list_of_pending_fullscreen_events;
 };
 
 template<>
