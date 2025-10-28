@@ -1713,6 +1713,7 @@ void Node::removed_from(Node*, Node&)
 {
     m_layout_node = nullptr;
     m_paintable = nullptr;
+    unfullscreen_descendants();
 }
 
 // https://dom.spec.whatwg.org/#concept-node-move-ext
@@ -3150,6 +3151,40 @@ bool Node::has_inclusive_ancestor_with_display_none()
         }
     }
     return false;
+}
+
+// https://fullscreen.spec.whatwg.org/#ref-for-concept-node-remove-ext
+void Node::unfullscreen_descendants()
+{
+    // 1. Let document be removedNode’s node document.
+    auto document = m_document;
+
+    // 2. Let nodes be removedNode’s shadow-including inclusive descendants that have their fullscreen flag set, in
+    //    shadow-including tree order.
+    // 3. For each node in nodes:
+    for_each_shadow_including_inclusive_descendant([document](Node& descendant) {
+        auto* element = as_if<Element>(&descendant);
+        if (!element || !element->is_fullscreen())
+            return TraversalDecision::Continue;
+
+        // 1. If node is document’s fullscreen element, exit fullscreen document.
+        if (element == document->fullscreen_element()) {
+            document->exit_fullscreen();
+        }
+        // 2. Otherwise, unfullscreen node.
+        else {
+            element->unfullscreen();
+        }
+
+        // 3. If document’s top layer contains node, remove from the top layer immediately given node.
+        // Spec Note: Other specifications can add and remove elements from top layer, so node might not be document’s
+        //            fullscreen element. For example, node could be an open dialog element.
+        if (document->top_layer_elements().contains(*element)) {
+            document->remove_an_element_from_the_top_layer_immediately(*element);
+        }
+
+        return TraversalDecision::Continue;
+    });
 }
 
 }

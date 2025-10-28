@@ -509,6 +509,8 @@ private:
     void append_child_impl(GC::Ref<Node>);
     void remove_child_impl(GC::Ref<Node>);
 
+    void unfullscreen_descendants();
+
     static Optional<StringView> first_valid_id(StringView, Document const&);
 
     GC::Ptr<NodeList> m_child_nodes;
