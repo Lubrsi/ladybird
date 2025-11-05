@@ -4089,6 +4089,8 @@ void Element::for_each_numbered_item_owned_by_list_owner(Callback callback)
 bool Element::not_rendered() const
 {
     // An element is not rendered if it does not have an associated box.
+    // NOTE: Ensure that layout is up-to-date before looking at metrics.
+    const_cast<Document&>(document()).update_layout(UpdateLayoutReason::ElementNotRendered);
     if (!layout_node() || !paintable_box())
         return true;
 
@@ -4099,6 +4101,7 @@ bool Element::not_rendered() const
 Optional<FlyString> Element::document_scoped_view_transition_name()
 {
     // To get the document-scoped view transition name for an Element element:
+    document().update_style();
 
     // 1. Let scopedViewTransitionName be the computed value of view-transition-name for element.
     auto scoped_view_transition_name = computed_properties()->view_transition_name();

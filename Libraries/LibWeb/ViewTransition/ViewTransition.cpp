@@ -616,20 +616,17 @@ void ViewTransition::call_the_update_callback()
 
     // 5. Otherwise, set callbackPromise to the result of invoking transition’s update callback.
     else {
-        auto promise = MUST(WebIDL::invoke_callback(*m_update_callback, {}, {}));
+        auto promise_or_exception = WebIDL::invoke_callback(*m_update_callback, {}, {});
         // FIXME: since WebIDL::invoke_callback does not yet convert the value for us,
         // We need to do it here manually.
         // https://webidl.spec.whatwg.org/#js-promise
 
-        // 1. Let promiseCapability be ? NewPromiseCapability(%Promise%).
-        auto promise_capability = WebIDL::create_promise(realm);
-        // 2. Perform ? Call(promiseCapability.[[Resolve]], undefined, « V »).
-        // FIXME: We should not need to push an incumbent realm here, but http://wpt.live/css/css-view-transitions/update-callback-timeout.html crashes without it.
-        HTML::main_thread_event_loop().push_onto_backup_incumbent_realm_stack(realm);
-        MUST(JS::call(realm.vm(), *promise_capability->resolve(), JS::js_undefined(), promise));
-        HTML::main_thread_event_loop().pop_backup_incumbent_realm_stack();
-        // 3. Return promiseCapability.
-        callback_promise = GC::make_root(promise_capability);
+        HTML::TemporaryExecutionContext temporary_execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+        if (!promise_or_exception.is_error()) {
+            callback_promise = WebIDL::create_resolved_promise(realm, promise_or_exception.value());
+        } else {
+            callback_promise = WebIDL::create_rejected_promise(realm, promise_or_exception.value());
+        }
     }
 
     // 6. Let fulfillSteps be to following steps:
@@ -668,9 +665,8 @@ void ViewTransition::call_the_update_callback()
     // AD-HOC: This can cause an assertion failure when the reaction algorithm ends up accessing the incumbent realm, which may not exist here.
     //         For now, lets just manually push something onto the incumbent realm stack here as a hack.
     //         A spec bug for this has been filed at https://github.com/w3c/csswg-drafts/issues/11990
-    HTML::main_thread_event_loop().push_onto_backup_incumbent_realm_stack(realm);
+    HTML::TemporaryExecutionContext temporary_execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
     WebIDL::react_to_promise(*callback_promise, fulfill_steps, reject_steps);
-    HTML::main_thread_event_loop().pop_backup_incumbent_realm_stack();
 
     // 9. To skip a transition after a timeout, the user agent may perform the following steps in parallel:
     // FIXME: Figure out if we want to do this.

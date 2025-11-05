@@ -780,11 +780,15 @@ void Navigation::abort_the_ongoing_navigation(GC::Ptr<WebIDL::DOMException> erro
     dispatch_event(ErrorEvent::create(realm, EventNames::navigateerror, event_init));
 
     // 10. If navigation's ongoing API method tracker is non-null, then reject the finished promise for apiMethodTracker with error.
-    if (m_ongoing_api_method_tracker != nullptr)
+    if (m_ongoing_api_method_tracker != nullptr) {
+        TemporaryExecutionContext temporary_execution_context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
         WebIDL::reject_promise(realm, m_ongoing_api_method_tracker->finished_promise, error);
+    }
 
     // 11. If navigation's transition is not null, then:
     if (m_transition != nullptr) {
+        TemporaryExecutionContext temporary_execution_context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
+
         // 1. Reject navigation's transition's finished promise with error.
         WebIDL::reject_promise(realm, m_transition->finished(), error);
 

@@ -92,6 +92,7 @@ enum class InvalidateLayoutTreeReason {
     X(ElementClientWidth)                     \
     X(ElementGetClientRects)                  \
     X(ElementIsPotentiallyScrollable)         \
+    X(ElementNotRendered)                     \
     X(ElementScroll)                          \
     X(ElementScrollHeight)                    \
     X(ElementScrollIntoView)                  \
