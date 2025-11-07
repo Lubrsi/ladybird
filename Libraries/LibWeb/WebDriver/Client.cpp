@@ -40,7 +40,7 @@ struct MatchedRoute {
     {                                                             \
         HTTP::HttpRequest::method,                                \
             path,                                                 \
-            [](auto& client, auto parameters, auto payload, Function<void>(Response) on_complete) {     \
+            [](auto& client, auto parameters, auto payload, Function<void(Response)> on_complete) {     \
                 client.handler(parameters, move(payload), move(on_complete));        \
             }                                                     \
     }
@@ -229,7 +229,17 @@ ErrorOr<void, Client::WrappedError> Client::on_ready_to_read()
     m_remaining_request.clear();
     auto request = parsed_request.release_value();
 
-    deferred_invoke([this, request = move(request)]() {
+    if (m_pending_requests.is_empty()) {
+        adopt_own()
+    }
+
+    return {};
+}
+
+void Client::process_next_pending_request()
+{
+    deferred_invoke([this] {
+        auto& request = m_pending_requests.first();
         auto body = read_body_as_json(request);
         if (body.is_error()) {
             handle_error(request, body.release_error());
@@ -239,9 +249,8 @@ ErrorOr<void, Client::WrappedError> Client::on_ready_to_read()
         if (auto result = handle_request(request, body.release_value()); result.is_error())
             handle_error(request, result.release_error());
     });
-
-    return {};
 }
+
 
 ErrorOr<JsonValue, Client::WrappedError> Client::read_body_as_json(HTTP::HttpRequest const& request)
 {
@@ -270,8 +279,11 @@ ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest con
     }
 
     auto [handler, parameters] = TRY(match_route(request));
-    auto result = TRY((*handler)(*this, move(parameters), move(body)));
-    return send_success_response(request, move(result));
+    (*handler)(*this, move(parameters), move(body), [this](Response result) {
+        send_success_response(request, move(result));
+    });
+
+    return {};
 }
 
 void Client::handle_error(HTTP::HttpRequest const& request, WrappedError const& error)
