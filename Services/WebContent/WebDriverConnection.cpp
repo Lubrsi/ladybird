@@ -253,9 +253,10 @@ void WebDriverConnection::set_strict_file_interactability(bool strict_file_inter
     m_strict_file_interactability = strict_file_interactability;
 }
 
-void WebDriverConnection::set_is_webdriver_active(bool is_webdriver_active)
+void WebDriverConnection::set_is_webdriver_active(int request_id, bool is_webdriver_active)
 {
     current_browsing_context().page().set_is_webdriver_active(is_webdriver_active);
+    async_driver_execution_complete(request_id, JsonValue {});
 }
 
 // 9.1 Get Timeouts, https://w3c.github.io/webdriver/#dfn-get-timeouts

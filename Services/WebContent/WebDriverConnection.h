@@ -51,7 +51,7 @@ private:
     virtual void set_page_load_strategy(Web::WebDriver::PageLoadStrategy page_load_strategy) override;
     virtual void set_user_prompt_handler(Web::WebDriver::UserPromptHandler user_prompt_handler) override;
     virtual void set_strict_file_interactability(bool strict_file_interactability) override;
-    virtual void set_is_webdriver_active(bool) override;
+    virtual void set_is_webdriver_active(int request_id, bool) override;
     virtual void get_timeouts(int request_id) override;
     virtual void set_timeouts(int request_id, JsonValue payload) override;
     virtual void navigate_to(int request_id, JsonValue payload) override;

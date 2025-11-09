@@ -33,7 +33,7 @@ ErrorOr<NonnullRefPtr<Session>> Session::create(NonnullRefPtr<Client> client, Js
 
     // 2. Let session be a new session with session ID session id, and HTTP flag flags contains "http".
     auto session = adopt_ref(*new Session(client, capabilities, move(session_id), flags));
-    TRY(session->start(client->launch_browser_callback()));
+    auto promise = TRY(session->start(client->launch_browser_callback()));
 
     // 3. Let proxy be the result of getting property "proxy" from capabilities and run the substeps of the first matching statement:
     // -> proxy is a proxy configuration object
@@ -90,7 +90,7 @@ ErrorOr<NonnullRefPtr<Session>> Session::create(NonnullRefPtr<Client> client, Js
         // 4. Let timeouts be the result of getting a property "timeouts" from capabilities. If timeouts is not
         //    undefined, set session's session timeouts to timeouts.
         if (auto timeouts = capabilities.get_object("timeouts"sv); timeouts.has_value()) {
-            MUST(session->set_timeouts(*timeouts));
+            session->set_timeouts(*timeouts);
         }
 
         // 5. Set a property on capabilities with name "timeouts" and value serialize the timeouts configuration with
@@ -211,22 +211,18 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
     server->on_accept = [this_ref = NonnullRefPtr { *this }, promise](auto client_socket) {
         auto maybe_connection = adopt_nonnull_ref_or_enomem(new (nothrow) WebContentConnection(make<IPC::Transport>(move(client_socket))));
         if (maybe_connection.is_error()) {
-            promise->resolve(maybe_connection.release_error());
+            promise->reject(maybe_connection.release_error());
             return;
         }
 
         dbgln("WebDriver is connected to WebContent socket");
         auto web_content_connection = maybe_connection.release_value();
 
-        auto after_getting_window_handle = [this_ref, promise, web_content_connection](Web::WebDriver::Response maybe_window_handle) -> void {
-            if (maybe_window_handle.is_error()) {
-                promise->reject(Error::from_string_literal("Window was closed immediately"));
-                return;
-            }
+        auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
+        inner_promise->when_resolved([web_content_connection, this_ref, promise](JsonValue& window_handle_value) {
+            auto const& window_handle = window_handle_value.as_string();
 
-            auto const& window_handle = maybe_window_handle.value().as_string();
-
-            web_content_connection->on_close = [this_ref, window_handle]() {
+            web_content_connection->on_close = [this_ref, window_handle] {
                 dbgln_if(WEBDRIVER_DEBUG, "Window {} was closed remotely.", window_handle);
                 this_ref->m_windows.remove(window_handle);
                 if (this_ref->m_windows.is_empty())
@@ -245,20 +241,23 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
                 this_ref->m_current_window_handle = window_handle;
 
             promise->resolve({});
-        };
+        }).when_rejected([promise](auto&) {
+            promise->reject(Error::from_string_literal("Window was closed immediately"));
+        });
 
-        auto request_id = web_content_connection->create_pending_request(move(after_getting_window_handle));
-        web_content_connection->async_get_window_handle(request_id);
+        this_ref->perform_async_action(inner_promise, [](auto& connection, auto request_id) {
+            connection.async_get_window_handle(request_id);
+        });
     };
 
     server->on_accept_error = [promise](auto error) {
-        promise->resolve(move(error));
+        promise->reject(move(error));
     };
 
     return server;
 }
 
-ErrorOr<void> Session::start(LaunchBrowserCallback const& launch_browser_callback)
+ErrorOr<NonnullRefPtr<Session::ServerPromise>> Session::start(LaunchBrowserCallback const& launch_browser_callback)
 {
     auto promise = ServerPromise::construct();
 
@@ -267,40 +266,29 @@ ErrorOr<void> Session::start(LaunchBrowserCallback const& launch_browser_callbac
 
     m_browser_process = TRY(launch_browser_callback(*m_web_content_socket_path, m_options.headless));
 
-    // FIXME: Allow this to be more asynchronous. For now, this at least allows us to propagate
-    //        errors received while accepting the Browser and WebContent sockets.
-    TRY(TRY(promise->await()));
-
-    return {};
+    return promise;
 }
 
-void Session::set_timeouts(JsonValue payload, Function<void(Web::WebDriver::Response)> on_complete)
+void Session::set_timeouts(JsonValue payload, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise)
 {
-    perform_async_action([payload = move(payload)](auto& connection, auto request_id) {
-        connection.async_set_timeouts(request_id, move(payload));
-    }, [this_ref = NonnullRefPtr { *this }, on_complete = move(on_complete)](Web::WebDriver::Response response) {
-        if (response.is_error()) [[unlikely]] {
-            on_complete(response.release_error());
-            return;
-        }
+    auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
+    inner_promise->when_resolved([this_ref = NonnullRefPtr { *this }, top_level_promise](JsonValue& value) {
+        this_ref->m_timeouts_configuration = value;
+        top_level_promise->resolve(JsonValue {});
+    }).when_rejected([top_level_promise](Web::WebDriver::Error& error) {
+        top_level_promise->reject(Web::WebDriver::Error(error));
+    });
 
-        this_ref->m_timeouts_configuration = response.release_value();
-        on_complete(JsonValue {});
+    perform_async_action(inner_promise, [payload = move(payload)](auto& connection, auto request_id) {
+        connection.async_set_timeouts(request_id, move(payload));
     });
 }
 
 // 11.2 Close Window, https://w3c.github.io/webdriver/#dfn-close-window
-void Session::close_window(Function<void(Web::WebDriver::Response)> on_complete)
+void Session::close_window(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise)
 {
-    // 3. Close the current top-level browsing context.
-    perform_async_action([](auto& connection, auto request_id) {
-        connection.async_close_window(request_id);
-    }, [this_ref = NonnullRefPtr { *this }, on_complete = move(on_complete)](Web::WebDriver::Response response) {
-        if (response.is_error()) [[unlikely]] {
-            on_complete(response.release_error());
-            return;
-        }
-
+    auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
+    inner_promise->when_resolved([this_ref = NonnullRefPtr { *this }, top_level_promise](JsonValue&) {
         {
             // Defer removing the window handle from this session until after we know we are done with its connection.
             ScopeGuard guard([this_ref] {
@@ -313,13 +301,19 @@ void Session::close_window(Function<void(Web::WebDriver::Response)> on_complete)
                 this_ref->close();
         }
 
-        // 5. Return the result of running the remote end steps for the Get Window Handles command.
-        on_complete(this_ref->get_window_handles());
+        top_level_promise->resolve(MUST(this_ref->get_window_handles()));
+    }).when_rejected([top_level_promise](Web::WebDriver::Error& error) {
+        top_level_promise->reject(Web::WebDriver::Error(error));
+    });
+
+    // 3. Close the current top-level browsing context.
+    perform_async_action(inner_promise, [](auto& connection, auto request_id) {
+        connection.async_close_window(request_id);
     });
 }
 
 // 11.3 Switch to Window, https://w3c.github.io/webdriver/#dfn-switch-to-window
-void Session::switch_to_window(StringView handle, Function<void(Web::WebDriver::Response)> on_complete)
+void Session::switch_to_window(StringView handle, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise)
 {
     // 4. If handle is equal to the associated window handle for some top-level browsing context, let context be the that
     //    browsing context, and set the current top-level browsing context with session and context.
@@ -327,23 +321,14 @@ void Session::switch_to_window(StringView handle, Function<void(Web::WebDriver::
     if (auto it = m_windows.find(handle); it != m_windows.end()) {
         m_current_window_handle = it->key;
     } else {
-        on_complete(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::NoSuchWindow, "Window not found"sv));
+        top_level_promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::NoSuchWindow, "Window not found"sv));
         return;
     }
 
     // 5. Update any implementation-specific state that would result from the user selecting the current
     //    browsing context for interaction, without altering OS-level focus.
-
-    perform_async_action([this](auto& connection, auto request_id) {
+    perform_async_action(top_level_promise, [this](auto& connection, auto request_id) {
         connection.async_switch_to_window(request_id, m_current_window_handle);
-    }, [on_complete = move(on_complete)](Web::WebDriver::Response response) {
-        if (response.is_error()) [[unlikely]] {
-            on_complete(response.release_error());
-            return;
-        }
-
-        // 6. Return success with data null.
-        on_complete(JsonValue {});
     });
 }
 
