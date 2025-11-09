@@ -32,90 +32,90 @@ public:
     virtual ~Client();
 
     // 8. Sessions, https://w3c.github.io/webdriver/#sessions
-    virtual void new_session(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void delete_session(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_status(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> new_session(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> delete_session(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_status(Parameters parameters, JsonValue payload) = 0;
 
     // 9. Timeouts, https://w3c.github.io/webdriver/#timeouts
-    virtual void get_timeouts(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void set_timeouts(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_timeouts(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> set_timeouts(Parameters parameters, JsonValue payload) = 0;
 
     // 10. Navigation, https://w3c.github.io/webdriver/#navigation
-    virtual void navigate_to(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_current_url(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void back(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void forward(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void refresh(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_title(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> navigate_to(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_current_url(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> back(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> forward(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> refresh(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_title(Parameters parameters, JsonValue payload) = 0;
 
     // 11. Contexts, https://w3c.github.io/webdriver/#contexts
-    virtual void get_window_handle(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void close_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void new_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void switch_to_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_window_handles(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_window_rect(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void set_window_rect(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void maximize_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void minimize_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void fullscreen_window(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void switch_to_frame(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void switch_to_parent_frame(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_window_handle(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> close_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> new_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> switch_to_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_window_handles(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_window_rect(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> set_window_rect(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> maximize_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> minimize_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> fullscreen_window(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> switch_to_frame(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> switch_to_parent_frame(Parameters parameters, JsonValue payload) = 0;
 
     // Extension: https://html.spec.whatwg.org/multipage/interaction.html#user-activation-user-agent-automation
-    virtual void consume_user_activation(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> consume_user_activation(Parameters parameters, JsonValue payload) = 0;
 
     // 12. Elements, https://w3c.github.io/webdriver/#elements
-    virtual void find_element(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void find_elements(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void find_element_from_element(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void find_elements_from_element(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void find_element_from_shadow_root(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void find_elements_from_shadow_root(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_active_element(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_shadow_root(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void is_element_selected(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_attribute(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_property(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_css_value(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_text(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_tag_name(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_element_rect(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void is_element_enabled(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_computed_role(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_computed_label(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void element_click(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void element_clear(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void element_send_keys(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_element(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_elements(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_element_from_element(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_elements_from_element(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_element_from_shadow_root(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> find_elements_from_shadow_root(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_active_element(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_shadow_root(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> is_element_selected(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_attribute(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_property(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_css_value(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_text(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_tag_name(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_element_rect(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> is_element_enabled(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_computed_role(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_computed_label(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> element_click(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> element_clear(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> element_send_keys(Parameters parameters, JsonValue payload) = 0;
 
     // 13. Document, https://w3c.github.io/webdriver/#document
-    virtual void get_source(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void execute_script(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void execute_async_script(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_source(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> execute_script(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> execute_async_script(Parameters parameters, JsonValue payload) = 0;
 
     // 14. Cookies, https://w3c.github.io/webdriver/#cookies
-    virtual void get_all_cookies(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_named_cookie(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void add_cookie(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void delete_cookie(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void delete_all_cookies(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_all_cookies(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_named_cookie(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> add_cookie(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> delete_cookie(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> delete_all_cookies(Parameters parameters, JsonValue payload) = 0;
 
     // 15. Actions, https://w3c.github.io/webdriver/#actions
-    virtual void perform_actions(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void release_actions(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> perform_actions(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> release_actions(Parameters parameters, JsonValue payload) = 0;
 
     // 16. User prompts, https://w3c.github.io/webdriver/#user-prompts
-    virtual void dismiss_alert(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void accept_alert(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void get_alert_text(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void send_alert_text(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> dismiss_alert(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> accept_alert(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> get_alert_text(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> send_alert_text(Parameters parameters, JsonValue payload) = 0;
 
     // 17. Screen capture, https://w3c.github.io/webdriver/#screen-capture
-    virtual void take_screenshot(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
-    virtual void take_element_screenshot(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> take_screenshot(Parameters parameters, JsonValue payload) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> take_element_screenshot(Parameters parameters, JsonValue payload) = 0;
 
     // 18. Print, https://w3c.github.io/webdriver/#print
-    virtual void print_page(Parameters parameters, JsonValue payload, Function<void(Response)> on_complete) = 0;
+    virtual NonnullRefPtr<Core::Promise<JsonValue, Error>> print_page(Parameters parameters, JsonValue payload) = 0;
 
     Function<void()> on_death;
 
@@ -130,7 +130,7 @@ private:
     ErrorOr<void, WrappedError> on_ready_to_read();
     static ErrorOr<JsonValue, WrappedError> read_body_as_json(HTTP::HttpRequest const&);
 
-    ErrorOr<void, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body, Function<void(Response)> on_complete);
+    ErrorOr<void, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body);
     void handle_error(HTTP::HttpRequest const&, WrappedError const&);
 
     ErrorOr<void, Client::WrappedError> send_success_response(HTTP::HttpRequest const&, JsonValue result);

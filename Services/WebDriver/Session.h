@@ -59,26 +59,25 @@ public:
 
     bool has_window_handle(StringView handle) const { return m_windows.contains(handle); }
 
-    void set_timeouts(JsonValue, Function<void(Web::WebDriver::Response)> on_complete);
-    void close_window(Function<void(Web::WebDriver::Response)> on_complete);
-    void switch_to_window(StringView, Function<void(Web::WebDriver::Response)> on_complete);
+    void set_timeouts(JsonValue, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise);
+    void close_window(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise);
+    void switch_to_window(StringView, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise);
     Web::WebDriver::Response get_window_handles() const;
     ErrorOr<void, Web::WebDriver::Error> ensure_current_window_handle_is_valid() const;
 
     template<typename Action>
-    void perform_async_action(Action&& action, Function<void(Web::WebDriver::Response)> on_complete)
+    void perform_async_action(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> promise, Action&& action)
     {
         auto& connection = web_content_connection();
-        auto request_id = connection.create_pending_request(move(on_complete));
+        auto request_id = connection.create_pending_request(move(promise));
         action(connection, request_id);
     }
 
 private:
     Session(NonnullRefPtr<Client> client, JsonObject const& capabilities, String session_id, Web::WebDriver::SessionFlags flags);
 
-    ErrorOr<void> start(LaunchBrowserCallback const&);
-
-    using ServerPromise = Core::Promise<ErrorOr<void>>;
+    using ServerPromise = Core::Promise<Empty>;
+    ErrorOr<NonnullRefPtr<ServerPromise>> start(LaunchBrowserCallback const&);
     ErrorOr<NonnullRefPtr<Core::LocalServer>> create_server(NonnullRefPtr<ServerPromise> promise);
 
     NonnullRefPtr<Client> m_client;

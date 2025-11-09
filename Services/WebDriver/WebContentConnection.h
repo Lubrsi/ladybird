@@ -25,14 +25,14 @@ public:
 
     Function<void()> on_close;
 
-    int create_pending_request(Function<void(Web::WebDriver::Response)> on_complete);
+    int create_pending_request(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> promise);
 
 private:
     virtual void die() override;
     virtual void driver_execution_complete(int, Web::WebDriver::Response) override;
 
     IDAllocator m_request_id_allocator;
-    HashMap<int, Function<void(Web::WebDriver::Response)>> m_pending_requests;
+    HashMap<int, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>>> m_pending_requests;
 };
 
 }
