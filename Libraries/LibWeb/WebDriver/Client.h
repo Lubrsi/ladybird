@@ -130,10 +130,10 @@ private:
     ErrorOr<void, WrappedError> on_ready_to_read();
     static ErrorOr<JsonValue, WrappedError> read_body_as_json(HTTP::HttpRequest const&);
 
-    ErrorOr<void, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body);
+    ErrorOr<void, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body, Function<void(Response)> on_complete);
     void handle_error(HTTP::HttpRequest const&, WrappedError const&);
 
-    void send_success_response(HTTP::HttpRequest const&, JsonValue result);
+    ErrorOr<void, Client::WrappedError> send_success_response(HTTP::HttpRequest const&, JsonValue result);
     ErrorOr<void, WrappedError> send_error_response(HTTP::HttpRequest const&, Error const& error);
     static void log_response(HTTP::HttpRequest const&, unsigned code);
 
@@ -141,7 +141,18 @@ private:
 
     NonnullOwnPtr<Core::BufferedTCPSocket> m_socket;
     StringBuilder m_remaining_request;
-    Vector<NonnullOwnPtr<HTTP::HttpRequest>> m_pending_requests;
+
+    struct PendingRequest final : public RefCounted<PendingRequest> {
+        PendingRequest(HTTP::HttpRequest&& http_request)
+            : http_request(move(http_request))
+        {
+        }
+
+        ~PendingRequest() = default;
+
+        HTTP::HttpRequest http_request;
+    };
+    Queue<NonnullRefPtr<PendingRequest>> m_pending_requests;
 };
 
 }

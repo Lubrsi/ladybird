@@ -227,10 +227,11 @@ ErrorOr<void, Client::WrappedError> Client::on_ready_to_read()
         return {};
 
     m_remaining_request.clear();
-    auto request = parsed_request.release_value();
+    auto pending_request = adopt_ref(*new PendingRequest(parsed_request.release_value()));
+    m_pending_requests.enqueue(move(pending_request));
 
-    if (m_pending_requests.is_empty()) {
-        adopt_own()
+    if (m_pending_requests.size() == 1) {
+        process_next_pending_request();
     }
 
     return {};
@@ -239,15 +240,38 @@ ErrorOr<void, Client::WrappedError> Client::on_ready_to_read()
 void Client::process_next_pending_request()
 {
     deferred_invoke([this] {
-        auto& request = m_pending_requests.first();
-        auto body = read_body_as_json(request);
+        auto pending_request = m_pending_requests.head();
+        auto body = read_body_as_json(pending_request->http_request);
         if (body.is_error()) {
-            handle_error(request, body.release_error());
+            handle_error(pending_request->http_request, body.release_error());
+            (void)m_pending_requests.dequeue();
+            if (!m_pending_requests.is_empty()) {
+                process_next_pending_request();
+            }
             return;
         }
 
-        if (auto result = handle_request(request, body.release_value()); result.is_error())
-            handle_error(request, result.release_error());
+        auto initial_result = handle_request(pending_request->http_request, body.release_value(), [this, pending_request](Response result) {
+            ScopeGuard pump_pending_requests_guard = [this] {
+                (void)m_pending_requests.dequeue();
+                if (!m_pending_requests.is_empty()) {
+                    process_next_pending_request();
+                }
+            };
+
+            if (result.is_error()) {
+                handle_error(pending_request->http_request, result.release_error());
+                return;
+            }
+
+            auto maybe_response_error = send_success_response(pending_request->http_request, result.release_value());
+            if (maybe_response_error.is_error()) {
+                handle_error(pending_request->http_request, maybe_response_error.release_error());
+            }
+        });
+
+        if (initial_result.is_error())
+            handle_error(pending_request->http_request, initial_result.release_error());
     });
 }
 
@@ -271,7 +295,7 @@ ErrorOr<JsonValue, Client::WrappedError> Client::read_body_as_json(HTTP::HttpReq
     return TRY(JsonValue::from_string(request.body()));
 }
 
-ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest const& request, JsonValue body)
+ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest const& request, JsonValue body, Function<void(Response)> on_complete)
 {
     if constexpr (WEBDRIVER_DEBUG) {
         dbgln("Got HTTP request: {} {}", request.method_name(), request.resource());
@@ -279,8 +303,8 @@ ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest con
     }
 
     auto [handler, parameters] = TRY(match_route(request));
-    (*handler)(*this, move(parameters), move(body), [this](Response result) {
-        send_success_response(request, move(result));
+    (*handler)(*this, move(parameters), move(body), [on_complete = move(on_complete)](Response result) {
+        on_complete(move(result));
     });
 
     return {};
