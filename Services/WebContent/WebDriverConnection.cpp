@@ -226,31 +226,36 @@ void WebDriverConnection::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://w3c.github.io/webdriver/#dfn-close-the-session
-void WebDriverConnection::close_session()
+void WebDriverConnection::close_session(int request_id)
 {
     // 1. Set the webdriver-active flag to false.
-    set_is_webdriver_active(false);
+    current_browsing_context().page().set_is_webdriver_active(false);
 
     // 5. Optionally, close all top-level browsing contexts, without prompting to unload.
     for (auto navigable : Web::HTML::all_navigables()) {
         if (auto traversable = navigable->top_level_traversable())
             traversable->close_top_level_traversable();
     }
+
+    async_driver_execution_complete(request_id, JsonValue {});
 }
 
-void WebDriverConnection::set_page_load_strategy(Web::WebDriver::PageLoadStrategy page_load_strategy)
+void WebDriverConnection::set_page_load_strategy(int request_id, Web::WebDriver::PageLoadStrategy page_load_strategy)
 {
     m_page_load_strategy = page_load_strategy;
+    async_driver_execution_complete(request_id, JsonValue {});
 }
 
-void WebDriverConnection::set_user_prompt_handler(Web::WebDriver::UserPromptHandler user_prompt_handler)
+void WebDriverConnection::set_user_prompt_handler(int request_id, Web::WebDriver::UserPromptHandler user_prompt_handler)
 {
     Web::WebDriver::set_user_prompt_handler(move(user_prompt_handler));
+    async_driver_execution_complete(request_id, JsonValue {});
 }
 
-void WebDriverConnection::set_strict_file_interactability(bool strict_file_interactability)
+void WebDriverConnection::set_strict_file_interactability(int request_id, bool strict_file_interactability)
 {
     m_strict_file_interactability = strict_file_interactability;
+    async_driver_execution_complete(request_id, JsonValue {});
 }
 
 void WebDriverConnection::set_is_webdriver_active(int request_id, bool is_webdriver_active)
