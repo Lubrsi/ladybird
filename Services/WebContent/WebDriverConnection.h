@@ -47,10 +47,10 @@ private:
 
     virtual void die() override { }
 
-    virtual void close_session() override;
-    virtual void set_page_load_strategy(Web::WebDriver::PageLoadStrategy page_load_strategy) override;
-    virtual void set_user_prompt_handler(Web::WebDriver::UserPromptHandler user_prompt_handler) override;
-    virtual void set_strict_file_interactability(bool strict_file_interactability) override;
+    virtual void close_session(int request_id) override;
+    virtual void set_page_load_strategy(int request_id, Web::WebDriver::PageLoadStrategy page_load_strategy) override;
+    virtual void set_user_prompt_handler(int request_id, Web::WebDriver::UserPromptHandler user_prompt_handler) override;
+    virtual void set_strict_file_interactability(int request_id, bool strict_file_interactability) override;
     virtual void set_is_webdriver_active(int request_id, bool) override;
     virtual void get_timeouts(int request_id) override;
     virtual void set_timeouts(int request_id, JsonValue payload) override;
