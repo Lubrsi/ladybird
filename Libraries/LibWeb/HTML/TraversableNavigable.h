@@ -83,8 +83,12 @@ public:
     void clear_the_forward_session_history();
     void traverse_the_history_by_delta(int delta, GC::Ptr<DOM::Document> source_document = {});
 
-    void close_top_level_traversable();
-    void definitely_close_top_level_traversable();
+    enum class PromptToUnload : bool {
+        No,
+        Yes,
+    };
+    void close_top_level_traversable(PromptToUnload = PromptToUnload::Yes);
+    void definitely_close_top_level_traversable(PromptToUnload = PromptToUnload::Yes);
     void destroy_top_level_traversable();
 
     void append_session_history_traversal_steps(GC::Ref<GC::Function<void()>> steps)

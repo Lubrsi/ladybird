@@ -9,6 +9,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#define WEBDRIVER_DEBUG 1
+
 #include <AK/Debug.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -83,32 +85,38 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::new_sessi
     }
 
     // 6. Let session be the result of create a session, with capabilities, and flags.
-    auto maybe_session = Session::create(*this, capabilities.as_object(), flags);
-    if (maybe_session.is_error()) {
-        promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::SessionNotCreated, MUST(String::formatted("Failed to start session: {}", maybe_session.error()))));
+    auto maybe_session_promise = Session::create(*this, move(capabilities), flags);
+    if (maybe_session_promise.is_error()) {
+        promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::SessionNotCreated, MUST(String::formatted("Failed to start session: {}", maybe_session_promise.error()))));
         return promise;
     }
 
-    auto session = maybe_session.release_value();
+    auto session_promise = maybe_session_promise.release_value();
+    promise->add_child(session_promise);
 
-    // 7. Let body be a JSON Object initialized with:
-    JsonObject body;
-    // "sessionId"
-    //     session's session ID.
-    body.set("sessionId"sv, JsonValue { session->session_id() });
-    // "capabilities"
-    //     capabilities
-    body.set("capabilities"sv, move(capabilities));
+    session_promise->when_resolved([promise](Session::NewSession& new_session) {
+        // 7. Let body be a JSON Object initialized with:
+        JsonObject body;
+        // "sessionId"
+        //     session's session ID.
+        body.set("sessionId"sv, JsonValue { new_session.session->session_id() });
+        // "capabilities"
+        //     capabilities
+        body.set("capabilities"sv, new_session.capabilities);
 
-    // 8. Set session' current top-level browsing context to one of the endpoint node's top-level browsing contexts,
-    //    preferring the top-level browsing context that has system focus, or otherwise preferring any top-level
-    //    browsing context whose visibility state is visible.
-    // NOTE: This happens in the WebContent process.
+        // 8. Set session' current top-level browsing context to one of the endpoint node's top-level browsing contexts,
+        //    preferring the top-level browsing context that has system focus, or otherwise preferring any top-level
+        //    browsing context whose visibility state is visible.
+        // NOTE: This happens in the WebContent process.
 
-    // FIXME: 9. Set the request queue to a new queue.
+        // FIXME: 9. Set the request queue to a new queue.
 
-    // 10. Return success with data body.
-    promise->resolve(JsonValue { move(body) });
+        // 10. Return success with data body.
+        promise->resolve(JsonValue { move(body) });
+    }).when_rejected([promise](Web::WebDriver::Error& error) {
+        promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::SessionNotCreated, MUST(String::formatted("Failed to start session: {}", error))));
+    });
+
     return promise;
 }
 
@@ -121,8 +129,17 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::delete_se
     auto promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
 
     // 1. If session is an active HTTP session, try to close the session with session.
-    if (auto session = Session::find_session(parameters[0], Web::WebDriver::SessionFlags::Http, Session::AllowInvalidWindowHandle::Yes); !session.is_error())
-        session.value()->close();
+    if (auto session = Session::find_session(parameters[0], Web::WebDriver::SessionFlags::Http, Session::AllowInvalidWindowHandle::Yes); !session.is_error()) {
+        auto close_promise = session.value()->close();
+        close_promise->when_resolved([promise](auto&) {
+            promise->resolve(JsonValue {});
+        }).when_rejected([promise](Web::WebDriver::Error& error) {
+            promise->reject(Web::WebDriver::Error(error));
+        });
+
+        promise->add_child(move(close_promise));
+        return promise;
+    }
 
     // 2. Return success with data null.
     promise->resolve(JsonValue {});
@@ -281,6 +298,7 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::get_windo
     auto session = WEBDRIVER_TRY(Session::find_session(parameters[0]));
 
     auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
+    promise->add_child(inner_promise);
     inner_promise->when_resolved([session, promise](JsonValue&) {
         promise->resolve(JsonValue { session->current_window_handle() });
     }).when_rejected([promise](Web::WebDriver::Error& error) {
@@ -351,7 +369,6 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::new_windo
     auto session = WEBDRIVER_TRY(Session::find_session(parameters[0]));
 
     auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
-
     inner_promise->when_resolved([promise, session](JsonValue& handle_value) {
         auto handle = handle_value.as_object().get("handle"sv)->as_string();
 
@@ -365,33 +382,15 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::new_windo
             promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::Timeout, "Timed out waiting for window handle"sv));
         });
         timer->start();
-
-
     }).when_rejected([promise](Web::WebDriver::Error& error) {
         promise->reject(Web::WebDriver::Error(error));
     });
 
-    session->perform_async_action([payload = move(payload)](auto& connection, auto request_id) {
+    session->perform_async_action(inner_promise, [payload = move(payload)](auto& connection, auto request_id) {
         connection.async_new_window(request_id, move(payload));
-    }, [session, on_complete = move(on_complete)](Web::WebDriver::Response handle_response) {
-
-        if (!session->has_window_handle(handle_string)) {
-            static constexpr u32 CONNECTION_TIMEOUT_MS = 5000;
-            auto timer = Core::Timer::create_single_shot(CONNECTION_TIMEOUT_MS, [] {
-                on_complete(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::Timeout, "Timed out waiting for window handle"sv));
-            });
-            timer->start();
-
-            Core::EventLoop::current().spin_until([&session, &timeout_fired, handle = ]() {
-                return session->has_window_handle(handle) || timeout_fired;
-            });
-
-            if (timeout_fired)
-                return ;
-        } else {
-            on_complete(move(handle));
-        }
     });
+
+    promise->add_child(move(inner_promise));
     return promise;
 }
 

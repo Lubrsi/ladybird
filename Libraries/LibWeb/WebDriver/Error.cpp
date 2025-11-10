@@ -80,12 +80,4 @@ Error::Error(unsigned http_status_, String error_, String message_, Optional<Jso
 {
 }
 
-Error::Error(Error const& error)
-    : http_status(error.http_status)
-    , error(error.error)
-    , message(error.message)
-    , data(error.data)
-{
-}
-
 }
