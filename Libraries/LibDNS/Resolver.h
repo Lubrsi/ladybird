@@ -232,7 +232,9 @@ public:
         ConnectionMode mode;
     };
 
-    Resolver(Function<ErrorOr<SocketResult>()> create_socket)
+    using CreateSocketFunction = Function<NonnullRefPtr<Core::Promise<SocketResult>>()>;
+
+    Resolver(CreateSocketFunction create_socket)
         : m_pending_lookups(make<RedBlackTree<u16, PendingLookup>>())
         , m_create_socket(move(create_socket))
     {
@@ -1245,7 +1247,7 @@ private:
     Threading::RWLockProtected<HashMap<ByteString, NonnullRefPtr<LookupResult>>> m_cache;
     Threading::RWLockProtected<NonnullOwnPtr<RedBlackTree<u16, PendingLookup>>> m_pending_lookups;
     Threading::RWLockProtected<Optional<MaybeOwned<Core::Socket>>> m_socket;
-    Function<ErrorOr<SocketResult>()> m_create_socket;
+    CreateSocketFunction m_create_socket;
     bool m_attempting_restart { false };
     ConnectionMode m_mode { ConnectionMode::UDP };
     Vector<NonnullRefPtr<Core::Promise<Empty>>> m_socket_ready_promises;

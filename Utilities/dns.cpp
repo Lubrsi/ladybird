@@ -74,7 +74,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Core::EventLoop loop;
 
     DNS::Resolver resolver {
-        [&] -> ErrorOr<DNS::Resolver::SocketResult> {
+        [&] -> NonnullRefPtr<Core::Promise<DNS::Resolver::SocketResult>> {
+            auto promise = Core::Promise<DNS::Resolver::SocketResult>::construct();
+
             auto make_resolver = [&](Core::SocketAddress const& address) -> ErrorOr<DNS::Resolver::SocketResult> {
                 if (use_tls) {
                     TLS::Options options;
@@ -92,7 +94,12 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             };
 
             if (auto v4 = IPv4Address::from_string(server_address); v4.has_value()) {
-                return make_resolver({ v4.value(), static_cast<u16>(use_tls ? 853 : 53) });
+                auto result = make_resolver({ v4.value(), static_cast<u16>(use_tls ? 853 : 53) });
+                if (!result.is_error()) {
+                    promise->resolve(result.release_value());
+                } else {
+                    promise->reject(result.release_error());
+                }
             } else if (auto v6 = IPv6Address::from_string(server_address); v6.has_value()) {
                 return make_resolver({ v6.value(), static_cast<u16>(use_tls ? 853 : 53) });
             } else {
@@ -100,6 +107,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                     return make_resolver({ address, static_cast<u16>(use_tls ? 853 : 53) });
                 });
             }
+
+            return promise;
         }
     };
 
