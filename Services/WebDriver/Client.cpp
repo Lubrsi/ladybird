@@ -378,9 +378,20 @@ NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> Client::new_windo
         }
 
         static constexpr u32 CONNECTION_TIMEOUT_MS = 5000;
-        auto timer = Core::Timer::create_single_shot(CONNECTION_TIMEOUT_MS, [promise] {
+        auto timer = Core::Timer::create_single_shot(CONNECTION_TIMEOUT_MS, [promise, session, handle] {
+            session->remove_window_handle_became_available_callback(handle);
             promise->reject(Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::Timeout, "Timed out waiting for window handle"sv));
         });
+
+        session->add_window_handle_became_available_callback(handle, [timer, promise, session, handle] {
+            // If it's not active, then it timed out.
+            if (!timer->is_active())
+                return;
+
+            session->remove_window_handle_became_available_callback(handle);
+            promise->resolve(move(handle));
+        });
+
         timer->start();
     }).when_rejected([promise](Web::WebDriver::Error& error) {
         promise->reject(Web::WebDriver::Error(error));

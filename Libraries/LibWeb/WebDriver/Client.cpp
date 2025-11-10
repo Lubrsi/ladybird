@@ -245,42 +245,37 @@ void Client::process_next_pending_request()
         auto body = read_body_as_json(pending_request->http_request);
         if (body.is_error()) {
             this_ref->handle_error(pending_request->http_request, body.release_error());
-            (void)this_ref->m_pending_requests.dequeue();
-            if (!this_ref->m_pending_requests.is_empty()) {
-                this_ref->process_next_pending_request();
-            }
+            this_ref->dequeue_current_pending_request();
             return;
         }
 
         auto initial_result = this_ref->handle_request(pending_request->http_request, body.release_value());
         if (initial_result.is_error()) {
             this_ref->handle_error(pending_request->http_request, initial_result.release_error());
+            this_ref->dequeue_current_pending_request();
             return;
         }
 
         auto promise = initial_result.release_value();
         promise->when_resolved([this_ref, pending_request](JsonValue& value) {
             auto response_error = this_ref->send_success_response(pending_request->http_request, value);
-            if (response_error.is_error()) {
+            if (response_error.is_error())
                 this_ref->handle_error(pending_request->http_request, response_error.release_error());
-                return;
-            }
 
-            (void)this_ref->m_pending_requests.dequeue();
-            if (!this_ref->m_pending_requests.is_empty()) {
-                this_ref->process_next_pending_request();
-            }
+            this_ref->dequeue_current_pending_request();
         }).when_rejected([this_ref, pending_request](Error& error) {
             this_ref->handle_error(pending_request->http_request, error);
-
-            (void)this_ref->m_pending_requests.dequeue();
-            if (!this_ref->m_pending_requests.is_empty()) {
-                this_ref->process_next_pending_request();
-            }
+            this_ref->dequeue_current_pending_request();
         });
     });
 }
 
+void Client::dequeue_current_pending_request()
+{
+    (void)m_pending_requests.dequeue();
+    if (!m_pending_requests.is_empty())
+        process_next_pending_request();
+}
 
 ErrorOr<JsonValue, Client::WrappedError> Client::read_body_as_json(HTTP::HttpRequest const& request)
 {
