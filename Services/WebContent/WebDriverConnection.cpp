@@ -234,7 +234,7 @@ void WebDriverConnection::close_session(int request_id)
     // 5. Optionally, close all top-level browsing contexts, without prompting to unload.
     for (auto navigable : Web::HTML::all_navigables()) {
         if (auto traversable = navigable->top_level_traversable())
-            traversable->close_top_level_traversable();
+            traversable->close_top_level_traversable(Web::HTML::TraversableNavigable::PromptToUnload::No);
     }
 
     async_driver_execution_complete(request_id, JsonValue {});

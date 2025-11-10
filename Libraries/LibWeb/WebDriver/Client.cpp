@@ -17,12 +17,13 @@
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Time.h>
+#include <LibCore/Promise.h>
 #include <LibHTTP/HttpResponse.h>
 #include <LibWeb/WebDriver/Client.h>
 
 namespace Web::WebDriver {
 
-using RouteHandler = void (*)(Client&, Parameters, JsonValue, Function<void(Response)>);
+using RouteHandler = NonnullRefPtr<Core::Promise<JsonValue, Error>> (*)(Client&, Parameters, JsonValue);
 
 struct Route {
     HTTP::HttpRequest::Method method {};
@@ -40,8 +41,8 @@ struct MatchedRoute {
     {                                                             \
         HTTP::HttpRequest::method,                                \
             path,                                                 \
-            [](auto& client, auto parameters, auto payload, Function<void(Response)> on_complete) {     \
-                client.handler(parameters, move(payload), move(on_complete));        \
+            [](auto& client, auto parameters, auto payload) {     \
+                return client.handler(parameters, move(payload)); \
             }                                                     \
     }
 
@@ -239,39 +240,44 @@ ErrorOr<void, Client::WrappedError> Client::on_ready_to_read()
 
 void Client::process_next_pending_request()
 {
-    deferred_invoke([this] {
-        auto pending_request = m_pending_requests.head();
+    deferred_invoke([this_ref = NonnullRefPtr { *this }] {
+        auto pending_request = this_ref->m_pending_requests.head();
         auto body = read_body_as_json(pending_request->http_request);
         if (body.is_error()) {
-            handle_error(pending_request->http_request, body.release_error());
-            (void)m_pending_requests.dequeue();
-            if (!m_pending_requests.is_empty()) {
-                process_next_pending_request();
+            this_ref->handle_error(pending_request->http_request, body.release_error());
+            (void)this_ref->m_pending_requests.dequeue();
+            if (!this_ref->m_pending_requests.is_empty()) {
+                this_ref->process_next_pending_request();
             }
             return;
         }
 
-        auto initial_result = handle_request(pending_request->http_request, body.release_value(), [this, pending_request](Response result) {
-            ScopeGuard pump_pending_requests_guard = [this] {
-                (void)m_pending_requests.dequeue();
-                if (!m_pending_requests.is_empty()) {
-                    process_next_pending_request();
-                }
-            };
+        auto initial_result = this_ref->handle_request(pending_request->http_request, body.release_value());
+        if (initial_result.is_error()) {
+            this_ref->handle_error(pending_request->http_request, initial_result.release_error());
+            return;
+        }
 
-            if (result.is_error()) {
-                handle_error(pending_request->http_request, result.release_error());
+        auto promise = initial_result.release_value();
+        promise->when_resolved([this_ref, pending_request](JsonValue& value) {
+            auto response_error = this_ref->send_success_response(pending_request->http_request, value);
+            if (response_error.is_error()) {
+                this_ref->handle_error(pending_request->http_request, response_error.release_error());
                 return;
             }
 
-            auto maybe_response_error = send_success_response(pending_request->http_request, result.release_value());
-            if (maybe_response_error.is_error()) {
-                handle_error(pending_request->http_request, maybe_response_error.release_error());
+            (void)this_ref->m_pending_requests.dequeue();
+            if (!this_ref->m_pending_requests.is_empty()) {
+                this_ref->process_next_pending_request();
+            }
+        }).when_rejected([this_ref, pending_request](Error& error) {
+            this_ref->handle_error(pending_request->http_request, error);
+
+            (void)this_ref->m_pending_requests.dequeue();
+            if (!this_ref->m_pending_requests.is_empty()) {
+                this_ref->process_next_pending_request();
             }
         });
-
-        if (initial_result.is_error())
-            handle_error(pending_request->http_request, initial_result.release_error());
     });
 }
 
@@ -295,7 +301,7 @@ ErrorOr<JsonValue, Client::WrappedError> Client::read_body_as_json(HTTP::HttpReq
     return TRY(JsonValue::from_string(request.body()));
 }
 
-ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest const& request, JsonValue body, Function<void(Response)> on_complete)
+ErrorOr<NonnullRefPtr<Core::Promise<JsonValue, Error>>, Client::WrappedError> Client::handle_request(HTTP::HttpRequest const& request, JsonValue body)
 {
     if constexpr (WEBDRIVER_DEBUG) {
         dbgln("Got HTTP request: {} {}", request.method_name(), request.resource());
@@ -303,11 +309,7 @@ ErrorOr<void, Client::WrappedError> Client::handle_request(HTTP::HttpRequest con
     }
 
     auto [handler, parameters] = TRY(match_route(request));
-    (*handler)(*this, move(parameters), move(body), [on_complete = move(on_complete)](Response result) {
-        on_complete(move(result));
-    });
-
-    return {};
+    return (*handler)(*this, move(parameters), move(body));
 }
 
 void Client::handle_error(HTTP::HttpRequest const& request, WrappedError const& error)

@@ -1208,27 +1208,30 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_traverse
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#close-a-top-level-traversable
-void TraversableNavigable::close_top_level_traversable()
+void TraversableNavigable::close_top_level_traversable(PromptToUnload prompt_to_unload)
 {
     // 1. If traversable's is closing is true, then return.
     if (is_closing())
         return;
 
     // 2. Definitely close traversable.
-    definitely_close_top_level_traversable();
+    definitely_close_top_level_traversable(prompt_to_unload);
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#definitely-close-a-top-level-traversable
-void TraversableNavigable::definitely_close_top_level_traversable()
+void TraversableNavigable::definitely_close_top_level_traversable(PromptToUnload prompt_to_unload)
 {
     VERIFY(is_top_level_traversable());
 
-    // 1. Let toUnload be traversable's active document's inclusive descendant navigables.
-    auto to_unload = active_document()->inclusive_descendant_navigables();
+    // AD-HOC: Not in the HTML spec, but WebDriver does not want us to prompt to unload when closing a session.
+    if (prompt_to_unload == PromptToUnload::Yes) {
+        // 1. Let toUnload be traversable's active document's inclusive descendant navigables.
+        auto to_unload = active_document()->inclusive_descendant_navigables();
 
-    // 2. If the result of checking if unloading is canceled for toUnload is not "continue", then return.
-    if (check_if_unloading_is_canceled(to_unload) != CheckIfUnloadingIsCanceledResult::Continue)
-        return;
+        // 2. If the result of checking if unloading is canceled for toUnload is not "continue", then return.
+        if (check_if_unloading_is_canceled(to_unload) != CheckIfUnloadingIsCanceledResult::Continue)
+            return;
+    }
 
     // 3. Append the following session history traversal steps to traversable:
     append_session_history_traversal_steps(GC::create_function(heap(), [this] {

@@ -28,7 +28,12 @@ namespace WebDriver {
 
 class Session : public RefCounted<Session> {
 public:
-    static ErrorOr<NonnullRefPtr<Session>> create(NonnullRefPtr<Client> client, JsonObject& capabilities, Web::WebDriver::SessionFlags flags);
+    struct NewSession {
+        NonnullRefPtr<Session> session;
+        JsonValue capabilities;
+    };
+
+    static ErrorOr<NonnullRefPtr<Core::Promise<NewSession, Web::WebDriver::Error>>> create(NonnullRefPtr<Client> client, JsonValue capabilities, Web::WebDriver::SessionFlags flags);
     ~Session();
 
     enum class AllowInvalidWindowHandle {
@@ -51,7 +56,7 @@ public:
         return current_window->web_content_connection;
     }
 
-    void close();
+    NonnullRefPtr<Core::Promise<Empty, Web::WebDriver::Error>> close();
 
     String session_id() const { return m_session_id; }
     Web::WebDriver::SessionFlags session_flags() const { return m_session_flags; }
@@ -96,7 +101,9 @@ private:
 
     Web::WebDriver::PageLoadStrategy m_page_load_strategy { Web::WebDriver::PageLoadStrategy::Normal };
     Optional<JsonValue> m_timeouts_configuration;
-    bool m_strict_file_interactiblity { false };
+    bool m_strict_file_interactability { false };
+
+    RefPtr<Core::Promise<Empty, Web::WebDriver::Error>> m_close_promise;
 };
 
 }

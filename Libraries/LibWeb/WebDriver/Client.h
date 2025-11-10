@@ -130,10 +130,10 @@ private:
     ErrorOr<void, WrappedError> on_ready_to_read();
     static ErrorOr<JsonValue, WrappedError> read_body_as_json(HTTP::HttpRequest const&);
 
-    ErrorOr<void, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body);
+    ErrorOr<NonnullRefPtr<Core::Promise<JsonValue, Error>>, WrappedError> handle_request(HTTP::HttpRequest const&, JsonValue body);
     void handle_error(HTTP::HttpRequest const&, WrappedError const&);
 
-    ErrorOr<void, Client::WrappedError> send_success_response(HTTP::HttpRequest const&, JsonValue result);
+    ErrorOr<void, WrappedError> send_success_response(HTTP::HttpRequest const&, JsonValue result);
     ErrorOr<void, WrappedError> send_error_response(HTTP::HttpRequest const&, Error const& error);
     static void log_response(HTTP::HttpRequest const&, unsigned code);
 
