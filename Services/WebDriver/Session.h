@@ -63,6 +63,8 @@ public:
     String const& current_window_handle() const { return m_current_window_handle; }
 
     bool has_window_handle(StringView handle) const { return m_windows.contains(handle); }
+    void add_window_handle_became_available_callback(String const& handle, Function<void()> callback);
+    void remove_window_handle_became_available_callback(String const& handle);
 
     void set_timeouts(JsonValue, NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise);
     void close_window(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> top_level_promise);
@@ -104,6 +106,7 @@ private:
     bool m_strict_file_interactability { false };
 
     RefPtr<Core::Promise<Empty, Web::WebDriver::Error>> m_close_promise;
+    HashMap<String, Function<void()>> m_window_handle_became_available_callbacks;
 };
 
 }

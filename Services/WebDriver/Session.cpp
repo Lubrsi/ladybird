@@ -286,7 +286,6 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
         auto web_content_connection = maybe_connection.release_value();
 
         auto inner_promise = Core::Promise<JsonValue, Web::WebDriver::Error>::construct();
-        promise->add_child(inner_promise);
         inner_promise->when_resolved([web_content_connection, this_ref, promise](JsonValue& window_handle_value) {
             auto const& window_handle = window_handle_value.as_string();
 
@@ -329,6 +328,9 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
                 if (this_ref->m_current_window_handle.is_empty())
                     this_ref->m_current_window_handle = window_handle;
 
+                if (auto callback_iterator = this_ref->m_window_handle_became_available_callbacks.find(window_handle); callback_iterator != this_ref->m_window_handle_became_available_callbacks.end())
+                    callback_iterator->value();
+
                 promise->resolve({});
             }).when_rejected([promise](Web::WebDriver::Error& error) {
                 promise->reject(Error::from_string_view(error.error.bytes_as_string_view()));
@@ -339,9 +341,9 @@ ErrorOr<NonnullRefPtr<Core::LocalServer>> Session::create_server(NonnullRefPtr<S
             promise->reject(Error::from_string_literal("Window was closed immediately"));
         });
 
-        this_ref->perform_async_action(inner_promise, [](auto& connection, auto request_id) {
-            connection.async_get_window_handle(request_id);
-        });
+        auto inner_promise_request_id = web_content_connection->create_pending_request(inner_promise);
+        web_content_connection->async_get_window_handle(inner_promise_request_id);
+        promise->add_child(move(inner_promise));
     };
 
     server->on_accept_error = [promise](auto error) {
@@ -355,7 +357,7 @@ ErrorOr<NonnullRefPtr<Session::ServerPromise>> Session::start(LaunchBrowserCallb
 {
     auto promise = ServerPromise::construct();
 
-    m_web_content_socket_path = ByteString::formatted("{}/webdriver/session_{}_{}", TRY(Core::StandardPaths::runtime_directory()), Core::System::getpid(), m_session_id);
+    m_web_content_socket_path = ByteString::formatted("{}/webdriver/session_{}", TRY(Core::StandardPaths::runtime_directory()), m_session_id);
     m_web_content_server = TRY(create_server(promise));
 
     m_browser_process = TRY(launch_browser_callback(*m_web_content_socket_path, m_options.headless));
@@ -455,6 +457,16 @@ ErrorOr<void, Web::WebDriver::Error> Session::ensure_current_window_handle_is_va
     if (auto current_window = m_windows.get(m_current_window_handle); current_window.has_value())
         return {};
     return Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::NoSuchWindow, "Window not found"sv);
+}
+
+void Session::add_window_handle_became_available_callback(String const& handle, Function<void()> callback)
+{
+    m_window_handle_became_available_callbacks.set(handle, move(callback));
+}
+
+void Session::remove_window_handle_became_available_callback(String const& handle)
+{
+    m_window_handle_became_available_callbacks.remove(handle);
 }
 
 }

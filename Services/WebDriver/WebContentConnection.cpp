@@ -24,6 +24,7 @@ void WebContentConnection::die()
 
 void WebContentConnection::driver_execution_complete(int request_id, Web::WebDriver::Response response)
 {
+    dbgln("finished request {}", request_id);
     m_request_id_allocator.deallocate(request_id);
     auto request_promise = m_pending_requests.take(request_id).value();
     if (response.is_error()) {
@@ -36,6 +37,7 @@ void WebContentConnection::driver_execution_complete(int request_id, Web::WebDri
 int WebContentConnection::create_pending_request(NonnullRefPtr<Core::Promise<JsonValue, Web::WebDriver::Error>> promise)
 {
     auto request_id = m_request_id_allocator.allocate();
+    dbgln("created request {}", request_id);
     auto result = m_pending_requests.set(request_id, move(promise));
     VERIFY(result == AK::HashSetResult::InsertedNewEntry);
     return request_id;

@@ -138,6 +138,7 @@ private:
     static void log_response(HTTP::HttpRequest const&, unsigned code);
 
     void process_next_pending_request();
+    void dequeue_current_pending_request();
 
     NonnullOwnPtr<Core::BufferedTCPSocket> m_socket;
     StringBuilder m_remaining_request;
