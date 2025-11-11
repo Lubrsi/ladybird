@@ -92,10 +92,10 @@ public:
         for (size_t i = 0; i < m_cached_records.size();) {
             auto& record = m_cached_records[i];
             if (record.expiration.has_value() && record.expiration.value() < now) {
-                dbgln_if(DNS_DEBUG, "DNS: Removing expired record for {}", m_name.to_string());
+                dbgln_if(1, "DNS: Removing expired record for {}", m_name.to_string());
                 m_cached_records.remove(i);
             } else {
-                dbgln_if(DNS_DEBUG, "DNS: Keeping record for {} (expires in {})", m_name.to_string(),
+                dbgln_if(1, "DNS: Keeping record for {} (expires in {})", m_name.to_string(),
                     record.expiration.has_value() ? record.expiration.value().to_string() : "never"_string);
                 ++i;
             }
@@ -301,7 +301,7 @@ public:
     {
         auto result = lookup_in_cache(name, class_, desired_types);
         VERIFY(!result.is_null());
-        dbgln_if(DNS_DEBUG, "DNS::expect({}) -> OK", name);
+        dbgln_if(1, "DNS::expect({}) -> OK", name);
         return *result;
     }
 
@@ -368,7 +368,7 @@ public:
         flush_cache();
 
         if (options.repeating_lookup && options.repeating_lookup->times_repeated >= 5) {
-            dbgln_if(DNS_DEBUG, "DNS: Repeating lookup for {} timed out", name);
+            dbgln_if(1, "DNS: Repeating lookup for {} timed out", name);
             auto promise = options.repeating_lookup->promise;
             promise->reject(Error::from_string_literal("DNS lookup timed out"));
             m_pending_lookups.with_write_locked([&](auto& lookups) {
@@ -380,7 +380,7 @@ public:
         auto lookup_promise = options.repeating_lookup ? options.repeating_lookup->promise : Core::Promise<NonnullRefPtr<LookupResult const>>::construct();
 
         if (auto maybe_ipv4 = IPv4Address::from_string(name); maybe_ipv4.has_value()) {
-            dbgln_if(DNS_DEBUG, "DNS: Resolving {} as IPv4", name);
+            dbgln_if(1, "DNS: Resolving {} as IPv4", name);
             if (desired_types.contains_slow(Messages::ResourceType::A)) {
                 auto result = make_ref_counted<LookupResult>(Messages::DomainName {});
                 result->add_record({ .name = {}, .type = Messages::ResourceType::A, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::A { maybe_ipv4.release_value() }, .raw = {} });
@@ -391,7 +391,7 @@ public:
         }
 
         if (auto maybe_ipv6 = IPv6Address::from_string(name); maybe_ipv6.has_value()) {
-            dbgln_if(DNS_DEBUG, "DNS: Resolving {} as IPv6", name);
+            dbgln_if(1, "DNS: Resolving {} as IPv6", name);
             if (desired_types.contains_slow(Messages::ResourceType::AAAA)) {
                 auto result = make_ref_counted<LookupResult>(Messages::DomainName {});
                 result->add_record({ .name = {}, .type = Messages::ResourceType::AAAA, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::AAAA { maybe_ipv6.release_value() }, .raw = {} });
@@ -402,13 +402,13 @@ public:
         }
 
         if (auto result = lookup_in_cache(name, class_, desired_types)) {
-            dbgln_if(DNS_DEBUG, "DNS: Resolving {} from cache...", name);
+            dbgln_if(1, "DNS: Resolving {} from cache...", name);
             if (!options.validate_dnssec_locally || result->is_dnssec_validated()) {
-                dbgln_if(DNS_DEBUG, "DNS: Resolved {} from cache", name);
+                dbgln_if(1, "DNS: Resolved {} from cache", name);
                 lookup_promise->resolve(result.release_nonnull());
                 return lookup_promise;
             }
-            dbgln_if(DNS_DEBUG, "DNS: Cache entry for {} is not DNSSEC validated (and we expect that), re-resolving", name);
+            dbgln_if(1, "DNS: Cache entry for {} is not DNSSEC validated (and we expect that), re-resolving", name);
         }
 
         auto domain_name = Messages::DomainName::from_string(name);
@@ -416,10 +416,10 @@ public:
         auto has_established_connection = [=, this] {
             auto already_in_cache = false;
             auto result = m_cache.with_write_locked([&](auto& cache) -> NonnullRefPtr<LookupResult> {
-                dbgln_if(DNS_DEBUG, "DNS: Resolving {}...", name);
+                dbgln_if(1, "DNS: Resolving {}...", name);
                 auto existing = [&] -> RefPtr<LookupResult> {
                     if (cache.contains(name)) {
-                        dbgln_if(DNS_DEBUG, "DNS: Resolving {} from cache...", name);
+                        dbgln_if(1, "DNS: Resolving {} from cache...", name);
                         auto ptr = *cache.get(name);
 
                         already_in_cache = (!options.validate_dnssec_locally && !ptr->is_being_dnssec_validated()) || ptr->is_dnssec_validated();
@@ -430,21 +430,21 @@ public:
                             }
                         }
 
-                        dbgln_if(DNS_DEBUG, "DNS: Found {} in cache, already_in_cache={}", name, already_in_cache);
-                        dbgln_if(DNS_DEBUG, "DNS: That entry is {} DNSSEC validated", ptr->is_dnssec_validated() ? "already" : "not");
+                        dbgln_if(1, "DNS: Found {} in cache, already_in_cache={}", name, already_in_cache);
+                        dbgln_if(1, "DNS: That entry is {} DNSSEC validated", ptr->is_dnssec_validated() ? "already" : "not");
                         for (auto const& entry : ptr->records())
-                            dbgln_if(DNS_DEBUG, "DNS: Found record of type {}", Messages::to_string(entry.type));
+                            dbgln_if(1, "DNS: Found record of type {}", Messages::to_string(entry.type));
                         return ptr;
                     }
                     return nullptr;
                 }();
 
                 if (existing) {
-                    dbgln_if(DNS_DEBUG, "DNS: Resolved {} from cache", name);
+                    dbgln_if(1, "DNS: Resolved {} from cache", name);
                     return *existing;
                 }
 
-                dbgln_if(DNS_DEBUG, "DNS: Adding {} to cache", name);
+                dbgln_if(1, "DNS: Adding {} to cache", name);
                 auto ptr = make_ref_counted<LookupResult>(domain_name);
                 if (!ptr->is_dnssec_validated())
                     ptr->set_dnssec_validated(options.validate_dnssec_locally);
@@ -567,7 +567,7 @@ public:
                   });
 
             if (cached_entry) {
-                dbgln_if(DNS_DEBUG, "DNS::lookup({}) -> Lookup already underway", name);
+                dbgln_if(1, "DNS::lookup({}) -> Lookup already underway", name);
                 auto previous_on_resolution = move(cached_entry->promise->on_resolution);
                 cached_entry->promise->on_resolution = [lookup_promise, previous_on_resolution = move(previous_on_resolution)](NonnullRefPtr<LookupResult const> result) -> ErrorOr<void> {
                     TRY(previous_on_resolution(result));
@@ -625,7 +625,7 @@ public:
 
             // Use system resolver
             // FIXME: Use an underlying resolver instead.
-            dbgln_if(DNS_DEBUG, "Not ready to resolve, using system resolver and skipping cache for {}", name);
+            dbgln_if(1, "Not ready to resolve, using system resolver and skipping cache for {}", name);
             auto record_or_error = Core::Socket::resolve_host(name, Core::Socket::SocketType::Stream);
             if (record_or_error.is_error()) {
                 lookup_promise->reject(record_or_error.release_error());
@@ -693,7 +693,7 @@ private:
                     return Error::from_string_literal("No pending lookup found for this message");
 
                 if (lookup->result.is_null()) {
-                    dbgln_if(DNS_DEBUG, "DNS: Received a message with no pending lookup (id={})", message.header.id);
+                    dbgln_if(1, "DNS: Received a message with no pending lookup (id={})", message.header.id);
                     return {}; // Message is a response to a lookup that's been purged from the cache, ignore it
                 }
 
@@ -703,7 +703,7 @@ private:
                 if (result->is_dnssec_validated())
                     return validate_dnssec(move(message), *lookup, *result);
 
-                if constexpr (DNS_DEBUG) {
+                if constexpr (1) {
                     switch (message.header.options.response_code()) {
                     case Messages::Options::ResponseCode::FormatError:
                         dbgln("DNS: Received FormatError response code");
@@ -728,7 +728,7 @@ private:
                 return {};
             });
             if (result.is_error())
-                dbgln_if(DNS_DEBUG, "DNS: Received a message with no pending lookup: {}", result.error());
+                dbgln_if(1, "DNS: Received a message with no pending lookup: {}", result.error());
         }
     }
 
@@ -742,7 +742,7 @@ private:
     // https://www.rfc-editor.org/rfc/rfc2535
     NonnullRefPtr<Core::Promise<bool>> validate_dnssec_chain_step(Messages::DomainName const& name, bool top_level = false)
     {
-        dbgln_if(DNS_DEBUG, "DNS: Validating DNSSEC chain for {}", name.to_string());
+        dbgln_if(1, "DNS: Validating DNSSEC chain for {}", name.to_string());
         auto promise = Core::Promise<bool>::construct();
         //  6.3.1. authentication leads to chains of alternating SIG and KEY RRs with the first SIG
         //         signing the original data whose authenticity is to be shown and the final KEY
@@ -783,19 +783,47 @@ private:
             // - Lookup the SOA record for the domain.
             // - If we have no SOA record-
             if (!result->has_record_of_type(Messages::ResourceType::SOA)) {
-                dbgln_if(DNS_DEBUG, "DNS: No SOA record found for {}", name.to_string());
+                dbgln_if(1, "DNS: No SOA record found for {}", name.to_string());
                 // - If there's no DS record, check for an NS record-
                 if (!result->has_record_of_type(Messages::ResourceType::DS)) {
-                    dbgln_if(DNS_DEBUG, "DNS: No DS record found for {}", name.to_string());
+                    dbgln_if(1, "DNS: No DS record found for {}", name.to_string());
                     // - If there's no DS record, check for an NS record-
                     if (result->has_record_of_type(Messages::ResourceType::NS)) {
                         // - but if there _is_ an NS record, this is a broken delegation, so reject.
-                        dbgln_if(DNS_DEBUG, "DNS: Found NS record for {}", name.to_string());
+                        dbgln_if(1, "DNS: Found NS record for {}", name.to_string());
                         promise->resolve(false);
                         return;
                     }
-                    dbgln_if(DNS_DEBUG, "DNS: No NS record found for {}", name.to_string());
-                    // this is just part of the parent delegation, so go up one level.
+                    dbgln_if(1, "DNS: No NS record found for {}", name.to_string());
+
+                    // NOTE: We have to defer here due to delegation_point_lookup being resolved from a lookup, which is whilst pending lookups are locked.
+                    Core::deferred_invoke([this, promise, name] {
+                        // this is just part of the parent delegation, so go up one level.
+                        auto upper_level_promise = validate_dnssec_chain_step(name.parent());
+                        upper_level_promise->when_resolved([promise](bool valid) {
+                            promise->resolve(move(valid));
+                        }).when_rejected([promise](Error const& error) {
+                            promise->reject(Error::copy(error));
+                        });
+
+                        promise->add_child(move(upper_level_promise));
+                    });
+                    return;
+                }
+                // - If there is a DS record, this is a separate zone...but since we don't have an SOA record, this is a misconfigured zone.
+                // Let's just reject.
+                dbgln_if(1, "DNS: Found DS record for {}", name.to_string());
+                promise->resolve(false);
+                return;
+            }
+
+            // So we have an SOA record, there's much rejoicing and we can continue.
+            auto& soa = result->record<Messages::Records::SOA>();
+            dbgln_if(1, "DNS: Found SOA record for {}: {}", name.to_string(), soa.mname.to_string());
+            if (soa.mname == name.parent()) {
+                // NOTE: We have to defer here due to delegation_point_lookup being resolved from a lookup, which is whilst pending lookups are locked.
+                Core::deferred_invoke([this, promise, name] {
+                    // Just go up one level, all is well.
                     auto upper_level_promise = validate_dnssec_chain_step(name.parent());
                     upper_level_promise->when_resolved([promise](bool valid) {
                         promise->resolve(move(valid));
@@ -804,47 +832,31 @@ private:
                     });
 
                     promise->add_child(move(upper_level_promise));
-                    return;
-                }
-                // - If there is a DS record, this is a separate zone...but since we don't have an SOA record, this is a misconfigured zone.
-                // Let's just reject.
-                dbgln_if(DNS_DEBUG, "DNS: Found DS record for {}", name.to_string());
-                promise->resolve(false);
+                });
                 return;
             }
 
-            // So we have an SOA record, there's much rejoicing and we can continue.
-            auto& soa = result->record<Messages::Records::SOA>();
-            dbgln_if(DNS_DEBUG, "DNS: Found SOA record for {}: {}", name.to_string(), soa.mname.to_string());
-            if (soa.mname == name.parent()) {
-                // Just go up one level, all is well.
-                auto upper_level_promise = validate_dnssec_chain_step(name.parent());
-                upper_level_promise->when_resolved([promise](bool valid) {
-                    promise->resolve(move(valid));
+            // NOTE: We have to defer here due to delegation_point_lookup being resolved from a lookup, which is whilst pending lookups are locked.
+            Core::deferred_invoke([this, promise, name] {
+                // This is a separate zone, let's look up the DS record.
+                dbgln_if(1, "DNS: In separate zone, looking up DS record for {}", name.to_string());
+                auto ds_lookup_promise = lookup(name.to_string().to_byte_string(), Messages::Class::IN, { Messages::ResourceType::DS }, { .validate_dnssec_locally = false });
+                ds_lookup_promise->when_resolved([promise, name](NonnullRefPtr<LookupResult const> const& ds_result) {
+                    if (!ds_result->has_record_of_type(Messages::ResourceType::DS)) {
+                        // If there's no DS record, this is a misconfigured zone.
+                        dbgln_if(1, "DNS: In separate zone, no DS record found for {}", name.to_string());
+                        promise->resolve(false);
+                        return;
+                    }
+
+                    dbgln_if(1, "DNS: In separate zone, DS record found for {}", name.to_string());
+                    promise->resolve(true);
                 }).when_rejected([promise](Error const& error) {
                     promise->reject(Error::copy(error));
                 });
 
-                promise->add_child(move(upper_level_promise));
-                return;
-            }
-
-            // This is a separate zone, let's look up the DS record.
-            auto ds_lookup_promise = lookup(name.to_string().to_byte_string(), Messages::Class::IN, { Messages::ResourceType::DS }, { .validate_dnssec_locally = false });
-            ds_lookup_promise->when_resolved([promise, name](NonnullRefPtr<LookupResult const> const& ds_result) {
-                if (!ds_result->has_record_of_type(Messages::ResourceType::DS)) {
-                    // If there's no DS record, this is a misconfigured zone.
-                    dbgln_if(DNS_DEBUG, "DNS: No DS record found for {}", name.to_string());
-                    promise->resolve(false);
-                    return;
-                }
-
-                promise->resolve(true);
-            }).when_rejected([promise](Error const& error) {
-                promise->reject(Error::copy(error));
+                promise->add_child(move(ds_lookup_promise));
             });
-
-            promise->add_child(move(ds_lookup_promise));
         }).when_rejected([promise](Error const& error) {
             promise->reject(Error::copy(error));
         });
@@ -878,14 +890,14 @@ private:
         }
 
         if (records_with_rrsigs.is_empty()) {
-            dbgln_if(DNS_DEBUG, "DNS: No RRSIG records found in DNSSEC response");
+            dbgln_if(1, "DNS: No RRSIG records found in DNSSEC response");
             return {};
         }
 
         auto name = result->name();
 
         Core::deferred_invoke([this, lookup, name, records_with_rrsigs = move(records_with_rrsigs), result = move(result)] mutable {
-            dbgln_if(DNS_DEBUG, "DNS: Resolving DNSKEY for {}", name.to_string());
+            dbgln_if(1, "DNS: Resolving DNSKEY for {}", name.to_string());
             result->set_dnssec_validated(false); // Will be set to true if we successfully validate the RRSIGs.
             result->set_being_dnssec_validated(true);
 
@@ -894,9 +906,9 @@ private:
 
             keys_promise->when_resolved([this, lookup, name, is_root_zone, records_with_rrsigs = move(records_with_rrsigs), result = move(result)](Vector<Messages::Records::DNSKEY> parent_zone_keys) {
                 auto resolve_using_keys = [=, this, records_with_rrsigs = move(records_with_rrsigs)](Vector<Messages::Records::DNSKEY> keys) mutable {
-                    dbgln_if(DNS_DEBUG, "DNS: Validating {} RRSIGs for {}; starting with {} keys", records_with_rrsigs.size(), name.to_string(), keys.size());
+                    dbgln_if(1, "DNS: Validating {} RRSIGs for {}; starting with {} keys", records_with_rrsigs.size(), name.to_string(), keys.size());
                     for (auto& key : keys)
-                        dbgln_if(DNS_DEBUG, "- DNSKEY: {}", key.to_string());
+                        dbgln_if(1, "- DNSKEY: {}", key.to_string());
                     Vector<NonnullRefPtr<Core::Promise<Empty>>> promises;
 
                     for (auto& record_and_rrsig : records_with_rrsigs) {
@@ -907,7 +919,7 @@ private:
                         }
                     }
 
-                    dbgln_if(DNS_DEBUG, "DNS: Found {} keys total", keys.size());
+                    dbgln_if(1, "DNS: Found {} keys total", keys.size());
 
                     // (owner | type | class) -> (RRSet, RRSIG, DNSKey*)
                     HashMap<String, CanonicalizedRRSetWithRRSIG> rrsets_with_rrsigs;
@@ -929,7 +941,7 @@ private:
                                     }
                                     return relevant_keys;
                                 }();
-                                dbgln_if(DNS_DEBUG, "DNS: Found {} relevant DNSKEYs for key {}", dnskeys.size(), key);
+                                dbgln_if(1, "DNS: Found {} relevant DNSKEYs for key {}", dnskeys.size(), key);
                                 rrsets_with_rrsigs.set(key, CanonicalizedRRSetWithRRSIG { {}, move(rrsig), move(dnskeys) });
                             }
                             auto& rrset_with_rrsig = *rrsets_with_rrsigs.get(key);
@@ -941,7 +953,7 @@ private:
                         auto& rrset_with_rrsig = entry.value;
 
                         if (rrset_with_rrsig.dnskeys.is_empty()) {
-                            dbgln_if(DNS_DEBUG, "DNS: No DNSKEY found for validation of {} RRs", rrset_with_rrsig.rrset.size());
+                            dbgln_if(1, "DNS: No DNSKEY found for validation of {} RRs", rrset_with_rrsig.rrset.size());
                             continue;
                         }
 
@@ -972,29 +984,32 @@ private:
                     return;
                 }
 
-                dbgln_if(DNS_DEBUG, "DNS: Starting DNSKEY lookup for {}", lookup.name);
-                this->lookup(lookup.name, Messages::Class::IN, { Messages::ResourceType::DNSKEY }, { .validate_dnssec_locally = false })
-                    ->when_resolved([=](NonnullRefPtr<LookupResult const>& dnskey_lookup_result) mutable {
-                        dbgln_if(DNS_DEBUG, "DNSKEY for {}:", name.to_string());
-                        auto key_records = dnskey_lookup_result->records(Messages::ResourceType::DNSKEY);
-                        for (auto& record : key_records)
-                            dbgln_if(DNS_DEBUG, "- DNSKEY: {}", record.to_string());
-                        Vector<Messages::Records::DNSKEY> keys;
-                        keys.ensure_capacity(parent_zone_keys.size() + dnskey_lookup_result->records().size());
-                        for (auto& record : parent_zone_keys)
-                            keys.append(record);
-                        for (auto& record : key_records)
-                            keys.append(move(record.record).get<Messages::Records::DNSKEY>());
-                        resolve_using_keys(move(keys));
-                    })
-                    .when_rejected([=](auto& error) mutable {
-                        if (parent_zone_keys.is_empty()) {
-                            dbgln_if(DNS_DEBUG, "Failed to resolve DNSKEY for {}: {}", name.to_string(), error);
-                            lookup.promise->reject(move(error));
-                            return;
-                        }
-                        resolve_using_keys(move(parent_zone_keys));
-                    });
+                // NOTE: We have to defer here due to keys_promises being resolved from a lookup, which is whilst pending lookups are locked.
+                Core::deferred_invoke([this, lookup, name, parent_zone_keys = move(parent_zone_keys), resolve_using_keys = move(resolve_using_keys)] {
+                    dbgln_if(1, "DNS: Starting DNSKEY lookup for {}", lookup.name);
+                    this->lookup(lookup.name, Messages::Class::IN, { Messages::ResourceType::DNSKEY }, { .validate_dnssec_locally = false })
+                        ->when_resolved([=](NonnullRefPtr<LookupResult const>& dnskey_lookup_result) mutable {
+                            dbgln_if(1, "DNSKEY for {}:", name.to_string());
+                            auto key_records = dnskey_lookup_result->records(Messages::ResourceType::DNSKEY);
+                            for (auto& record : key_records)
+                                dbgln_if(1, "- DNSKEY: {}", record.to_string());
+                            Vector<Messages::Records::DNSKEY> keys;
+                            keys.ensure_capacity(parent_zone_keys.size() + dnskey_lookup_result->records().size());
+                            for (auto& record : parent_zone_keys)
+                                keys.append(record);
+                            for (auto& record : key_records)
+                                keys.append(move(record.record).get<Messages::Records::DNSKEY>());
+                            resolve_using_keys(move(keys));
+                        })
+                        .when_rejected([=](auto& error) mutable {
+                            if (parent_zone_keys.is_empty()) {
+                                dbgln_if(1, "Failed to resolve DNSKEY for {}: {}", name.to_string(), error);
+                                lookup.promise->reject(move(error));
+                                return;
+                            }
+                            resolve_using_keys(move(parent_zone_keys));
+                        });
+                });
             }).when_rejected([lookup](Error const& error) {
                 lookup.promise->reject(Error::copy(error));
             });
@@ -1007,24 +1022,27 @@ private:
                         return;
                     }
 
-                    auto parent_result_promise = this->lookup(lookup.parsed_name.parent().to_string().to_byte_string(), Messages::Class::IN, { Messages::ResourceType::DNSKEY }, { .validate_dnssec_locally = true });
-                    parent_result_promise->when_resolved([lookup, keys_promise](NonnullRefPtr<LookupResult const> const& parent_result) {
-                        if (!parent_result->is_dnssec_validated()) {
-                            keys_promise->reject(Error::from_string_literal("Parent zone is not DNSSEC validated"));
-                            return;
-                        }
+                    // NOTE: We have to defer here due to chain_valid_promise being potentially resolved from a lookup, which is whilst pending lookups are locked.
+                    Core::deferred_invoke([this, lookup, keys_promise] {
+                        auto parent_result_promise = this->lookup(lookup.parsed_name.parent().to_string().to_byte_string(), Messages::Class::IN, { Messages::ResourceType::DNSKEY }, { .validate_dnssec_locally = true });
+                        parent_result_promise->when_resolved([lookup, keys_promise](NonnullRefPtr<LookupResult const> const& parent_result) {
+                            if (!parent_result->is_dnssec_validated()) {
+                                keys_promise->reject(Error::from_string_literal("Parent zone is not DNSSEC validated"));
+                                return;
+                            }
 
-                        Vector<Messages::Records::DNSKEY> parent_zone_keys = parent_result->used_dnskeys();
-                        for (auto& rr : parent_result->records(Messages::ResourceType::DNSKEY))
-                            parent_zone_keys.append(rr.record.get<Messages::Records::DNSKEY>());
+                            Vector<Messages::Records::DNSKEY> parent_zone_keys = parent_result->used_dnskeys();
+                            for (auto& rr : parent_result->records(Messages::ResourceType::DNSKEY))
+                                parent_zone_keys.append(rr.record.get<Messages::Records::DNSKEY>());
 
-                        dbgln("Found {} DNSKEYs for parent zone ({})", parent_zone_keys.size(), lookup.parsed_name.parent().to_string());
-                        keys_promise->resolve(move(parent_zone_keys));
-                    }).when_rejected([keys_promise](Error const& error) {
-                        keys_promise->reject(Error::copy(error));
+                            dbgln("Found {} DNSKEYs for parent zone ({})", parent_zone_keys.size(), lookup.parsed_name.parent().to_string());
+                            keys_promise->resolve(move(parent_zone_keys));
+                        }).when_rejected([keys_promise](Error const& error) {
+                            keys_promise->reject(Error::copy(error));
+                        });
+
+                        keys_promise->add_child(move(parent_result_promise));
                     });
-
-                    keys_promise->add_child(move(parent_result_promise));
                 }).when_rejected([keys_promise](Error const& error) {
                     keys_promise->reject(Error::copy(error));
                 });
@@ -1043,7 +1061,7 @@ private:
         for (auto& key : rrset_with_rrsig.dnskeys) {
             if (key.calculated_key_tag == rrset_with_rrsig.rrsig.key_tag)
                 return &key;
-            dbgln_if(DNS_DEBUG, "DNS: DNSKEY with tag {} does not match RRSIG with tag {}", key.calculated_key_tag, rrset_with_rrsig.rrsig.key_tag);
+            dbgln_if(1, "DNS: DNSKEY with tag {} does not match RRSIG with tag {}", key.calculated_key_tag, rrset_with_rrsig.rrsig.key_tag);
         }
         return nullptr;
     }
@@ -1073,7 +1091,7 @@ private:
 
         auto& dnskey = *find_dnskey(rrset_with_rrsig);
 
-        if constexpr (DNS_DEBUG) {
+        if constexpr (1) {
             dbgln("Validating RRSet with RRSIG for {}", result->name().to_string());
             for (auto& rr : rrset_with_rrsig.rrset)
                 dbgln("- RR {}", rr.to_string());
@@ -1131,7 +1149,7 @@ private:
         TRY_OR_REJECT_PROMISE(promise, rrsig.signers_name.to_raw(to_be_signed));
         TRY_OR_REJECT_PROMISE(promise, to_be_signed.try_append(canon_encoded.data(), canon_encoded.size()));
 
-        dbgln_if(DNS_DEBUG, "To be signed: {:hex-dump}", to_be_signed.bytes());
+        dbgln_if(1, "To be signed: {:hex-dump}", to_be_signed.bytes());
 
         switch (dnskey.algorithm) {
         case Messages::DNSSEC::Algorithm::RSAMD5: {
@@ -1253,7 +1271,7 @@ private:
                 set_socket(move(result.socket), result.mode);
                 promise->resolve(true);
             }).when_rejected([this, promise](Error const& error) {
-                dbgln_if(DNS_DEBUG, "DNS: Failed to create socket: {}", error);
+                dbgln_if(1, "DNS: Failed to create socket: {}", error);
                 m_attempting_restart = false;
                 promise->resolve(false);
             });
