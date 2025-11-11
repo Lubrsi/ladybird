@@ -101,11 +101,28 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                     promise->reject(result.release_error());
                 }
             } else if (auto v6 = IPv6Address::from_string(server_address); v6.has_value()) {
-                return make_resolver({ v6.value(), static_cast<u16>(use_tls ? 853 : 53) });
+                auto result = make_resolver({ v6.value(), static_cast<u16>(use_tls ? 853 : 53) });
+                if (!result.is_error()) {
+                    promise->resolve(result.release_value());
+                } else {
+                    promise->reject(result.release_error());
+                }
             } else {
-                return TRY(resolver.lookup(server_address)->await())->cached_addresses().first().visit([&](auto& address) {
-                    return make_resolver({ address, static_cast<u16>(use_tls ? 853 : 53) });
+                auto lookup_promise = resolver.lookup(server_address);
+                lookup_promise->when_resolved([use_tls, promise, make_resolver = move(make_resolver)](NonnullRefPtr<DNS::LookupResult const> const& result) {
+                    result->cached_addresses().first().visit([use_tls, promise, make_resolver = move(make_resolver)](auto& address) {
+                        auto resolver_result = make_resolver({ address, static_cast<u16>(use_tls ? 853 : 53) });
+                        if (!resolver_result.is_error()) {
+                            promise->resolve(resolver_result.release_value());
+                        } else {
+                            promise->reject(resolver_result.release_error());
+                        }
+                    });
+                }).when_rejected([promise](Error const& error) {
+                    promise->reject(Error::copy(error));
                 });
+
+                promise->add_child(move(lookup_promise));
             }
 
             return promise;
