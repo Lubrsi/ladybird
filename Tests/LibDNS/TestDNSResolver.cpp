@@ -36,17 +36,21 @@ TEST_CASE(test_udp)
         }
     };
 
-    TRY_OR_FAIL(resolver.when_socket_ready()->await());
+    auto when_socket_ready_promise = resolver.when_socket_ready();
 
-    resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
-        ->when_resolved([&](auto& result) {
-            EXPECT(!result->records().is_empty());
-            loop.quit(0);
-        })
-        .when_rejected([&](auto& error) {
-            outln("Failed to resolve: {}", error);
-            loop.quit(1);
-        });
+    when_socket_ready_promise->when_resolved([&loop, &resolver, when_socket_ready_promise](auto&) {
+        NonnullRefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>> lookup_promise = resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
+            ->when_resolved([&](auto& result) {
+                EXPECT(!result->records().is_empty());
+                loop.quit(0);
+            })
+            .when_rejected([&](auto& error) {
+                outln("Failed to resolve: {}", error);
+                loop.quit(1);
+            });
+
+        when_socket_ready_promise->add_child(move(lookup_promise));
+    });
 
     EXPECT_EQ(0, loop.exec());
 }
@@ -82,17 +86,21 @@ TEST_CASE(test_tcp)
         }
     };
 
-    TRY_OR_FAIL(resolver.when_socket_ready()->await());
+    auto when_socket_ready_promise = resolver.when_socket_ready();
 
-    resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
-        ->when_resolved([&](auto& result) {
-            EXPECT(!result->records().is_empty());
-            loop.quit(0);
-        })
-        .when_rejected([&](auto& error) {
-            outln("Failed to resolve: {}", error);
-            loop.quit(1);
-        });
+    when_socket_ready_promise->when_resolved([&loop, &resolver, when_socket_ready_promise](auto&) {
+        NonnullRefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>> lookup_promise = resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
+            ->when_resolved([&loop](auto& result) {
+                EXPECT(!result->records().is_empty());
+                loop.quit(0);
+            })
+            .when_rejected([&loop](auto& error) {
+                outln("Failed to resolve: {}", error);
+                loop.quit(1);
+            });
+
+        when_socket_ready_promise->add_child(move(lookup_promise));
+    });
 
     EXPECT_EQ(0, loop.exec());
 }
@@ -127,17 +135,21 @@ TEST_CASE(test_tls)
         }
     };
 
-    TRY_OR_FAIL(resolver.when_socket_ready()->await());
+    auto when_socket_ready_promise = resolver.when_socket_ready();
 
-    resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
-        ->when_resolved([&](auto& result) {
-            EXPECT(!result->records().is_empty());
-            loop.quit(0);
-        })
-        .when_rejected([&](auto& error) {
-            outln("Failed to resolve: {}", error);
-            loop.quit(1);
-        });
+    when_socket_ready_promise->when_resolved([&loop, &resolver, when_socket_ready_promise](auto&) {
+        NonnullRefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>> lookup_promise = resolver.lookup("google.com", DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
+            ->when_resolved([&loop](auto& result) {
+                EXPECT(!result->records().is_empty());
+                loop.quit(0);
+            })
+            .when_rejected([&loop](auto& error) {
+                outln("Failed to resolve: {}", error);
+                loop.quit(1);
+            });
+
+        when_socket_ready_promise->add_child(move(lookup_promise));
+    });
 
     EXPECT_EQ(0, loop.exec());
 }
