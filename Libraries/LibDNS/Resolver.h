@@ -36,7 +36,6 @@
     })
 
 namespace DNS {
-
 // FIXME: Load these keys from a file (likely something trusted by the system, e.g. "whatever systemd does").
 // https://data.iana.org/root-anchors/root-anchors.xml
 static Vector<Messages::Records::DNSKEY> s_root_zone_dnskeys = {
@@ -201,6 +200,70 @@ private:
     Vector<Messages::Records::DNSKEY> m_used_dnskeys {};
     HashTable<u16> m_seen_key_tags;
     u16 m_id { 0 };
+};
+
+class ResolverTunnel {
+    AK_MAKE_NONMOVABLE(ResolverTunnel);
+    AK_MAKE_NONCOPYABLE(ResolverTunnel);
+
+public:
+    virtual ~ResolverTunnel() = default;
+
+    virtual void dispatch_query();
+
+    Function<void(Messages::Message)> on_message_received;
+
+protected:
+    ResolverTunnel() = default;
+};
+
+class UDPSocketResolverTunnel : public ResolverTunnel {
+public:
+    UDPSocketResolverTunnel(MaybeOwned<Core::UDPSocket> udp_socket)
+        : m_udp_socket(move(udp_socket))
+    {
+        m_udp_socket.with_write_locked([this](MaybeOwned<Core::UDPSocket>& socket) {
+            socket->on_ready_to_read = [this] {
+                process_incoming_messages();
+            };
+            socket->set_notifications_enabled(true);
+        });
+    }
+
+    virtual ~UDPSocketResolverTunnel() override = default;
+
+    void dispatch_query() override
+    {}
+
+private:
+    Threading::RWLockProtected<MaybeOwned<Core::UDPSocket>> m_udp_socket;
+
+    ErrorOr<Messages::Message> parse_one_message()
+    {
+        return m_udp_socket.with_write_locked([&](auto& socket) { return Messages::Message::from_raw(*socket); });
+    }
+
+    void process_incoming_messages()
+    {
+        for (;;) {
+            if (auto result = m_udp_socket.with_read_locked([](auto& socket) {
+                return socket->can_read_without_blocking();
+            });
+            result.is_error() || !result.value()) {
+                break;
+            }
+
+            auto message_or_err = parse_one_message();
+            if (message_or_err.is_error()) {
+                if (!message_or_err.error().is_errno() || message_or_err.error().code() != EAGAIN)
+                    dbgln("DNS: (UDP) Failed to receive message: {}", message_or_err.error());
+                break;
+            }
+
+            if (on_message_received)
+                on_message_received(message_or_err.release_value());
+        }
+    }
 };
 
 class Resolver {
@@ -656,9 +719,6 @@ public:
 private:
     ErrorOr<Messages::Message> parse_one_message()
     {
-        if (m_mode == ConnectionMode::UDP)
-            return m_socket.with_write_locked([&](auto& socket) { return Messages::Message::from_raw(**socket); });
-
         return m_socket.with_write_locked([&](auto& socket) -> ErrorOr<Messages::Message> {
             if (!TRY((*socket)->can_read_without_blocking()))
                 return Error::from_errno(EAGAIN);
@@ -671,65 +731,50 @@ private:
         });
     }
 
-    void process_incoming_messages()
+    void process_incoming_message(Messages::Message message)
     {
-        while (true) {
-            if (auto result = m_socket.with_read_locked([](auto& socket) {
-                    return (*socket)->can_read_without_blocking();
-                });
-                result.is_error() || !result.value())
-                break;
-            auto message_or_err = parse_one_message();
-            if (message_or_err.is_error()) {
-                if (!message_or_err.error().is_errno() || message_or_err.error().code() != EAGAIN)
-                    dbgln("DNS: Failed to receive message: {}", message_or_err.error());
-                break;
+        auto result = m_pending_lookups.with_write_locked([&](auto& lookups) -> ErrorOr<void> {
+            auto* lookup = lookups->find(message.header.id);
+            if (!lookup)
+                return Error::from_string_literal("No pending lookup found for this message");
+
+            if (lookup->result.is_null()) {
+                dbgln_if(1, "DNS: Received a message with no pending lookup (id={})", message.header.id);
+                return {}; // Message is a response to a lookup that's been purged from the cache, ignore it
             }
 
-            auto message = message_or_err.release_value();
-            auto result = m_pending_lookups.with_write_locked([&](auto& lookups) -> ErrorOr<void> {
-                auto* lookup = lookups->find(message.header.id);
-                if (!lookup)
-                    return Error::from_string_literal("No pending lookup found for this message");
+            lookup->repeat_timer->stop();
 
-                if (lookup->result.is_null()) {
-                    dbgln_if(1, "DNS: Received a message with no pending lookup (id={})", message.header.id);
-                    return {}; // Message is a response to a lookup that's been purged from the cache, ignore it
+            auto result = lookup->result.strong_ref();
+            if (result->is_dnssec_validated())
+                return validate_dnssec(move(message), *lookup, *result);
+
+            if constexpr (1) {
+                switch (message.header.options.response_code()) {
+                case Messages::Options::ResponseCode::FormatError:
+                    dbgln("DNS: Received FormatError response code");
+                    break;
+                case Messages::Options::ResponseCode::ServerFailure:
+                    dbgln("DNS: Received ServerFailure response code");
+                    break;
+                case Messages::Options::ResponseCode::NameError:
+                    dbgln("DNS: Received NameError response code");
+                    break;
+                default:
+                    break;
                 }
+            }
 
-                lookup->repeat_timer->stop();
+            for (auto& record : message.answers)
+                result->add_record(move(record));
 
-                auto result = lookup->result.strong_ref();
-                if (result->is_dnssec_validated())
-                    return validate_dnssec(move(message), *lookup, *result);
-
-                if constexpr (1) {
-                    switch (message.header.options.response_code()) {
-                    case Messages::Options::ResponseCode::FormatError:
-                        dbgln("DNS: Received FormatError response code");
-                        break;
-                    case Messages::Options::ResponseCode::ServerFailure:
-                        dbgln("DNS: Received ServerFailure response code");
-                        break;
-                    case Messages::Options::ResponseCode::NameError:
-                        dbgln("DNS: Received NameError response code");
-                        break;
-                    default:
-                        break;
-                    }
-                }
-
-                for (auto& record : message.answers)
-                    result->add_record(move(record));
-
-                result->finished_request();
-                lookup->promise->resolve(*result);
-                lookups->remove(message.header.id);
-                return {};
-            });
-            if (result.is_error())
-                dbgln_if(1, "DNS: Received a message with no pending lookup: {}", result.error());
-        }
+            result->finished_request();
+            lookup->promise->resolve(*result);
+            lookups->remove(message.header.id);
+            return {};
+        });
+        if (result.is_error())
+            dbgln_if(1, "DNS: Received a message with no pending lookup: {}", result.error());
     }
 
     using RRSet = Vector<Messages::ResourceRecord>;
@@ -1284,15 +1329,13 @@ private:
         return promise;
     }
 
-    void set_socket(MaybeOwned<Core::Socket> socket, ConnectionMode mode = ConnectionMode::UDP)
+    void set_tunnel(MaybeOwned<ResolverTunnel> tunnel)
     {
-        m_mode = mode;
-        m_socket.with_write_locked([&](auto& s) {
-            s = move(socket);
-            (*s)->on_ready_to_read = [this] {
-                process_incoming_messages();
+        m_tunnel.with_write_locked([&](auto& t) {
+            t = move(tunnel);
+            (*t)->on_message_received = [this](Messages::Message message) {
+                process_incoming_message(move(message));
             };
-            (*s)->set_notifications_enabled(true);
         });
     }
 
@@ -1312,10 +1355,9 @@ private:
 
     Threading::RWLockProtected<HashMap<ByteString, NonnullRefPtr<LookupResult>>> m_cache;
     Threading::RWLockProtected<NonnullOwnPtr<RedBlackTree<u16, PendingLookup>>> m_pending_lookups;
-    Threading::RWLockProtected<Optional<MaybeOwned<Core::Socket>>> m_socket;
+    Threading::RWLockProtected<Optional<MaybeOwned<ResolverTunnel>>> m_tunnel;
     CreateSocketFunction m_create_socket;
     bool m_attempting_restart { false };
-    ConnectionMode m_mode { ConnectionMode::UDP };
 };
 
 }

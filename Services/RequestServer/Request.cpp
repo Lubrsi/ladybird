@@ -21,9 +21,7 @@ namespace RequestServer {
 static long s_connect_timeout_seconds = 90L;
 
 NonnullOwnPtr<Request> Request::fetch(
-    i32 request_id,
     Optional<DiskCache&> disk_cache,
-    ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url,
@@ -33,15 +31,13 @@ NonnullOwnPtr<Request> Request::fetch(
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
 {
-    auto request = adopt_own(*new Request { request_id, disk_cache, client, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
+    auto request = adopt_own(*new Request { disk_cache, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
     request->process();
 
     return request;
 }
 
 NonnullOwnPtr<Request> Request::connect(
-    i32 request_id,
-    ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url,
@@ -62,9 +58,7 @@ NonnullOwnPtr<Request> Request::connect(
 }
 
 Request::Request(
-    i32 request_id,
     Optional<DiskCache&> disk_cache,
-    ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url,
@@ -73,10 +67,8 @@ Request::Request(
     ByteBuffer request_body,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
-    : m_request_id(request_id)
     , m_type(Type::Fetch)
     , m_disk_cache(disk_cache)
-    , m_client(client)
     , m_curl_multi_handle(curl_multi)
     , m_resolver(resolver)
     , m_url(move(url))
@@ -89,12 +81,9 @@ Request::Request(
 }
 
 Request::Request(
-    i32 request_id,
-    ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url)
-    : m_request_id(request_id)
     , m_type(Type::Connect)
     , m_client(client)
     , m_curl_multi_handle(curl_multi)
@@ -235,7 +224,7 @@ void Request::handle_read_cache_state()
     if (inform_client_request_started().is_error())
         return;
 
-    m_client.async_headers_became_available(m_request_id, m_response_headers, m_status_code, m_reason_phrase);
+    headers_received(m_response_headers, m_status_code, m_reason_phrase);
     m_sent_response_headers_to_client = true;
 
     m_cache_entry_reader->pipe_to(
@@ -448,20 +437,20 @@ void Request::handle_complete_state()
             }
         }
 
-        m_client.async_request_finished(m_request_id, m_bytes_transferred_to_client, timing_info, m_network_error);
+        request_finished(m_bytes_transferred_to_client, timing_info, m_network_error);
     }
 
-    m_client.request_complete({}, m_request_id);
+    request_complete();
 }
 
 void Request::handle_error_state()
 {
     if (m_type == Type::Fetch) {
         // FIXME: Implement timing info for failed requests.
-        m_client.async_request_finished(m_request_id, m_bytes_transferred_to_client, {}, m_network_error.value_or(Requests::NetworkError::Unknown));
+        request_finished(m_bytes_transferred_to_client, {}, m_network_error.value_or(Requests::NetworkError::Unknown));
     }
 
-    m_client.request_complete({}, m_request_id);
+    request_complete();
 }
 
 size_t Request::on_header_received(void* buffer, size_t size, size_t nmemb, void* user_data)
@@ -546,7 +535,7 @@ ErrorOr<void> Request::inform_client_request_started()
     }
 
     m_client_request_pipe = request_pipe.release_value();
-    m_client.async_request_started(m_request_id, IPC::File::adopt_fd(m_client_request_pipe->reader_fd()));
+    request_started(m_client_request_pipe->reader_fd());
 
     return {};
 }
@@ -557,7 +546,7 @@ void Request::transfer_headers_to_client_if_needed()
         return;
 
     m_status_code = acquire_status_code();
-    m_client.async_headers_became_available(m_request_id, m_response_headers, m_status_code, m_reason_phrase);
+    headers_received(m_response_headers, m_status_code, m_reason_phrase);
 
     if (m_cache_entry_writer.has_value()) {
         if (m_cache_entry_writer->write_status_and_reason(m_status_code, m_reason_phrase, m_response_headers).is_error())

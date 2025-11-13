@@ -28,27 +28,6 @@ namespace RequestServer {
 
 class Request : public Weakable<Request> {
 public:
-    static NonnullOwnPtr<Request> fetch(
-        i32 request_id,
-        Optional<DiskCache&> disk_cache,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        ByteString method,
-        HTTP::HeaderMap request_headers,
-        ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Core::ProxyData proxy_data);
-
-    static NonnullOwnPtr<Request> connect(
-        i32 request_id,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        CacheLevel cache_level);
-
     ~Request();
 
     URL::URL const& url() const { return m_url; }
@@ -57,6 +36,12 @@ public:
 
     void notify_request_unblocked(Badge<DiskCache>);
     void notify_fetch_complete(Badge<ConnectionFromClient>, int result_code);
+
+protected:
+    virtual void request_started(int /* reader_fd */) {}
+    virtual void headers_received(HTTP::HeaderMap /* response_headers */, Optional<u32> /* status_code */, Optional<String> /* reason_phrase */) {}
+    virtual void request_finished(u64 /* total_size */, Requests::RequestTimingInfo /* timing_info */, Optional<Requests::NetworkError> /* network_error */) {}
+    virtual void request_complete() {}
 
 private:
     enum class Type : u8 {
@@ -76,9 +61,7 @@ private:
     };
 
     Request(
-        i32 request_id,
         Optional<DiskCache&> disk_cache,
-        ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
         URL::URL url,
@@ -89,8 +72,6 @@ private:
         Core::ProxyData proxy_data);
 
     Request(
-        i32 request_id,
-        ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
         URL::URL url);
@@ -117,14 +98,10 @@ private:
     u32 acquire_status_code() const;
     Requests::RequestTimingInfo acquire_timing_info() const;
 
-    ConnectionFromClient& client();
-
-    i32 m_request_id { 0 };
     Type m_type { Type::Fetch };
     State m_state { State::Init };
 
     Optional<DiskCache&> m_disk_cache;
-    ConnectionFromClient& m_client;
 
     void* m_curl_multi_handle { nullptr };
     void* m_curl_easy_handle { nullptr };
@@ -161,6 +138,42 @@ private:
     Optional<CacheEntryWriter&> m_cache_entry_writer;
 
     Optional<Requests::NetworkError> m_network_error;
+};
+
+class RequestFromClient final : public Request {
+    static NonnullOwnPtr<RequestFromClient> fetch(
+        Optional<DiskCache&> disk_cache,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        ByteString method,
+        HTTP::HeaderMap request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+    static NonnullOwnPtr<RequestFromClient> connect(
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        CacheLevel cache_level);
+
+private:
+    Request(
+        Optional<DiskCache&> disk_cache,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        ByteString method,
+        HTTP::HeaderMap request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+    Request(
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url);
 };
 
 }
