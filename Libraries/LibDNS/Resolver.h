@@ -23,6 +23,7 @@
 #include <LibCrypto/Curves/EdwardsCurve.h>
 #include <LibCrypto/PK/RSA.h>
 #include <LibDNS/Message.h>
+#include <LibTLS/TLSv12.h>
 #include <LibThreading/RWLockProtected.h>
 
 #define TRY_OR_REJECT_PROMISE(promise, expr)          \
@@ -209,7 +210,8 @@ class ResolverTunnel {
 public:
     virtual ~ResolverTunnel() = default;
 
-    virtual void dispatch_query();
+    virtual ErrorOr<void> dispatch_query(Messages::Message) = 0;
+    virtual bool is_open() const = 0;
 
     Function<void(Messages::Message)> on_message_received;
 
@@ -219,10 +221,10 @@ protected:
 
 class UDPSocketResolverTunnel : public ResolverTunnel {
 public:
-    UDPSocketResolverTunnel(MaybeOwned<Core::UDPSocket> udp_socket)
+    UDPSocketResolverTunnel(MaybeOwned<Core::BufferedSocket<Core::UDPSocket>> udp_socket)
         : m_udp_socket(move(udp_socket))
     {
-        m_udp_socket.with_write_locked([this](MaybeOwned<Core::UDPSocket>& socket) {
+        m_udp_socket.with_write_locked([this](auto& socket) {
             socket->on_ready_to_read = [this] {
                 process_incoming_messages();
             };
@@ -232,11 +234,25 @@ public:
 
     virtual ~UDPSocketResolverTunnel() override = default;
 
-    void dispatch_query() override
-    {}
+    virtual ErrorOr<void> dispatch_query(Messages::Message query) override
+    {
+        ByteBuffer query_bytes;
+        TRY(query.to_raw(query_bytes));
+
+        return m_udp_socket.with_write_locked([&](auto& socket) {
+            return socket->write_until_depleted(query_bytes.bytes());
+        });
+    }
+
+    virtual bool is_open() const override
+    {
+        return m_udp_socket.with_read_locked([](auto const& socket) {
+            return socket->is_open();
+        });
+    }
 
 private:
-    Threading::RWLockProtected<MaybeOwned<Core::UDPSocket>> m_udp_socket;
+    Threading::RWLockProtected<MaybeOwned<Core::BufferedSocket<Core::UDPSocket>>> m_udp_socket;
 
     ErrorOr<Messages::Message> parse_one_message()
     {
@@ -247,6 +263,84 @@ private:
     {
         for (;;) {
             if (auto result = m_udp_socket.with_read_locked([](auto& socket) {
+                return socket->can_read_without_blocking();
+            });
+            result.is_error() || !result.value()) {
+                break;
+            }
+
+            auto message_or_err = parse_one_message();
+            if (message_or_err.is_error()) {
+                if (!message_or_err.error().is_errno() || message_or_err.error().code() != EAGAIN)
+                    dbgln("DNS: (UDP) Failed to receive message: {}", message_or_err.error());
+                break;
+            }
+
+            if (on_message_received)
+                on_message_received(message_or_err.release_value());
+        }
+    }
+};
+
+class TLSSocketResolverTunnel : public ResolverTunnel {
+public:
+    TLSSocketResolverTunnel(MaybeOwned<TLS::TLSv12> tls_socket)
+        : m_tls_socket(move(tls_socket))
+    {
+        m_tls_socket.with_write_locked([this](auto& socket) {
+            socket->on_ready_to_read = [this] {
+                process_incoming_messages();
+            };
+            socket->set_notifications_enabled(true);
+        });
+    }
+
+    virtual ~TLSSocketResolverTunnel() override = default;
+
+    virtual ErrorOr<void> dispatch_query(Messages::Message query) override
+    {
+        ByteBuffer query_bytes;
+        TRY(query.to_raw(query_bytes));
+
+        auto original_query_bytes = query_bytes;
+        query_bytes = TRY(ByteBuffer::create_uninitialized(query_bytes.size() + sizeof(u16)));
+        NetworkOrdered<u16> size = original_query_bytes.size();
+        query_bytes.overwrite(0, &size, sizeof(size));
+        query_bytes.overwrite(sizeof(size), original_query_bytes.data(), original_query_bytes.size());
+
+        return m_tls_socket.with_write_locked([&](MaybeOwned<TLS::TLSv12>& socket) {
+            return socket->write_until_depleted(query_bytes.bytes());
+        });
+    }
+
+    virtual bool is_open() const override
+    {
+        return m_tls_socket.with_read_locked([](auto const& socket) {
+            return socket->is_open();
+        });
+    }
+
+private:
+    Threading::RWLockProtected<MaybeOwned<TLS::TLSv12>> m_tls_socket;
+
+    ErrorOr<Messages::Message> parse_one_message()
+    {
+        return m_tls_socket.with_write_locked([&](auto& socket) -> ErrorOr<Messages::Message> {
+            if (!TRY(socket->can_read_without_blocking()))
+                return Error::from_errno(EAGAIN);
+
+            auto size = TRY(socket->template read_value<NetworkOrdered<u16>>());
+            auto buffer = TRY(ByteBuffer::create_uninitialized(size));
+            TRY(socket->read_until_filled(buffer));
+            FixedMemoryStream stream { static_cast<ReadonlyBytes>(buffer) };
+            return Messages::Message::from_raw(stream);
+        });
+    }
+
+    void process_incoming_messages()
+    {
+        for (;;) {
+            if (auto result = m_tls_socket.with_read_locked([](auto& socket) {
                 return socket->can_read_without_blocking();
             });
             result.is_error() || !result.value()) {
@@ -290,16 +384,11 @@ public:
         static LookupOptions default_() { return {}; }
     };
 
-    struct SocketResult {
-        MaybeOwned<Core::Socket> socket;
-        ConnectionMode mode;
-    };
+    using CreateTunnelFunction = Function<NonnullRefPtr<Core::Promise<MaybeOwned<ResolverTunnel>>>()>;
 
-    using CreateSocketFunction = Function<NonnullRefPtr<Core::Promise<SocketResult>>()>;
-
-    Resolver(CreateSocketFunction create_socket)
+    Resolver(CreateTunnelFunction create_tunnel)
         : m_pending_lookups(make<RedBlackTree<u16, PendingLookup>>())
-        , m_create_socket(move(create_socket))
+        , m_create_tunnel(move(create_tunnel))
     {
         m_cache.with_write_locked([&](auto& cache) {
             auto add_v4v6_entry = [&cache](StringView name_string, IPv4Address v4, IPv6Address v6) {
@@ -352,7 +441,7 @@ public:
 
     void reset_connection()
     {
-        m_socket.with_write_locked([&](auto& socket) { socket = {}; });
+        m_tunnel.with_write_locked([&](auto& tunnel) { tunnel = {}; });
     }
 
     NonnullRefPtr<LookupResult const> expect_cached(StringView name, Messages::Class class_ = Messages::Class::IN)
@@ -652,19 +741,8 @@ public:
                 return lookups->find(query.header.id);
             });
 
-            ByteBuffer query_bytes;
-            MUST(query.to_raw(query_bytes));
-
-            if (m_mode == ConnectionMode::TCP) {
-                auto original_query_bytes = query_bytes;
-                query_bytes = MUST(ByteBuffer::create_uninitialized(query_bytes.size() + sizeof(u16)));
-                NetworkOrdered<u16> size = original_query_bytes.size();
-                query_bytes.overwrite(0, &size, sizeof(size));
-                query_bytes.overwrite(sizeof(size), original_query_bytes.data(), original_query_bytes.size());
-            }
-
-            auto write_result = m_socket.with_write_locked([&](auto& socket) {
-                return (*socket)->write_until_depleted(query_bytes.bytes());
+            auto write_result = m_tunnel.with_write_locked([query = move(query)](auto& tunnel) {
+                return (*tunnel)->dispatch_query(move(query));
             });
             if (write_result.is_error()) {
                 lookup_promise->reject(write_result.release_error());
@@ -717,20 +795,6 @@ public:
     }
 
 private:
-    ErrorOr<Messages::Message> parse_one_message()
-    {
-        return m_socket.with_write_locked([&](auto& socket) -> ErrorOr<Messages::Message> {
-            if (!TRY((*socket)->can_read_without_blocking()))
-                return Error::from_errno(EAGAIN);
-
-            auto size = TRY((*socket)->template read_value<NetworkOrdered<u16>>());
-            auto buffer = TRY(ByteBuffer::create_uninitialized(size));
-            TRY((*socket)->read_until_filled(buffer));
-            FixedMemoryStream stream { static_cast<ReadonlyBytes>(buffer) };
-            return Messages::Message::from_raw(stream);
-        });
-    }
-
     void process_incoming_message(Messages::Message message)
     {
         auto result = m_pending_lookups.with_write_locked([&](auto& lookups) -> ErrorOr<void> {
@@ -1304,16 +1368,16 @@ private:
     {
         auto promise = Core::Promise<bool>::construct();
 
-        auto result = m_socket.with_read_locked(
-            [&](auto& socket) { return socket.has_value() && (*socket)->is_open(); });
+        auto result = m_tunnel.with_read_locked(
+            [&](auto& tunnel) { return tunnel.has_value() && (*tunnel)->is_open(); });
 
         if (attempt_restart && !result && !m_attempting_restart) {
             m_attempting_restart = true;
 
-            auto create_socket_promise = m_create_socket();
-            create_socket_promise->when_resolved([this, promise](SocketResult& result) {
+            auto create_socket_promise = m_create_tunnel();
+            create_socket_promise->when_resolved([this, promise](MaybeOwned<ResolverTunnel>& result) {
                 m_attempting_restart = false;
-                set_socket(move(result.socket), result.mode);
+                set_tunnel(move(result));
                 promise->resolve(true);
             }).when_rejected([this, promise](Error const& error) {
                 dbgln_if(1, "DNS: Failed to create socket: {}", error);
@@ -1356,7 +1420,7 @@ private:
     Threading::RWLockProtected<HashMap<ByteString, NonnullRefPtr<LookupResult>>> m_cache;
     Threading::RWLockProtected<NonnullOwnPtr<RedBlackTree<u16, PendingLookup>>> m_pending_lookups;
     Threading::RWLockProtected<Optional<MaybeOwned<ResolverTunnel>>> m_tunnel;
-    CreateSocketFunction m_create_socket;
+    CreateTunnelFunction m_create_tunnel;
     bool m_attempting_restart { false };
 };
 

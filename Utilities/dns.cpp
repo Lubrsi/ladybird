@@ -73,23 +73,22 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Core::EventLoop loop;
 
     DNS::Resolver resolver {
-        [&] -> NonnullRefPtr<Core::Promise<DNS::Resolver::SocketResult>> {
-            auto promise = Core::Promise<DNS::Resolver::SocketResult>::construct();
+        [&] -> NonnullRefPtr<Core::Promise<MaybeOwned<DNS::ResolverTunnel>>> {
+            auto promise = Core::Promise<MaybeOwned<DNS::ResolverTunnel>>::construct();
 
-            auto make_resolver = [&](Core::SocketAddress const& address) -> ErrorOr<DNS::Resolver::SocketResult> {
+            auto make_resolver = [&](Core::SocketAddress const& address) -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
                 if (use_tls) {
                     TLS::Options options;
                     if (!cert_path.is_empty())
                         options.root_certificates_path = cert_path;
 
                     auto tls = TRY(TLS::TLSv12::connect(address, server_address, move(options)));
-                    return DNS::Resolver::SocketResult { move(tls), DNS::Resolver::ConnectionMode::TCP };
+                    return adopt_own(*new DNS::TLSSocketResolverTunnel(move(tls)));
                 }
 
-                return DNS::Resolver::SocketResult {
-                    TRY(Core::BufferedSocket<Core::UDPSocket>::create(TRY(Core::UDPSocket::connect(address)))),
-                    DNS::Resolver::ConnectionMode::UDP,
-                };
+                return adopt_own(*new DNS::UDPSocketResolverTunnel(
+                    TRY(Core::BufferedSocket<Core::UDPSocket>::create(TRY(Core::UDPSocket::connect(address))))
+                ));
             };
 
             if (auto v4 = IPv4Address::from_string(server_address); v4.has_value()) {
