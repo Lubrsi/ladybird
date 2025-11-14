@@ -82,8 +82,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                     if (!cert_path.is_empty())
                         options.root_certificates_path = cert_path;
 
-                    auto tls = TRY(TLS::TLSv12::connect(address, server_address, move(options)));
-                    return adopt_own(*new DNS::TLSSocketResolverTunnel(move(tls)));
+                    return adopt_own(*new DNS::TLSSocketResolverTunnel(
+                        TRY(TLS::TLSv12::connect(address, server_address, move(options)))
+                    ));
                 }
 
                 return adopt_own(*new DNS::UDPSocketResolverTunnel(

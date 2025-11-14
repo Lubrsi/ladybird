@@ -25,7 +25,7 @@ public:
 
     virtual void die() override;
 
-    void request_complete(Badge<Request>, int request_id);
+    void request_complete(Badge<RequestFromClient>, int request_id);
 
 private:
     explicit ConnectionFromClient(NonnullOwnPtr<IPC::Transport>);
@@ -55,7 +55,7 @@ private:
     HashMap<i32, NonnullOwnPtr<Request>> m_active_requests;
     HashMap<i32, RefPtr<WebSocket::WebSocket>> m_websockets;
 
-    CURLMultiHandleSession m_curl_multi_handle_session;
+    NonnullOwnPtr<CURLMultiHandleSession> m_curl_multi_handle_session;
 
     NonnullRefPtr<Resolver> m_resolver;
     ByteString m_alt_svc_cache_path;

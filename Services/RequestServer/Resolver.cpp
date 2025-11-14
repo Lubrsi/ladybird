@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2024, Ali Mohammad Pur <mpfard@serenityos.org>
  * Copyright (c) 2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -48,7 +49,7 @@ public:
 private:
     CURLMultiHandleSession m_curl_multi_handle_session;
     Vector<NonnullOwnPtr<Request>> m_active_requests;
-}
+};
 
 NonnullRefPtr<Resolver> Resolver::default_resolver()
 {
@@ -57,11 +58,11 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
     if (auto resolver = g_resolver.strong_ref())
         return *resolver;
 
-    auto resolver = adopt_ref(*new Resolver([] -> NonnullRefPtr<Core::Promise<DNS::Resolver::SocketResult>> {
-        auto promise = Core::Promise<DNS::Resolver::SocketResult>::construct();
+    auto resolver = adopt_ref(*new Resolver([] -> NonnullRefPtr<Core::Promise<MaybeOwned<DNS::ResolverTunnel>>> {
+        auto promise = Core::Promise<MaybeOwned<DNS::ResolverTunnel>>::construct();
         auto& dns_info = DNSInfo::the();
 
-        auto make_resolver = [] -> ErrorOr<DNS::Resolver::SocketResult> {
+        auto make_resolver = [] -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
             auto& dns_info = DNSInfo::the();
 
             if (dns_info.use_dns_over_tls) {
@@ -70,16 +71,14 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
                 if (!g_default_certificate_path.is_empty())
                     options.root_certificates_path = g_default_certificate_path;
 
-                return DNS::Resolver::SocketResult {
-                    MaybeOwned<Core::Socket>(TRY(TLS::TLSv12::connect(*dns_info.server_address, *dns_info.server_hostname, move(options)))),
-                    DNS::Resolver::ConnectionMode::TCP,
-                };
+                return adopt_own(*new DNS::TLSSocketResolverTunnel(
+                    TRY(TLS::TLSv12::connect(*dns_info.server_address, *dns_info.server_hostname, move(options)))
+                ));
             }
 
-            return DNS::Resolver::SocketResult {
-                MaybeOwned<Core::Socket>(TRY(Core::BufferedUDPSocket::create(TRY(Core::UDPSocket::connect(*dns_info.server_address))))),
-                DNS::Resolver::ConnectionMode::UDP,
-            };
+            return adopt_own(*new DNS::UDPSocketResolverTunnel(
+                TRY(Core::BufferedSocket<Core::UDPSocket>::create(TRY(Core::UDPSocket::connect(*dns_info.server_address))))
+            ));
         };
 
         if (!dns_info.server_address.has_value()) {
@@ -119,8 +118,8 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
     return resolver;
 }
 
-Resolver::Resolver(DNS::Resolver::CreateSocketFunction create_socket)
-    : dns(move(create_socket))
+Resolver::Resolver(DNS::Resolver::CreateTunnelFunction create_tunnel)
+    : dns(move(create_tunnel))
 {
 }
 

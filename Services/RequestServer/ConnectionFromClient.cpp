@@ -29,6 +29,7 @@ Optional<DiskCache> g_disk_cache;
 
 ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transport)
     : IPC::ConnectionFromClient<RequestClientEndpoint, RequestServerEndpoint>(*this, move(transport), s_client_ids.allocate())
+    , m_curl_multi_handle_session(adopt_own(*new CURLMultiHandleSession()))
     , m_resolver(Resolver::default_resolver())
 {
     s_connections.set(client_id(), *this);
@@ -41,7 +42,7 @@ ConnectionFromClient::~ConnectionFromClient()
     m_active_requests.clear();
 }
 
-void ConnectionFromClient::request_complete(Badge<Request>, int request_id)
+void ConnectionFromClient::request_complete(Badge<RequestFromClient>, int request_id)
 {
     Core::deferred_invoke([weak_self = make_weak_ptr<ConnectionFromClient>(), request_id] {
         if (auto self = weak_self.strong_ref())
@@ -165,7 +166,7 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
 {
     dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_request({}, {})", request_id, url);
 
-    auto request = Request::fetch(request_id, g_disk_cache, *this, m_curl_multi_handle_session.curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
+    auto request = RequestFromClient::fetch(request_id, *this, g_disk_cache,  m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
     m_active_requests.set(request_id, move(request));
 }
 
@@ -192,7 +193,7 @@ void ConnectionFromClient::ensure_connection(URL::URL url, ::RequestServer::Cach
 {
     auto connect_only_request_id = get_random<i32>();
 
-    auto request = Request::connect(connect_only_request_id, *this, m_curl_multi_handle_session.curl_multi_handle(), m_resolver, move(url), cache_level);
+    auto request = RequestFromClient::connect(connect_only_request_id, *this, m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), cache_level);
     m_active_requests.set(connect_only_request_id, move(request));
 }
 
@@ -238,7 +239,7 @@ void ConnectionFromClient::websocket_connect(i64 websocket_id, URL::URL url, Byt
             if (auto const& path = default_certificate_path(); !path.is_empty())
                 connection_info.set_root_certificates_path(path);
 
-            auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session.curl_multi_handle());
+            auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session->curl_multi_handle());
             auto connection = WebSocket::WebSocket::create(move(connection_info), move(impl));
 
             connection->on_open = [this, websocket_id]() {

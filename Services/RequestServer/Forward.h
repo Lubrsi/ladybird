@@ -16,6 +16,7 @@ class ConnectionFromClient;
 class CURLMultiHandleSession;
 class DiskCache;
 class Request;
+class RequestFromClient;
 class RequestPipe;
 
 struct DNSInfo;

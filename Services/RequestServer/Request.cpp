@@ -20,7 +20,9 @@ namespace RequestServer {
 
 static long s_connect_timeout_seconds = 90L;
 
-NonnullOwnPtr<Request> Request::fetch(
+NonnullOwnPtr<RequestFromClient> RequestFromClient::fetch(
+    i32 request_id,
+    ConnectionFromClient& client,
     Optional<DiskCache&> disk_cache,
     void* curl_multi,
     Resolver& resolver,
@@ -31,19 +33,21 @@ NonnullOwnPtr<Request> Request::fetch(
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
 {
-    auto request = adopt_own(*new Request { disk_cache, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
+    auto request = adopt_own(*new RequestFromClient { request_id, client, disk_cache, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
     request->process();
 
     return request;
 }
 
-NonnullOwnPtr<Request> Request::connect(
+NonnullOwnPtr<RequestFromClient> RequestFromClient::connect(
+    i32 request_id,
+    ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url,
     CacheLevel cache_level)
 {
-    auto request = adopt_own(*new Request { request_id, client, curl_multi, resolver, move(url) });
+    auto request = adopt_own(*new RequestFromClient { request_id, client, curl_multi, resolver, move(url) });
 
     switch (cache_level) {
     case CacheLevel::ResolveOnly:
@@ -57,6 +61,56 @@ NonnullOwnPtr<Request> Request::connect(
     return request;
 }
 
+RequestFromClient::RequestFromClient(
+    i32 request_id,
+    ConnectionFromClient& client,
+    Optional<DiskCache&> disk_cache,
+    void* curl_multi,
+    Resolver& resolver,
+    URL::URL url,
+    ByteString method,
+    HTTP::HeaderMap request_headers,
+    ByteBuffer request_body,
+    ByteString alt_svc_cache_path,
+    Core::ProxyData proxy_data)
+        : Request(disk_cache, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), move(proxy_data))
+        , m_request_id(request_id)
+        , m_client(client)
+{
+}
+
+RequestFromClient::RequestFromClient(
+    i32 request_id,
+    ConnectionFromClient& client,
+    void* curl_multi,
+    Resolver& resolver,
+    URL::URL url)
+        : Request(curl_multi, resolver, move(url))
+        , m_request_id(request_id)
+        , m_client(client)
+{
+}
+
+void RequestFromClient::request_started(int reader_fd)
+{
+    m_client.async_request_started(m_request_id, IPC::File::adopt_fd(reader_fd));
+}
+
+void RequestFromClient::headers_received(HTTP::HeaderMap response_headers, Optional<u32> status_code, Optional<String> reason_phrase)
+{
+    m_client.async_headers_became_available(m_request_id, move(response_headers), move(status_code), move(reason_phrase));
+}
+
+void RequestFromClient::request_finished(u64 total_size, Requests::RequestTimingInfo timing_info, Optional<Requests::NetworkError> network_error)
+{
+    m_client.async_request_finished(m_request_id, total_size, move(timing_info), move(network_error));
+}
+
+void RequestFromClient::request_complete()
+{
+    m_client.request_complete({}, m_request_id);
+}
+
 Request::Request(
     Optional<DiskCache&> disk_cache,
     void* curl_multi,
@@ -67,7 +121,7 @@ Request::Request(
     ByteBuffer request_body,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
-    , m_type(Type::Fetch)
+    : m_type(Type::Fetch)
     , m_disk_cache(disk_cache)
     , m_curl_multi_handle(curl_multi)
     , m_resolver(resolver)
@@ -84,8 +138,7 @@ Request::Request(
     void* curl_multi,
     Resolver& resolver,
     URL::URL url)
-    , m_type(Type::Connect)
-    , m_client(client)
+    : m_type(Type::Connect)
     , m_curl_multi_handle(curl_multi)
     , m_resolver(resolver)
     , m_url(move(url))

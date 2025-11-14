@@ -28,7 +28,7 @@ namespace RequestServer {
 
 class Request : public Weakable<Request> {
 public:
-    ~Request();
+    virtual ~Request();
 
     URL::URL const& url() const { return m_url; }
     ByteString const& method() const { return m_method; }
@@ -43,12 +43,6 @@ protected:
     virtual void request_finished(u64 /* total_size */, Requests::RequestTimingInfo /* timing_info */, Optional<Requests::NetworkError> /* network_error */) {}
     virtual void request_complete() {}
 
-private:
-    enum class Type : u8 {
-        Fetch,
-        Connect,
-    };
-
     enum class State : u8 {
         Init,         // Decide whether to service this request from cache or the network.
         ReadCache,    // Read the cached response from disk.
@@ -59,6 +53,9 @@ private:
         Complete,     // Finalize the request with the client.
         Error,        // Any error occured during the request's lifetime.
     };
+
+    void transition_to_state(State);
+    void process();
 
     Request(
         Optional<DiskCache&> disk_cache,
@@ -76,8 +73,11 @@ private:
         Resolver& resolver,
         URL::URL url);
 
-    void transition_to_state(State);
-    void process();
+private:
+    enum class Type : u8 {
+        Fetch,
+        Connect,
+    };
 
     void handle_initial_state();
     void handle_read_cache_state();
@@ -141,7 +141,10 @@ private:
 };
 
 class RequestFromClient final : public Request {
+public:
     static NonnullOwnPtr<RequestFromClient> fetch(
+        i32 request_id,
+        ConnectionFromClient& client,
         Optional<DiskCache&> disk_cache,
         void* curl_multi,
         Resolver& resolver,
@@ -153,13 +156,19 @@ class RequestFromClient final : public Request {
         Core::ProxyData proxy_data);
 
     static NonnullOwnPtr<RequestFromClient> connect(
+        i32 request_id,
+        ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
         URL::URL url,
         CacheLevel cache_level);
 
+    virtual ~RequestFromClient() override = default;
+
 private:
-    Request(
+    RequestFromClient(
+        i32 request_id,
+        ConnectionFromClient& client,
         Optional<DiskCache&> disk_cache,
         void* curl_multi,
         Resolver& resolver,
@@ -170,10 +179,20 @@ private:
         ByteString alt_svc_cache_path,
         Core::ProxyData proxy_data);
 
-    Request(
+    RequestFromClient(
+        i32 request_id,
+        ConnectionFromClient& client,
         void* curl_multi,
         Resolver& resolver,
         URL::URL url);
+
+    virtual void request_started(int reader_fd) override;
+    virtual void headers_received(HTTP::HeaderMap response_headers, Optional<u32> status_code, Optional<String> reason_phrase) override;
+    virtual void request_finished(u64 total_size, Requests::RequestTimingInfo timing_info, Optional<Requests::NetworkError> network_error) override;
+    virtual void request_complete() override;
+
+    i32 m_request_id { 0 };
+    ConnectionFromClient& m_client;
 };
 
 }

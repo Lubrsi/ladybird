@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2024, Ali Mohammad Pur <mpfard@serenityos.org>
  * Copyright (c) 2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -37,7 +38,7 @@ struct Resolver
     DNS::Resolver dns;
 
 private:
-    explicit Resolver(DNS::Resolver::CreateSocketFunction create_socket);
+    explicit Resolver(DNS::Resolver::CreateTunnelFunction create_tunnel);
 };
 
 ByteString const& default_certificate_path();
