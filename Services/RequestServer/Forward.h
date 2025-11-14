@@ -13,6 +13,7 @@ class CacheEntryReader;
 class CacheEntryWriter;
 class CacheIndex;
 class ConnectionFromClient;
+class CURLMultiHandleSession;
 class DiskCache;
 class Request;
 class RequestPipe;

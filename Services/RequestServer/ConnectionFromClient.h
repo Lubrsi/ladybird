@@ -50,25 +50,15 @@ private:
     virtual void websocket_close(i64 websocket_id, u16, ByteString) override;
     virtual Messages::RequestServer::WebsocketSetCertificateResponse websocket_set_certificate(i64, ByteString, ByteString) override;
 
-    static int on_socket_callback(void*, int sockfd, int what, void* user_data, void*);
-    static int on_timeout_callback(void*, long timeout_ms, void* user_data);
-    void check_active_requests();
-
     static ErrorOr<IPC::File> create_client_socket();
-
-    void* m_curl_multi { nullptr };
 
     HashMap<i32, NonnullOwnPtr<Request>> m_active_requests;
     HashMap<i32, RefPtr<WebSocket::WebSocket>> m_websockets;
 
-    RefPtr<Core::Timer> m_timer;
-    HashMap<int, NonnullRefPtr<Core::Notifier>> m_read_notifiers;
-    HashMap<int, NonnullRefPtr<Core::Notifier>> m_write_notifiers;
+    CURLMultiHandleSession m_curl_multi_handle_session;
 
     NonnullRefPtr<Resolver> m_resolver;
     ByteString m_alt_svc_cache_path;
 };
-
-constexpr inline uintptr_t websocket_private_tag = 0x1;
 
 }

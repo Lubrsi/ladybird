@@ -26,4 +26,24 @@ namespace RequestServer {
 ByteString build_curl_resolve_list(DNS::LookupResult const& dns_result, StringView host, u16 port);
 Requests::NetworkError curl_code_to_network_error(int code);
 
+class CURLMultiHandleSession {
+public:
+    CURLMultiHandleSession();
+    ~CURLMultiHandleSession();
+
+    static int on_socket_callback(void*, int sockfd, int what, void* user_data, void*);
+    static int on_timeout_callback(void*, long timeout_ms, void* user_data);
+
+    void check_active_requests();
+
+    void* curl_multi_handle() const { return m_curl_multi; }
+
+private:
+    void* m_curl_multi { nullptr };
+
+    RefPtr<Core::Timer> m_timer;
+    HashMap<int, NonnullRefPtr<Core::Notifier>> m_read_notifiers;
+    HashMap<int, NonnullRefPtr<Core::Notifier>> m_write_notifiers;
+};
+
 }

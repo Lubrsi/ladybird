@@ -35,7 +35,7 @@ public:
     UnixDateTime request_start_time() const { return m_request_start_time; }
 
     void notify_request_unblocked(Badge<DiskCache>);
-    void notify_fetch_complete(Badge<ConnectionFromClient>, int result_code);
+    void notify_fetch_complete(Badge<CURLMultiHandleSession>, int result_code);
 
 protected:
     virtual void request_started(int /* reader_fd */) {}

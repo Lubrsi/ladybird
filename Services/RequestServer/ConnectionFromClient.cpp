@@ -34,31 +34,11 @@ ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transpo
     s_connections.set(client_id(), *this);
 
     m_alt_svc_cache_path = ByteString::formatted("{}/Ladybird/alt-svc-cache.txt", Core::StandardPaths::user_data_directory());
-
-    m_curl_multi = curl_multi_init();
-
-    auto set_option = [this](auto option, auto value) {
-        auto result = curl_multi_setopt(m_curl_multi, option, value);
-        VERIFY(result == CURLM_OK);
-    };
-    set_option(CURLMOPT_SOCKETFUNCTION, &on_socket_callback);
-    set_option(CURLMOPT_SOCKETDATA, this);
-    set_option(CURLMOPT_TIMERFUNCTION, &on_timeout_callback);
-    set_option(CURLMOPT_TIMERDATA, this);
-
-    m_timer = Core::Timer::create_single_shot(0, [this] {
-        auto result = curl_multi_socket_action(m_curl_multi, CURL_SOCKET_TIMEOUT, 0, nullptr);
-        VERIFY(result == CURLM_OK);
-        check_active_requests();
-    });
 }
 
 ConnectionFromClient::~ConnectionFromClient()
 {
     m_active_requests.clear();
-
-    curl_multi_cleanup(m_curl_multi);
-    m_curl_multi = nullptr;
 }
 
 void ConnectionFromClient::request_complete(Badge<Request>, int request_id)
@@ -185,94 +165,8 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
 {
     dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_request({}, {})", request_id, url);
 
-    auto request = Request::fetch(request_id, g_disk_cache, *this, m_curl_multi, m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
+    auto request = Request::fetch(request_id, g_disk_cache, *this, m_curl_multi_handle_session.curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
     m_active_requests.set(request_id, move(request));
-}
-
-int ConnectionFromClient::on_socket_callback(CURL*, int sockfd, int what, void* user_data, void*)
-{
-    auto* client = static_cast<ConnectionFromClient*>(user_data);
-
-    if (what == CURL_POLL_REMOVE) {
-        client->m_read_notifiers.remove(sockfd);
-        client->m_write_notifiers.remove(sockfd);
-        return 0;
-    }
-
-    if (what & CURL_POLL_IN) {
-        client->m_read_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
-            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Read);
-            notifier->on_activation = [client, sockfd, multi] {
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_IN, nullptr);
-                VERIFY(result == CURLM_OK);
-
-                client->check_active_requests();
-            };
-
-            notifier->set_enabled(true);
-            return notifier;
-        });
-    }
-
-    if (what & CURL_POLL_OUT) {
-        client->m_write_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
-            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Write);
-            notifier->on_activation = [client, sockfd, multi] {
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_OUT, nullptr);
-                VERIFY(result == CURLM_OK);
-
-                client->check_active_requests();
-            };
-
-            notifier->set_enabled(true);
-            return notifier;
-        });
-    }
-
-    return 0;
-}
-
-int ConnectionFromClient::on_timeout_callback(void*, long timeout_ms, void* user_data)
-{
-    auto* client = static_cast<ConnectionFromClient*>(user_data);
-    if (!client->m_timer)
-        return 0;
-
-    if (timeout_ms < 0)
-        client->m_timer->stop();
-    else
-        client->m_timer->restart(timeout_ms);
-
-    return 0;
-}
-
-void ConnectionFromClient::check_active_requests()
-{
-    int msgs_in_queue = 0;
-    while (auto* msg = curl_multi_info_read(m_curl_multi, &msgs_in_queue)) {
-        if (msg->msg != CURLMSG_DONE)
-            continue;
-
-        void* application_private = nullptr;
-        auto result = curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &application_private);
-        VERIFY(result == CURLE_OK);
-        VERIFY(application_private != nullptr);
-
-        // FIXME: Come up with a unified way to track websockets and standard fetches instead of this nasty tagged pointer
-        if (reinterpret_cast<uintptr_t>(application_private) & websocket_private_tag) {
-            auto* websocket_impl = reinterpret_cast<WebSocketImplCurl*>(reinterpret_cast<uintptr_t>(application_private) & ~websocket_private_tag);
-            if (msg->data.result == CURLE_OK) {
-                if (!websocket_impl->did_connect())
-                    websocket_impl->on_connection_error();
-            } else {
-                websocket_impl->on_connection_error();
-            }
-            continue;
-        }
-
-        auto* request = static_cast<Request*>(application_private);
-        request->notify_fetch_complete({}, msg->data.result);
-    }
 }
 
 Messages::RequestServer::StopRequestResponse ConnectionFromClient::stop_request(i32 request_id)
@@ -298,7 +192,7 @@ void ConnectionFromClient::ensure_connection(URL::URL url, ::RequestServer::Cach
 {
     auto connect_only_request_id = get_random<i32>();
 
-    auto request = Request::connect(connect_only_request_id, *this, m_curl_multi, m_resolver, move(url), cache_level);
+    auto request = Request::connect(connect_only_request_id, *this, m_curl_multi_handle_session.curl_multi_handle(), m_resolver, move(url), cache_level);
     m_active_requests.set(connect_only_request_id, move(request));
 }
 
@@ -344,7 +238,7 @@ void ConnectionFromClient::websocket_connect(i64 websocket_id, URL::URL url, Byt
             if (auto const& path = default_certificate_path(); !path.is_empty())
                 connection_info.set_root_certificates_path(path);
 
-            auto impl = WebSocketImplCurl::create(m_curl_multi);
+            auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session.curl_multi_handle());
             auto connection = WebSocket::WebSocket::create(move(connection_info), move(impl));
 
             connection->on_open = [this, websocket_id]() {

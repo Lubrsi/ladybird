@@ -7,6 +7,8 @@
 
 #include <AK/Enumerate.h>
 #include <RequestServer/CURL.h>
+#include <RequestServer/Request.h>
+#include <RequestServer/WebSocketImplCurl.h>
 
 namespace RequestServer {
 
@@ -53,6 +55,118 @@ Requests::NetworkError curl_code_to_network_error(int code)
     default:
         return Requests::NetworkError::Unknown;
     }
+}
+
+CURLMultiHandleSession::CURLMultiHandleSession()
+{
+    m_curl_multi = curl_multi_init();
+
+    auto set_option = [this](auto option, auto value) {
+        auto result = curl_multi_setopt(m_curl_multi, option, value);
+        VERIFY(result == CURLM_OK);
+    };
+    set_option(CURLMOPT_SOCKETFUNCTION, &on_socket_callback);
+    set_option(CURLMOPT_SOCKETDATA, this);
+    set_option(CURLMOPT_TIMERFUNCTION, &on_timeout_callback);
+    set_option(CURLMOPT_TIMERDATA, this);
+
+    m_timer = Core::Timer::create_single_shot(0, [this] {
+        auto result = curl_multi_socket_action(m_curl_multi, CURL_SOCKET_TIMEOUT, 0, nullptr);
+        VERIFY(result == CURLM_OK);
+        check_active_requests();
+    });
+}
+
+CURLMultiHandleSession::~CURLMultiHandleSession()
+{
+    curl_multi_cleanup(m_curl_multi);
+    m_curl_multi = nullptr;
+}
+
+int CURLMultiHandleSession::on_socket_callback(CURL*, int sockfd, int what, void* user_data, void*)
+{
+    auto* client = static_cast<CURLMultiHandleSession*>(user_data);
+
+    if (what == CURL_POLL_REMOVE) {
+        client->m_read_notifiers.remove(sockfd);
+        client->m_write_notifiers.remove(sockfd);
+        return 0;
+    }
+
+    if (what & CURL_POLL_IN) {
+        client->m_read_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
+            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Read);
+            notifier->on_activation = [client, sockfd, multi] {
+                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_IN, nullptr);
+                VERIFY(result == CURLM_OK);
+
+                client->check_active_requests();
+            };
+
+            notifier->set_enabled(true);
+            return notifier;
+        });
+    }
+
+    if (what & CURL_POLL_OUT) {
+        client->m_write_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
+            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Write);
+            notifier->on_activation = [client, sockfd, multi] {
+                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_OUT, nullptr);
+                VERIFY(result == CURLM_OK);
+
+                client->check_active_requests();
+            };
+
+            notifier->set_enabled(true);
+            return notifier;
+        });
+    }
+
+    return 0;
+}
+
+void CURLMultiHandleSession::check_active_requests()
+{
+    int msgs_in_queue = 0;
+    while (auto* msg = curl_multi_info_read(m_curl_multi, &msgs_in_queue)) {
+        if (msg->msg != CURLMSG_DONE)
+            continue;
+
+        void* application_private = nullptr;
+        auto result = curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &application_private);
+        VERIFY(result == CURLE_OK);
+        VERIFY(application_private != nullptr);
+
+        // FIXME: Come up with a unified way to track websockets and standard fetches instead of this nasty tagged pointer
+        if (reinterpret_cast<uintptr_t>(application_private) & websocket_private_tag) {
+            auto* websocket_impl = reinterpret_cast<WebSocketImplCurl*>(reinterpret_cast<uintptr_t>(application_private) & ~websocket_private_tag);
+            if (msg->data.result == CURLE_OK) {
+                if (!websocket_impl->did_connect())
+                    websocket_impl->on_connection_error();
+            } else {
+                websocket_impl->on_connection_error();
+            }
+            continue;
+        }
+
+        auto* request = static_cast<Request*>(application_private);
+        request->notify_fetch_complete({}, msg->data.result);
+    }
+}
+
+int CURLMultiHandleSession::on_timeout_callback(void*, long timeout_ms, void* user_data)
+{
+    auto* client = static_cast<CURLMultiHandleSession*>(user_data);
+    if (!client->m_timer)
+        return 0;
+
+    if (timeout_ms < 0)
+        client->m_timer->stop();
+    else
+        client->m_timer->restart(timeout_ms);
+
+    return 0;
 }
 
 }

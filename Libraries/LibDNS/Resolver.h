@@ -350,7 +350,7 @@ private:
             auto message_or_err = parse_one_message();
             if (message_or_err.is_error()) {
                 if (!message_or_err.error().is_errno() || message_or_err.error().code() != EAGAIN)
-                    dbgln("DNS: (UDP) Failed to receive message: {}", message_or_err.error());
+                    dbgln("DNS: (TLS) Failed to receive message: {}", message_or_err.error());
                 break;
             }
 

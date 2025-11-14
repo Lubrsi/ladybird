@@ -6,6 +6,7 @@
  */
 
 #include <LibTLS/TLSv12.h>
+#include <RequestServer/CURL.h>
 #include <RequestServer/Resolver.h>
 
 namespace RequestServer {
@@ -26,6 +27,27 @@ DNSInfo& DNSInfo::the()
 {
     static DNSInfo g_dns_info;
     return g_dns_info;
+}
+
+class HTTPSResolverTunnel final : public DNS::ResolverTunnel {
+public:
+    HTTPSResolverTunnel() = default;
+    virtual ~HTTPSResolverTunnel() override;
+
+    virtual ErrorOr<void> dispatch_query(DNS::Messages::Message) override
+    {
+        return {};
+    }
+
+    virtual bool is_open() const override
+    {
+        // Sockets are handled automatically by curl as we make requests, so the tunnel is always open.
+        return true;
+    }
+
+private:
+    CURLMultiHandleSession m_curl_multi_handle_session;
+    Vector<NonnullOwnPtr<Request>> m_active_requests;
 }
 
 NonnullRefPtr<Resolver> Resolver::default_resolver()

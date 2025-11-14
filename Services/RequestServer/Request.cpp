@@ -118,7 +118,7 @@ void Request::notify_request_unblocked(Badge<DiskCache>)
     transition_to_state(State::Init);
 }
 
-void Request::notify_fetch_complete(Badge<ConnectionFromClient>, int result_code)
+void Request::notify_fetch_complete(Badge<CURLMultiHandleSession>, int result_code)
 {
     if (m_cache_entry_reader.has_value() && m_cache_entry_reader->must_revalidate()) {
         if (acquire_status_code() == 304) {

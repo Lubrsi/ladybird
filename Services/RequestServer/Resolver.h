@@ -12,6 +12,7 @@
 #include <AK/Weakable.h>
 #include <LibCore/Forward.h>
 #include <LibDNS/Resolver.h>
+#include <RequestServer/Forward.h>
 
 namespace RequestServer {
 
