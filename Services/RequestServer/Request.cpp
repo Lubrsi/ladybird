@@ -73,7 +73,7 @@ RequestFromClient::RequestFromClient(
     ByteBuffer request_body,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
-        : Request(disk_cache, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), move(proxy_data))
+        : Request(disk_cache, curl_multi, NonnullRefPtr { resolver }, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), move(proxy_data))
         , m_request_id(request_id)
         , m_client(client)
 {
@@ -85,7 +85,7 @@ RequestFromClient::RequestFromClient(
     void* curl_multi,
     Resolver& resolver,
     URL::URL url)
-        : Request(curl_multi, resolver, move(url))
+        : Request(curl_multi, NonnullRefPtr { resolver }, move(url))
         , m_request_id(request_id)
         , m_client(client)
 {
@@ -114,7 +114,7 @@ void RequestFromClient::request_complete()
 Request::Request(
     Optional<DiskCache&> disk_cache,
     void* curl_multi,
-    Resolver& resolver,
+    Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
     URL::URL url,
     ByteString method,
     HTTP::HeaderMap request_headers,
@@ -124,7 +124,7 @@ Request::Request(
     : m_type(Type::Fetch)
     , m_disk_cache(disk_cache)
     , m_curl_multi_handle(curl_multi)
-    , m_resolver(resolver)
+    , m_dns(move(dns))
     , m_url(move(url))
     , m_method(move(method))
     , m_request_headers(move(request_headers))
@@ -136,11 +136,11 @@ Request::Request(
 
 Request::Request(
     void* curl_multi,
-    Resolver& resolver,
+    Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
     URL::URL url)
     : m_type(Type::Connect)
     , m_curl_multi_handle(curl_multi)
-    , m_resolver(resolver)
+    , m_dns(move(dns))
     , m_url(move(url))
 {
 }
@@ -299,10 +299,21 @@ void Request::handle_read_cache_state()
 
 void Request::handle_dns_lookup_state()
 {
+    if (m_dns.has<NonnullRefPtr<DNS::LookupResult const>>()) {
+        if (m_type == Type::Fetch)
+            transition_to_state(State::Fetch);
+        else
+            transition_to_state(State::Complete);
+
+        return;
+    }
+
     auto host = m_url.serialized_host().to_byte_string();
     auto const& dns_info = DNSInfo::the();
 
-    m_resolver->dns.lookup(host, DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
+    auto resolver = m_dns.get<NonnullRefPtr<Resolver>>();
+
+    resolver->dns.lookup(host, DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
         ->when_rejected([this, host](auto const& error) {
             dbgln("Request::handle_dns_lookup_state: DNS lookup failed for '{}': {}", host, error);
             m_network_error = Requests::NetworkError::UnableToResolveHost;
@@ -314,7 +325,7 @@ void Request::handle_dns_lookup_state()
                 m_network_error = Requests::NetworkError::UnableToResolveHost;
                 transition_to_state(State::Error);
             } else if (m_type == Type::Fetch) {
-                m_dns_result = move(dns_result);
+                m_dns = move(dns_result);
                 transition_to_state(State::Fetch);
             } else {
                 transition_to_state(State::Complete);
@@ -382,7 +393,7 @@ void Request::handle_fetch_state()
 
     set_option(CURLOPT_CUSTOMREQUEST, m_method.characters());
     set_option(CURLOPT_FOLLOWLOCATION, 0);
-    if constexpr (CURL_DEBUG) {
+    if constexpr (1) {
         set_option(CURLOPT_VERBOSE, 1);
     }
 
@@ -452,8 +463,9 @@ void Request::handle_fetch_state()
     set_option(CURLOPT_WRITEFUNCTION, &on_data_received);
     set_option(CURLOPT_WRITEDATA, this);
 
-    VERIFY(m_dns_result);
-    auto formatted_address = build_curl_resolve_list(*m_dns_result, m_url.serialized_host(), m_url.port_or_default());
+    auto const* dns_result = m_dns.get_pointer<NonnullRefPtr<DNS::LookupResult const>>();
+    VERIFY(dns_result);
+    auto formatted_address = build_curl_resolve_list(*dns_result, m_url.serialized_host(), m_url.port_or_default());
 
     if (curl_slist* resolve_list = curl_slist_append(nullptr, formatted_address.characters())) {
         set_option(CURLOPT_RESOLVE, resolve_list);

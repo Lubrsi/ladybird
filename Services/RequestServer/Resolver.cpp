@@ -6,7 +6,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "Request.h"
+
+
+#include <AK/LexicalPath.h>
+#include <LibCore/StandardPaths.h>
+#include <LibRequests/Request.h>
 #include <LibTLS/TLSv12.h>
+#include <LibURL/Parser.h>
 #include <RequestServer/CURL.h>
 #include <RequestServer/Resolver.h>
 
@@ -30,13 +37,167 @@ DNSInfo& DNSInfo::the()
     return g_dns_info;
 }
 
+class DNSRequest final : public Request {
+public:
+    static NonnullOwnPtr<DNSRequest> fetch(
+        NetworkOrdered<u16> original_query_id,
+        void* curl_multi,
+        DNS::LookupResult const& dns_result,
+        URL::URL url,
+        ByteString method,
+        HTTP::HeaderMap request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Function<void(DNS::Messages::Message)> on_complete)
+    {
+        auto request = adopt_own(*new DNSRequest { original_query_id, curl_multi, dns_result, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), move(on_complete) });
+        request->process();
+
+        return request;
+    }
+
+private:
+    DNSRequest(
+        NetworkOrdered<u16> original_query_id,
+        void* curl_multi,
+        DNS::LookupResult const& dns_result,
+        URL::URL url,
+        ByteString method,
+        HTTP::HeaderMap request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Function<void(DNS::Messages::Message)> on_complete)
+            : Request(
+                OptionalNone {},
+                curl_multi,
+                NonnullRefPtr { dns_result },
+                move(url),
+                move(method),
+                move(request_headers),
+                move(request_body),
+                move(alt_svc_cache_path),
+                {})
+            , m_original_query_id(original_query_id)
+            , m_on_complete(move(on_complete))
+    {
+    }
+
+    virtual void request_started(int reader_fd) override
+    {
+        m_read_stream = MUST(Requests::ReadStream::create(reader_fd));
+    }
+
+    virtual void request_finished(u64, Requests::RequestTimingInfo, Optional<Requests::NetworkError> network_error) override
+    {
+        if (network_error.has_value()) {
+            dbgln("DNS: (HTTPS) Query failed: {}", network_error_to_string(network_error.value()));
+            return;
+        }
+
+        auto result = DNS::Messages::Message::from_raw(*m_read_stream);
+        if (result.is_error()) {
+            dbgln("DNS: (HTTPS) Failed to parse message: {}", result.release_error());
+            return;
+        }
+
+        m_on_complete(result.release_value());
+    }
+
+    NetworkOrdered<u16> m_original_query_id;
+    OwnPtr<Requests::ReadStream> m_read_stream;
+    Function<void(DNS::Messages::Message)> m_on_complete;
+};
+
+// https://datatracker.ietf.org/doc/html/rfc8484
 class HTTPSResolverTunnel final : public DNS::ResolverTunnel {
 public:
-    HTTPSResolverTunnel() = default;
-    virtual ~HTTPSResolverTunnel() override;
-
-    virtual ErrorOr<void> dispatch_query(DNS::Messages::Message) override
+    static ErrorOr<NonnullOwnPtr<HTTPSResolverTunnel>> create(NonnullRefPtr<Resolver> resolver, StringView url)
     {
+        auto maybe_url = URL::Parser::basic_parse(url);
+        if (!maybe_url.has_value())
+            return Error::from_string_literal("Invalid DNS-over-HTTPS URL");
+
+        if (maybe_url->scheme() != "https")
+            return Error::from_string_literal("DNS-over-HTTPS URL must have the https scheme");
+
+        if (!maybe_url->host().has_value())
+            return Error::from_string_literal("DNS-over-HTTPS URL must have a hostname");
+
+        auto parsed_url = maybe_url.release_value();
+
+        if (parsed_url.includes_credentials()
+            || parsed_url.query().has_value()
+            || parsed_url.fragment().has_value()
+            || parsed_url.port().has_value()) {
+            return Error::from_string_literal("DNS-over-HTTPS URL is only allowed to have a scheme, host and path");
+        }
+
+        // Since we're setting up the tunnel and since the URL can be a hostname, we have to use the system resolver first.
+        auto serialized_host = parsed_url.serialized_host();
+
+        // FIXME: Handle expiry.
+        auto resolved_host_result = TRY(resolver->dns.lookup_with_system_resolver(serialized_host));
+
+        return adopt_own(*new HTTPSResolverTunnel(move(resolved_host_result), move(parsed_url)));
+    }
+
+    virtual ~HTTPSResolverTunnel() override = default;
+
+    virtual ErrorOr<void> dispatch_query(DNS::Messages::Message query) override
+    {
+        // "Using the GET method is friendlier to many HTTP cache implementations."
+        // "In order to maximize HTTP cache friendliness, DoH clients using media formats that include the ID field
+        // from the DNS message header, such as "application/dns-message", SHOULD use a DNS ID of 0 in every DNS
+        // request. HTTP correlates the request and response, thus eliminating the need for the ID in a media type
+        // such as "application/dns-message". The use of a varying DNS ID can cause semantically equivalent DNS
+        // queries to be cached separately."
+        // NOTE: Since DNS::Resolver requires the response to have the passed in ID for the query, we stash away
+        //       the original ID and restore it when sending back the response.
+        auto original_query_id = query.header.id;
+        query.header.id = 0;
+
+        ByteBuffer query_bytes;
+        TRY(query.to_raw(query_bytes));
+
+        // "When the HTTP method is GET, the single variable "dns" is defined as the content of the DNS request (as
+        // described in Section 6), encoded with base64url [RFC4648]."
+        // "When using the GET method, the data payload for this media type MUST be encoded with base64url [RFC4648]
+        // and then provided as a variable named "dns" to the URI Template expansion. Padding characters for
+        // base64url MUST NOT be included."
+        auto encoded_query = TRY(encode_base64url(query_bytes, AK::OmitPadding::Yes));
+
+        auto copy_url = m_url;
+        copy_url.set_query(TRY(String::formatted("dns={}", encoded_query)));
+
+        dbgln("encoded query: {}", encoded_query);
+        dbgln("url: {}", copy_url);
+
+        // "The DoH client SHOULD include an HTTP Accept request header field to indicate what type of content can be
+        // understood in response. Irrespective of the value of the Accept request header field, the client MUST be
+        // prepared to process "application/dns-message" (as described in Section 6) responses but MAY also process
+        // other DNS-related media types it receives."
+        HTTP::HeaderMap request_headers;
+        request_headers.set("Accept"sv, "application/dns-message"sv);
+
+        auto on_complete = [this, original_query_id](DNS::Messages::Message result) {
+            result.header.id = original_query_id;
+            if (on_message_received)
+                on_message_received(move(result));
+        };
+
+        auto dns_request = DNSRequest::fetch(
+            original_query_id,
+            m_curl_multi_handle_session.curl_multi_handle(),
+            m_resolved_host_result,
+            move(copy_url),
+            "GET"sv,
+            move(request_headers),
+            ByteBuffer {},
+            m_alt_svc_cache_path.string(),
+            move(on_complete));
+
+        m_active_requests.append(move(dns_request));
+
         return {};
     }
 
@@ -47,7 +208,17 @@ public:
     }
 
 private:
+    HTTPSResolverTunnel(NonnullRefPtr<DNS::LookupResult const> resolved_host_result, URL::URL url)
+        : m_url(move(url))
+        , m_alt_svc_cache_path(LexicalPath::join(Core::StandardPaths::cache_directory(), "Ladybird"sv, "dns-over-https-alt-svc-cache.txt"sv))
+        , m_resolved_host_result(move(resolved_host_result))
+    {
+    }
+
     CURLMultiHandleSession m_curl_multi_handle_session;
+    URL::URL m_url;
+    LexicalPath m_alt_svc_cache_path;
+    NonnullRefPtr<DNS::LookupResult const> m_resolved_host_result;
     Vector<NonnullOwnPtr<Request>> m_active_requests;
 };
 
@@ -63,6 +234,8 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
         auto& dns_info = DNSInfo::the();
 
         auto make_resolver = [] -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
+            return HTTPSResolverTunnel::create(default_resolver(), "https://cloudflare-dns.com/dns-query"sv);
+
             auto& dns_info = DNSInfo::the();
 
             if (dns_info.use_dns_over_tls) {

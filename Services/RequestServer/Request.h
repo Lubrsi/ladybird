@@ -60,7 +60,7 @@ protected:
     Request(
         Optional<DiskCache&> disk_cache,
         void* curl_multi,
-        Resolver& resolver,
+        Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
         URL::URL url,
         ByteString method,
         HTTP::HeaderMap request_headers,
@@ -70,7 +70,7 @@ protected:
 
     Request(
         void* curl_multi,
-        Resolver& resolver,
+        Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
         URL::URL url);
 
 private:
@@ -108,8 +108,7 @@ private:
     Vector<curl_slist*> m_curl_string_lists;
     Optional<int> m_curl_result_code;
 
-    NonnullRefPtr<Resolver> m_resolver;
-    RefPtr<DNS::LookupResult const> m_dns_result;
+    Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> m_dns;
 
     URL::URL m_url;
     ByteString m_method;

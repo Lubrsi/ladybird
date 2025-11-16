@@ -753,45 +753,56 @@ public:
         };
 
         auto has_connection_with_restart_promise = has_connection();
-        has_connection_with_restart_promise->when_resolved([options, name, domain_name, lookup_promise, has_established_connection = move(has_established_connection)](bool has_connection) {
+        has_connection_with_restart_promise->when_resolved([this, options, name, domain_name, lookup_promise, has_established_connection = move(has_established_connection)](bool has_connection) -> ErrorOr<void> {
             if (has_connection) {
                 has_established_connection();
-                return;
+                return {};
             }
 
-            if (options.validate_dnssec_locally) {
-                lookup_promise->reject(Error::from_string_literal("No connection available to validate DNSSEC"));
-                return;
-            }
+            if (options.validate_dnssec_locally)
+                return Error::from_string_literal("No connection available to validate DNSSEC");
 
             // Use system resolver
             // FIXME: Use an underlying resolver instead.
             dbgln_if(1, "Not ready to resolve, using system resolver and skipping cache for {}", name);
-            auto record_or_error = Core::Socket::resolve_host(name, Core::Socket::SocketType::Stream);
-            if (record_or_error.is_error()) {
-                lookup_promise->reject(record_or_error.release_error());
-                return;
-            }
-            auto result = make_ref_counted<LookupResult>(domain_name);
-            auto records = record_or_error.release_value();
-
-            for (auto const& record : records) {
-                record.visit(
-                    [&](IPv4Address const& address) {
-                        result->add_record({ .name = {}, .type = Messages::ResourceType::A, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::A { address }, .raw = {} });
-                    },
-                    [&](IPv6Address const& address) {
-                        result->add_record({ .name = {}, .type = Messages::ResourceType::AAAA, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::AAAA { address }, .raw = {} });
-                    });
-            }
-            result->finished_request();
+            auto result = TRY(lookup_with_system_resolver(name));
             lookup_promise->resolve(result);
+            return {};
         }).when_rejected([lookup_promise](Error const& error) {
             lookup_promise->reject(Error::copy(error));
         });
 
         lookup_promise->add_child(move(has_connection_with_restart_promise));
         return lookup_promise;
+    }
+
+    // Only use this if you're in a context where you know the tunnel is not yet setup,
+    // for example when resolving a custom DNS server name when setting up a tunnel.
+    ErrorOr<NonnullRefPtr<LookupResult>> lookup_with_system_resolver(StringView name)
+    {
+        TRY(m_tunnel.with_read_locked([](auto& tunnel) -> ErrorOr<void> {
+            if (tunnel.has_value() && (*tunnel)->is_open())
+                return Error::from_string_literal("Resolver tunnel is active, not allowed to use system resolver");
+
+            return {};
+        }));
+
+        auto records = TRY(Core::Socket::resolve_host(name, Core::Socket::SocketType::Stream));
+        auto domain_name = Messages::DomainName::from_string(name);
+        auto result = make_ref_counted<LookupResult>(domain_name);
+
+        for (auto const& record : records) {
+            record.visit(
+                [&](IPv4Address const& address) {
+                    result->add_record({ .name = {}, .type = Messages::ResourceType::A, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::A { address }, .raw = {} });
+                },
+                [&](IPv6Address const& address) {
+                    result->add_record({ .name = {}, .type = Messages::ResourceType::AAAA, .class_ = Messages::Class::IN, .ttl = 0, .record = Messages::Records::AAAA { address }, .raw = {} });
+                });
+        }
+        result->finished_request();
+
+        return result;
     }
 
 private:
