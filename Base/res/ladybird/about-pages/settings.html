@@ -311,6 +311,10 @@
             dialog .dialog-controls select {
                 flex-grow: 1;
             }
+
+            .invalid-message {
+                color: red;
+            }
         </style>
     </head>
     <body>
@@ -429,6 +433,7 @@
                                 <select id="dns-type">
                                     <option value="udp">UDP</option>
                                     <option value="tls">TLS</option>
+                                    <option value="https">HTTPS</option>
                                 </select>
                             </div>
                             <div class="card-group">
@@ -438,6 +443,7 @@
                             <div class="card-group">
                                 <label for="dns-server">DNS Server (IP or hostname)</label>
                                 <input id="dns-server" type="text" />
+                                <div class="invalid-message hidden" id="dns-server-invalid-message"></div>
                             </div>
                             <div class="card-group">
                                 <label for="dns-port">Port</label>

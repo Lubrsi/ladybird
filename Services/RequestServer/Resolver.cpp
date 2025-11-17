@@ -111,34 +111,27 @@ private:
 // https://datatracker.ietf.org/doc/html/rfc8484
 class HTTPSResolverTunnel final : public DNS::ResolverTunnel {
 public:
-    static ErrorOr<NonnullOwnPtr<HTTPSResolverTunnel>> create(NonnullRefPtr<Resolver> resolver, StringView url)
+    static ErrorOr<NonnullOwnPtr<HTTPSResolverTunnel>> create(NonnullRefPtr<Resolver> resolver, URL::URL url)
     {
-        auto maybe_url = URL::Parser::basic_parse(url);
-        if (!maybe_url.has_value())
-            return Error::from_string_literal("Invalid DNS-over-HTTPS URL");
-
-        if (maybe_url->scheme() != "https")
+        if (url.scheme() != "https")
             return Error::from_string_literal("DNS-over-HTTPS URL must have the https scheme");
 
-        if (!maybe_url->host().has_value())
+        if (!url.host().has_value())
             return Error::from_string_literal("DNS-over-HTTPS URL must have a hostname");
 
-        auto parsed_url = maybe_url.release_value();
-
-        if (parsed_url.includes_credentials()
-            || parsed_url.query().has_value()
-            || parsed_url.fragment().has_value()
-            || parsed_url.port().has_value()) {
-            return Error::from_string_literal("DNS-over-HTTPS URL is only allowed to have a scheme, host and path");
+        if (url.includes_credentials()
+            || url.query().has_value()
+            || url.fragment().has_value()) {
+            return Error::from_string_literal("DNS-over-HTTPS URL is only allowed to have a scheme, host, port and path");
         }
 
         // Since we're setting up the tunnel and since the URL can be a hostname, we have to use the system resolver first.
-        auto serialized_host = parsed_url.serialized_host();
+        auto serialized_host = url.serialized_host();
 
         // FIXME: Handle expiry.
         auto resolved_host_result = TRY(resolver->dns.lookup_with_system_resolver(serialized_host));
 
-        return adopt_own(*new HTTPSResolverTunnel(move(resolved_host_result), move(parsed_url)));
+        return adopt_own(*new HTTPSResolverTunnel(move(resolved_host_result), move(url)));
     }
 
     virtual ~HTTPSResolverTunnel() override = default;
@@ -233,8 +226,6 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
         auto& dns_info = DNSInfo::the();
 
         auto make_resolver = [] -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
-            return HTTPSResolverTunnel::create(default_resolver(), "https://cloudflare-dns.com/dns-query"sv);
-
             auto& dns_info = DNSInfo::the();
 
             if (dns_info.use_dns_over_tls) {

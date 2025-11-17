@@ -64,8 +64,12 @@ struct DNSOverUDP {
     u16 port;
     bool validate_dnssec_locally;
 };
+struct DNSOverHTTPS {
+    URL::URL resolver_url;
+    bool validate_dnssec_locally;
+};
 
-using DNSSettings = Variant<SystemDNS, DNSOverTLS, DNSOverUDP>;
+using DNSSettings = Variant<SystemDNS, DNSOverTLS, DNSOverUDP, DNSOverHTTPS>;
 
 constexpr inline u16 default_devtools_port = 6000;
 

@@ -238,6 +238,14 @@ JsonValue Settings::serialize_json() const
             dns_settings.set("type"sv, "udp"sv);
             dns_settings.set("dnssec"sv, dns.validate_dnssec_locally);
             dns_settings.set("forciblyEnabled"sv, m_dns_override_by_command_line);
+        },
+        [&](DNSOverHTTPS const& https) {
+            dns_settings.set("mode"sv, "custom"sv);
+            dns_settings.set("server"sv, https.resolver_url.serialize(URL::ExcludeFragment::Yes));
+            dns_settings.set("port"sv, JsonValue {});
+            dns_settings.set("type"sv, "https"sv);
+            dns_settings.set("dnssec"sv, https.validate_dnssec_locally);
+            dns_settings.set("forciblyEnabled"sv, m_dns_override_by_command_line);
         });
     settings.set(dns_settings_key, move(dns_settings));
 
@@ -462,13 +470,25 @@ DNSSettings Settings::parse_dns_settings(JsonValue const& dns_settings)
             auto server = dns_settings_object.get_string("server"sv);
             auto port = dns_settings_object.get_u16("port"sv);
             auto type = dns_settings_object.get_string("type"sv);
-            auto validate_dnssec_locally = dns_settings_object.get_bool("dnssec"sv);
+            auto validate_dnssec_locally = dns_settings_object.get_bool("dnssec"sv).value_or(false);
 
-            if (server.has_value() && port.has_value() && type.has_value()) {
-                if (*type == "tls"sv)
-                    return DNSOverTLS { .server_address = server->to_byte_string(), .port = *port, .validate_dnssec_locally = validate_dnssec_locally.value_or(false) };
-                if (*type == "udp"sv)
-                    return DNSOverUDP { .server_address = server->to_byte_string(), .port = *port, .validate_dnssec_locally = validate_dnssec_locally.value_or(false) };
+            if (server.has_value() && type.has_value()) {
+                if (port.has_value()) {
+                    if (*type == "tls"sv)
+                        return DNSOverTLS { .server_address = server->to_byte_string(), .port = *port, .validate_dnssec_locally = validate_dnssec_locally };
+                    if (*type == "udp"sv)
+                        return DNSOverUDP { .server_address = server->to_byte_string(), .port = *port, .validate_dnssec_locally = validate_dnssec_locally };
+                }
+
+                if (*type == "https"sv) {
+                    auto maybe_url = URL::Parser::basic_parse(server.value());
+                    if (maybe_url.has_value()) {
+                        auto url = maybe_url.release_value();
+                        if (url.scheme() == "https" && url.host().has_value() && !url.includes_credentials() && !url.query().has_value() && !url.fragment().has_value()) {
+                            return DNSOverHTTPS { .resolver_url = move(url), .validate_dnssec_locally = validate_dnssec_locally };
+                        }
+                    }
+                }
             }
         }
     }
