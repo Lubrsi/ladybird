@@ -47,16 +47,9 @@ NonnullOwnPtr<RequestFromClient> RequestFromClient::connect(
     URL::URL url,
     CacheLevel cache_level)
 {
-    auto request = adopt_own(*new RequestFromClient { request_id, client, curl_multi, resolver, move(url) });
-
-    switch (cache_level) {
-    case CacheLevel::ResolveOnly:
-        request->transition_to_state(State::DNSLookup);
-        break;
-    case CacheLevel::CreateConnection:
-        request->transition_to_state(State::Connect);
-        break;
-    }
+    auto type = cache_level == CacheLevel::ResolveOnly ? Type::Resolve : Type::Connect;
+    auto request = adopt_own(*new RequestFromClient { type, request_id, client, curl_multi, resolver, move(url) });
+    request->process();
 
     return request;
 }
@@ -80,12 +73,13 @@ RequestFromClient::RequestFromClient(
 }
 
 RequestFromClient::RequestFromClient(
+    Type type,
     i32 request_id,
     ConnectionFromClient& client,
     void* curl_multi,
     Resolver& resolver,
     URL::URL url)
-        : Request(curl_multi, NonnullRefPtr { resolver }, move(url))
+        : Request(type, curl_multi, NonnullRefPtr { resolver }, move(url))
         , m_request_id(request_id)
         , m_client(client)
 {
@@ -135,10 +129,11 @@ Request::Request(
 }
 
 Request::Request(
+    Type type,
     void* curl_multi,
     Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
     URL::URL url)
-    : m_type(Type::Connect)
+    : m_type(type)
     , m_curl_multi_handle(curl_multi)
     , m_dns(move(dns))
     , m_url(move(url))
@@ -150,12 +145,12 @@ Request::~Request()
     if (!m_response_buffer.is_eof())
         dbgln("Warning: Request destroyed with buffered data (it's likely that the client disappeared or the request was cancelled)");
 
-    if (m_curl_easy_handle) {
-        auto result = curl_multi_remove_handle(m_curl_multi_handle, m_curl_easy_handle);
-        VERIFY(result == CURLM_OK);
-
-        curl_easy_cleanup(m_curl_easy_handle);
-    }
+    // if (m_curl_easy_handle) {
+    //     auto result = curl_multi_remove_handle(m_curl_multi_handle, m_curl_easy_handle);
+    //     VERIFY(result == CURLM_OK);
+    //
+    //     curl_easy_cleanup(m_curl_easy_handle);
+    // }
 
     for (auto* string_list : m_curl_string_lists)
         curl_slist_free_all(string_list);
@@ -300,12 +295,19 @@ void Request::handle_read_cache_state()
 void Request::handle_dns_lookup_state()
 {
     if (m_dns.has<NonnullRefPtr<DNS::LookupResult const>>()) {
-        if (m_type == Type::Fetch)
+        switch (m_type) {
+        case Type::Fetch:
             transition_to_state(State::Fetch);
-        else
+            return;
+        case Type::Resolve:
             transition_to_state(State::Complete);
+            return;
+        case Type::Connect:
+            transition_to_state(State::Connect);
+            return;
+        }
 
-        return;
+        VERIFY_NOT_REACHED();
     }
 
     auto host = m_url.serialized_host().to_byte_string();
@@ -313,7 +315,7 @@ void Request::handle_dns_lookup_state()
 
     auto resolver = m_dns.get<NonnullRefPtr<Resolver>>();
 
-    resolver->dns.lookup(host, DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
+    m_pending_dns_request = resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::A }, Vector { DNS::Messages::ResourceType::AAAA } }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
         ->when_rejected([this, host](auto const& error) {
             dbgln("Request::handle_dns_lookup_state: DNS lookup failed for '{}': {}", host, error);
             m_network_error = Requests::NetworkError::UnableToResolveHost;
@@ -324,12 +326,24 @@ void Request::handle_dns_lookup_state()
                 dbgln("Request::handle_dns_lookup_state: DNS lookup failed for '{}'", host);
                 m_network_error = Requests::NetworkError::UnableToResolveHost;
                 transition_to_state(State::Error);
-            } else if (m_type == Type::Fetch) {
-                m_dns = move(dns_result);
-                transition_to_state(State::Fetch);
-            } else {
-                transition_to_state(State::Complete);
+                return;
             }
+
+            m_dns = move(dns_result);
+
+            switch (m_type) {
+            case Type::Fetch:
+                transition_to_state(State::Fetch);
+                return;
+            case Type::Resolve:
+                transition_to_state(State::Complete);
+                return;
+            case Type::Connect:
+                transition_to_state(State::Connect);
+                return;
+            }
+
+            VERIFY_NOT_REACHED();
         });
 }
 
@@ -351,6 +365,20 @@ void Request::handle_connect_state()
     set_option(CURLOPT_PORT, m_url.port_or_default());
     set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
     set_option(CURLOPT_CONNECT_ONLY, 1L);
+    if constexpr (1) {
+        set_option(CURLOPT_VERBOSE, 1);
+    }
+
+    auto const* dns_result = m_dns.get_pointer<NonnullRefPtr<DNS::LookupResult const>>();
+    VERIFY(dns_result);
+    auto formatted_address = build_curl_resolve_list(*dns_result, m_url.serialized_host(), m_url.port_or_default());
+
+    if (curl_slist* resolve_list = curl_slist_append(nullptr, formatted_address.characters())) {
+        set_option(CURLOPT_RESOLVE, resolve_list);
+        m_curl_string_lists.append(resolve_list);
+    } else {
+        VERIFY_NOT_REACHED();
+    }
 
     auto result = curl_multi_add_handle(m_curl_multi_handle, m_curl_easy_handle);
     VERIFY(result == CURLM_OK);

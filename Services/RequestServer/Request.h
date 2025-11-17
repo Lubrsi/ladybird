@@ -54,6 +54,12 @@ protected:
         Error,        // Any error occured during the request's lifetime.
     };
 
+    enum class Type : u8 {
+        Fetch,
+        Resolve,
+        Connect,
+    };
+
     void transition_to_state(State);
     void process();
 
@@ -69,16 +75,12 @@ protected:
         Core::ProxyData proxy_data);
 
     Request(
+        Type type,
         void* curl_multi,
         Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
         URL::URL url);
 
 private:
-    enum class Type : u8 {
-        Fetch,
-        Connect,
-    };
-
     void handle_initial_state();
     void handle_read_cache_state();
     void handle_dns_lookup_state();
@@ -109,6 +111,7 @@ private:
     Optional<int> m_curl_result_code;
 
     Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> m_dns;
+    RefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>> m_pending_dns_request;
 
     URL::URL m_url;
     ByteString m_method;
@@ -179,6 +182,7 @@ private:
         Core::ProxyData proxy_data);
 
     RequestFromClient(
+        Type type,
         i32 request_id,
         ConnectionFromClient& client,
         void* curl_multi,

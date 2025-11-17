@@ -37,13 +37,17 @@ public:
     void check_active_requests();
 
     void* curl_multi_handle() const { return m_curl_multi; }
+    ByteString const& alt_svc_cache_path() const { return m_alt_svc_cache_path; }
 
 private:
     void* m_curl_multi { nullptr };
+    Vector<void*> m_active_curl_easy_handles;
 
     RefPtr<Core::Timer> m_timer;
     HashMap<int, NonnullRefPtr<Core::Notifier>> m_read_notifiers;
     HashMap<int, NonnullRefPtr<Core::Notifier>> m_write_notifiers;
+
+    ByteString m_alt_svc_cache_path;
 };
 
 }

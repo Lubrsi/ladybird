@@ -33,8 +33,6 @@ ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transpo
     , m_resolver(Resolver::default_resolver())
 {
     s_connections.set(client_id(), *this);
-
-    m_alt_svc_cache_path = ByteString::formatted("{}/Ladybird/alt-svc-cache.txt", Core::StandardPaths::user_data_directory());
 }
 
 ConnectionFromClient::~ConnectionFromClient()
@@ -166,7 +164,7 @@ void ConnectionFromClient::start_request(i32 request_id, ByteString method, URL:
 {
     dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_request({}, {})", request_id, url);
 
-    auto request = RequestFromClient::fetch(request_id, *this, g_disk_cache,  m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
+    auto request = RequestFromClient::fetch(request_id, *this, g_disk_cache,  m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_curl_multi_handle_session->alt_svc_cache_path(), proxy_data);
     m_active_requests.set(request_id, move(request));
 }
 

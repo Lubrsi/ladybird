@@ -58,7 +58,6 @@ private:
     NonnullOwnPtr<CURLMultiHandleSession> m_curl_multi_handle_session;
 
     NonnullRefPtr<Resolver> m_resolver;
-    ByteString m_alt_svc_cache_path;
 };
 
 }

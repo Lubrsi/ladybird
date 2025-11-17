@@ -107,6 +107,7 @@ public:
 
     void add_record(Messages::ResourceRecord record)
     {
+        dbgln("{:p} adding record: {} {} {}", this, record.name.to_string(), to_underlying(record.type), record.ttl);
         m_valid = true;
         auto expiration = record.ttl > 0 ? Optional<AK::UnixDateTime>(AK::UnixDateTime::now() + AK::Duration::from_seconds(record.ttl)) : OptionalNone();
         m_cached_records.append({ move(record), move(expiration) });
@@ -152,10 +153,15 @@ public:
 
     bool has_record_of_type(Messages::ResourceType type, bool later = false) const
     {
+        dbgln("-- has record of type {} {}", to_underlying(type), later);
+        for (auto desired_type : m_desired_types) {
+            dbgln("-- desired type: {}", to_underlying(desired_type));
+        }
         if (later && m_desired_types.contains(type))
             return true;
 
         for (auto const& re : m_cached_records) {
+            dbgln("-- cached record type: {}", to_underlying(re.record.type));
             if (re.record.type == type)
                 return true;
         }
@@ -576,7 +582,9 @@ public:
 
                         already_in_cache = (!options.validate_dnssec_locally && !ptr->is_being_dnssec_validated()) || ptr->is_dnssec_validated();
                         for (auto const& type : desired_types) {
+                            dbgln("- {} {} {}", to_underlying(type), options.validate_dnssec_locally, ptr->is_being_dnssec_validated());
                             if (!ptr->has_record_of_type(type, !options.validate_dnssec_locally && !ptr->is_being_dnssec_validated())) {
+                                dbgln("- not already in cache");
                                 already_in_cache = false;
                                 break;
                             }
@@ -640,6 +648,8 @@ public:
                     lookup_promise->resolve(*result);
                     return;
                 }
+
+                dbgln_if(1, "DNS: No pending lookup but cached result isn't done. Attempting to re-resolve.");
             }
 
             Messages::Message query;

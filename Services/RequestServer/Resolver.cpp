@@ -145,6 +145,7 @@ public:
 
     virtual ErrorOr<void> dispatch_query(DNS::Messages::Message query) override
     {
+        dbgln("{}", query.questions[0].name.to_string());
         // "Using the GET method is friendlier to many HTTP cache implementations."
         // "In order to maximize HTTP cache friendliness, DoH clients using media formats that include the ID field
         // from the DNS message header, such as "application/dns-message", SHOULD use a DNS ID of 0 in every DNS
@@ -193,7 +194,7 @@ public:
             "GET"sv,
             move(request_headers),
             ByteBuffer {},
-            m_alt_svc_cache_path.string(),
+            m_curl_multi_handle_session.alt_svc_cache_path(),
             move(on_complete));
 
         m_active_requests.append(move(dns_request));
@@ -210,14 +211,12 @@ public:
 private:
     HTTPSResolverTunnel(NonnullRefPtr<DNS::LookupResult const> resolved_host_result, URL::URL url)
         : m_url(move(url))
-        , m_alt_svc_cache_path(LexicalPath::join(Core::StandardPaths::cache_directory(), "Ladybird"sv, "dns-over-https-alt-svc-cache.txt"sv))
         , m_resolved_host_result(move(resolved_host_result))
     {
     }
 
     CURLMultiHandleSession m_curl_multi_handle_session;
     URL::URL m_url;
-    LexicalPath m_alt_svc_cache_path;
     NonnullRefPtr<DNS::LookupResult const> m_resolved_host_result;
     Vector<NonnullOwnPtr<Request>> m_active_requests;
 };

@@ -6,6 +6,7 @@
  */
 
 #include <AK/Enumerate.h>
+#include <LibCore/StandardPaths.h>
 #include <RequestServer/CURL.h>
 #include <RequestServer/Request.h>
 #include <RequestServer/WebSocketImplCurl.h>
@@ -75,6 +76,8 @@ CURLMultiHandleSession::CURLMultiHandleSession()
         VERIFY(result == CURLM_OK);
         check_active_requests();
     });
+
+    m_alt_svc_cache_path = ByteString::formatted("{}/Ladybird/alt-svc-cache.txt", Core::StandardPaths::user_data_directory());
 }
 
 CURLMultiHandleSession::~CURLMultiHandleSession()
