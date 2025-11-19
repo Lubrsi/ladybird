@@ -232,6 +232,10 @@ ErrorOr<NonnullRefPtr<Requests::RequestClient>> launch_request_server_process()
         [&](WebView::DNSOverUDP const& dns_over_udp) {
             dbgln("Setting DNS server to {}:{} ({} local dnssec)", dns_over_udp.server_address, dns_over_udp.port, dns_over_udp.validate_dnssec_locally ? "with" : "without");
             client->async_set_socket_dns_server(dns_over_udp.server_address, dns_over_udp.port, false, dns_over_udp.validate_dnssec_locally);
+        },
+        [&](WebView::DNSOverHTTPS const& dns_over_https) {
+            dbgln("Setting DNS over HTTPS server to {} ({} local dnssec)", dns_over_https.resolver_url, dns_over_https.validate_dnssec_locally ? "with" : "without");
+            client->async_set_https_dns_server(dns_over_https.resolver_url, dns_over_https.validate_dnssec_locally);
         });
 
     return client;

@@ -6,6 +6,7 @@ const dnsType = document.querySelector("#dns-type");
 const dnsServer = document.querySelector("#dns-server");
 const dnsServerInvalidMessage = document.querySelector("#dns-server-invalid-message");
 const dnsPort = document.querySelector("#dns-port");
+const dnsPortGroup = document.querySelector("#dns-port-group");
 const dnssecToggle = document.querySelector("#dnssec-toggle");
 
 let DNS_SETTINGS = {};
@@ -25,9 +26,9 @@ function loadDnsSettings() {
         dnssecToggle.checked = DNS_SETTINGS.dnssec;
 
         if (dnsType.value === "https") {
-            dnsPort.classList.add("hidden");
+            dnsPortGroup.classList.add("hidden");
         } else {
-            dnsPort.classList.remove("hidden");
+            dnsPortGroup.classList.remove("hidden");
         }
 
         customDnsSettings.classList.remove("hidden");
@@ -89,7 +90,10 @@ function updateDnsSettings() {
 
     if (type !== "https") {
         server = dnsServer.value;
+        dnsPortGroup.classList.remove("hidden");
     } else {
+        dnsPortGroup.classList.add("hidden");
+
         const showInvalidURLMessage = (reason) => {
             dnsServer.classList.add("invalid");
             dnsServerInvalidMessage.classList.remove("hidden");

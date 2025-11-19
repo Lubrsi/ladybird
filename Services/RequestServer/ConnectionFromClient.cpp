@@ -125,9 +125,6 @@ void ConnectionFromClient::set_socket_dns_server(ByteString host_or_address, u16
 {
     auto& dns_info = DNSInfo::the();
 
-    if (host_or_address == dns_info.server_hostname && port == dns_info.port && use_tls == dns_info.use_dns_over_tls && validate_dnssec_locally == dns_info.validate_dnssec_locally)
-        return;
-
     auto result = [&] -> ErrorOr<void> {
         Core::SocketAddress addr;
         if (auto v4 = IPv4Address::from_string(host_or_address); v4.has_value())
@@ -137,10 +134,17 @@ void ConnectionFromClient::set_socket_dns_server(ByteString host_or_address, u16
         else
             TRY(m_resolver->dns.lookup(host_or_address)->await())->cached_addresses().first().visit([&](auto& address) { addr = { address, port }; });
 
-        dns_info.server_address = addr;
-        dns_info.server_hostname = host_or_address;
-        dns_info.port = port;
-        dns_info.use_dns_over_tls = use_tls;
+        if (!use_tls) {
+            dns_info.info = DNSOverUDPSocketInfo {
+                .server_address = addr,
+            };
+        } else {
+            dns_info.info = DNSOverTLSSocketInfo {
+                .server_address = addr,
+                .server_hostname = host_or_address,
+            };
+        }
+
         dns_info.validate_dnssec_locally = validate_dnssec_locally;
         return {};
     }();
@@ -151,12 +155,27 @@ void ConnectionFromClient::set_socket_dns_server(ByteString host_or_address, u16
         m_resolver->dns.reset_connection();
 }
 
+void ConnectionFromClient::set_https_dns_server(URL::URL resolver_url, bool validate_dnssec_locally)
+{
+    auto& dns_info = DNSInfo::the();
+
+    if (auto* existing_https_info = dns_info.info.get_pointer<DNSOverHTTPSInfo>(); existing_https_info) {
+        if (resolver_url == existing_https_info->resolver_url && validate_dnssec_locally == dns_info.validate_dnssec_locally)
+            return;
+    }
+
+    dns_info.info = DNSOverHTTPSInfo {
+        .resolver_url = move(resolver_url),
+    };
+    dns_info.validate_dnssec_locally = validate_dnssec_locally;
+
+    m_resolver->dns.reset_connection();
+}
+
 void ConnectionFromClient::set_use_system_dns()
 {
     auto& dns_info = DNSInfo::the();
-    dns_info.server_hostname = {};
-    dns_info.server_address = {};
-
+    dns_info.info = DNSOverSystemResolverInfo {};
     m_resolver->dns.reset_connection();
 }
 

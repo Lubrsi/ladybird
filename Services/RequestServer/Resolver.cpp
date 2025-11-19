@@ -138,7 +138,6 @@ public:
 
     virtual ErrorOr<void> dispatch_query(DNS::Messages::Message query) override
     {
-        dbgln("{}", query.questions[0].name.to_string());
         // "Using the GET method is friendlier to many HTTP cache implementations."
         // "In order to maximize HTTP cache friendliness, DoH clients using media formats that include the ID field
         // from the DNS message header, such as "application/dns-message", SHOULD use a DNS ID of 0 in every DNS
@@ -162,9 +161,6 @@ public:
 
         auto copy_url = m_url;
         copy_url.set_query(TRY(String::formatted("dns={}", encoded_query)));
-
-        dbgln("encoded query: {}", encoded_query);
-        dbgln("url: {}", copy_url);
 
         // "The DoH client SHOULD include an HTTP Accept request header field to indicate what type of content can be
         // understood in response. Irrespective of the value of the Accept request header field, the client MUST be
@@ -223,55 +219,38 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
 
     auto resolver = adopt_ref(*new Resolver([] -> NonnullRefPtr<Core::Promise<MaybeOwned<DNS::ResolverTunnel>>> {
         auto promise = Core::Promise<MaybeOwned<DNS::ResolverTunnel>>::construct();
-        auto& dns_info = DNSInfo::the();
 
-        auto make_resolver = [] -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
+        auto result = [] -> ErrorOr<MaybeOwned<DNS::ResolverTunnel>> {
             auto& dns_info = DNSInfo::the();
 
-            if (dns_info.use_dns_over_tls) {
+            if (auto* udp_socket_info = dns_info.info.get_pointer<DNSOverUDPSocketInfo>(); udp_socket_info) {
+                return adopt_own(*new DNS::UDPSocketResolverTunnel(
+                    TRY(Core::BufferedSocket<Core::UDPSocket>::create(TRY(Core::UDPSocket::connect(udp_socket_info->server_address))))
+                ));
+            }
+
+            if (auto* tls_socket_info = dns_info.info.get_pointer<DNSOverTLSSocketInfo>(); tls_socket_info) {
                 TLS::Options options;
 
                 if (!g_default_certificate_path.is_empty())
                     options.root_certificates_path = g_default_certificate_path;
 
                 return adopt_own(*new DNS::TLSSocketResolverTunnel(
-                    TRY(TLS::TLSv12::connect(*dns_info.server_address, *dns_info.server_hostname, move(options)))
+                    TRY(TLS::TLSv12::connect(tls_socket_info->server_address, tls_socket_info->server_hostname, move(options)))
                 ));
             }
 
-            return adopt_own(*new DNS::UDPSocketResolverTunnel(
-                TRY(Core::BufferedSocket<Core::UDPSocket>::create(TRY(Core::UDPSocket::connect(*dns_info.server_address))))
-            ));
-        };
-
-        if (!dns_info.server_address.has_value()) {
-            if (!dns_info.server_hostname.has_value()) {
-                promise->reject(Error::from_string_literal("No DNS server configured"));
-                return promise;
+            if (auto* https_info = dns_info.info.get_pointer<DNSOverHTTPSInfo>(); https_info) {
+                return TRY(HTTPSResolverTunnel::create(default_resolver(), https_info->resolver_url));
             }
 
-            auto resolved_promise = default_resolver()->dns.lookup(*dns_info.server_hostname);
-            resolved_promise->when_resolved([promise, make_resolver = move(make_resolver)](NonnullRefPtr<DNS::LookupResult const> const& resolved) -> ErrorOr<void> {
-                if (!resolved->has_cached_addresses())
-                    return Error::from_string_literal("Failed to resolve DNS server hostname");
+            return Error::from_string_literal("No DNS server configured");
+        }();
 
-                auto& dns_info = DNSInfo::the();
-                auto address = resolved->cached_addresses().first().visit([&](auto& addr) -> Core::SocketAddress { return { addr, dns_info.port }; });
-                dns_info.server_address = address;
-                promise->resolve(TRY(make_resolver()));
-                return {};
-            }).when_rejected([promise](Error const& error) {
-                promise->reject(Error::copy(error));
-            });
-
-            promise->add_child(move(resolved_promise));
+        if (!result.is_error()) {
+            promise->resolve(result.release_value());
         } else {
-            auto result = make_resolver();
-            if (!result.is_error()) {
-                promise->resolve(result.release_value());
-            } else {
-                promise->reject(result.release_error());
-            }
+            promise->reject(result.release_error());
         }
 
         return promise;

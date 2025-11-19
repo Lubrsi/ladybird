@@ -17,21 +17,26 @@
 
 namespace RequestServer {
 
-struct DNSOverSocketInfo {
-    Optional<Core::SocketAddress> server_address;
-    Optional<ByteString> server_hostname;
-    u16 port { 0 };
-    bool use_dns_over_tls { true };
+struct DNSOverUDPSocketInfo {
+    Core::SocketAddress server_address;
+};
+
+struct DNSOverTLSSocketInfo {
+    Core::SocketAddress server_address;
+    ByteString server_hostname;
 };
 
 struct DNSOverHTTPSInfo {
     URL::URL resolver_url;
 };
 
+struct DNSOverSystemResolverInfo {
+};
+
 struct DNSInfo {
     static DNSInfo& the();
 
-    Variant<DNSOverSocketInfo, DNSOverHTTPSInfo> info { DNSOverSocketInfo {} };
+    Variant<DNSOverUDPSocketInfo, DNSOverTLSSocketInfo, DNSOverHTTPSInfo, DNSOverSystemResolverInfo> info { DNSOverSystemResolverInfo {} };
     bool validate_dnssec_locally { false };
 
 private:
