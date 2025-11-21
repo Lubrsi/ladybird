@@ -58,6 +58,17 @@ public:
         return m_headers;
     }
 
+    void clear()
+    {
+        m_map.clear();
+        m_headers.clear();
+    }
+
+    [[nodiscard]] bool is_empty() const
+    {
+        return m_map.is_empty();
+    }
+
 private:
     HashMap<ByteString, ByteString, CaseInsensitiveStringTraits> m_map;
     Vector<Header> m_headers;
