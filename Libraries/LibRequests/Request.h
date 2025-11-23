@@ -71,7 +71,7 @@ public:
 
     // Configure the request such that the response data is provided unbuffered as it is received. Using this method is
     // mutually exclusive with `set_buffered_request_finished_callback`.
-    void set_unbuffered_request_callbacks(HeadersReceived, DataReceived, RequestFinished);
+    void set_unbuffered_request_callbacks(HeadersReceived, InterimResponseReceived, DataReceived, RequestFinished);
 
     Function<CertificateAndKey()> on_certificate_requested;
 

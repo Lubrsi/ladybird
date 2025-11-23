@@ -17,6 +17,7 @@
 #include <LibGC/Ptr.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
+#include <LibURL/URL.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/MimeSniff/MimeType.h>
 
@@ -64,6 +65,15 @@ public:
     [[nodiscard]] ExtractLengthResult extract_length() const;
 
     [[nodiscard]] Optional<MimeSniff::MimeType> extract_mime_type() const;
+
+    struct ExtractedLink {
+        URL::URL target_uri;
+        String relation_type;
+        URL::URL context_uri;
+        OrderedHashMap<String, String> target_attributes;
+    };
+
+    [[nodiscard]] Vector<ExtractedLink> extract_links() const;
 
     [[nodiscard]] Vector<ByteBuffer> unique_names() const;
 };

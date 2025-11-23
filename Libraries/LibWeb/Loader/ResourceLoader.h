@@ -31,10 +31,11 @@ public:
     void set_client(NonnullRefPtr<Requests::RequestClient>);
 
     using OnHeadersReceived = GC::Function<void(HTTP::HeaderMap const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase)>;
+    using OnInterimResponseReceived = GC::Function<void(HTTP::HeaderMap const& interim_response, u32 status_code)>;
     using OnDataReceived = GC::Function<void(ReadonlyBytes data)>;
     using OnComplete = GC::Function<void(bool success, Requests::RequestTimingInfo const& timing_info, Optional<StringView> error_message)>;
 
-    void load(LoadRequest&, GC::Root<OnHeadersReceived>, GC::Root<OnDataReceived>, GC::Root<OnComplete>);
+    void load(LoadRequest&, GC::Root<OnHeadersReceived>, GC::Root<OnInterimResponseReceived>, GC::Root<OnDataReceived>, GC::Root<OnComplete>);
 
     RefPtr<Requests::RequestClient>& request_client() { return m_request_client; }
 

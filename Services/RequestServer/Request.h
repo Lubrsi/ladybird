@@ -159,6 +159,8 @@ private:
     HTTP::HeaderMap m_response_headers;
     bool m_sent_response_headers_to_client { false };
 
+    HTTP::HeaderMap m_interim_response_headers;
+
     AllocatingMemoryStream m_response_buffer;
     RefPtr<Core::Notifier> m_client_writer_notifier;
     Optional<RequestPipe> m_client_request_pipe;

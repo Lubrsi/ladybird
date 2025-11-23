@@ -92,12 +92,13 @@ void Request::set_buffered_request_finished_callback(BufferedRequestFinished on_
     });
 }
 
-void Request::set_unbuffered_request_callbacks(HeadersReceived on_headers_received, DataReceived on_data_received, RequestFinished on_finish)
+void Request::set_unbuffered_request_callbacks(HeadersReceived on_headers_received, InterimResponseReceived interim_response_received, DataReceived on_data_received, RequestFinished on_finish)
 {
     VERIFY(m_mode == Mode::Unknown);
     m_mode = Mode::Unbuffered;
 
     this->m_on_headers_received = move(on_headers_received);
+    this->m_on_interim_response_received = move(interim_response_received);
     this->m_on_finish = move(on_finish);
 
     set_up_internal_stream_data(move(on_data_received));

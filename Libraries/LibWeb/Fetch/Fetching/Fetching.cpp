@@ -2413,6 +2413,33 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         pending_response->resolve(response);
     });
 
+    auto on_interim_response_received = GC::create_function(vm.heap(), [&vm, fetch_timing_info, &fetch_params](HTTP::HeaderMap const& response_headers, u32 status_code) {
+        // 4. If status is in the range 100 to 199, inclusive:
+        // 1. If timingInfo’s first interim network-response start time is 0, then set timingInfo’s first interim
+        //    network-response start time to timingInfo’s final network-response start time.
+        if (fetch_timing_info->first_interim_network_response_start_time() == 0.0)
+            fetch_timing_info->set_first_interim_network_response_start_time(HighResolutionTime::coarsened_shared_current_time(fetch_params.cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes));
+
+        // FIXME: 2. If request’s mode is "websocket" and status is 101, then break.
+
+        // 3. If status is 103 and fetchParams’s process early hints response is non-null, then queue a fetch task to
+        //    run fetchParams’s process early hints response, with response.
+        if (status_code == 103) {
+            auto response = Infrastructure::Response::create(vm);
+            response->set_status(status_code);
+
+            for (auto const& [name, value] : response_headers.headers()) {
+                auto header = Infrastructure::Header::from_latin1_pair(name, value);
+                response->header_list()->append(move(header));
+            }
+
+            if (fetch_params.algorithms()->process_early_hints_response())
+                fetch_params.algorithms()->process_early_hints_response()(response);
+        }
+
+        // 4. Continue.
+    });
+
     // 16. Run these steps in parallel:
     //     FIXME: 1. Run these steps, but abort when fetchParams is canceled:
     auto on_data_received = GC::create_function(vm.heap(), [fetched_data_receiver](ReadonlyBytes bytes) {
@@ -2437,7 +2464,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         }
     });
 
-    ResourceLoader::the().load(load_request, on_headers_received, on_data_received, on_complete);
+    ResourceLoader::the().load(load_request, on_headers_received, on_interim_response_received, on_data_received, on_complete);
 
     return pending_response;
 }

@@ -16,6 +16,7 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibRegex/Regex.h>
 #include <LibTextCodec/Decoder.h>
+#include <LibURL/Parser.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Headers.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Methods.h>
@@ -412,6 +413,159 @@ Optional<MimeSniff::MimeType> HeaderList::extract_mime_type() const
     // 7. If mimeType is null, then return failure.
     // 8. Return mimeType.
     return mime_type;
+}
+
+// https://httpwg.org/specs/rfc7230.html#rfc.section.3.2.3
+constexpr auto is_optional_whitespace = is_any_of("\t "sv);
+constexpr auto is_bad_whitespace = is_any_of(" "sv);
+
+struct LinkParameter {
+    String name;
+    String value;
+};
+
+// https://httpwg.org/specs/rfc8288.html#rfc.section.B.3
+static Vector<LinkParameter> parse_link_parameters(GenericLexer& link_lexer)
+{
+    // 1. Let parameters be an empty list.
+    Vector<LinkParameter> parameters;
+
+    // 2. While input has content:
+    while (!link_lexer.is_eof()) {
+        // 1. Consume any leading OWS.
+        link_lexer.ignore_while(is_optional_whitespace);
+
+        // 2. If the first character is not “;”, return parameters.
+        if (link_lexer.peek() != ';')
+            return parameters;
+
+        // 3. Discard the leading “;” character.
+        link_lexer.ignore(1);
+
+        // 4. Consume any leading OWS.
+        link_lexer.ignore_while(is_optional_whitespace);
+
+        // 5. Consume up to but not including the first BWS, “=”, “;”, “,” character or end of input and let the result
+        //    be parameter_name.
+        auto consumed_name = link_lexer.consume_until([](char ch) {
+            return is_bad_whitespace(ch) || ch == '=' || ch == ';' || ch == ',';
+        });
+        auto parameter_name = String::from_ascii_without_validation(consumed_name.bytes());
+
+        // 6. Consume any leading BWS.
+        link_lexer.ignore_while(is_bad_whitespace);
+
+        String parameter_value;
+
+        // 7. If the next character is “=”:
+        if (link_lexer.peek() == '=') {
+            // 1. Discard the leading “=” character.
+            link_lexer.ignore(1);
+
+            // 2. Consume any leading BWS.
+            link_lexer.ignore_while(is_bad_whitespace);
+
+            // 3. If the next character is DQUOTE, let parameter_value be the result of Parsing a Quoted String
+            //    (Appendix B.4) from input (consuming zero or more characters of it).
+            if (link_lexer.peek() == '"') {
+                parameter_value = collect_an_http_quoted_string(link_lexer, HttpQuotedStringExtractValue::Yes);
+            }
+
+            // 4. Else, consume the contents up to but not including the first “;” or “,” character, or up to the end
+            //    of input, and let the results be parameter_value.
+            else {
+                auto consumed_value = link_lexer.consume_until(is_any_of(";,"sv));
+                parameter_value = String::from_ascii_without_validation(consumed_value.bytes());
+            }
+
+            // FIXME: 5. If the last character of parameter_name is an asterisk (“*”), decode parameter_value according
+            //           to [RFC8187]. Continue processing input if an unrecoverable error is encountered.
+        }
+
+        // 8. Else:
+        //    1. Let parameter_value be an empty string.
+        // NB: It is already empty in this case.
+
+        // 9. Case-normalise parameter_name to lowercase.
+        parameter_name = parameter_name.to_ascii_lowercase();
+
+        // 10. Append (parameter_name, parameter_value) to parameters.
+        parameters.append(LinkParameter {
+            .name = move(parameter_name),
+            .value = move(parameter_value),
+        });
+
+        // 11. Consume any leading OWS.
+        link_lexer.ignore_while(is_optional_whitespace);
+
+        // 12. If the next character is “,” or the end of input, stop processing input and return parameters.
+        if (link_lexer.peek() == ',')
+            return parameters;
+    }
+
+    return parameters;
+}
+
+// https://httpwg.org/specs/rfc8288.html#rfc.section.B.2
+static Vector<HeaderList::ExtractedLink> parse_link_field_value(StringView link_header)
+{
+    // 1. Let links be an empty list.
+    Vector<HeaderList::ExtractedLink> links;
+
+    // 2. While field_value has content:
+    GenericLexer lexer(link_header);
+    while (!lexer.is_eof()) {
+        // 1. Consume any leading OWS.
+        lexer.ignore_while(is_optional_whitespace);
+
+        // 2. If the first character is not “<”, return links.
+        if (lexer.peek() != '<')
+            return links;
+
+        // 3. Discard the first character (“<”).
+        lexer.ignore(1);
+
+        // 4. Consume up to but not including the first “>” character or end of field_value and let the result be target_string.
+        auto target_string = lexer.consume_until('>');
+
+        // 5. If the next character is not “>”, return links.
+        if (lexer.peek() != '>')
+            return links;
+
+        // 6. Discard the leading “>” character.
+        lexer.ignore(1);
+
+        // 7. Let link_parameters be the result of Parsing Parameters (Appendix B.3) from field_value (consuming zero
+        //    or more characters of it).
+        auto link_parameters = parse_link_parameters(lexer);
+
+        // 8. Let target_uri be the result of relatively resolving (as per [RFC3986], Section 5.2) target_string.
+        //    Note that any base URI carried in the payload body is NOT used.
+        auto target_uri = URL::Parser::basic_parse(target_string);
+
+        
+    }
+
+    // 3. Return links.
+    return links;
+}
+
+Vector<HeaderList::ExtractedLink> HeaderList::extract_links() const
+{
+    // 1. Let links be a new list.
+    Vector<ExtractedLink> links;
+
+    // 2. Let rawLinkHeaders be the result of getting, decoding, and splitting `Link` from headers.
+    auto raw_link_headers = get_decode_and_split("Link"sv.bytes());
+    if (raw_link_headers.has_value()) {
+        // 3. For each linkHeader of rawLinkHeaders:
+        for (auto const& link_header : raw_link_headers.value()) {
+
+        }
+    }
+
+    // 4. Return links.
+    return links;
 }
 
 // https://fetch.spec.whatwg.org/#legacy-extract-an-encoding

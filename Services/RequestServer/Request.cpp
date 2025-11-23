@@ -476,20 +476,29 @@ size_t Request::on_header_received(void* buffer, size_t size, size_t nmemb, void
     auto total_size = size * nmemb;
     auto header_line = StringView { static_cast<char const*>(buffer), total_size };
 
-    // We need to extract the HTTP reason phrase since it can be a custom value. Fetching infrastructure needs this
-    // value for setting the status message.
-    if (!request.m_reason_phrase.has_value() && header_line.starts_with("HTTP/"sv)) {
-        auto space_index = header_line.find(' ');
-        if (space_index.has_value())
-            space_index = header_line.find(' ', *space_index + 1);
+    long http_status_code = 0;
+    auto result = curl_easy_getinfo(request.m_curl_easy_handle, CURLINFO_RESPONSE_CODE, &http_status_code);
+    VERIFY(result == CURLE_OK);
 
-        if (space_index.has_value()) {
-            if (auto reason_phrase = header_line.substring_view(*space_index + 1).trim_whitespace(); !reason_phrase.is_empty()) {
-                auto decoder = TextCodec::decoder_for_exact_name("ISO-8859-1"sv);
-                VERIFY(decoder.has_value());
+    bool receiving_interim_response = http_status_code >= 100 && http_status_code <= 199;
+    bool final_header = header_line == "\r\n"sv;
 
-                request.m_reason_phrase = MUST(decoder->to_utf8(reason_phrase));
-                return total_size;
+    if (!receiving_interim_response) {
+        // We need to extract the HTTP reason phrase since it can be a custom value. Fetching infrastructure needs this
+        // value for setting the status message.
+        if (!request.m_reason_phrase.has_value() && header_line.starts_with("HTTP/"sv)) {
+            auto space_index = header_line.find(' ');
+            if (space_index.has_value())
+                space_index = header_line.find(' ', *space_index + 1);
+
+            if (space_index.has_value()) {
+                if (auto reason_phrase = header_line.substring_view(*space_index + 1).trim_whitespace(); !reason_phrase.is_empty()) {
+                    auto decoder = TextCodec::decoder_for_exact_name("ISO-8859-1"sv);
+                    VERIFY(decoder.has_value());
+
+                    request.m_reason_phrase = MUST(decoder->to_utf8(reason_phrase));
+                    return total_size;
+                }
             }
         }
     }
@@ -497,7 +506,16 @@ size_t Request::on_header_received(void* buffer, size_t size, size_t nmemb, void
     if (auto colon_index = header_line.find(':'); colon_index.has_value()) {
         auto name = header_line.substring_view(0, *colon_index).trim_whitespace();
         auto value = header_line.substring_view(*colon_index + 1).trim_whitespace();
-        request.m_response_headers.set(name, value);
+
+        if (!receiving_interim_response)
+            request.m_response_headers.set(name, value);
+        else
+            request.m_interim_response_headers.set(name, value);
+    }
+
+    if (final_header && receiving_interim_response) {
+        request.m_client.async_interim_response_received(request.m_request_id, request.m_interim_response_headers, http_status_code);
+        request.m_interim_response_headers.clear();
     }
 
     return total_size;

@@ -928,7 +928,13 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
     //    with processEarlyHintsResponse set to processEarlyHintsResponse as defined below, processResponse
     //    set to processResponse as defined below, and useParallelQueue set to true.
     if (!state_holder->fetch_controller) {
-        // FIXME: Let processEarlyHintsResponse be the following algorithm given a response earlyResponse:
+        // Let processEarlyHintsResponse be the following algorithm given a response earlyResponse:
+        auto process_early_hints_response = [state_holder](GC::Ref<Fetch::Infrastructure::Response> early_hints_response) {
+            // 1. If commitEarlyHints is null, then set commitEarlyHints to the result of processing early hint headers
+            //    given earlyResponse and request's reserved client.
+            if (!state_holder->commit_early_hints)
+                state_holder->commit_early_hints =
+        };
 
         // Let processResponse be the following algorithm given a response fetchedResponse:
         auto process_response = [state_holder](GC::Ref<Fetch::Infrastructure::Response> fetch_response) {
