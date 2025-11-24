@@ -539,11 +539,75 @@ static Vector<HeaderList::ExtractedLink> parse_link_field_value(StringView link_
         //    or more characters of it).
         auto link_parameters = parse_link_parameters(lexer);
 
-        // 8. Let target_uri be the result of relatively resolving (as per [RFC3986], Section 5.2) target_string.
-        //    Note that any base URI carried in the payload body is NOT used.
-        auto target_uri = URL::Parser::basic_parse(target_string);
+        // FIXME: 8. Let target_uri be the result of relatively resolving (as per [RFC3986], Section 5.2) target_string.
+        //           Note that any base URI carried in the payload body is NOT used.
+        // NB: The HTML spec expects this to be a string because it parses this itself.
 
-        
+        // 9. Let relations_string be the second item of the first tuple of link_parameters whose first item matches the
+        //    string “rel” or the empty string (“”) if it is not present.
+        String relations_string;
+        auto maybe_rel_parameter = link_parameters.first_matching([](LinkParameter const& link_parameter) {
+            return link_parameter.name == "rel"sv;
+        });
+        if (maybe_rel_parameter.has_value())
+            relations_string = maybe_rel_parameter->value;
+
+        // 10. Split relations_string on RWS (removing it in the process) into a list of string relation_types.
+        // FIXME: Support \t
+        auto relation_types = MUST(relations_string.split(' '));
+
+        // FIXME: 11. Let context_string be the second item of the first tuple of link_parameters whose first item matches the
+        //            string “anchor”. If it is not present, context_string is the URL of the representation carrying the Link
+        //            header [RFC7231], Section 3.1.4.1, serialised as a URI. Where the URL is anonymous, context_string is null.
+
+        // FIXME: 12. Let context_uri be the result of relatively resolving (as per [RFC3986], Section 5.2) context_string,
+        //            unless context_string is null, in which case context is null. Note that any base URI carried in the
+        //            payload body is NOT used.
+
+        // 13. Let target_attributes be an empty list.
+        OrderedHashMap<String, String> target_attributes;
+
+        // 14. For each tuple (param_name, param_value) of link_parameters:
+        for (auto& link_parameter : link_parameters) {
+            // 1. If param_name matches “rel” or “anchor”, skip this tuple.
+            if (link_parameter.name == "rel"sv || link_parameter.name == "anchor"sv)
+                continue;
+
+            // FIXME: 2. If param_name matches “media”, “title”, “title*” or “type” and target_attributes already
+            //           contains a tuple whose first element matches the value of param_name, skip this tuple.
+            // NB: The HTML spec expects target_attributes to be an ordered map, which removes any duplicates.
+            if (!target_attributes.contains(link_parameter.name))
+                target_attributes.set(link_parameter.name, link_parameter.value);
+        }
+
+        // 15. Let star_param_names be the set of param_names in the (param_name, param_value) tuples of link_parameters
+        //     where the last character of param_name is an asterisk (“*”).
+        // 16. For each star_param_name in star_param_names:
+        //      FIXME: 1. Let base_param_name be star_param_name with the last character removed.
+        //      2. If the implementation does not choose to support an internationalised form of a parameter named base_param_name
+        //         for any reason (including, but not limited to, it being prohibited by the parameter’s specification), remove
+        //         all tuples from link_parameters whose first member is star_param_name, and skip to the next star_param_name.
+        // NB: We remove these simply because we don't decode them yet.
+        target_attributes.remove_all_matching([](auto& name, auto&) {
+            return name.ends_with('*');
+        });
+
+        //      FIXME: 3. Remove all tuples from link_parameters whose first member is base_param_name.
+        //      FIXME: 4. Change the first member of all tuples in link_parameters whose first member is star_param_name to base_param_name.
+
+        // 17. For each relation_type in relation_types:
+        for (auto& relation_type : relation_types) {
+            // 1. Case-normalise relation_type to lowercase.
+            auto lowercase_relation_type = relation_type.to_ascii_lowercase();
+
+            // 2. Append a link object to links with the target target_uri, relation type of relation_type, context of
+            //    context_uri, and target attributes target_attributes.
+            links.append(HeaderList::ExtractedLink {
+                .target_uri = String::from_ascii_without_validation(target_string.bytes()),
+                .relation_type = move(lowercase_relation_type),
+                .target_attributes = move(target_attributes),
+            });
+        }
     }
 
     // 3. Return links.
@@ -560,7 +624,15 @@ Vector<HeaderList::ExtractedLink> HeaderList::extract_links() const
     if (raw_link_headers.has_value()) {
         // 3. For each linkHeader of rawLinkHeaders:
         for (auto const& link_header : raw_link_headers.value()) {
+            // 1. Let linkObject be the result of parsing linkHeader. [WEBLINK]
+            auto link_object = parse_link_field_value(link_header);
 
+            // FIXME: 2. If linkObject["target_uri"] does not exist, then continue.
+            // NB: What does this mean? The WEBLINK spec doesn't conditionally add target_uri.
+
+            // 3. Append linkObject to links.
+            // FIXME: The spec assumes this is a single object, but it can be multiple.
+            links.extend(move(link_object));
         }
     }
 

@@ -2413,7 +2413,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         pending_response->resolve(response);
     });
 
-    auto on_interim_response_received = GC::create_function(vm.heap(), [&vm, fetch_timing_info, &fetch_params](HTTP::HeaderMap const& response_headers, u32 status_code) {
+    auto on_interim_response_received = GC::create_function(vm.heap(), [&vm, fetch_timing_info, request, &fetch_params](HTTP::HeaderMap const& response_headers, u32 status_code) {
         // 4. If status is in the range 100 to 199, inclusive:
         // 1. If timingInfo’s first interim network-response start time is 0, then set timingInfo’s first interim
         //    network-response start time to timingInfo’s final network-response start time.
@@ -2432,6 +2432,8 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
                 auto header = Infrastructure::Header::from_latin1_pair(name, value);
                 response->header_list()->append(move(header));
             }
+
+            response->set_url_list(request->url_list());
 
             if (fetch_params.algorithms()->process_early_hints_response())
                 fetch_params.algorithms()->process_early_hints_response()(response);

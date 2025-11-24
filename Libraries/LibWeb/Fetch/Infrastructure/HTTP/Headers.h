@@ -67,9 +67,9 @@ public:
     [[nodiscard]] Optional<MimeSniff::MimeType> extract_mime_type() const;
 
     struct ExtractedLink {
-        URL::URL target_uri;
+        String target_uri;
         String relation_type;
-        URL::URL context_uri;
+        // FIXME: URL::URL context_uri;
         OrderedHashMap<String, String> target_attributes;
     };
 

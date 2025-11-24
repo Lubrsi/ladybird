@@ -27,6 +27,7 @@
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/DocumentState.h>
+#include <LibWeb/HTML/HTMLLinkElement.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/HTML/HistoryHandlingBehavior.h>
 #include <LibWeb/HTML/Navigable.h>
@@ -864,6 +865,7 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
         user_involvement);
 }
 
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-by-fetching
 static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<NavigationParamsFetchStateHolder> state_holder, GC::Ref<GC::Function<void(Navigable::NavigationParamsVariant)>> top_level_completion_steps, GC::Ref<GC::Function<void()>> fetch_completion_steps)
 {
     // 21. While true:
@@ -929,11 +931,13 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
     //    set to processResponse as defined below, and useParallelQueue set to true.
     if (!state_holder->fetch_controller) {
         // Let processEarlyHintsResponse be the following algorithm given a response earlyResponse:
-        auto process_early_hints_response = [state_holder](GC::Ref<Fetch::Infrastructure::Response> early_hints_response) {
+        auto process_early_hints_response = [&realm, state_holder](GC::Ref<Fetch::Infrastructure::Response> early_hints_response) {
             // 1. If commitEarlyHints is null, then set commitEarlyHints to the result of processing early hint headers
             //    given earlyResponse and request's reserved client.
-            if (!state_holder->commit_early_hints)
-                state_holder->commit_early_hints =
+            if (!state_holder->commit_early_hints) {
+                VERIFY(state_holder->request->reserved_client());
+                state_holder->commit_early_hints = HTMLLinkElement::process_early_hint_headers(realm, early_hints_response, *state_holder->request->reserved_client());
+            }
         };
 
         // Let processResponse be the following algorithm given a response fetchedResponse:
@@ -951,7 +955,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
                 {
                     .process_request_body_chunk_length = {},
                     .process_request_end_of_body = {},
-                    .process_early_hints_response = {},
+                    .process_early_hints_response = move(process_early_hints_response),
                     .process_response = move(process_response),
                     .process_response_end_of_body = {},
                     .process_response_consume_body = {},

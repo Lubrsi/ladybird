@@ -39,6 +39,7 @@ public:
     bool load_favicon_and_use_if_window_is_active();
 
     static void load_fallback_favicon_if_needed(GC::Ref<DOM::Document>);
+    static GC::Ptr<GC::Function<void(DOM::Document&)>> process_early_hint_headers(JS::Realm& realm, GC::Ref<Fetch::Infrastructure::Response> response, GC::Ref<Environment> reserved_environment);
 
     void set_parser_document(Badge<HTMLParser>, GC::Ref<DOM::Document> document) { m_parser_document = document; }
     void set_was_enabled_when_created_by_parser(Badge<HTMLParser>, bool was_enabled_when_created_by_parser) { m_was_enabled_when_created_by_parser = was_enabled_when_created_by_parser; }
@@ -50,8 +51,8 @@ public:
 
 private:
     // https://html.spec.whatwg.org/multipage/semantics.html#link-processing-options
-    struct LinkProcessingOptions final : public JS::Cell {
-        GC_CELL(LinkProcessingOptions, JS::Cell);
+    struct LinkProcessingOptions final : public GC::Cell {
+        GC_CELL(LinkProcessingOptions, GC::Cell);
         GC_DECLARE_ALLOCATOR(LinkProcessingOptions);
 
         LinkProcessingOptions(
@@ -65,7 +66,21 @@ private:
             String cryptographic_nonce_metadata,
             Fetch::Infrastructure::Request::Priority fetch_priority);
 
+        LinkProcessingOptions(
+            String href,
+            Fetch::Infrastructure::Request::InitiatorType initiator,
+            URL::URL base_url,
+            URL::Origin origin,
+            GC::Ref<HTML::Environment> environment,
+            GC::Ref<HTML::PolicyContainer> policy_container);
+
         virtual void visit_edges(Cell::Visitor& visitor) override;
+
+        enum class AppliedOptions : bool {
+            No,
+            Yes,
+        };
+        AppliedOptions apply_link_options_from_parsed_header_attributes(OrderedHashMap<String, String> const& attributes, String const& rel);
 
         // href (default the empty string)
         String href;
@@ -108,7 +123,7 @@ private:
 
         // environment
         //     An environment
-        GC::Ref<HTML::EnvironmentSettingsObject> environment;
+        GC::Ref<HTML::Environment> environment;
 
         // policy container
         //     A policy container
@@ -182,7 +197,7 @@ private:
     virtual bool is_implicitly_potentially_render_blocking() const override;
 
     GC::Ref<LinkProcessingOptions> create_link_options();
-    GC::Ptr<Fetch::Infrastructure::Request> create_link_request(LinkProcessingOptions const&);
+    static GC::Ptr<Fetch::Infrastructure::Request> create_link_request(JS::VM&, LinkProcessingOptions const&);
 
     void fetch_and_process_linked_resource();
     void default_fetch_and_process_linked_resource();
@@ -194,14 +209,16 @@ private:
     bool icon_linked_resource_fetch_setup_steps(Fetch::Infrastructure::Request&);
     bool stylesheet_linked_resource_fetch_setup_steps(Fetch::Infrastructure::Request&);
 
-    void preconnect(LinkProcessingOptions const&);
-    void preload(LinkProcessingOptions&, GC::Ptr<GC::Function<void(Fetch::Infrastructure::Response&)>> process_response = {});
+    static void preconnect(LinkProcessingOptions const&);
+    static GC::Ptr<Fetch::Infrastructure::FetchController> preload(JS::Realm&, LinkProcessingOptions&, GC::Ptr<GC::Function<void(Fetch::Infrastructure::Response&)>> process_response = {});
 
     void process_linked_resource(bool success, Fetch::Infrastructure::Response const&, ByteBuffer);
     void process_icon_resource(bool success, Fetch::Infrastructure::Response const&, ByteBuffer);
     void process_stylesheet_resource(bool success, Fetch::Infrastructure::Response const&, ByteBuffer);
 
     bool should_fetch_and_process_resource_type() const;
+
+    static void process_link_header(JS::Realm&, String const&, LinkProcessingOptions&);
 
     struct Relationship {
         enum {

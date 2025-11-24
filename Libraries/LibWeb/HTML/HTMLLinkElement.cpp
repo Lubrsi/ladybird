@@ -270,7 +270,7 @@ GC::Ref<HTMLLinkElement::LinkProcessingOptions> HTMLLinkElement::create_link_opt
     auto& document = this->document();
 
     // 2. Let options be a new link processing options with
-    auto options = realm().create<LinkProcessingOptions>(
+    auto options = realm().heap().allocate<LinkProcessingOptions>(
         // crossorigin
         //     the state of el's crossorigin content attribute
         cors_setting_attribute_from_keyword(get_attribute(AttributeNames::crossorigin)),
@@ -330,7 +330,7 @@ GC::Ref<HTMLLinkElement::LinkProcessingOptions> HTMLLinkElement::create_link_opt
 }
 
 // https://html.spec.whatwg.org/multipage/semantics.html#create-a-link-request
-GC::Ptr<Fetch::Infrastructure::Request> HTMLLinkElement::create_link_request(HTMLLinkElement::LinkProcessingOptions const& options)
+GC::Ptr<Fetch::Infrastructure::Request> HTMLLinkElement::create_link_request(JS::VM& vm, HTMLLinkElement::LinkProcessingOptions const& options)
 {
     // 1. Assert: options's href is not the empty string.
     VERIFY(!options.href.is_empty());
@@ -347,7 +347,7 @@ GC::Ptr<Fetch::Infrastructure::Request> HTMLLinkElement::create_link_request(HTM
         return nullptr;
 
     // 5. Let request be the result of creating a potential-CORS request given url, options's destination, and options's crossorigin.
-    auto request = create_potential_CORS_request(vm(), *url, options.destination, options.crossorigin);
+    auto request = create_potential_CORS_request(vm, *url, options.destination, options.crossorigin);
 
     // 6. Set request's policy container to options's policy container.
     request->set_policy_container(GC::Ref { *options.policy_container });
@@ -362,7 +362,16 @@ GC::Ptr<Fetch::Infrastructure::Request> HTMLLinkElement::create_link_request(HTM
     request->set_referrer_policy(options.referrer_policy);
 
     // 10. Set request's client to options's environment.
-    request->set_client(options.environment);
+    // AD-HOC: Early Hints does not have an ESO due to happening in navigation, so set reserved client instead.
+    // FIXME: File a spec issue for this.
+    if (auto* settings_object = as_if<EnvironmentSettingsObject>(options.environment.ptr())) {
+        request->set_client(settings_object);
+    } else {
+        request->set_reserved_client(options.environment);
+
+        // AD-HOC: Since we don't have an ESO, we have to set these manually:
+        request->set_origin(options.origin);
+    }
 
     // 11. Set request's priority to options's fetch priority.
     request->set_priority(options.fetch_priority);
@@ -397,7 +406,7 @@ void HTMLLinkElement::default_fetch_and_process_linked_resource()
     auto options = create_link_options();
 
     // 2. Let request be the result of creating a link request given options.
-    auto request = create_link_request(options);
+    auto request = create_link_request(vm(), options);
 
     // 3. If request is null, then return.
     if (request == nullptr) {
@@ -512,7 +521,7 @@ void HTMLLinkElement::fetch_and_process_linked_preload_resource()
     options->destination = destination.get<Optional<Fetch::Infrastructure::Request::Destination>>();
 
     // 6. Preload options, with the following steps given a response response:
-    preload(options, GC::Function<void(Fetch::Infrastructure::Response&)>::create(heap(), [this](Fetch::Infrastructure::Response& response) {
+    m_fetch_controller = preload(realm(), options, GC::Function<void(Fetch::Infrastructure::Response&)>::create(heap(), [this](Fetch::Infrastructure::Response& response) {
         // 1. If response is a network error, fire an event named error at el. Otherwise, fire an event named load at el.
         if (response.is_network_error())
             dispatch_event(DOM::Event::create(realm(), HTML::EventNames::error));
@@ -654,27 +663,36 @@ static bool type_matches_destination(StringView type, Optional<Fetch::Infrastruc
     return false;
 }
 
+struct PreloadState : public GC::Cell {
+    GC_CELL(PreloadState, GC::Cell);
+    GC_DECLARE_ALLOCATOR(PreloadState);
+
+    GC::Ptr<Fetch::Infrastructure::FetchController> fetch_controller;
+};
+
+GC_DEFINE_ALLOCATOR(PreloadState);
+
 // https://html.spec.whatwg.org/multipage/links.html#preload
-void HTMLLinkElement::preload(LinkProcessingOptions& options, GC::Ptr<GC::Function<void(Fetch::Infrastructure::Response&)>> process_response)
+GC::Ptr<Fetch::Infrastructure::FetchController> HTMLLinkElement::preload(JS::Realm& realm, LinkProcessingOptions& options, GC::Ptr<GC::Function<void(Fetch::Infrastructure::Response&)>> process_response)
 {
-    auto& realm = this->realm();
+    auto& heap = realm.heap();
     auto& vm = realm.vm();
 
     // 1. If options's type doesn't match options's destination, then return.
     if (!type_matches_destination(options.type, options.destination))
-        return;
+        return nullptr;
 
     // FIXME: 2. If options's destination is "image" and options's source set is not null, then set options's href to the
     //           result of selecting an image source from options's source set.
     if (options.href.is_empty())
-        return;
+        return nullptr;
 
     // 3. Let request be the result of creating a link request given options.
-    auto request = create_link_request(options);
+    auto request = create_link_request(vm, options);
 
     // 4. If request is null, then return.
     if (!request)
-        return;
+        return nullptr;
 
     // FIXME: 5. Let unsafeEndTime be 0.
 
@@ -690,11 +708,11 @@ void HTMLLinkElement::preload(LinkProcessingOptions& options, GC::Ptr<GC::Functi
         request->set_initiator_type(Fetch::Infrastructure::Request::InitiatorType::EarlyHint);
 
     // 9. Let controller be null.
-    m_fetch_controller = nullptr;
+    auto preload_state = heap.allocate<PreloadState>();
 
     // 10. Let reportTiming given a Document document be to report timing for controller given document's relevant global object.
-    auto report_timing = GC::Function<void(DOM::Document const&)>::create(realm.heap(), [this](DOM::Document const& document) {
-        m_fetch_controller->report_timing(relevant_global_object(document));
+    auto report_timing = GC::Function<void(DOM::Document const&)>::create(realm.heap(), [preload_state](DOM::Document const& document) {
+        preload_state->fetch_controller->report_timing(relevant_global_object(document));
     });
 
     // 11. Set controller to the result of fetching request, with processResponseConsumeBody set to the following steps
@@ -730,7 +748,7 @@ void HTMLLinkElement::preload(LinkProcessingOptions& options, GC::Ptr<GC::Functi
             process_response->function()(response);
     };
 
-    m_fetch_controller = Fetch::Fetching::fetch(realm, *request, Fetch::Infrastructure::FetchAlgorithms::create(vm, move(fetch_algorithms_input)));
+    preload_state->fetch_controller = Fetch::Fetching::fetch(realm, *request, Fetch::Infrastructure::FetchAlgorithms::create(vm, move(fetch_algorithms_input)));
 
     // 12. Let commit be the following steps given a Document document:
     auto commit = GC::Function<void(DOM::Document&)>::create(realm.heap(), [entry, report_timing](DOM::Document& document) {
@@ -747,6 +765,8 @@ void HTMLLinkElement::preload(LinkProcessingOptions& options, GC::Ptr<GC::Functi
         options.on_document_ready = commit;
     else
         commit->function()(*options.document);
+
+    return preload_state->fetch_controller;
 }
 
 // https://html.spec.whatwg.org/multipage/semantics.html#process-the-linked-resource
@@ -998,6 +1018,108 @@ bool HTMLLinkElement::should_fetch_and_process_resource_type() const
     return m_relationship & Relationship::Icon;
 }
 
+// https://html.spec.whatwg.org/multipage/semantics.html#process-early-hint-headers
+GC::Ptr<GC::Function<void(DOM::Document&)>> HTMLLinkElement::process_early_hint_headers(JS::Realm& realm, GC::Ref<Fetch::Infrastructure::Response> response, GC::Ref<Environment> reserved_environment)
+{
+    auto& heap = realm.heap();
+
+    // 1. Let earlyPolicyContainer be the result of creating a policy container from a fetch response given response and reservedEnvironment.
+    // Spec-note: This allows the early hint response to include a Content Security Policy which would be enforced when fetching the early hint request.
+    auto early_policy_container = create_a_policy_container_from_a_fetch_response(heap, response, reserved_environment);
+
+    // 2. Let links be the result of extracting links from response's header list.
+    auto links = response->header_list()->extract_links();
+
+    // 3. Let earlyHints be an empty list.
+    Vector<GC::Root<LinkProcessingOptions>> early_hints;
+
+    // 4. For each linkObject in links:
+    // Spec-note: The moment we receive the early hint link header, we begin fetching earlyRequest. If it comes back before the Document is created,
+    //            we set earlyResponse to the response of that fetch and once the Document is created we commit it (by making it available in the map
+    //            of preloaded resources as if it was a link element). If the Document is created first, the response is committed as soon as it becomes
+    //            available.
+    for (auto const& link_object : links) {
+        // 1. Let rel be linkObject["relation_type"].
+        auto const& rel = link_object.relation_type;
+
+        // 2. Let options be a new link processing options with
+        VERIFY(response->url().has_value());
+        auto options = heap.allocate<LinkProcessingOptions>(
+            // href
+            //     linkObject["target_uri"]
+            link_object.target_uri,
+
+            // initiator
+            //     "early-hint"
+            Fetch::Infrastructure::Request::InitiatorType::EarlyHint,
+
+            // base URL
+            //     response's URL
+            response->url().value(),
+
+            // origin
+            //     response's URL's origin
+            response->url()->origin(),
+
+            // environment
+            //     reservedEnvironment
+            reserved_environment,
+
+            // policy container
+            //     earlyPolicyContainer
+            early_policy_container);
+
+        // 3. Let attribs be linkObject["target_attributes"].
+        // Spec-note: Only the as, crossorigin, integrity, and type attributes are handled as part of early hint processing.
+        //            The other ones, in particular blocking, imagesrcset, imagesizes, and media are only applicable once a
+        //            Document is created.
+        auto const& attributes = link_object.target_attributes;
+
+        // 4. Apply link options from parsed header attributes to options given attribs and rel. If that returned false, then return.
+        // FIXME: The spec doesn't specify what to return if it returns false. Assume it's null.
+        auto applied_options = options->apply_link_options_from_parsed_header_attributes(attributes, rel);
+        if (applied_options == LinkProcessingOptions::AppliedOptions::No)
+            return nullptr;
+
+        // 5. Run the process a link header steps for rel given options.
+        process_link_header(realm, rel, options);
+
+        // 6. Append options to earlyHints.
+        early_hints.append(GC::make_root(options));
+    }
+
+    // 5. Return the following substeps given Document doc: for each options in earlyHints:
+    return GC::create_function(heap, [early_hints = move(early_hints)](DOM::Document& document) {
+        for (auto& options : early_hints) {
+            // 1. If options's on document ready is null, then set options's document to doc.
+            if (!options->on_document_ready) {
+                options->document = document;
+                return;
+            }
+
+            // 2. Otherwise, call options's on document ready with doc.
+            options->on_document_ready->function()(document);
+        }
+    });
+}
+
+// https://html.spec.whatwg.org/multipage/semantics.html#process-a-link-header
+void HTMLLinkElement::process_link_header(JS::Realm& realm, String const& rel, LinkProcessingOptions& options)
+{
+    // All link types that can be external resource links define a process a link header algorithm, which takes a link
+    // processing options. This algorithm defines whether and how they react to appearing in an HTTP `Link` response header.
+
+    // https://html.spec.whatwg.org/multipage/links.html#link-type-preload
+    // The process a link header step for this type of link given a link processing options options is to preload options.
+    if (rel == "preload"sv)
+        (void)preload(realm, options);
+
+    // https://html.spec.whatwg.org/multipage/links.html#link-type-preconnect
+    // The process a link header step for this type of linked resource given a link processing options options are to preconnect given options.
+    if (rel == "preconnect"sv)
+        preconnect(options);
+}
+
 HTMLLinkElement::LinkProcessingOptions::LinkProcessingOptions(
     CORSSettingAttribute crossorigin,
     ReferrerPolicy::ReferrerPolicy referrer_policy,
@@ -1020,6 +1142,22 @@ HTMLLinkElement::LinkProcessingOptions::LinkProcessingOptions(
 {
 }
 
+HTMLLinkElement::LinkProcessingOptions::LinkProcessingOptions(
+    String href,
+    Fetch::Infrastructure::Request::InitiatorType initiator,
+    URL::URL base_url,
+    URL::Origin origin,
+    GC::Ref<HTML::Environment> environment,
+    GC::Ref<HTML::PolicyContainer> policy_container)
+    : href(move(href))
+    , initiator(initiator)
+    , base_url(move(base_url))
+    , origin(move(origin))
+    , environment(environment)
+    , policy_container(policy_container)
+{
+}
+
 void HTMLLinkElement::LinkProcessingOptions::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
@@ -1027,6 +1165,55 @@ void HTMLLinkElement::LinkProcessingOptions::visit_edges(Cell::Visitor& visitor)
     visitor.visit(policy_container);
     visitor.visit(document);
     visitor.visit(on_document_ready);
+}
+
+// https://html.spec.whatwg.org/multipage/semantics.html#apply-link-options-from-parsed-header-attributes
+HTMLLinkElement::LinkProcessingOptions::AppliedOptions HTMLLinkElement::LinkProcessingOptions::apply_link_options_from_parsed_header_attributes(OrderedHashMap<String, String> const& attributes, String const& rel)
+{
+    // 1. If rel is "preload":
+    if (rel == "preload"sv) {
+        // 1. If attribs["as"] does not exist, then return false.
+        auto as_attribute = attributes.get("as"sv);
+        if (!as_attribute.has_value())
+            return AppliedOptions::No;
+
+        // 2. Let destination be the result of translating attribs["as"].
+        auto translated_destination = translate_a_preload_destination(as_attribute.value());
+
+        // 3. If destination is null, then return false.
+        if (translated_destination.has<Empty>())
+            return AppliedOptions::No;
+
+        // 4. Set options's destination to destination.
+        destination = translated_destination.get<Optional<Fetch::Infrastructure::Request::Destination>>();
+    }
+
+    // 2. If attribs["crossorigin"] exists and is an ASCII case-insensitive match for one of the CORS settings attribute
+    //    keywords, then set options's crossorigin to the CORS settings attribute state corresponding to that keyword.
+    if (auto crossorigin_attribute = attributes.get("crossorigin"sv); crossorigin_attribute.has_value()) {
+        // FIXME: Implement
+    }
+
+    // 3. If attribs["integrity"] exists, then set options's integrity to attribs["integrity"].
+    if (auto integrity_attribute = attributes.get("integrity"sv); integrity_attribute.has_value())
+        integrity = integrity_attribute.value();
+
+    // FIXME: 4. If attribs["referrerpolicy"] exists and is an ASCII case-insensitive match for some referrer policy, then set options's referrer policy to that referrer policy.
+
+    // 5. If attribs["nonce"] exists, then set options's nonce to attribs["nonce"].
+    if (auto nonce_attribute = attributes.get("nonce"sv); nonce_attribute.has_value())
+        cryptographic_nonce_metadata = nonce_attribute.value();
+
+    // 6. If attribs["type"] exists, then set options's type to attribs["type"].
+    if (auto type_attribute = attributes.get("type"sv); type_attribute.has_value())
+        type = type_attribute.value();
+
+    // 7. If attribs["fetchpriority"] exists and is an ASCII case-insensitive match for a fetch priority attribute keyword,
+    //    then set options's fetch priority to that fetch priority attribute keyword.
+    // FIXME: Implement
+
+    // 8. Return true.
+    return AppliedOptions::Yes;
 }
 
 // https://html.spec.whatwg.org/multipage/links.html#create-a-preload-key

@@ -431,7 +431,9 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         document->shared_declarative_refresh_steps(value, nullptr);
     }
 
-    // FIXME: 16. If navigationParams's commit early hints is not null, then call navigationParams's commit early hints with document.
+    // 16. If navigationParams's commit early hints is not null, then call navigationParams's commit early hints with document.
+    if (navigation_params.commit_early_hints)
+        navigation_params.commit_early_hints->function()(document);
 
     // FIXME: 17. Process link headers given document, navigationParams's response, and "pre-media".
 
