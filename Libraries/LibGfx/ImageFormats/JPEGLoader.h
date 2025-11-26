@@ -14,8 +14,8 @@ struct JPEGLoadingContext;
 
 class JPEGImageDecoderPlugin : public ImageDecoderPlugin {
 public:
-    static bool sniff(ReadonlyBytes);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(ReadonlyBytes);
+    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     virtual ~JPEGImageDecoderPlugin() override;
     virtual IntSize size() override;

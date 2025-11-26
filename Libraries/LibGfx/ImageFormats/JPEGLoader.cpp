@@ -8,8 +8,18 @@
 #include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <jpeglib.h>
 #include <setjmp.h>
+#include <LibCore/SeekableSharedMemoryStream.h>
 
 namespace Gfx {
+
+static constexpr size_t READ_BUFFER_SIZE = 4 * KiB;
+
+struct SourceManager {
+    jpeg_source_mgr source_manager;
+    Core::SeekableSharedMemoryStream* stream;
+    Array<u8, READ_BUFFER_SIZE> read_buffer;
+    ReadonlyBytes current_view_into_read_buffer;
+};
 
 struct JPEGLoadingContext {
     enum class State {
@@ -23,11 +33,11 @@ struct JPEGLoadingContext {
     RefPtr<Gfx::Bitmap> rgb_bitmap;
     RefPtr<Gfx::CMYKBitmap> cmyk_bitmap;
 
-    ReadonlyBytes data;
+    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
     Vector<u8> icc_data;
 
-    JPEGLoadingContext(ReadonlyBytes data)
-        : data(data)
+    JPEGLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+        : stream(move(stream))
     {
     }
 
@@ -43,10 +53,10 @@ ErrorOr<void> JPEGLoadingContext::decode()
     struct jpeg_decompress_struct cinfo;
     ScopeGuard guard { [&]() { jpeg_destroy_decompress(&cinfo); } };
 
+    SourceManager source_manager {};
+
     struct JPEGErrorManager jerr;
     cinfo.err = jpeg_std_error(&jerr);
-
-    jpeg_source_mgr source_manager {};
 
     if (setjmp(jerr.setjmp_buffer))
         return Error::from_string_literal("Failed to decode JPEG");
@@ -60,22 +70,53 @@ ErrorOr<void> JPEGLoadingContext::decode()
 
     jpeg_create_decompress(&cinfo);
 
-    source_manager.next_input_byte = data.data();
-    source_manager.bytes_in_buffer = data.size();
-    source_manager.init_source = [](j_decompress_ptr) { };
-    source_manager.fill_input_buffer = [](j_decompress_ptr) -> boolean { return false; };
-    source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
-        if (num_bytes > static_cast<long>(context->src->bytes_in_buffer)) {
-            context->src->bytes_in_buffer = 0;
+    source_manager.stream = stream.ptr();
+
+    source_manager.source_manager.bytes_in_buffer = 0;
+    source_manager.source_manager.next_input_byte = nullptr;
+    source_manager.source_manager.init_source = [](j_decompress_ptr) { dbgln("init source"); };
+    source_manager.source_manager.fill_input_buffer = [](j_decompress_ptr context) -> boolean {
+        auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
+        auto maybe_error = source_manager->stream->read_some(source_manager->read_buffer);
+        if (maybe_error.is_error()) {
+            dbgln("Failed to read from JPEG data stream: {}", maybe_error.error());
+            return false;
+        }
+
+        auto bytes = maybe_error.release_value();
+        source_manager->current_view_into_read_buffer = bytes;
+        source_manager->source_manager.next_input_byte = bytes.data();
+        source_manager->source_manager.bytes_in_buffer = bytes.size();
+        return true;
+    };
+    source_manager.source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
+        auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
+        dbgln("skip {} bytes", num_bytes);
+        if (num_bytes < 0) {
+            dbgln("Did not expect to seek backwards by {} bytes", num_bytes);
             return;
         }
-        context->src->next_input_byte += num_bytes;
-        context->src->bytes_in_buffer -= num_bytes;
-    };
-    source_manager.resync_to_restart = jpeg_resync_to_restart;
-    source_manager.term_source = [](j_decompress_ptr) { };
 
-    cinfo.src = &source_manager;
+        // if (static_cast<size_t>(num_bytes) < source_manager->current_view_into_read_buffer.size()) {
+        //     auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes);
+        //     source_manager->current_view_into_read_buffer = sliced_bytes;
+        //     source_manager->source_manager.next_input_byte = sliced_bytes.data();
+        //     source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
+        //     return;
+        // }
+
+        auto maybe_error = source_manager->stream->seek(num_bytes, SeekMode::FromCurrentPosition);
+        if (maybe_error.is_error())
+            dbgln("Failed to seek JPEG data stream: {}", maybe_error.error());
+
+        // Make it call fill_input_buffer after seeking.
+        context->src->next_input_byte = nullptr;
+        context->src->bytes_in_buffer = 0;
+    };
+    source_manager.source_manager.resync_to_restart = jpeg_resync_to_restart;
+    source_manager.source_manager.term_source = [](j_decompress_ptr) { };
+
+    cinfo.src = reinterpret_cast<jpeg_source_mgr*>(&source_manager);
 
     jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK)
@@ -208,17 +249,21 @@ IntSize JPEGImageDecoderPlugin::size()
     return {};
 }
 
-bool JPEGImageDecoderPlugin::sniff(ReadonlyBytes data)
+bool JPEGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
-    return data.size() > 3
-        && data.data()[0] == 0xFF
+    Array<u8, 3> data;
+    auto maybe_error = stream->read_until_filled(data);
+    if (maybe_error.is_error())
+        return false;
+
+    return data.data()[0] == 0xFF
         && data.data()[1] == 0xD8
         && data.data()[2] == 0xFF;
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGImageDecoderPlugin::create(ReadonlyBytes data)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
-    return adopt_own(*new JPEGImageDecoderPlugin(make<JPEGLoadingContext>(data)));
+    return adopt_own(*new JPEGImageDecoderPlugin(make<JPEGLoadingContext>(move(stream))));
 }
 
 ErrorOr<ImageFrameDescriptor> JPEGImageDecoderPlugin::frame(size_t index, Optional<IntSize>)
