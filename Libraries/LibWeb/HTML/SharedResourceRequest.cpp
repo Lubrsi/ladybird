@@ -103,7 +103,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
             return;
         }
 
-        response->body()->fully_read(realm, process_body, process_body_error, GC::Ref { realm.global_object() });
+        response->body()->incrementally_read(process_body, process_body_error, GC::Ref { realm.global_object() });
     };
 
     m_state = State::Fetching;

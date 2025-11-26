@@ -64,6 +64,24 @@ public:
         return (T const*)m_impl->data();
     }
 
+    template<typename T>
+    Span<T> span() const
+    {
+        static_assert(IsVoid<T> || IsTrivial<T>);
+        if (!m_impl)
+            return Span<T> {};
+        return Span<T> { (T*)m_impl->data(), m_impl->size() };
+    }
+
+    template<typename T>
+    ReadonlySpan<T> readonly_span() const
+    {
+        static_assert(IsVoid<T> || IsTrivial<T>);
+        if (!m_impl)
+            return ReadonlySpan<T> {};
+        return ReadonlySpan<T> { (T const*)m_impl->data(), m_impl->size() };
+    }
+
 private:
     explicit AnonymousBuffer(NonnullRefPtr<AnonymousBufferImpl> impl)
         : m_impl(move(impl))

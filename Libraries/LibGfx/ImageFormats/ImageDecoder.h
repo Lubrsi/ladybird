@@ -11,6 +11,7 @@
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/String.h>
+#include <LibCore/Forward.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/CMYKBitmap.h>
 #include <LibGfx/ColorSpace.h>
@@ -98,7 +99,7 @@ protected:
 
 class ImageDecoder : public RefCounted<ImageDecoder> {
 public:
-    static ErrorOr<RefPtr<ImageDecoder>> try_create_for_raw_bytes(ReadonlyBytes, Optional<ByteString> mime_type = {});
+    static ErrorOr<RefPtr<ImageDecoder>> try_create_for_stream(NonnullRefPtr<Core::SeekableSharedMemoryStream>, Optional<ByteString> mime_type = {});
     ~ImageDecoder() = default;
 
     IntSize size() const { return m_plugin->size(); }

@@ -11,6 +11,8 @@
 #include <AK/Debug.h>
 #include <AK/Error.h>
 #include <AK/Function.h>
+#include <AK/MaybeOwned.h>
+#include <AK/Stream.h>
 #include <AK/Try.h>
 #include <AK/Vector.h>
 #include <LibGfx/ImageFormats/BMPLoader.h>
@@ -203,9 +205,7 @@ struct BMPLoadingContext {
     };
     State state { State::NotDecoded };
 
-    u8 const* file_bytes { nullptr };
-    size_t file_size { 0 };
-    u32 data_offset { 0 };
+    MaybeOwned<SeekableStream> stream;
 
     bool is_included_in_ico { false };
 
@@ -238,62 +238,11 @@ struct BMPLoadingContext {
 
         VERIFY_NOT_REACHED();
     }
-};
 
-class InputStreamer {
-public:
-    InputStreamer(u8 const* data, size_t size)
-        : m_data_ptr(data)
-        , m_size_remaining(size)
+    BMPLoadingContext(MaybeOwned<SeekableStream> stream)
+        : stream(move(stream))
     {
     }
-
-    u8 read_u8()
-    {
-        VERIFY(m_size_remaining >= 1);
-        m_size_remaining--;
-        return *(m_data_ptr++);
-    }
-
-    u16 read_u16()
-    {
-        return read_u8() | (read_u8() << 8);
-    }
-
-    u32 read_u24()
-    {
-        return read_u8() | (read_u8() << 8) | (read_u8() << 16);
-    }
-
-    i32 read_i32()
-    {
-        return static_cast<i32>(read_u16() | (read_u16() << 16));
-    }
-
-    u32 read_u32()
-    {
-        return read_u16() | (read_u16() << 16);
-    }
-
-    void drop_bytes(u8 num_bytes)
-    {
-        VERIFY(m_size_remaining >= num_bytes);
-        m_size_remaining -= num_bytes;
-        m_data_ptr += num_bytes;
-    }
-
-    bool at_end() const { return !m_size_remaining; }
-
-    bool has_u8() const { return m_size_remaining >= 1; }
-    bool has_u16() const { return m_size_remaining >= 2; }
-    bool has_u24() const { return m_size_remaining >= 3; }
-    bool has_u32() const { return m_size_remaining >= 4; }
-
-    size_t remaining() const { return m_size_remaining; }
-
-private:
-    u8 const* m_data_ptr { nullptr };
-    size_t m_size_remaining { 0 };
 };
 
 // Lookup table for distributing all possible 2-bit numbers evenly into 8-bit numbers
@@ -498,15 +447,7 @@ static bool set_dib_bitmasks(BMPLoadingContext& context, InputStreamer& streamer
 
 static ErrorOr<void> decode_bmp_header(BMPLoadingContext& context)
 {
-    if (!context.file_bytes || context.file_size < bmp_header_size) {
-        dbgln_if(BMP_DEBUG, "Missing BMP header");
-        context.state = BMPLoadingContext::State::Error;
-        return Error::from_string_literal("Missing BMP header");
-    }
-
-    InputStreamer streamer(context.file_bytes, bmp_header_size);
-
-    u16 header = streamer.read_u16();
+    u16 header = TRY(context.stream->read_value<u16>());
     if (header != 0x4d42) {
         dbgln_if(BMP_DEBUG, "BMP has invalid magic header number: {:#04x}", header);
         context.state = BMPLoadingContext::State::Error;
@@ -518,25 +459,17 @@ static ErrorOr<void> decode_bmp_header(BMPLoadingContext& context)
     // be the size of the header instead, so we just rely on the known file
     // size, instead of a possibly-correct-but-also-possibly-incorrect reported
     // value of the file size.
-    streamer.drop_bytes(4);
+    TRY(context.stream->discard(4));
 
     // Ignore reserved bytes
-    streamer.drop_bytes(4);
-    context.data_offset = streamer.read_u32();
-    if (context.data_offset >= context.file_size) {
-        dbgln_if(BMP_DEBUG, "BMP has invalid data offset: {}", context.data_offset);
-        context.state = BMPLoadingContext::State::Error;
-        return Error::from_string_literal("BMP has invalid data offset");
-    }
+    TRY(context.stream->discard(4));
+
+    u32 data_offset = TRY(context.stream->read_value<u32>());
+    TRY(context.stream->seek(data_offset, SeekMode::SetPosition));
 
     if constexpr (BMP_DEBUG) {
-        dbgln("BMP file size: {}", context.file_size);
-        dbgln("BMP data offset: {}", context.data_offset);
-    }
-
-    if (context.data_offset >= context.file_size) {
-        dbgln_if(BMP_DEBUG, "BMP data offset is beyond file end?!");
-        return Error::from_string_literal("BMP data offset is beyond file end");
+        dbgln("BMP file size: {}", TRY(context.stream->size()));
+        dbgln("BMP data offset: {}", TRY(context.stream->tell()));
     }
 
     return {};
@@ -825,9 +758,6 @@ static ErrorOr<void> decode_bmp_dib(BMPLoadingContext& context)
         TRY(decode_bmp_header(context));
 
     u8 header_size = context.is_included_in_ico ? 0 : bmp_header_size;
-
-    if (context.file_size < header_size + 4u)
-        return Error::from_string_literal("File size too short");
 
     InputStreamer streamer(context.file_bytes + header_size, 4);
 
@@ -1505,11 +1435,9 @@ IntSize BMPImageDecoderPlugin::size()
     return { m_context->dib.core.width, abs(m_context->dib.core.height) };
 }
 
-bool BMPImageDecoderPlugin::sniff(ReadonlyBytes data)
+bool BMPImageDecoderPlugin::sniff(SeekableStream& stream)
 {
-    BMPLoadingContext context;
-    context.file_bytes = data.data();
-    context.file_size = data.size();
+    BMPLoadingContext context { MaybeOwned { stream } };
     return !decode_bmp_header(context).is_error();
 }
 

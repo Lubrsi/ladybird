@@ -22,18 +22,13 @@ void Client::die()
     m_pending_decoded_images.clear();
 }
 
-NonnullRefPtr<Core::Promise<DecodedImage>> Client::decode_image(ReadonlyBytes encoded_data, Function<ErrorOr<void>(DecodedImage&)> on_resolved, Function<void(Error&)> on_rejected, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
+InFlightDecoding Client::start_decoding_image(Function<ErrorOr<void>(DecodedImage&)> on_resolved, Function<void(Error&)> on_rejected, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
 {
     auto promise = Core::Promise<DecodedImage>::construct();
     if (on_resolved)
         promise->on_resolution = move(on_resolved);
     if (on_rejected)
         promise->on_rejection = move(on_rejected);
-
-    if (encoded_data.is_empty()) {
-        promise->reject(Error::from_string_literal("No encoded data"));
-        return promise;
-    }
 
     auto encoded_buffer_or_error = Core::AnonymousBuffer::create_with_size(encoded_data.size());
     if (encoded_buffer_or_error.is_error()) {

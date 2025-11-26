@@ -53,6 +53,7 @@ set(SOURCES
     Resource.cpp
     ResourceImplementation.cpp
     ResourceImplementationFile.cpp
+    SeekableSharedMemoryStream.cpp
     SystemServerTakeover.cpp
     ThreadEventQueue.cpp
     Timer.cpp

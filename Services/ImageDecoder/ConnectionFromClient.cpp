@@ -8,6 +8,7 @@
 #include <AK/IDAllocator.h>
 #include <ImageDecoder/ConnectionFromClient.h>
 #include <ImageDecoder/ImageDecoderClientEndpoint.h>
+#include <LibCore/SeekableSharedMemoryStream.h>
 #include <LibCore/System.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
@@ -148,6 +149,8 @@ static ErrorOr<ConnectionFromClient::DecodeResult> decode_image_to_details(Core:
 
 NonnullRefPtr<ConnectionFromClient::Job> ConnectionFromClient::make_decode_image_job(i64 image_id, Core::AnonymousBuffer encoded_buffer, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
 {
+    auto stream = adopt_ref(*new Core::SeekableSharedMemoryStream());
+
     return Job::construct(
         [encoded_buffer = move(encoded_buffer), ideal_size = move(ideal_size), mime_type = move(mime_type)](auto&) -> ErrorOr<DecodeResult> {
             return TRY(decode_image_to_details(encoded_buffer, ideal_size, mime_type));
@@ -164,7 +167,7 @@ NonnullRefPtr<ConnectionFromClient::Job> ConnectionFromClient::make_decode_image
         });
 }
 
-Messages::ImageDecoderServer::DecodeImageResponse ConnectionFromClient::decode_image(Core::AnonymousBuffer encoded_buffer, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
+Messages::ImageDecoderServer::DecodeImageResponse ConnectionFromClient::decode_image(Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
 {
     auto image_id = m_next_image_id++;
 

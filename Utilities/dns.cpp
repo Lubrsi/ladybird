@@ -6,13 +6,38 @@
 
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
+#include <LibCore/File.h>
 #include <LibCore/Socket.h>
+#include <LibCore/System.h>
 #include <LibDNS/Resolver.h>
 #include <LibMain/Main.h>
 #include <LibTLS/TLSv12.h>
+#include <LibThreading/BackgroundAction.h>
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
+    Core::EventLoop loop;
+    auto sockets = MUST(Core::System::pipe2(O_CLOEXEC));
+
+    auto background_action = Threading::BackgroundAction<int>::construct(
+        [reader_fd = sockets[0]](auto&) -> ErrorOr<int> {
+            auto read_file = TRY(Core::File::adopt_fd(reader_fd, Core::File::OpenMode::Read));
+            TRY(read_file->seek(50, SeekMode::SetPosition));
+            u8 buffer[16];
+            auto bytes = TRY(read_file->read_some({ buffer, sizeof(buffer) }));
+            dbgln("{}", bytes);
+            return 1;
+        },
+        [](int) -> ErrorOr<void> {
+            dbgln("done");
+            return {};
+        },
+        [](Error error) -> void {
+            dbgln("error: {}", error);
+        }
+    );
+
+    return loop.exec();
     struct Request {
         Vector<Vector<DNS::Messages::ResourceType>> types;
         ByteString name;
@@ -71,7 +96,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         return 1;
     }
 
-    Core::EventLoop loop;
+    // Core::EventLoop loop;
 
     DNS::Resolver resolver {
         [&] -> ErrorOr<DNS::Resolver::SocketResult> {
