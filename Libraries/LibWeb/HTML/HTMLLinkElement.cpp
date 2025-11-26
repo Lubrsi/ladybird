@@ -905,24 +905,27 @@ static NonnullRefPtr<Core::Promise<bool>> decode_favicon(ReadonlyBytes favicon_d
         return promise;
     }
 
-    auto on_failed_decode = [favicon_url, promise]([[maybe_unused]] Error& error) {
-        dbgln_if(IMAGE_DECODER_DEBUG, "Failed to decode favicon {}: {}", favicon_url, error);
-        promise->reject(move(error));
-    };
+    dbgln("FIXME: Reimplement favicon decoding");
+    promise->resolve(true);
 
-    auto on_successful_decode = [document = GC::Root(document), promise](Web::Platform::DecodedImage& decoded_image) -> ErrorOr<void> {
-        auto favicon_bitmap = decoded_image.frames[0].bitmap;
-        dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
-
-        auto navigable = document->navigable();
-        if (navigable && navigable->is_traversable())
-            navigable->traversable_navigable()->page().client().page_did_change_favicon(*favicon_bitmap);
-
-        promise->resolve(true);
-        return {};
-    };
-
-    (void)Platform::ImageCodecPlugin::the().decode_image(favicon_data, move(on_successful_decode), move(on_failed_decode));
+    // auto on_failed_decode = [favicon_url, promise]([[maybe_unused]] Error& error) {
+    //     dbgln_if(IMAGE_DECODER_DEBUG, "Failed to decode favicon {}: {}", favicon_url, error);
+    //     promise->reject(move(error));
+    // };
+    //
+    // auto on_successful_decode = [document = GC::Root(document), promise](Web::Platform::DecodedImage& decoded_image) -> ErrorOr<void> {
+    //     auto favicon_bitmap = decoded_image.frames[0].bitmap;
+    //     dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
+    //
+    //     auto navigable = document->navigable();
+    //     if (navigable && navigable->is_traversable())
+    //         navigable->traversable_navigable()->page().client().page_did_change_favicon(*favicon_bitmap);
+    //
+    //     promise->resolve(true);
+    //     return {};
+    // };
+    //
+    // (void)Platform::ImageCodecPlugin::the().decode_image(favicon_data, move(on_successful_decode), move(on_failed_decode));
 
     return promise;
 }

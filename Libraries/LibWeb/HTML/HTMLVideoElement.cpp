@@ -162,18 +162,19 @@ WebIDL::ExceptionOr<void> HTMLVideoElement::determine_element_poster_frame(Optio
             response = filtered_response.internal_response();
         }
 
-        auto on_image_data_read = GC::create_function(heap(), [this](ByteBuffer image_data) mutable {
+        auto on_image_data_read = GC::create_function(heap(), [this](ByteBuffer) mutable {
             m_fetch_controller = nullptr;
 
             // 6. If an image is thus obtained, the poster frame is that image. Otherwise, there is no poster frame.
-            (void)Platform::ImageCodecPlugin::the().decode_image(
-                image_data,
-                [strong_this = GC::Root(*this)](Web::Platform::DecodedImage& image) -> ErrorOr<void> {
-                    if (!image.frames.is_empty())
-                        strong_this->m_poster_frame = move(image.frames[0].bitmap);
-                    return {};
-                },
-                [](auto&) {});
+            dbgln("FIXME: Reimplement video poster image decoding");
+            // (void)Platform::ImageCodecPlugin::the().decode_image(
+            //     image_data,
+            //     [strong_this = GC::Root(*this)](Web::Platform::DecodedImage& image) -> ErrorOr<void> {
+            //         if (!image.frames.is_empty())
+            //             strong_this->m_poster_frame = move(image.frames[0].bitmap);
+            //         return {};
+            //     },
+            //     [](auto&) {});
         });
 
         VERIFY(response->body());

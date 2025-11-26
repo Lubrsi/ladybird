@@ -108,6 +108,7 @@ AVIFImageDecoderPlugin::~AVIFImageDecoderPlugin()
 
 static ErrorOr<void> decode_avif_header(AVIFLoadingContext& context)
 {
+    dbgln("decode header");
     if (context.state >= AVIFLoadingContext::HeaderDecoded)
         return {};
 
@@ -127,6 +128,7 @@ static ErrorOr<void> decode_avif_header(AVIFLoadingContext& context)
     avifDecoderSetIO(context.decoder, &context.io);
 
     avifResult result = avifDecoderParse(context.decoder);
+    dbgln("decoder parse result: {}", avifResultToString(result));
     if (result != AVIF_RESULT_OK)
         return Error::from_string_literal("Failed to decode AVIF");
 
@@ -180,12 +182,14 @@ IntSize AVIFImageDecoderPlugin::size()
 
 bool AVIFImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
+    dbgln("sniff");
     auto context = make<AVIFLoadingContext>(stream);
     return !decode_avif_header(*context).is_error();
 }
 
 ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> AVIFImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
+    dbgln("create");
     auto context = make<AVIFLoadingContext>(stream);
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) AVIFImageDecoderPlugin(move(context))));
     TRY(decode_avif_header(*plugin->m_context));

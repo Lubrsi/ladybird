@@ -14,7 +14,21 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
 
     size_t read_bytes = 0;
 
+    if (m_chunks.is_empty()) {
+        dbgln("no chunks, waiting for at least one to be appended");
+        VERIFY(m_chunk_index == 0);
+        m_waiting_for_more_data.wait_while([this] {
+            return !m_closed && m_chunks.is_empty();
+        });
+
+        if (m_closed && m_chunks.is_empty()) {
+            dbgln("closed and no chunks, returning no data");
+            return Bytes {};
+        }
+    }
+
     while (read_bytes < bytes.size()) {
+        dbgln("read, read_bytes = {}, bytes.size() = {}, m_chunk_index = {}, m_chunks.size() = {}", read_bytes, bytes.size(), m_chunk_index, m_chunks.size());
         VERIFY(m_chunk_index < m_chunks.size());
         auto const& chunk = m_chunks[m_chunk_index];
 
@@ -24,12 +38,15 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
 
         auto copied_bytes = chunk_span.copy_trimmed_to(destination_span);
         read_bytes += copied_bytes;
+        dbgln("read {} bytes (span size = {})", copied_bytes, chunk_span.size());
 
         if (copied_bytes == chunk_span.size()) {
             auto next_chunk_index = m_chunk_index + 1;
 
             m_waiting_for_more_data.wait_while([this, next_chunk_index] {
-                return !m_closed && next_chunk_index == m_chunks.size();
+                bool should_wait = !m_closed && next_chunk_index == m_chunks.size();
+                dbgln("read, next_chunk_index = {}, m_chunks.size() = {}, should wait for more data? {}", next_chunk_index, m_chunks.size(), should_wait);
+                return should_wait;
             });
 
             if (m_closed && next_chunk_index == m_chunks.size()) {
@@ -42,6 +59,8 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
         } else {
             m_offset_inside_chunk += copied_bytes;
         }
+
+        dbgln("new chunk index and offset: {}, {}", m_chunk_index, m_offset_inside_chunk);
     }
 
     return bytes.trim(read_bytes);
@@ -61,23 +80,40 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
         size_t remaining_bytes_to_seek = offset;
         size_t new_chunk_index = 0;
 
+        if (remaining_bytes_to_seek == 0) {
+            m_chunk_index = 0;
+            m_offset_inside_chunk = 0;
+            return 0;
+        }
+
         while (remaining_bytes_to_seek > 0) {
+            dbgln("seek, remaining bytes: {}", remaining_bytes_to_seek);
             m_waiting_for_more_data.wait_while([this, new_chunk_index] {
-                return !m_closed && new_chunk_index >= m_chunks.size();
+                bool should_wait = !m_closed && new_chunk_index >= m_chunks.size();
+                dbgln("new_chunk_index = {}, m_chunks.size() = {}, should wait for more data? {}", new_chunk_index, m_chunks.size(), should_wait);
+                return should_wait;
             });
 
-            if (m_closed && new_chunk_index >= m_chunks.size())
+            dbgln("seek no longer waiting for data");
+
+            if (m_closed && new_chunk_index >= m_chunks.size()) {
+                dbgln("seek not enough data");
                 return Error::from_string_literal("Offset past the end of the stream memory");
+            }
 
             auto const& chunk = m_chunks[new_chunk_index];
+
+            dbgln("seek remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk.size());
 
             if (remaining_bytes_to_seek <= chunk.size()) {
                 m_chunk_index = new_chunk_index;
                 m_offset_inside_chunk = remaining_bytes_to_seek;
+                dbgln("seek new chunk index and offset: {}, {}", m_chunk_index, m_offset_inside_chunk);
                 remaining_bytes_to_seek = 0;
             } else {
                 ++new_chunk_index;
                 remaining_bytes_to_seek -= chunk.size();
+                dbgln("seek moving to chunk {}", new_chunk_index);
             }
         }
 
@@ -102,8 +138,13 @@ bool SeekableSharedMemoryStream::is_eof() const
 {
     Threading::MutexLocker locker(m_mutex);
 
-    return m_closed
-        && m_chunk_index == m_chunks.size() - 1
+    if (!m_closed)
+        return false;
+
+    if (m_chunks.is_empty())
+        return true;
+
+    return m_chunk_index == m_chunks.size() - 1
         && m_offset_inside_chunk == m_chunks.last().size();
 }
 
@@ -117,6 +158,7 @@ void SeekableSharedMemoryStream::close()
 {
     Threading::MutexLocker locker(m_mutex);
 
+    dbgln("stream closed");
     m_closed = true;
     m_waiting_for_more_data.broadcast();
 }
@@ -124,6 +166,8 @@ void SeekableSharedMemoryStream::close()
 void SeekableSharedMemoryStream::append_chunk(AnonymousBuffer&& chunk)
 {
     Threading::MutexLocker locker(m_mutex);
+
+    dbgln("new chunk of size {} added", chunk.size());
 
     if (m_closed)
         return;

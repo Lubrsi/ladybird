@@ -11,6 +11,7 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/Platform/ImageCodecPlugin.h>
 
 namespace Web::HTML {
 
@@ -43,7 +44,9 @@ private:
     virtual void finalize() override;
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
-    void handle_successful_fetch(URL::URL const&, StringView mime_type, ByteBuffer data);
+    void handle_successful_fetch_for_general_image_data(ByteBuffer partial_data);
+    void handle_end_of_fetch_for_general_image_data();
+    void handle_successful_fetch_for_svg_image_data(URL::URL const&, ByteBuffer full_data);
     void handle_failed_fetch();
     void handle_successful_resource_load();
 
@@ -67,6 +70,7 @@ private:
     URL::URL m_url;
     GC::Ptr<DecodedImageData> m_image_data;
     GC::Ptr<Fetch::Infrastructure::FetchController> m_fetch_controller;
+    Optional<Platform::ImageCodecPlugin::PendingDecode> m_pending_decode;
 
     GC::Ptr<DOM::Document> m_document;
 };

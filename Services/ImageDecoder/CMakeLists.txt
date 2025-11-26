@@ -4,7 +4,6 @@ set(CMAKE_AUTOUIC OFF)
 
 set(SOURCES
     ConnectionFromClient.cpp
-    SeekableSharedMemoryStream.cpp
 )
 
 if (ANDROID)

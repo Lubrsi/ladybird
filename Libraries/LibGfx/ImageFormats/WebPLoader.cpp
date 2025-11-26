@@ -63,8 +63,6 @@ static ErrorOr<void> decode_webp_header(WebPLoadingContext& context)
     if (getinfo_result != 1)
         return Error::from_string_literal("Failed to decode webp image data");
 
-    WebPIAppend
-
     WebPBitstreamFeatures webp_bitstream_features {};
     VP8StatusCode vp8_result = WebPGetFeatures(context.data.data(), context.data.size(), &webp_bitstream_features);
     if (vp8_result != VP8_STATUS_OK)
