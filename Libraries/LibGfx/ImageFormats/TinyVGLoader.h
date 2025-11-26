@@ -60,8 +60,8 @@ public:
         return m_draw_commands;
     }
 
-    static ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> decode(Stream& stream);
-    static ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> decode(Stream& stream, TinyVGHeader const& header);
+    static ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> decode(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> decode(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, TinyVGHeader const& header);
 
 private:
     TinyVGDecodedImageData(IntSize size, Vector<DrawCommand> draw_commands)
@@ -78,8 +78,8 @@ struct TinyVGLoadingContext;
 
 class TinyVGImageDecoderPlugin final : public ImageDecoderPlugin {
 public:
-    static bool sniff(ReadonlyBytes);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(ReadonlyBytes);
+    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     virtual IntSize size() override;
     virtual ErrorOr<ImageFrameDescriptor> frame(size_t index, Optional<IntSize> ideal_size = {}) override;
@@ -90,7 +90,7 @@ public:
     virtual ~TinyVGImageDecoderPlugin() override;
 
 private:
-    TinyVGImageDecoderPlugin(ReadonlyBytes);
+    TinyVGImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     NonnullOwnPtr<TinyVGLoadingContext> m_context;
 };
