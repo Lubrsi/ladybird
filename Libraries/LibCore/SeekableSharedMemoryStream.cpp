@@ -130,16 +130,50 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
         if (offset == 0)
             return current_offset;
 
-        dbgln("FIXME: Non-zero offset seeking from current position");
-        return Error::from_errno(ENOTSUP);
+        size_t target_offset = current_offset + offset;
 
-        // size_t target_offset = current_offset + offset;
-        //
-        // if (target_offset > current_offset) {
-        //
-        // }
+        if (target_offset > current_offset) {
+            size_t remaining_bytes_to_seek = target_offset - current_offset;
+            size_t new_chunk_index = m_chunk_index;
+            size_t new_offset_inside_chunk = m_offset_inside_chunk;
 
-        // return target_offset;
+            while (remaining_bytes_to_seek > 0) {
+                dbgln("seek FROM CURRENT, remaining bytes: {}", remaining_bytes_to_seek);
+                m_waiting_for_more_data.wait_while([this, new_chunk_index] {
+                    bool should_wait = !m_closed && new_chunk_index >= m_chunks.size();
+                    dbgln("seek  FROM CURRENT new_chunk_index = {}, m_chunks.size() = {}, should wait for more data? {}", new_chunk_index, m_chunks.size(), should_wait);
+                    return should_wait;
+                });
+
+                dbgln("seek FROM CURRENT no longer waiting for data");
+
+                if (m_closed && new_chunk_index >= m_chunks.size()) {
+                    dbgln("seek  FROM CURRENT not enough data");
+                    return Error::from_string_literal("Offset past the end of the stream memory");
+                }
+
+                auto const chunk = m_chunks[new_chunk_index].span<u8>().slice(new_offset_inside_chunk);
+
+                dbgln("seek FROM CURRENT remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk.size());
+
+                if (remaining_bytes_to_seek <= chunk.size()) {
+                    m_chunk_index = new_chunk_index;
+                    m_offset_inside_chunk = new_offset_inside_chunk + remaining_bytes_to_seek;
+                    dbgln("seek FROM CURRENT new chunk index and offset: {}, {}", m_chunk_index, m_offset_inside_chunk);
+                    remaining_bytes_to_seek = 0;
+                } else {
+                    ++new_chunk_index;
+                    new_offset_inside_chunk = 0;
+                    remaining_bytes_to_seek -= chunk.size();
+                    dbgln("seek FROM CURRENT moving to chunk {} offset {}", new_chunk_index, new_offset_inside_chunk);
+                }
+            }
+        } else {
+            dbgln("FIXME: Seek backwards from current position");
+            return Error::from_errno(ENOTSUP);
+        }
+
+        return target_offset;
     }
     case SeekMode::FromEndPosition:
         dbgln("FIXME: Seek from end");
