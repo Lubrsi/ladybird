@@ -36,9 +36,9 @@ class TIFFLoadingContext;
 
 class TIFFImageDecoderPlugin : public ImageDecoderPlugin {
 public:
-    static bool sniff(ReadonlyBytes);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(ReadonlyBytes);
-    static ErrorOr<NonnullOwnPtr<ExifMetadata>> read_exif_metadata(ReadonlyBytes);
+    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullOwnPtr<ExifMetadata>> read_exif_metadata(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     virtual ~TIFFImageDecoderPlugin() override;
 
@@ -50,7 +50,7 @@ public:
     virtual ErrorOr<Optional<ReadonlyBytes>> icc_data() override;
 
 private:
-    TIFFImageDecoderPlugin(NonnullOwnPtr<FixedMemoryStream>);
+    TIFFImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     OwnPtr<TIFF::TIFFLoadingContext> m_context;
 };

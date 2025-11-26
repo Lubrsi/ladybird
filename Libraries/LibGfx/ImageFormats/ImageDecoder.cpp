@@ -34,14 +34,14 @@ static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugi
         // { JPEGImageDecoderPlugin::sniff, JPEGImageDecoderPlugin::create },
         // { JPEGXLImageDecoderPlugin::sniff, JPEGXLImageDecoderPlugin::create },
         // { PNGImageDecoderPlugin::sniff, PNGImageDecoderPlugin::create },
-        // { TIFFImageDecoderPlugin::sniff, TIFFImageDecoderPlugin::create },
-        { TinyVGImageDecoderPlugin::sniff, TinyVGImageDecoderPlugin::create },
-        { AVIFImageDecoderPlugin::sniff, AVIFImageDecoderPlugin::create }
+        { TIFFImageDecoderPlugin::sniff, TIFFImageDecoderPlugin::create },
+        // { TinyVGImageDecoderPlugin::sniff, TinyVGImageDecoderPlugin::create },
+        // { AVIFImageDecoderPlugin::sniff, AVIFImageDecoderPlugin::create }
     };
 
     for (auto& plugin : s_streaming_initializers) {
         auto sniff_result = plugin.sniff(stream);
-        dbgln("sniffed, now seeking");
+        dbgln("sniffed, was valid? {}, now seeking", sniff_result);
         TRY(stream->seek(0, SeekMode::SetPosition));
         dbgln("should have seeked");
         if (!sniff_result)

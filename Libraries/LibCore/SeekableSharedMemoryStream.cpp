@@ -120,9 +120,29 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
         return offset;
     }
     // FIXME: Support these modes.
-    case SeekMode::FromCurrentPosition:
+    case SeekMode::FromCurrentPosition: {
+        size_t current_offset = 0;
+        for (size_t chunk_index = 0; chunk_index < m_chunk_index; ++chunk_index)
+            current_offset += m_chunks[chunk_index].size();
+
+        current_offset += m_offset_inside_chunk;
+
+        if (offset == 0)
+            return current_offset;
+
+        dbgln("FIXME: Non-zero offset seeking from current position");
         return Error::from_errno(ENOTSUP);
+
+        // size_t target_offset = current_offset + offset;
+        //
+        // if (target_offset > current_offset) {
+        //
+        // }
+
+        // return target_offset;
+    }
     case SeekMode::FromEndPosition:
+        dbgln("FIXME: Seek from end");
         return Error::from_errno(ENOTSUP);
     }
 
