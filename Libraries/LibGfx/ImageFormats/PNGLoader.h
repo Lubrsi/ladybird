@@ -14,8 +14,8 @@ struct PNGLoadingContext;
 
 class PNGImageDecoderPlugin final : public ImageDecoderPlugin {
 public:
-    static bool sniff(ReadonlyBytes);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(ReadonlyBytes);
+    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     virtual ~PNGImageDecoderPlugin() override;
 
@@ -31,7 +31,7 @@ public:
     virtual ErrorOr<Optional<ReadonlyBytes>> icc_data() override;
 
 private:
-    explicit PNGImageDecoderPlugin(ReadonlyBytes);
+    explicit PNGImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
 
     ErrorOr<void> initialize();
 

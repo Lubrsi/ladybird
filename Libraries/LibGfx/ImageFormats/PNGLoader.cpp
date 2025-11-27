@@ -13,10 +13,16 @@
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/Painter.h>
 #include <png.h>
+#include <LibCore/SeekableSharedMemoryStream.h>
 
 namespace Gfx {
 
 struct PNGLoadingContext {
+    PNGLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+        : stream(move(stream))
+    {
+    }
+
     ~PNGLoadingContext()
     {
         png_destroy_read_struct(&png_ptr, &info_ptr, nullptr);
@@ -25,7 +31,7 @@ struct PNGLoadingContext {
     png_structp png_ptr { nullptr };
     png_infop info_ptr { nullptr };
 
-    ReadonlyBytes data;
+    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
     IntSize size;
     u32 frame_count { 0 };
     u32 loop_count { 0 };
@@ -54,9 +60,9 @@ struct PNGLoadingContext {
     }
 };
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(ReadonlyBytes bytes)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
-    auto decoder = adopt_own(*new PNGImageDecoderPlugin(bytes));
+    auto decoder = adopt_own(*new PNGImageDecoderPlugin(move(stream)));
     TRY(decoder->initialize());
 
     auto result = decoder->m_context->read_all_frames();
@@ -73,10 +79,9 @@ ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(Readonl
     return decoder;
 }
 
-PNGImageDecoderPlugin::PNGImageDecoderPlugin(ReadonlyBytes data)
-    : m_context(adopt_own(*new PNGLoadingContext))
+PNGImageDecoderPlugin::PNGImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    : m_context(adopt_own(*new PNGLoadingContext(move(stream))))
 {
-    m_context->data = data;
 }
 
 size_t PNGImageDecoderPlugin::first_animated_frame_index()
@@ -150,14 +155,11 @@ ErrorOr<void> PNGImageDecoderPlugin::initialize()
         return Error::from_errno(error_value);
     }
 
-    png_set_read_fn(m_context->png_ptr, &m_context->data, [](png_structp png_ptr, png_bytep data, png_size_t length) {
-        auto* read_data = reinterpret_cast<ReadonlyBytes*>(png_get_io_ptr(png_ptr));
-        if (read_data->size() < length) {
+    png_set_read_fn(m_context->png_ptr, m_context->stream.ptr(), [](png_structp png_ptr, png_bytep data, png_size_t length) {
+        auto* read_stream = reinterpret_cast<Core::SeekableSharedMemoryStream*>(png_get_io_ptr(png_ptr));
+        auto maybe_error = read_stream->read_until_filled({ data, length });
+        if (maybe_error.is_error())
             png_error(png_ptr, "Read error");
-            return;
-        }
-        memcpy(data, read_data->data(), length);
-        *read_data = read_data->slice(length);
     });
 
     png_set_error_fn(m_context->png_ptr, nullptr, log_png_error, log_png_warning);
@@ -362,12 +364,15 @@ ErrorOr<size_t> PNGLoadingContext::read_frames(png_structp png_ptr, png_infop in
 
 PNGImageDecoderPlugin::~PNGImageDecoderPlugin() = default;
 
-bool PNGImageDecoderPlugin::sniff(ReadonlyBytes data)
+bool PNGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
 {
     auto constexpr png_signature_size_in_bytes = 8;
-    if (data.size() < png_signature_size_in_bytes)
+    Array<u8, png_signature_size_in_bytes> png_signature;
+    auto maybe_error = stream->read_until_filled(png_signature);
+    if (maybe_error.is_error())
         return false;
-    return png_sig_cmp(data.data(), 0, png_signature_size_in_bytes) == 0;
+
+    return png_sig_cmp(png_signature.data(), 0, png_signature_size_in_bytes) == 0;
 }
 
 Optional<Metadata const&> PNGImageDecoderPlugin::metadata()

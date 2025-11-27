@@ -31,9 +31,9 @@ static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugi
         // { BMPImageDecoderPlugin::sniff, BMPImageDecoderPlugin::create },
         // { GIFImageDecoderPlugin::sniff, GIFImageDecoderPlugin::create },
         // { ICOImageDecoderPlugin::sniff, ICOImageDecoderPlugin::create },
-        { JPEGImageDecoderPlugin::sniff, JPEGImageDecoderPlugin::create },
+        // { JPEGImageDecoderPlugin::sniff, JPEGImageDecoderPlugin::create },
         // { JPEGXLImageDecoderPlugin::sniff, JPEGXLImageDecoderPlugin::create },
-        // { PNGImageDecoderPlugin::sniff, PNGImageDecoderPlugin::create },
+        { PNGImageDecoderPlugin::sniff, PNGImageDecoderPlugin::create },
         // { TIFFImageDecoderPlugin::sniff, TIFFImageDecoderPlugin::create },
         // { TinyVGImageDecoderPlugin::sniff, TinyVGImageDecoderPlugin::create },
         // { AVIFImageDecoderPlugin::sniff, AVIFImageDecoderPlugin::create }
