@@ -97,13 +97,13 @@ ErrorOr<void> JPEGLoadingContext::decode()
             return;
         }
 
-        // if (static_cast<size_t>(num_bytes) < source_manager->current_view_into_read_buffer.size()) {
-        //     auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes);
-        //     source_manager->current_view_into_read_buffer = sliced_bytes;
-        //     source_manager->source_manager.next_input_byte = sliced_bytes.data();
-        //     source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
-        //     return;
-        // }
+        if (static_cast<size_t>(num_bytes) < source_manager->current_view_into_read_buffer.size()) {
+            auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes);
+            source_manager->current_view_into_read_buffer = sliced_bytes;
+            source_manager->source_manager.next_input_byte = sliced_bytes.data();
+            source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
+            return;
+        }
 
         auto maybe_error = source_manager->stream->seek(num_bytes, SeekMode::FromCurrentPosition);
         if (maybe_error.is_error())

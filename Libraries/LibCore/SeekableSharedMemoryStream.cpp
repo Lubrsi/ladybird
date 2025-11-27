@@ -30,11 +30,11 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
     while (read_bytes < bytes.size()) {
         dbgln("read, read_bytes = {}, bytes.size() = {}, m_chunk_index = {}, m_chunks.size() = {}", read_bytes, bytes.size(), m_chunk_index, m_chunks.size());
         VERIFY(m_chunk_index < m_chunks.size());
-        auto const& chunk = m_chunks[m_chunk_index];
+        auto const& chunk = m_chunks.find(m_chunk_index);
 
-        VERIFY(m_offset_inside_chunk <= chunk.size());
+        VERIFY(m_offset_inside_chunk <= chunk->size());
         auto destination_span = bytes.slice(read_bytes);
-        auto const chunk_span = chunk.readonly_span<u8>().slice(m_offset_inside_chunk);
+        auto const chunk_span = chunk->readonly_span<u8>().slice(m_offset_inside_chunk);
 
         auto copied_bytes = chunk_span.copy_trimmed_to(destination_span);
         read_bytes += copied_bytes;
@@ -50,7 +50,7 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
             });
 
             if (m_closed && next_chunk_index == m_chunks.size()) {
-                m_offset_inside_chunk = chunk.size();
+                m_offset_inside_chunk = chunk->size();
                 break;
             }
 
@@ -101,18 +101,18 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
                 return Error::from_string_literal("Offset past the end of the stream memory");
             }
 
-            auto const& chunk = m_chunks[new_chunk_index];
+            auto const* chunk = m_chunks.find(new_chunk_index);
 
-            dbgln("seek remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk.size());
+            dbgln("seek remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk->size());
 
-            if (remaining_bytes_to_seek <= chunk.size()) {
+            if (remaining_bytes_to_seek <= chunk->size()) {
                 m_chunk_index = new_chunk_index;
                 m_offset_inside_chunk = remaining_bytes_to_seek;
                 dbgln("seek new chunk index and offset: {}, {}", m_chunk_index, m_offset_inside_chunk);
                 remaining_bytes_to_seek = 0;
             } else {
                 ++new_chunk_index;
-                remaining_bytes_to_seek -= chunk.size();
+                remaining_bytes_to_seek -= chunk->size();
                 dbgln("seek moving to chunk {}", new_chunk_index);
             }
         }
@@ -123,7 +123,7 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
     case SeekMode::FromCurrentPosition: {
         size_t current_offset = 0;
         for (size_t chunk_index = 0; chunk_index < m_chunk_index; ++chunk_index)
-            current_offset += m_chunks[chunk_index].size();
+            current_offset += m_chunks.find(chunk_index)->size();
 
         current_offset += m_offset_inside_chunk;
 
@@ -152,7 +152,7 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
                     return Error::from_string_literal("Offset past the end of the stream memory");
                 }
 
-                auto const chunk = m_chunks[new_chunk_index].span<u8>().slice(new_offset_inside_chunk);
+                auto const chunk = m_chunks.find(new_chunk_index)->span<u8>().slice(new_offset_inside_chunk);
 
                 dbgln("seek FROM CURRENT remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk.size());
 
@@ -199,7 +199,7 @@ bool SeekableSharedMemoryStream::is_eof() const
         return true;
 
     return m_chunk_index == m_chunks.size() - 1
-        && m_offset_inside_chunk == m_chunks.last().size();
+        && m_offset_inside_chunk == m_chunks.find(m_chunk_index)->size();
 }
 
 bool SeekableSharedMemoryStream::is_open() const
@@ -226,7 +226,8 @@ void SeekableSharedMemoryStream::append_chunk(AnonymousBuffer&& chunk)
     if (m_closed)
         return;
 
-    m_chunks.append(move(chunk));
+    size_t index = m_chunks.size();
+    m_chunks.insert(index, move(chunk));
     m_waiting_for_more_data.broadcast();
 }
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/AtomicRefCounted.h>
+#include <AK/RedBlackTree.h>
 #include <AK/Stream.h>
 #include <AK/Vector.h>
 #include <LibCore/AnonymousBuffer.h>
@@ -33,7 +34,7 @@ public:
 
 private:
     mutable Threading::Mutex m_mutex;
-    Vector<AnonymousBuffer> m_chunks;
+    RedBlackTree<size_t, AnonymousBuffer> m_chunks;
     size_t m_chunk_index { 0 };
     size_t m_offset_inside_chunk { 0 };
     bool m_closed { false };
