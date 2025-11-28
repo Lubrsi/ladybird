@@ -128,7 +128,6 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
         anim_decoder_options.color_mode = MODE_BGRA;
         anim_decoder_options.use_threads = 1;
 
-        WebPINewDecoder
         WebPData webp_data { .bytes = context.data.data(), .size = context.data.size() };
         auto* anim_decoder = WebPAnimDecoderNew(&webp_data, &anim_decoder_options);
         if (anim_decoder == nullptr)

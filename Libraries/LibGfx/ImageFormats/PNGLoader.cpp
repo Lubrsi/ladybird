@@ -214,11 +214,15 @@ ErrorOr<void> PNGImageDecoderPlugin::initialize()
             m_context->icc_profile = TRY(ByteBuffer::copy(profile_data, profile_len));
     }
 
-    // u8* exif_data = nullptr;
-    // u32 exif_length = 0;
-    // int const num_exif_chunks = png_get_eXIf_1(m_context->png_ptr, m_context->info_ptr, &exif_length, &exif_data);
-    // if (num_exif_chunks > 0)
-    //     m_context->exif_metadata = TRY(TIFFImageDecoderPlugin::read_exif_metadata({ exif_data, exif_length }));
+    u8* exif_data = nullptr;
+    u32 exif_length = 0;
+    int const num_exif_chunks = png_get_eXIf_1(m_context->png_ptr, m_context->info_ptr, &exif_length, &exif_data);
+    if (num_exif_chunks > 0) {
+        auto stream = adopt_ref(*new Core::SeekableSharedMemoryStream());
+        stream->append_chunk(TRY(ByteBuffer::copy(exif_data, exif_length)));
+        stream->close();
+        m_context->exif_metadata = TRY(TIFFImageDecoderPlugin::read_exif_metadata(move(stream)));
+    }
 
     return {};
 }

@@ -179,7 +179,7 @@ Messages::ImageDecoderServer::StartDecodingImageResponse ConnectionFromClient::s
     return image_id;
 }
 
-void ConnectionFromClient::partial_image_data_became_available(i64 image_id, Core::AnonymousBuffer data)
+void ConnectionFromClient::partial_image_data_became_available(i64 image_id, ByteBuffer data)
 {
     auto pending_job_iterator = m_pending_jobs.find(image_id);
     if (pending_job_iterator == m_pending_jobs.end()) {

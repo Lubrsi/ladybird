@@ -88,6 +88,12 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
         //        https://github.com/whatwg/html/issues/9355
         response = response->unsafe_response();
 
+        // Check for failed fetch response
+        if (!Fetch::Infrastructure::is_ok_status(response->status()) || !response->body()) {
+            handle_failed_fetch();
+            return;
+        }
+
         // AD-HOC: At this point, things gets very ad-hoc.
         // FIXME: Bring this closer to spec.
         auto extracted_mime_type = Fetch::Infrastructure::extract_mime_type(response->header_list());
@@ -101,12 +107,6 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
             auto process_body_error = GC::create_function(heap(), [this](JS::Value) {
                 handle_failed_fetch();
             });
-
-            // Check for failed fetch response
-            if (!Fetch::Infrastructure::is_ok_status(response->status()) || !response->body()) {
-                handle_failed_fetch();
-                return;
-            }
 
             response->body()->fully_read(realm, process_body, process_body_error, GC::Ref { realm.global_object() });
             return;
@@ -183,7 +183,7 @@ void SharedResourceRequest::handle_successful_fetch_for_general_image_data(ByteB
         m_pending_decode = Platform::ImageCodecPlugin::the().start_decoding_image(move(handle_successful_bitmap_decode), move(handle_failed_decode));
     }
 
-    Platform::ImageCodecPlugin::the().partial_image_data_became_available(*m_pending_decode, partial_data.bytes());
+    Platform::ImageCodecPlugin::the().partial_image_data_became_available(*m_pending_decode, move(partial_data));
 }
 
 void SharedResourceRequest::handle_end_of_fetch_for_general_image_data()

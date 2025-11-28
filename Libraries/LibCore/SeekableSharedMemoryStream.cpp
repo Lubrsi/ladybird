@@ -34,7 +34,7 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
 
         VERIFY(m_offset_inside_chunk <= chunk->size());
         auto destination_span = bytes.slice(read_bytes);
-        auto const chunk_span = chunk->readonly_span<u8>().slice(m_offset_inside_chunk);
+        auto const chunk_span = chunk->span().slice(m_offset_inside_chunk);
 
         auto copied_bytes = chunk_span.copy_trimmed_to(destination_span);
         read_bytes += copied_bytes;
@@ -152,7 +152,7 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
                     return Error::from_string_literal("Offset past the end of the stream memory");
                 }
 
-                auto const chunk = m_chunks.find(new_chunk_index)->span<u8>().slice(new_offset_inside_chunk);
+                auto const chunk = m_chunks.find(new_chunk_index)->span().slice(new_offset_inside_chunk);
 
                 dbgln("seek FROM CURRENT remaining bytes to seek: {}, chunk size {}", remaining_bytes_to_seek, chunk.size());
 
@@ -217,7 +217,7 @@ void SeekableSharedMemoryStream::close()
     m_waiting_for_more_data.broadcast();
 }
 
-void SeekableSharedMemoryStream::append_chunk(AnonymousBuffer&& chunk)
+void SeekableSharedMemoryStream::append_chunk(ByteBuffer&& chunk)
 {
     Threading::MutexLocker locker(m_mutex);
 

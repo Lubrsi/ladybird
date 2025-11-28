@@ -7,10 +7,9 @@
 #pragma once
 
 #include <AK/AtomicRefCounted.h>
+#include <AK/ByteBuffer.h>
 #include <AK/RedBlackTree.h>
 #include <AK/Stream.h>
-#include <AK/Vector.h>
-#include <LibCore/AnonymousBuffer.h>
 #include <LibThreading/ConditionVariable.h>
 #include <LibThreading/MutexProtected.h>
 
@@ -30,11 +29,11 @@ public:
     virtual bool is_open() const override;
     virtual void close() override;
 
-    void append_chunk(AnonymousBuffer&& chunk);
+    void append_chunk(ByteBuffer&& chunk);
 
 private:
     mutable Threading::Mutex m_mutex;
-    RedBlackTree<size_t, AnonymousBuffer> m_chunks;
+    RedBlackTree<size_t, ByteBuffer> m_chunks;
     size_t m_chunk_index { 0 };
     size_t m_offset_inside_chunk { 0 };
     bool m_closed { false };

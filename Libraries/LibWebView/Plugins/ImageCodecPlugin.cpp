@@ -72,16 +72,14 @@ ImageCodecPlugin::PendingDecode ImageCodecPlugin::start_decoding_image(Function<
     };
 }
 
-void ImageCodecPlugin::partial_image_data_became_available(PendingDecode const& pending_decode, ReadonlyBytes encoded_data)
+void ImageCodecPlugin::partial_image_data_became_available(PendingDecode const& pending_decode, ByteBuffer encoded_data)
 {
     if (!m_client) {
         pending_decode.promise->reject(Error::from_string_literal("ImageDecoderClient is disconnected"));
         return;
     }
 
-    auto maybe_error = m_client->partial_image_data_became_available(pending_decode.image_id, encoded_data);
-    if (maybe_error.is_error())
-        pending_decode.promise->reject(maybe_error.release_error());
+    m_client->partial_image_data_became_available(pending_decode.image_id, move(encoded_data));
 }
 
 void ImageCodecPlugin::no_more_data_for_image(PendingDecode const& pending_decode)

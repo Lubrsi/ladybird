@@ -44,7 +44,7 @@ public:
     Client(NonnullOwnPtr<IPC::Transport>);
 
     InFlightDecoding start_decoding_image(Function<ErrorOr<void>(DecodedImage&)> on_resolved, Function<void(Error&)> on_rejected, Optional<Gfx::IntSize> ideal_size = {}, Optional<ByteString> mime_type = {});
-    ErrorOr<void> partial_image_data_became_available(i64 image_id, ReadonlyBytes encoded_data);
+    void partial_image_data_became_available(i64 image_id, ByteBuffer encoded_data);
     void no_more_data_for_image(i64 image_id);
 
     Function<void()> on_death;

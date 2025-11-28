@@ -48,21 +48,9 @@ InFlightDecoding Client::start_decoding_image(Function<ErrorOr<void>(DecodedImag
     };
 }
 
-ErrorOr<void> Client::partial_image_data_became_available(i64 image_id, ReadonlyBytes encoded_data)
+void Client::partial_image_data_became_available(i64 image_id, ByteBuffer encoded_data)
 {
-    auto encoded_buffer_or_error = Core::AnonymousBuffer::create_with_size(encoded_data.size());
-    if (encoded_buffer_or_error.is_error()) {
-        dbgln("Could not allocate encoded buffer: {}", encoded_buffer_or_error.error());
-        no_more_data_for_image(image_id);
-        return encoded_buffer_or_error.release_error();
-    }
-
-    auto encoded_buffer = encoded_buffer_or_error.release_value();
-
-    memcpy(encoded_buffer.data<void>(), encoded_data.data(), encoded_data.size());
-
-    async_partial_image_data_became_available(image_id, move(encoded_buffer));
-    return {};
+    async_partial_image_data_became_available(image_id, move(encoded_data));
 }
 
 void Client::no_more_data_for_image(i64 image_id)
