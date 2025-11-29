@@ -75,13 +75,8 @@ public:
             loading_context->current_read_buffer = maybe_buffer_error.release_value();
 
             auto maybe_read_error = loading_context->data->read_some(loading_context->current_read_buffer.span());
-            if (maybe_read_error.is_error()) {
-                auto error = maybe_buffer_error.release_error();
-                if (error.is_errno() && first_is_one_of(error.code(), EAGAIN, EWOULDBLOCK))
-                    return AVIF_RESULT_WAITING_ON_IO;
-
+            if (maybe_read_error.is_error())
                 return AVIF_RESULT_IO_ERROR;
-            }
 
             auto read_result = maybe_read_error.release_value();
             out->data = read_result.data();

@@ -4,15 +4,20 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "PNGWriter.h"
+
+
 #include <LibGfx/CMYKBitmap.h>
 #include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <jpeglib.h>
 #include <setjmp.h>
+#include <AK/Base64.h>
+#include <LibCore/File.h>
 #include <LibCore/SeekableSharedMemoryStream.h>
 
 namespace Gfx {
 
-static constexpr size_t READ_BUFFER_SIZE = 4 * KiB;
+static constexpr size_t READ_BUFFER_SIZE = 8 * KiB;
 
 struct SourceManager {
     jpeg_source_mgr source_manager;
@@ -77,6 +82,8 @@ ErrorOr<void> JPEGLoadingContext::decode()
     source_manager.source_manager.init_source = [](j_decompress_ptr) { dbgln("init source"); };
     source_manager.source_manager.fill_input_buffer = [](j_decompress_ptr context) -> boolean {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
+        dbgln("current offset: {}", source_manager->stream->tell());
+        // dump_backtrace();
         auto maybe_error = source_manager->stream->read_some(source_manager->read_buffer);
         if (maybe_error.is_error()) {
             dbgln("Failed to read from JPEG data stream: {}", maybe_error.error());
@@ -87,25 +94,41 @@ ErrorOr<void> JPEGLoadingContext::decode()
         source_manager->current_view_into_read_buffer = bytes;
         source_manager->source_manager.next_input_byte = bytes.data();
         source_manager->source_manager.bytes_in_buffer = bytes.size();
+        if (bytes.size() >= 10) {
+            dbgln("next 10 bytes: {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x}", source_manager->source_manager.next_input_byte[0] , source_manager->source_manager.next_input_byte[1], source_manager->source_manager.next_input_byte[2], source_manager->source_manager.next_input_byte[3], source_manager->source_manager.next_input_byte[4], source_manager->source_manager.next_input_byte[5], source_manager->source_manager.next_input_byte[6], source_manager->source_manager.next_input_byte[7], source_manager->source_manager.next_input_byte[8], source_manager->source_manager.next_input_byte[9]);
+        }
+
         return true;
     };
     source_manager.source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
-        dbgln("skip {} bytes", num_bytes);
         if (num_bytes < 0) {
             dbgln("Did not expect to seek backwards by {} bytes", num_bytes);
             return;
         }
 
-        if (static_cast<size_t>(num_bytes) < source_manager->current_view_into_read_buffer.size()) {
-            auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes);
+        size_t num_bytes_as_size = static_cast<size_t>(num_bytes);
+
+        size_t current_offset_into_read_buffer = source_manager->source_manager.next_input_byte - source_manager->current_view_into_read_buffer.data();
+        num_bytes_as_size += current_offset_into_read_buffer;
+
+        dbgln("skip {} bytes", num_bytes_as_size);
+
+        if (num_bytes_as_size < source_manager->current_view_into_read_buffer.size()) {
+            dbgln("SEEKED INTO READ BUFFER");
+            auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes_as_size);
             source_manager->current_view_into_read_buffer = sliced_bytes;
             source_manager->source_manager.next_input_byte = sliced_bytes.data();
             source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
+            if (sliced_bytes.size() >= 10) {
+                dbgln("next 10 bytes: {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x}", source_manager->source_manager.next_input_byte[0] , source_manager->source_manager.next_input_byte[1], source_manager->source_manager.next_input_byte[2], source_manager->source_manager.next_input_byte[3], source_manager->source_manager.next_input_byte[4], source_manager->source_manager.next_input_byte[5], source_manager->source_manager.next_input_byte[6], source_manager->source_manager.next_input_byte[7], source_manager->source_manager.next_input_byte[8], source_manager->source_manager.next_input_byte[9]);
+            }
             return;
         }
 
-        auto maybe_error = source_manager->stream->seek(num_bytes, SeekMode::FromCurrentPosition);
+        dbgln("SEEKED INTO STREAM");
+
+        auto maybe_error = source_manager->stream->seek(num_bytes_as_size - source_manager->current_view_into_read_buffer.size(), SeekMode::FromCurrentPosition);
         if (maybe_error.is_error())
             dbgln("Failed to seek JPEG data stream: {}", maybe_error.error());
 
@@ -130,83 +153,100 @@ ErrorOr<void> JPEGLoadingContext::decode()
         cinfo.out_color_space = JCS_EXT_BGRX;
     }
 
+    cinfo.buffered_image = true;
+
     jpeg_start_decompress(&cinfo);
     bool could_read_all_scanlines = true;
 
     if (cinfo.out_color_space == JCS_EXT_BGRX) {
         rgb_bitmap = TRY(Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { static_cast<int>(cinfo.output_width), static_cast<int>(cinfo.output_height) }));
-        while (cinfo.output_scanline < cinfo.output_height) {
-            auto* row_ptr = (u8*)rgb_bitmap->scanline(cinfo.output_scanline);
-            auto out_size = jpeg_read_scanlines(&cinfo, &row_ptr, 1);
-            if (cinfo.output_scanline < cinfo.output_height && out_size == 0) {
-                dbgln("JPEG Warning: Decoding produced no more scanlines in scanline {}/{}.", cinfo.output_scanline, cinfo.output_height);
-                could_read_all_scanlines = false;
-                break;
-            }
-        }
     } else {
         cmyk_bitmap = TRY(CMYKBitmap::create_with_size({ static_cast<int>(cinfo.output_width), static_cast<int>(cinfo.output_height) }));
-        while (cinfo.output_scanline < cinfo.output_height) {
-            auto* row_ptr = (u8*)cmyk_bitmap->scanline(cinfo.output_scanline);
-            auto out_size = jpeg_read_scanlines(&cinfo, &row_ptr, 1);
-            if (cinfo.output_scanline < cinfo.output_height && out_size == 0) {
-                dbgln("JPEG Warning: Decoding produced no more scanlines in scanline {}/{}.", cinfo.output_scanline, cinfo.output_height);
-                could_read_all_scanlines = false;
-                break;
+    }
+
+    while (!jpeg_input_complete(&cinfo)) {
+        jpeg_start_output(&cinfo, cinfo.input_scan_number);
+
+        if (cinfo.out_color_space == JCS_EXT_BGRX) {
+            VERIFY(rgb_bitmap);
+            while (cinfo.output_scanline < cinfo.output_height) {
+                auto* row_ptr = (u8*)rgb_bitmap->scanline(cinfo.output_scanline);
+                auto out_size = jpeg_read_scanlines(&cinfo, &row_ptr, 1);
+                if (cinfo.output_scanline < cinfo.output_height && out_size == 0) {
+                    dbgln("JPEG Warning: Decoding produced no more scanlines in scanline {}/{}.", cinfo.output_scanline, cinfo.output_height);
+                    could_read_all_scanlines = false;
+                    break;
+                }
             }
-        }
+        } else {
+            VERIFY(cmyk_bitmap);
+            while (cinfo.output_scanline < cinfo.output_height) {
+                auto* row_ptr = (u8*)cmyk_bitmap->scanline(cinfo.output_scanline);
+                auto out_size = jpeg_read_scanlines(&cinfo, &row_ptr, 1);
+                dbgln("== RETURNED CONTROL 2");
+                if (cinfo.output_scanline < cinfo.output_height && out_size == 0) {
+                    dbgln("JPEG Warning: Decoding produced no more scanlines in scanline {}/{}.", cinfo.output_scanline, cinfo.output_height);
+                    could_read_all_scanlines = false;
+                    break;
+                }
+            }
 
-        // If image is in YCCK color space, we convert it to CMYK
-        // and then CMYK code path will handle the rest
-        if (cinfo.out_color_space == JCS_YCCK) {
-            for (int i = 0; i < cmyk_bitmap->size().height(); ++i) {
-                for (int j = 0; j < cmyk_bitmap->size().width(); ++j) {
-                    auto const& cmyk = cmyk_bitmap->scanline(i)[j];
+            // If image is in YCCK color space, we convert it to CMYK
+            // and then CMYK code path will handle the rest
+            if (cinfo.out_color_space == JCS_YCCK) {
+                for (int i = 0; i < cmyk_bitmap->size().height(); ++i) {
+                    for (int j = 0; j < cmyk_bitmap->size().width(); ++j) {
+                        auto const& cmyk = cmyk_bitmap->scanline(i)[j];
 
-                    auto y = cmyk.c;
-                    auto cb = cmyk.m;
-                    auto cr = cmyk.y;
-                    auto k = cmyk.k;
+                        auto y = cmyk.c;
+                        auto cb = cmyk.m;
+                        auto cr = cmyk.y;
+                        auto k = cmyk.k;
 
-                    int r = y + 1.402f * (cr - 128);
-                    int g = y - 0.3441f * (cb - 128) - 0.7141f * (cr - 128);
-                    int b = y + 1.772f * (cb - 128);
+                        int r = y + 1.402f * (cr - 128);
+                        int g = y - 0.3441f * (cb - 128) - 0.7141f * (cr - 128);
+                        int b = y + 1.772f * (cb - 128);
 
-                    y = clamp(r, 0, 255);
-                    cb = clamp(g, 0, 255);
-                    cr = clamp(b, 0, 255);
-                    k = 255 - k;
+                        y = clamp(r, 0, 255);
+                        cb = clamp(g, 0, 255);
+                        cr = clamp(b, 0, 255);
+                        k = 255 - k;
 
-                    cmyk_bitmap->scanline(i)[j] = {
-                        y,
-                        cb,
-                        cr,
-                        k,
-                    };
+                        cmyk_bitmap->scanline(i)[j] = {
+                            y,
+                            cb,
+                            cr,
+                            k,
+                        };
+                    }
+                }
+            }
+
+            // Photoshop writes inverted CMYK data (i.e. Photoshop's 0 should be 255). We convert this
+            // to expected values.
+            bool should_invert_cmyk = cinfo.jpeg_color_space == JCS_CMYK
+                && (!cinfo.saw_Adobe_marker || cinfo.Adobe_transform == 0);
+
+            if (should_invert_cmyk) {
+                for (int i = 0; i < cmyk_bitmap->size().height(); ++i) {
+                    auto* line = cmyk_bitmap->scanline(i);
+
+                    for (int j = 0; j < cmyk_bitmap->size().width(); ++j) {
+                        auto const& cmyk = line[j];
+                        line[j] = {
+                            static_cast<u8>(255 - cmyk.c),
+                            static_cast<u8>(255 - cmyk.m),
+                            static_cast<u8>(255 - cmyk.y),
+                            static_cast<u8>(255 - cmyk.k),
+                        };
+                    }
                 }
             }
         }
 
-        // Photoshop writes inverted CMYK data (i.e. Photoshop's 0 should be 255). We convert this
-        // to expected values.
-        bool should_invert_cmyk = cinfo.jpeg_color_space == JCS_CMYK
-            && (!cinfo.saw_Adobe_marker || cinfo.Adobe_transform == 0);
-
-        if (should_invert_cmyk) {
-            for (int i = 0; i < cmyk_bitmap->size().height(); ++i) {
-                auto* line = cmyk_bitmap->scanline(i);
-
-                for (int j = 0; j < cmyk_bitmap->size().width(); ++j) {
-                    auto const& cmyk = line[j];
-                    line[j] = {
-                        static_cast<u8>(255 - cmyk.c),
-                        static_cast<u8>(255 - cmyk.m),
-                        static_cast<u8>(255 - cmyk.y),
-                        static_cast<u8>(255 - cmyk.k),
-                    };
-                }
-            }
-        }
+        jpeg_finish_output(&cinfo);
+        if (!could_read_all_scanlines)
+            break;
     }
 
     JOCTET* icc_data_ptr = nullptr;
