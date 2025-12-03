@@ -229,7 +229,6 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
                 auto& canvas = context.animation_surface->canvas();
 
                 if (context.previous_frame_dipose_method == WEBP_MUX_DISPOSE_BACKGROUND) {
-                    dbgln("disposing background");
                     canvas.clear(SkColors::kTransparent);
                 }
 
