@@ -30,12 +30,13 @@ static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugi
     static constexpr ImagePluginStreamingInitializer s_streaming_initializers[] = {
         { BMPImageDecoderPlugin::sniff, BMPImageDecoderPlugin::create },
         { GIFImageDecoderPlugin::sniff, GIFImageDecoderPlugin::create },
-        // { ICOImageDecoderPlugin::sniff, ICOImageDecoderPlugin::create },
+        { ICOImageDecoderPlugin::sniff, ICOImageDecoderPlugin::create },
         { JPEGImageDecoderPlugin::sniff, JPEGImageDecoderPlugin::create },
         { JPEGXLImageDecoderPlugin::sniff, JPEGXLImageDecoderPlugin::create },
         { PNGImageDecoderPlugin::sniff, PNGImageDecoderPlugin::create },
         { TIFFImageDecoderPlugin::sniff, TIFFImageDecoderPlugin::create },
         { TinyVGImageDecoderPlugin::sniff, TinyVGImageDecoderPlugin::create },
+        { WebPImageDecoderPlugin::sniff, WebPImageDecoderPlugin::create },
         { AVIFImageDecoderPlugin::sniff, AVIFImageDecoderPlugin::create }
     };
 
@@ -50,20 +51,6 @@ static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugi
         dbgln("now creating");
         return TRY(plugin.create(move(stream)));
     }
-
-    // For formats that must have all the data available upfront to be able to decode.
-    // struct ImagePluginNonStreamingInitializer {
-    //     bool (*sniff)(ReadonlyBytes) = nullptr;
-    //     ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> (*create)(ReadonlyBytes) = nullptr;
-    // };
-    //
-    // static constexpr ImagePluginNonStreamingInitializer s_non_streaming_initializers[] = {
-    //     { WebPImageDecoderPlugin::sniff, WebPImageDecoderPlugin::create },
-    // };
-    //
-    // TRY(stream->seek(0, SeekMode::SetPosition));
-    // auto bytes = TRY(stream->read_until_eof());
-
 
     return OwnPtr<ImageDecoderPlugin> {};
 }

@@ -70,7 +70,7 @@ public:
 
             auto maybe_buffer_error = ByteBuffer::create_uninitialized(size);
             if (maybe_buffer_error.is_error())
-                return AVIF_RESULT_IO_ERROR;
+                return AVIF_RESULT_OUT_OF_MEMORY;
 
             loading_context->current_read_buffer = maybe_buffer_error.release_value();
 

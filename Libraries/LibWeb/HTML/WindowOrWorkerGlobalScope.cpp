@@ -304,62 +304,63 @@ GC::Ref<WebIDL::Promise> WindowOrWorkerGlobalScopeMixin::create_image_bitmap_imp
     // 6. Switch on image:
     image.visit(
         // -> Blob
-        [&](GC::Root<FileAPI::Blob>& ) {
+        [&](GC::Root<FileAPI::Blob>& blob) {
             // Run these step in parallel:
             Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(realm.heap(), [=]() {
                 // 1. Let imageData be the result of reading image's data. If an error occurs during reading of the
                 //    object, then queue a global task, using the bitmap task source, to reject promise with an
                 //    "InvalidStateError" DOMException and abort these steps.
                 // FIXME: I guess this is always fine for us as the data is already read.
-                dbgln("FIXME: Reimplement blob decoding in createImageBitmap");
-                // auto const image_data = blob->raw_bytes();
+                auto const image_data = blob->raw_bytes();
 
                 // FIXME:
                 // 2. Apply the image sniffing rules to determine the file format of imageData, with MIME type of
                 // image (as given by image's type attribute) giving the official type.
 
-                // auto on_failed_decode = [p = GC::Root(*p)](Error&) {
-                //     // 3. If imageData is not in a supported image file format (e.g., it's not an image at all), or if
-                //     //    imageData is corrupted in some fatal way such that the image dimensions cannot be obtained
-                //     //    (e.g., a vector graphic with no natural size), then queue a global task, using the bitmap
-                //     //    task source, to reject promise with an "InvalidStateError" DOMException and abort these steps.
-                //     auto& realm = relevant_realm(p->promise());
-                //     queue_global_task(Task::Source::BitmapTask, realm.global_object(), GC::create_function(realm.heap(), [&realm, p] {
-                //         TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
-                //         WebIDL::reject_promise(realm, *p, WebIDL::InvalidStateError::create(realm, "Image does not contain a supported image format"_utf16));
-                //     }));
-                // };
-                //
-                // auto on_successful_decode = [image_bitmap = GC::Root(*image_bitmap), p = GC::Root(*p), sx, sy, sw, sh, options = Optional(options)](Web::Platform::DecodedImage& result) -> ErrorOr<void> {
-                //     // 4. Set imageBitmap's bitmap data to imageData, cropped to the source rectangle with formatting.
-                //     // If this is an animated image, imageBitmap's bitmap data must only be taken from the default image
-                //     // of the animation (the one that the format defines is to be used when animation is not supported
-                //     // or is disabled), or, if there is no such image, the first frame of the animation.
-                //     auto cropped_bitmap_or_error = crop_to_the_source_rectangle_with_formatting(result.frames.take_first().bitmap, sx, sy, sw, sh, options);
-                //     // AD-HOC: Reject promise with an "InvalidStateError" DOMException on allocation failure
-                //     // Spec issue: https://github.com/whatwg/html/issues/3323
-                //     if (cropped_bitmap_or_error.is_error()) {
-                //         auto& realm = relevant_realm(p->promise());
-                //         queue_global_task(Task::Source::BitmapTask, realm.global_object(), GC::create_function(realm.heap(), [&realm, p] {
-                //             TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
-                //             WebIDL::reject_promise(realm, *p, WebIDL::InvalidStateError::create(realm, "Image size is invalid"_utf16));
-                //         }));
-                //         return {};
-                //     }
-                //     image_bitmap->set_bitmap(cropped_bitmap_or_error.release_value());
-                //
-                //     auto& realm = relevant_realm(p->promise());
-                //
-                //     // 5. Queue a global task, using the bitmap task source, to resolve promise with imageBitmap.
-                //     queue_global_task(Task::Source::BitmapTask, *image_bitmap, GC::create_function(realm.heap(), [p, image_bitmap] {
-                //         auto& realm = relevant_realm(*image_bitmap);
-                //         TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
-                //         WebIDL::resolve_promise(realm, *p, image_bitmap);
-                //     }));
-                //     return {};
-                // };
-                //
-                // (void)Web::Platform::ImageCodecPlugin::the().decode_image(image_data, move(on_successful_decode), move(on_failed_decode));
+                auto on_failed_decode = [p = GC::Root(*p)](Error&) {
+                    // 3. If imageData is not in a supported image file format (e.g., it's not an image at all), or if
+                    //    imageData is corrupted in some fatal way such that the image dimensions cannot be obtained
+                    //    (e.g., a vector graphic with no natural size), then queue a global task, using the bitmap
+                    //    task source, to reject promise with an "InvalidStateError" DOMException and abort these steps.
+                    auto& realm = relevant_realm(p->promise());
+                    queue_global_task(Task::Source::BitmapTask, realm.global_object(), GC::create_function(realm.heap(), [&realm, p] {
+                        TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
+                        WebIDL::reject_promise(realm, *p, WebIDL::InvalidStateError::create(realm, "Image does not contain a supported image format"_utf16));
+                    }));
+                };
+
+                auto on_successful_decode = [image_bitmap = GC::Root(*image_bitmap), p = GC::Root(*p), sx, sy, sw, sh, options = Optional(options)](Web::Platform::DecodedImage& result) -> ErrorOr<void> {
+                    // 4. Set imageBitmap's bitmap data to imageData, cropped to the source rectangle with formatting.
+                    // If this is an animated image, imageBitmap's bitmap data must only be taken from the default image
+                    // of the animation (the one that the format defines is to be used when animation is not supported
+                    // or is disabled), or, if there is no such image, the first frame of the animation.
+                    auto cropped_bitmap_or_error = crop_to_the_source_rectangle_with_formatting(result.frames.take_first().bitmap, sx, sy, sw, sh, options);
+                    // AD-HOC: Reject promise with an "InvalidStateError" DOMException on allocation failure
+                    // Spec issue: https://github.com/whatwg/html/issues/3323
+                    if (cropped_bitmap_or_error.is_error()) {
+                        auto& realm = relevant_realm(p->promise());
+                        queue_global_task(Task::Source::BitmapTask, realm.global_object(), GC::create_function(realm.heap(), [&realm, p] {
+                            TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
+                            WebIDL::reject_promise(realm, *p, WebIDL::InvalidStateError::create(realm, "Image size is invalid"_utf16));
+                        }));
+                        return {};
+                    }
+                    image_bitmap->set_bitmap(cropped_bitmap_or_error.release_value());
+
+                    auto& realm = relevant_realm(p->promise());
+
+                    // 5. Queue a global task, using the bitmap task source, to resolve promise with imageBitmap.
+                    queue_global_task(Task::Source::BitmapTask, *image_bitmap, GC::create_function(realm.heap(), [p, image_bitmap] {
+                        auto& realm = relevant_realm(*image_bitmap);
+                        TemporaryExecutionContext const context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
+                        WebIDL::resolve_promise(realm, *p, image_bitmap);
+                    }));
+                    return {};
+                };
+
+                auto pending_decode = Web::Platform::ImageCodecPlugin::the().start_decoding_image(move(on_successful_decode), move(on_failed_decode));
+                Web::Platform::ImageCodecPlugin::the().partial_image_data_became_available(pending_decode, MUST(ByteBuffer::copy(image_data)));
+                Web::Platform::ImageCodecPlugin::the().no_more_data_for_image(pending_decode);
             }));
         },
         // -> ImageData

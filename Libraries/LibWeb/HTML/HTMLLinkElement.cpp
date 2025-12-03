@@ -908,24 +908,26 @@ static NonnullRefPtr<Core::Promise<bool>> decode_favicon(ReadonlyBytes favicon_d
     dbgln("FIXME: Reimplement favicon decoding");
     promise->resolve(true);
 
-    // auto on_failed_decode = [favicon_url, promise]([[maybe_unused]] Error& error) {
-    //     dbgln_if(IMAGE_DECODER_DEBUG, "Failed to decode favicon {}: {}", favicon_url, error);
-    //     promise->reject(move(error));
-    // };
-    //
-    // auto on_successful_decode = [document = GC::Root(document), promise](Web::Platform::DecodedImage& decoded_image) -> ErrorOr<void> {
-    //     auto favicon_bitmap = decoded_image.frames[0].bitmap;
-    //     dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
-    //
-    //     auto navigable = document->navigable();
-    //     if (navigable && navigable->is_traversable())
-    //         navigable->traversable_navigable()->page().client().page_did_change_favicon(*favicon_bitmap);
-    //
-    //     promise->resolve(true);
-    //     return {};
-    // };
-    //
-    // (void)Platform::ImageCodecPlugin::the().decode_image(favicon_data, move(on_successful_decode), move(on_failed_decode));
+    auto on_failed_decode = [favicon_url, promise]([[maybe_unused]] Error& error) {
+        dbgln_if(IMAGE_DECODER_DEBUG, "Failed to decode favicon {}: {}", favicon_url, error);
+        promise->reject(move(error));
+    };
+
+    auto on_successful_decode = [document = GC::Root(document), promise](Web::Platform::DecodedImage& decoded_image) -> ErrorOr<void> {
+        auto favicon_bitmap = decoded_image.frames[0].bitmap;
+        dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
+
+        auto navigable = document->navigable();
+        if (navigable && navigable->is_traversable())
+            navigable->traversable_navigable()->page().client().page_did_change_favicon(*favicon_bitmap);
+
+        promise->resolve(true);
+        return {};
+    };
+
+    auto pending_decode = Platform::ImageCodecPlugin::the().start_decoding_image(move(on_successful_decode), move(on_failed_decode));
+    Platform::ImageCodecPlugin::the().partial_image_data_became_available(pending_decode, MUST(ByteBuffer::copy(favicon_data)));
+    Platform::ImageCodecPlugin::the().no_more_data_for_image(pending_decode);
 
     return promise;
 }
