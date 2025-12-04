@@ -162,7 +162,6 @@ static ErrorOr<void> decode_webp_header(WebPLoadingContext& context)
 static ErrorOr<NonnullRefPtr<Bitmap>> decode_webp_frame(WebPLoadingContext& context, WebPIterator& frame)
 {
     if (!context.current_frame_decoder) {
-        dbgln("frame dimensions {}x{}", frame.width, frame.height);
         auto bitmap_format = context.has_alpha ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888;
         context.current_frame_bitmap = TRY(Bitmap::create(bitmap_format, Gfx::AlphaType::Unpremultiplied, { frame.width, frame.height }));
         context.current_frame_decoder = WebPINewRGB(MODE_BGRA, context.current_frame_bitmap->scanline_u8(0), context.current_frame_bitmap->size_in_bytes(), context.current_frame_bitmap->pitch());;
@@ -201,7 +200,6 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
         // We have to do + 1 here because 0 actually gives the last frame.
         size_t frame_index = context.frame_descriptors.size() + 1;
         while (!WebPDemuxGetFrame(context.demuxer, frame_index, &frame)) {
-            dbgln("nothing yet");
             WebPDemuxReleaseIterator(&frame);
             TRY(context.populate_demuxer_with_more_data());
             if (context.stream->is_eof())
@@ -228,17 +226,14 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
 
                 auto& canvas = context.animation_surface->canvas();
 
-                if (context.previous_frame_dipose_method == WEBP_MUX_DISPOSE_BACKGROUND) {
+                if (context.previous_frame_dipose_method == WEBP_MUX_DISPOSE_BACKGROUND)
                     canvas.clear(SkColors::kTransparent);
-                }
 
                 context.previous_frame_dipose_method = frame.dispose_method;
 
                 SkPaint paint;
-                if (frame.has_alpha && frame.blend_method == WEBP_MUX_BLEND) {
-                    dbgln("blending");
+                if (frame.has_alpha && frame.blend_method == WEBP_MUX_BLEND)
                     paint.setBlendMode(SkBlendMode::kSrcOver);
-                }
 
                 canvas.drawImageRect(immutable_bitmap->sk_image(), to_skia_rect(destination_rect), to_skia_sampling_options(ScalingMode::None), &paint);
 
@@ -282,7 +277,6 @@ ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> WebPImageDecoderPlugin::create(Nonnul
 
 bool WebPImageDecoderPlugin::is_animated()
 {
-    dbgln("is animated? {}", m_context->has_animation);
     return m_context->has_animation;
 }
 
@@ -299,7 +293,6 @@ size_t WebPImageDecoderPlugin::frame_count()
     if (!is_animated())
         return 1;
 
-    dbgln("frame count: {}", m_context->frame_descriptors.size());
     return m_context->frame_descriptors.size();
 }
 

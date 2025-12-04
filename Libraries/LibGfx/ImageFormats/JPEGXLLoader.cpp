@@ -85,16 +85,13 @@ private:
                 return status;
 
             size_t unprocessed_bytes = JxlDecoderReleaseInput(m_decoder);
-            dbgln("needs more input, unprocessed bytes: {}", unprocessed_bytes);
             TRY(m_stream->seek(-unprocessed_bytes, SeekMode::FromCurrentPosition));
             auto bytes = TRY(m_stream->read_some(m_read_buffer));
 
             if (!bytes.is_empty()) {
                 status = JxlDecoderSetInput(m_decoder, bytes.data(), bytes.size());
-                if (status == JXL_DEC_ERROR) {
-                    dbgln("errored out set");
+                if (status == JXL_DEC_ERROR)
                     return status;
-                }
             } else {
                 JxlDecoderCloseInput(m_decoder);
             }
@@ -108,8 +105,6 @@ private:
             auto const status = TRY(perform_operation_that_may_require_more_input([this] {
                 return JxlDecoderProcessInput(m_decoder);
             }));
-
-            dbgln("status: {}", to_underlying(status));
 
             if (status == JXL_DEC_ERROR)
                 return Error::from_string_literal("JPEGXLImageDecoderPlugin: Decoder is corrupted.");
@@ -185,12 +180,11 @@ private:
 
     ErrorOr<void> set_output_buffer(u32 duration)
     {
+        dbgln("duration: {}", duration);
         auto result = [this, duration]() -> ErrorOr<void> {
             auto res = TRY(perform_operation_that_may_require_more_input([this] {
                 return JxlDecoderProcessInput(m_decoder);
             }));
-
-            dbgln("res: {}", to_underlying(res));
 
             if (res != JXL_DEC_NEED_IMAGE_OUT_BUFFER)
                 return Error::from_string_literal("JPEGXLImageDecoderPlugin: Decoder is in an unexpected state.");

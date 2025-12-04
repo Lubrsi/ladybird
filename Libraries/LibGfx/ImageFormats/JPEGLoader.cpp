@@ -79,54 +79,40 @@ ErrorOr<void> JPEGLoadingContext::decode()
 
     source_manager.source_manager.bytes_in_buffer = 0;
     source_manager.source_manager.next_input_byte = nullptr;
-    source_manager.source_manager.init_source = [](j_decompress_ptr) { dbgln("init source"); };
+    source_manager.source_manager.init_source = [](j_decompress_ptr context) {
+        auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
+        MUST(source_manager->stream->seek(0, SeekMode::SetPosition));
+        source_manager->read_buffer.fill(0);
+    };
     source_manager.source_manager.fill_input_buffer = [](j_decompress_ptr context) -> boolean {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
-        dbgln("current offset: {}", source_manager->stream->tell());
-        // dump_backtrace();
         auto maybe_error = source_manager->stream->read_some(source_manager->read_buffer);
-        if (maybe_error.is_error()) {
-            dbgln("Failed to read from JPEG data stream: {}", maybe_error.error());
+        if (maybe_error.is_error())
             return false;
-        }
 
         auto bytes = maybe_error.release_value();
         source_manager->current_view_into_read_buffer = bytes;
         source_manager->source_manager.next_input_byte = bytes.data();
         source_manager->source_manager.bytes_in_buffer = bytes.size();
-        if (bytes.size() >= 10) {
-            dbgln("next 10 bytes: {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x}", source_manager->source_manager.next_input_byte[0] , source_manager->source_manager.next_input_byte[1], source_manager->source_manager.next_input_byte[2], source_manager->source_manager.next_input_byte[3], source_manager->source_manager.next_input_byte[4], source_manager->source_manager.next_input_byte[5], source_manager->source_manager.next_input_byte[6], source_manager->source_manager.next_input_byte[7], source_manager->source_manager.next_input_byte[8], source_manager->source_manager.next_input_byte[9]);
-        }
-
         return true;
     };
     source_manager.source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
-        if (num_bytes < 0) {
-            dbgln("Did not expect to seek backwards by {} bytes", num_bytes);
+        if (num_bytes < 0)
             return;
-        }
 
         size_t num_bytes_as_size = static_cast<size_t>(num_bytes);
 
         size_t current_offset_into_read_buffer = source_manager->source_manager.next_input_byte - source_manager->current_view_into_read_buffer.data();
         num_bytes_as_size += current_offset_into_read_buffer;
 
-        dbgln("skip {} bytes", num_bytes_as_size);
-
         if (num_bytes_as_size < source_manager->current_view_into_read_buffer.size()) {
-            dbgln("SEEKED INTO READ BUFFER");
             auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes_as_size);
             source_manager->current_view_into_read_buffer = sliced_bytes;
             source_manager->source_manager.next_input_byte = sliced_bytes.data();
             source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
-            if (sliced_bytes.size() >= 10) {
-                dbgln("next 10 bytes: {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x} {:#02x}", source_manager->source_manager.next_input_byte[0] , source_manager->source_manager.next_input_byte[1], source_manager->source_manager.next_input_byte[2], source_manager->source_manager.next_input_byte[3], source_manager->source_manager.next_input_byte[4], source_manager->source_manager.next_input_byte[5], source_manager->source_manager.next_input_byte[6], source_manager->source_manager.next_input_byte[7], source_manager->source_manager.next_input_byte[8], source_manager->source_manager.next_input_byte[9]);
-            }
             return;
         }
-
-        dbgln("SEEKED INTO STREAM");
 
         auto maybe_error = source_manager->stream->seek(num_bytes_as_size - source_manager->current_view_into_read_buffer.size(), SeekMode::FromCurrentPosition);
         if (maybe_error.is_error())
@@ -183,7 +169,6 @@ ErrorOr<void> JPEGLoadingContext::decode()
             while (cinfo.output_scanline < cinfo.output_height) {
                 auto* row_ptr = (u8*)cmyk_bitmap->scanline(cinfo.output_scanline);
                 auto out_size = jpeg_read_scanlines(&cinfo, &row_ptr, 1);
-                dbgln("== RETURNED CONTROL 2");
                 if (cinfo.output_scanline < cinfo.output_height && out_size == 0) {
                     dbgln("JPEG Warning: Decoding produced no more scanlines in scanline {}/{}.", cinfo.output_scanline, cinfo.output_height);
                     could_read_all_scanlines = false;

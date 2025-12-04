@@ -634,7 +634,6 @@ private:
     ErrorOr<Vector<Value, 1>> read_tiff_value(Type type, u32 count, u32 offset)
     {
         auto const old_offset = TRY(m_stream->tell());
-        dbgln("old offset = {}", old_offset);
         ScopeGuard reset_offset { [this, old_offset]() { MUST(m_stream->seek(old_offset, SeekMode::SetPosition)); } };
 
         TRY(m_stream->seek(offset, SeekMode::SetPosition));
@@ -761,12 +760,8 @@ bool TIFFImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStrea
 {
     Array<u8, 4> bytes;
     auto maybe_error = stream->read_until_filled(bytes);
-    if (maybe_error.is_error()) {
-        dbgln("tiff stream error");
+    if (maybe_error.is_error())
         return false;
-    }
-
-    dbgln("bytes[0] = {:#02x}, bytes[1] = {:#02x}, bytes[2] = {:#02x}, bytes[3] = {:#02x}", bytes[0], bytes[1], bytes[2], bytes[3]);
 
     bool const valid_little_endian = bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00;
     bool const valid_big_endian = bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A;
