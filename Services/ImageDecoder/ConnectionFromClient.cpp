@@ -8,8 +8,8 @@
 #include <AK/IDAllocator.h>
 #include <ImageDecoder/ConnectionFromClient.h>
 #include <ImageDecoder/ImageDecoderClientEndpoint.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
 #include <LibCore/System.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
 #include <LibGfx/ImageFormats/TIFFMetadata.h>
@@ -104,9 +104,9 @@ static void decode_image_to_bitmaps_and_durations_with_decoder(Gfx::ImageDecoder
     }
 }
 
-static ErrorOr<ConnectionFromClient::DecodeResult> decode_image_to_details(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> const& known_mime_type)
+static ErrorOr<ConnectionFromClient::DecodeResult> decode_image_to_details(NonnullRefPtr<Gfx::ImageDecoderStream> stream, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> const& known_mime_type)
 {
-    auto decoder = TRY(Gfx::ImageDecoder::try_create_for_stream(stream, known_mime_type));
+    auto decoder = TRY(Gfx::ImageDecoder::try_create_for_stream(move(stream), known_mime_type));
 
     if (!decoder)
         return Error::from_string_literal("Could not find suitable image decoder plugin for data");
@@ -149,7 +149,7 @@ static ErrorOr<ConnectionFromClient::DecodeResult> decode_image_to_details(Nonnu
 
 ConnectionFromClient::PendingJob ConnectionFromClient::make_decode_image_job(i64 image_id, Optional<Gfx::IntSize> ideal_size, Optional<ByteString> mime_type)
 {
-    auto stream = adopt_ref(*new Core::SeekableSharedMemoryStream());
+    auto stream = adopt_ref(*new Gfx::ImageDecoderStream());
 
     auto job = Job::construct(
         [stream, ideal_size = move(ideal_size), mime_type = move(mime_type)](auto&) -> ErrorOr<DecodeResult> {
@@ -157,12 +157,15 @@ ConnectionFromClient::PendingJob ConnectionFromClient::make_decode_image_job(i64
         },
         [strong_this = NonnullRefPtr(*this), image_id](DecodeResult result) -> ErrorOr<void> {
             strong_this->async_did_decode_image(image_id, result.is_animated, result.loop_count, move(result.bitmaps), move(result.durations), result.scale, move(result.color_profile));
+            dbgln("success, removing image ID {}", image_id);
             strong_this->m_pending_jobs.remove(image_id);
             return {};
         },
         [strong_this = NonnullRefPtr(*this), image_id](Error error) -> void {
             if (strong_this->is_open())
                 strong_this->async_did_fail_to_decode_image(image_id, MUST(String::formatted("Decoding failed: {}", error)));
+
+            dbgln("failure, removing image ID {}", image_id);
             strong_this->m_pending_jobs.remove(image_id);
         });
 
@@ -176,25 +179,29 @@ Messages::ImageDecoderServer::StartDecodingImageResponse ConnectionFromClient::s
 {
     auto image_id = m_next_image_id++;
     m_pending_jobs.set(image_id, make_decode_image_job(image_id, ideal_size, move(mime_type)));
+    dbgln("started decoding image with ID {}", image_id);
     return image_id;
 }
 
 void ConnectionFromClient::partial_image_data_became_available(i64 image_id, ByteBuffer data)
 {
+    dbgln("data coming in for ID {} with {} bytes", image_id, data.size());
     auto pending_job_iterator = m_pending_jobs.find(image_id);
     if (pending_job_iterator == m_pending_jobs.end()) {
         dbgln("ConnectionFromClient::partial_image_data_became_available: No job found with ID {}", image_id);
         return;
     }
 
+    dbgln("appended chunked to image id {}", image_id);
     pending_job_iterator->value.stream->append_chunk(move(data));
 }
 
 void ConnectionFromClient::no_more_data_for_image(i64 image_id)
 {
+    dbgln("no more data for image {}", image_id);
     auto pending_job_iterator = m_pending_jobs.find(image_id);
     if (pending_job_iterator == m_pending_jobs.end()) {
-        dbgln("ConnectionFromClient::partial_image_data_became_available: No job found with ID {}", image_id);
+        dbgln("ConnectionFromClient::no_more_data_for_image: No job found with ID {}", image_id);
         return;
     }
 
@@ -203,6 +210,7 @@ void ConnectionFromClient::no_more_data_for_image(i64 image_id)
 
 void ConnectionFromClient::cancel_decoding(i64 image_id)
 {
+    dbgln("cancelled decoding of {}", image_id);
     if (auto pending_job = m_pending_jobs.take(image_id); pending_job.has_value()) {
         pending_job.value().job->cancel();
     }

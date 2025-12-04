@@ -6,6 +6,7 @@
  */
 
 #include <AK/Vector.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/ExifOrientedBitmap.h>
 #include <LibGfx/ImageFormats/PNGLoader.h>
 #include <LibGfx/ImageFormats/TIFFLoader.h>
@@ -13,12 +14,11 @@
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/Painter.h>
 #include <png.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
 
 namespace Gfx {
 
 struct PNGLoadingContext {
-    PNGLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    PNGLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -31,7 +31,7 @@ struct PNGLoadingContext {
     png_structp png_ptr { nullptr };
     png_infop info_ptr { nullptr };
 
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
     IntSize size;
     u32 frame_count { 0 };
     u32 loop_count { 0 };
@@ -60,7 +60,7 @@ struct PNGLoadingContext {
     }
 };
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto decoder = adopt_own(*new PNGImageDecoderPlugin(move(stream)));
     TRY(decoder->initialize());
@@ -79,7 +79,7 @@ ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> PNGImageDecoderPlugin::create(Nonnull
     return decoder;
 }
 
-PNGImageDecoderPlugin::PNGImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+PNGImageDecoderPlugin::PNGImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream)
     : m_context(adopt_own(*new PNGLoadingContext(move(stream))))
 {
 }
@@ -156,7 +156,7 @@ ErrorOr<void> PNGImageDecoderPlugin::initialize()
     }
 
     png_set_read_fn(m_context->png_ptr, m_context->stream.ptr(), [](png_structp png_ptr, png_bytep data, png_size_t length) {
-        auto* read_stream = reinterpret_cast<Core::SeekableSharedMemoryStream*>(png_get_io_ptr(png_ptr));
+        auto* read_stream = static_cast<ImageDecoderStream*>(png_get_io_ptr(png_ptr));
         auto maybe_error = read_stream->read_until_filled({ data, length });
         if (maybe_error.is_error())
             png_error(png_ptr, "Read error");
@@ -218,7 +218,7 @@ ErrorOr<void> PNGImageDecoderPlugin::initialize()
     u32 exif_length = 0;
     int const num_exif_chunks = png_get_eXIf_1(m_context->png_ptr, m_context->info_ptr, &exif_length, &exif_data);
     if (num_exif_chunks > 0) {
-        auto stream = adopt_ref(*new Core::SeekableSharedMemoryStream());
+        auto stream = adopt_ref(*new ImageDecoderStream());
         stream->append_chunk(TRY(ByteBuffer::copy(exif_data, exif_length)));
         stream->close();
         m_context->exif_metadata = TRY(TIFFImageDecoderPlugin::read_exif_metadata(move(stream)));
@@ -368,7 +368,7 @@ ErrorOr<size_t> PNGLoadingContext::read_frames(png_structp png_ptr, png_infop in
 
 PNGImageDecoderPlugin::~PNGImageDecoderPlugin() = default;
 
-bool PNGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool PNGImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto constexpr png_signature_size_in_bytes = 8;
     Array<u8, png_signature_size_in_bytes> png_signature;

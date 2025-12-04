@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/AVIFLoader.h>
 #include <LibGfx/ImageFormats/BMPLoader.h>
 #include <LibGfx/ImageFormats/GIFLoader.h>
@@ -19,12 +19,12 @@
 
 namespace Gfx {
 
-static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+static ErrorOr<OwnPtr<ImageDecoderPlugin>> probe_and_sniff_for_appropriate_plugin(NonnullRefPtr<ImageDecoderStream> stream)
 {
     // For formats that don't require all data to be available before being able to start decoding.
     struct ImagePluginStreamingInitializer {
-        bool (*sniff)(NonnullRefPtr<Core::SeekableSharedMemoryStream>) = nullptr;
-        ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> (*create)(NonnullRefPtr<Core::SeekableSharedMemoryStream>) = nullptr;
+        bool (*sniff)(NonnullRefPtr<ImageDecoderStream>) = nullptr;
+        ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> (*create)(NonnullRefPtr<ImageDecoderStream>) = nullptr;
     };
 
     static constexpr ImagePluginStreamingInitializer s_streaming_initializers[] = {
@@ -64,7 +64,7 @@ ErrorOr<ColorSpace> ImageDecoder::color_space()
     return ColorSpace::load_from_icc_bytes(maybe_icc_data.value());
 }
 
-ErrorOr<RefPtr<ImageDecoder>> ImageDecoder::try_create_for_stream(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, [[maybe_unused]] Optional<ByteString> mime_type)
+ErrorOr<RefPtr<ImageDecoder>> ImageDecoder::try_create_for_stream(NonnullRefPtr<ImageDecoderStream> stream, [[maybe_unused]] Optional<ByteString> mime_type)
 {
     if (auto plugin = TRY(probe_and_sniff_for_appropriate_plugin(stream)); plugin)
         return adopt_ref_if_nonnull(new (nothrow) ImageDecoder(plugin.release_nonnull()));

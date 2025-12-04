@@ -44,10 +44,15 @@ private:
     virtual void finalize() override;
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
+    enum class FetchFailureReason {
+        FetchFailed,
+        DecodingFailed,
+    };
+
     void handle_successful_fetch_for_general_image_data(ByteBuffer partial_data);
     void handle_end_of_fetch_for_general_image_data();
     void handle_successful_fetch_for_svg_image_data(URL::URL const&, ByteBuffer full_data);
-    void handle_failed_fetch();
+    void handle_failed_fetch(FetchFailureReason);
     void handle_successful_resource_load();
 
     enum class State {

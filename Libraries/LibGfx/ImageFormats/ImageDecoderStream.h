@@ -13,11 +13,11 @@
 #include <LibThreading/ConditionVariable.h>
 #include <LibThreading/MutexProtected.h>
 
-namespace Core {
+namespace Gfx {
 
-class SeekableSharedMemoryStream
+class ImageDecoderStream
     : public SeekableStream
-    , public AtomicRefCounted<SeekableSharedMemoryStream> {
+    , public AtomicRefCounted<ImageDecoderStream> {
 
 public:
     virtual ErrorOr<Bytes> read_some(Bytes) override;

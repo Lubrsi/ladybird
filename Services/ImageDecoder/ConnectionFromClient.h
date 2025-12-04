@@ -40,7 +40,7 @@ private:
     using Job = Threading::BackgroundAction<DecodeResult>;
     struct PendingJob {
         NonnullRefPtr<Job> job;
-        NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+        NonnullRefPtr<Gfx::ImageDecoderStream> stream;
     };
 
     explicit ConnectionFromClient(NonnullOwnPtr<IPC::Transport>);

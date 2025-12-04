@@ -16,7 +16,7 @@
 #include <AK/MemoryStream.h>
 #include <AK/Try.h>
 #include <AK/Vector.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/BMPLoader.h>
 
 namespace Gfx {
@@ -198,7 +198,7 @@ enum class DIBType {
 };
 
 struct BMPLoadingContext {
-    BMPLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    BMPLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -212,10 +212,11 @@ struct BMPLoadingContext {
     };
     State state { State::NotDecoded };
 
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
     u32 data_offset { 0 };
 
     bool is_included_in_ico { false };
+    size_t offset_in_ico { 0 };
 
     DIB dib;
     DIBType dib_type;
@@ -737,8 +738,9 @@ static ErrorOr<void> decode_bmp_dib(BMPLoadingContext& context)
         TRY(decode_bmp_header(context));
 
     u8 header_size = context.is_included_in_ico ? 0 : bmp_header_size;
+    context.offset_in_ico = context.is_included_in_ico ? TRY(context.stream->tell()) : 0;
 
-    TRY(context.stream->seek(header_size, SeekMode::SetPosition));
+    TRY(context.stream->seek(context.offset_in_ico + header_size, SeekMode::SetPosition));
 
     u64 dib_size = TRY(context.stream->read_value<u32>());
 
@@ -752,7 +754,7 @@ static ErrorOr<void> decode_bmp_dib(BMPLoadingContext& context)
     if (!context.is_included_in_ico && context.data_offset < header_size + 4u)
         return Error::from_string_literal("Data offset too small");
 
-    TRY(context.stream->seek(header_size + 4, SeekMode::SetPosition));
+    TRY(context.stream->seek(context.offset_in_ico + header_size + 4, SeekMode::SetPosition));
 
     dbgln_if(BMP_DEBUG, "BMP dib size: {}", dib_size);
 
@@ -891,7 +893,7 @@ static ErrorOr<void> decode_bmp_color_table(BMPLoadingContext& context)
         }
     }
 
-    TRY(context.stream->seek(header_size + context.dib_size(), SeekMode::SetPosition));
+    TRY(context.stream->seek(context.offset_in_ico + header_size + context.dib_size(), SeekMode::SetPosition));
     for (u32 i = 0; !context.stream->is_eof() && i < max_colors; ++i) {
         if (bytes_per_color == 4) {
             context.color_table.append(TRY(context.stream->read_value<u32>()) | 0xff'00'00'00);
@@ -925,7 +927,7 @@ static ErrorOr<void> uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuf
         return Error::from_string_literal("BMP is top-down and RLE compressed");
     }
 
-    TRY(context.stream->seek(context.data_offset, SeekMode::SetPosition));
+    TRY(context.stream->seek(context.offset_in_ico + context.data_offset, SeekMode::SetPosition));
 
     auto compression = context.dib.info.compression;
 
@@ -1181,7 +1183,7 @@ static ErrorOr<void> decode_bmp_pixel_data(BMPLoadingContext& context)
         TRY(uncompress_bmp_rle_data(context, rle_buffer));
         stream = TRY(try_make<FixedMemoryStream>(rle_buffer.bytes()));
     } else {
-        TRY(stream->seek(context.data_offset, SeekMode::SetPosition));
+        TRY(stream->seek(context.offset_in_ico + context.data_offset, SeekMode::SetPosition));
     }
 
     auto process_row_padding = [&](size_t const consumed) -> ErrorOr<void> {
@@ -1342,7 +1344,7 @@ static ErrorOr<void> decode_bmp_pixel_data(BMPLoadingContext& context)
     return {};
 }
 
-BMPImageDecoderPlugin::BMPImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, IncludedInICO is_included_in_ico)
+BMPImageDecoderPlugin::BMPImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream, IncludedInICO is_included_in_ico)
 {
     m_context = make<BMPLoadingContext>(move(stream));
     m_context->is_included_in_ico = (is_included_in_ico == IncludedInICO::Yes);
@@ -1355,25 +1357,25 @@ IntSize BMPImageDecoderPlugin::size()
     return { m_context->dib.core.width, abs(m_context->dib.core.height) };
 }
 
-bool BMPImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool BMPImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     BMPLoadingContext context(move(stream));
     return !decode_bmp_header(context).is_error();
 }
 
-ErrorOr<NonnullOwnPtr<BMPImageDecoderPlugin>> BMPImageDecoderPlugin::create_impl(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, IncludedInICO included_in_ico)
+ErrorOr<NonnullOwnPtr<BMPImageDecoderPlugin>> BMPImageDecoderPlugin::create_impl(NonnullRefPtr<ImageDecoderStream> stream, IncludedInICO included_in_ico)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) BMPImageDecoderPlugin(move(stream), included_in_ico)));
     TRY(decode_bmp_dib(*plugin->m_context));
     return plugin;
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> BMPImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> BMPImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     return create_impl(move(stream), IncludedInICO::No);
 }
 
-ErrorOr<NonnullOwnPtr<BMPImageDecoderPlugin>> BMPImageDecoderPlugin::create_as_included_in_ico(Badge<ICOImageDecoderPlugin>, NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<BMPImageDecoderPlugin>> BMPImageDecoderPlugin::create_as_included_in_ico(Badge<ICOImageDecoderPlugin>, NonnullRefPtr<ImageDecoderStream> stream)
 {
     return create_impl(move(stream), IncludedInICO::Yes);
 }
@@ -1422,7 +1424,7 @@ ErrorOr<Optional<ReadonlyBytes>> BMPImageDecoderPlugin::icc_data()
 
     u8 header_size = m_context->is_included_in_ico ? 0 : bmp_header_size;
     auto current_offset = TRY(m_context->stream->tell());
-    TRY(m_context->stream->seek(header_size + v5.profile_data, SeekMode::SetPosition));
+    TRY(m_context->stream->seek(m_context->offset_in_ico + header_size + v5.profile_data, SeekMode::SetPosition));
     TRY(m_context->stream->read_until_filled(m_icc_data.value().bytes()));
     TRY(m_context->stream->seek(current_offset, SeekMode::SetPosition));
     return m_icc_data->bytes();

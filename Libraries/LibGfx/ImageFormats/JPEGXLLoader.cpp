@@ -5,7 +5,7 @@
  */
 
 #include <AK/Error.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/JPEGXLLoader.h>
 #include <jxl/decode.h>
 
@@ -18,7 +18,7 @@ class JPEGXLLoadingContext {
     AK_MAKE_NONMOVABLE(JPEGXLLoadingContext);
 
 public:
-    JPEGXLLoadingContext(JxlDecoder* decoder, NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    JPEGXLLoadingContext(JxlDecoder* decoder, NonnullRefPtr<ImageDecoderStream> stream)
         : m_decoder(decoder)
         , m_stream(move(stream))
     {
@@ -218,7 +218,7 @@ private:
     State m_state { State::NotDecoded };
 
     JxlDecoder* m_decoder;
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> m_stream;
+    NonnullRefPtr<ImageDecoderStream> m_stream;
     Array<u8, READ_BUFFER_SIZE> m_read_buffer;
 
     IntSize m_size;
@@ -242,7 +242,7 @@ IntSize JPEGXLImageDecoderPlugin::size()
     return m_context->size();
 }
 
-bool JPEGXLImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool JPEGXLImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     ByteBuffer buffer;
     JxlSignature signature = JXL_SIG_NOT_ENOUGH_BYTES;
@@ -255,7 +255,7 @@ bool JPEGXLImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStr
     return signature == JXL_SIG_CODESTREAM || signature == JXL_SIG_CONTAINER;
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGXLImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGXLImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto* decoder = JxlDecoderCreate(nullptr);
     if (!decoder)

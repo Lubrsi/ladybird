@@ -90,7 +90,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
 
         // Check for failed fetch response
         if (!Fetch::Infrastructure::is_ok_status(response->status()) || !response->body()) {
-            handle_failed_fetch();
+            handle_failed_fetch(FetchFailureReason::FetchFailed);
             return;
         }
 
@@ -105,7 +105,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
                 handle_successful_fetch_for_svg_image_data(request->url(), move(data));
             });
             auto process_body_error = GC::create_function(heap(), [this](JS::Value) {
-                handle_failed_fetch();
+                handle_failed_fetch(FetchFailureReason::FetchFailed);
             });
 
             response->body()->fully_read(realm, process_body, process_body_error, GC::Ref { realm.global_object() });
@@ -113,6 +113,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
         }
 
         auto process_body_chunk = GC::create_function(heap(), [this](ByteBuffer body_chunk) {
+            dbgln("{} got a chunk of size {}", m_url, body_chunk.size());
             handle_successful_fetch_for_general_image_data(move(body_chunk));
         });
 
@@ -121,7 +122,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
         });
 
         auto process_body_error = GC::create_function(heap(), [this](JS::Value) {
-            handle_failed_fetch();
+            handle_failed_fetch(FetchFailureReason::FetchFailed);
         });
 
         response->body()->incrementally_read(process_body_chunk, process_end_of_body, process_body_error, GC::Ref { realm.global_object() });
@@ -177,7 +178,7 @@ void SharedResourceRequest::handle_successful_fetch_for_general_image_data(ByteB
         };
 
         auto handle_failed_decode = [strong_this = GC::Root(*this)](Error&) -> void {
-            strong_this->handle_failed_fetch();
+            strong_this->handle_failed_fetch(FetchFailureReason::DecodingFailed);
         };
 
         m_pending_decode = Platform::ImageCodecPlugin::the().start_decoding_image(move(handle_successful_bitmap_decode), move(handle_failed_decode));
@@ -188,10 +189,8 @@ void SharedResourceRequest::handle_successful_fetch_for_general_image_data(ByteB
 
 void SharedResourceRequest::handle_end_of_fetch_for_general_image_data()
 {
-    if (!m_pending_decode.has_value()) {
-        dbgln("SharedResourceRequest::handle_end_of_fetch_for_general_image_data: No pending decode?");
+    if (!m_pending_decode.has_value())
         return;
-    }
 
     Platform::ImageCodecPlugin::the().no_more_data_for_image(m_pending_decode.value());
 }
@@ -200,21 +199,20 @@ void SharedResourceRequest::handle_successful_fetch_for_svg_image_data(URL::URL 
 {
     auto result = SVG::SVGDecodedImageData::create(m_document->realm(), m_page, url_string, full_data);
     if (result.is_error()) {
-        handle_failed_fetch();
+        handle_failed_fetch(FetchFailureReason::DecodingFailed);
     } else {
         m_image_data = result.release_value();
         handle_successful_resource_load();
     }
 }
 
-void SharedResourceRequest::handle_failed_fetch()
+void SharedResourceRequest::handle_failed_fetch(FetchFailureReason reason)
 {
-    if (m_pending_decode.has_value()) {
+    if (reason == FetchFailureReason::FetchFailed && m_pending_decode.has_value())
         Platform::ImageCodecPlugin::the().no_more_data_for_image(m_pending_decode.value());
-        m_pending_decode.clear();
-    }
 
     m_state = State::Failed;
+    m_pending_decode.clear();
     for (auto& callback : m_callbacks) {
         if (callback.on_fail)
             callback.on_fail->function()();
@@ -225,6 +223,7 @@ void SharedResourceRequest::handle_failed_fetch()
 void SharedResourceRequest::handle_successful_resource_load()
 {
     m_state = State::Finished;
+    m_pending_decode.clear();
     for (auto& callback : m_callbacks) {
         if (callback.on_finish)
             callback.on_finish->function()();

@@ -14,7 +14,7 @@
 #include <AK/Memory.h>
 #include <AK/MemoryStream.h>
 #include <AK/Try.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibCompress/Lzw.h>
 #include <LibGfx/ImageFormats/GIFLoader.h>
 #include <LibGfx/Painter.h>
@@ -62,7 +62,7 @@ struct LogicalScreen {
 };
 
 struct GIFLoadingContext {
-    GIFLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    GIFLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -81,7 +81,7 @@ struct GIFLoadingContext {
     };
     ErrorState error_state { NoError };
 
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
 
     LogicalScreen logical_screen {};
     u8 background_color_index { 0 };
@@ -97,7 +97,7 @@ enum class GIFFormat {
     GIF89a,
 };
 
-static ErrorOr<GIFFormat> decode_gif_header(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+static ErrorOr<GIFFormat> decode_gif_header(NonnullRefPtr<ImageDecoderStream> stream)
 {
     static auto valid_header_87 = "GIF87a"sv;
     static auto valid_header_89 = "GIF89a"sv;
@@ -389,7 +389,7 @@ static ErrorOr<void> load_gif_frame_descriptors(GIFLoadingContext& context)
     return {};
 }
 
-GIFImageDecoderPlugin::GIFImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+GIFImageDecoderPlugin::GIFImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream)
 {
     m_context = make<GIFLoadingContext>(move(stream));
 }
@@ -401,12 +401,12 @@ IntSize GIFImageDecoderPlugin::size()
     return { m_context->logical_screen.width, m_context->logical_screen.height };
 }
 
-bool GIFImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool GIFImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     return !decode_gif_header(move(stream)).is_error();
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> GIFImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> GIFImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) GIFImageDecoderPlugin(move(stream))));
     TRY(load_header_and_logical_screen(*plugin->m_context));

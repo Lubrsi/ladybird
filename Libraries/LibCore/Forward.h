@@ -34,7 +34,6 @@ class Process;
 class ProcessStatisticsReader;
 class Resource;
 class ResourceImplementation;
-class SeekableSharedMemoryStream;
 class Socket;
 template<typename Result, typename TError = AK::Error>
 class Promise;

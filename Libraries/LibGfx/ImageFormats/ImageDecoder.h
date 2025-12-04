@@ -99,7 +99,7 @@ protected:
 
 class ImageDecoder : public RefCounted<ImageDecoder> {
 public:
-    static ErrorOr<RefPtr<ImageDecoder>> try_create_for_stream(NonnullRefPtr<Core::SeekableSharedMemoryStream>, Optional<ByteString> mime_type = {});
+    static ErrorOr<RefPtr<ImageDecoder>> try_create_for_stream(NonnullRefPtr<ImageDecoderStream>, Optional<ByteString> mime_type = {});
     ~ImageDecoder() = default;
 
     IntSize size() const { return m_plugin->size(); }

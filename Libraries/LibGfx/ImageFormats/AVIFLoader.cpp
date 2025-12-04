@@ -10,7 +10,7 @@
 #include <AK/GenericShorthands.h>
 #include <AK/MemoryStream.h>
 #include <AK/Stream.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/AVIFLoader.h>
 
 #include <avif/avif.h>
@@ -30,7 +30,7 @@ public:
     };
 
     State state { State::NotDecoded };
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> data;
+    NonnullRefPtr<ImageDecoderStream> data;
     ByteBuffer current_read_buffer;
 
     avifDecoder* decoder { nullptr };
@@ -45,7 +45,7 @@ public:
 
     Vector<ImageFrameDescriptor> frame_descriptors;
 
-    AVIFLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    AVIFLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : data(move(stream))
     {
         // Since we don't know the size straight away, we have to set a reasonable limit.
@@ -171,15 +171,15 @@ IntSize AVIFImageDecoderPlugin::size()
     return m_context->size.value();
 }
 
-bool AVIFImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool AVIFImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
-    auto context = make<AVIFLoadingContext>(stream);
+    auto context = make<AVIFLoadingContext>(move(stream));
     return !decode_avif_header(*context).is_error();
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> AVIFImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> AVIFImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
-    auto context = make<AVIFLoadingContext>(stream);
+    auto context = make<AVIFLoadingContext>(move(stream));
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) AVIFImageDecoderPlugin(move(context))));
     TRY(decode_avif_header(*plugin->m_context));
     return plugin;

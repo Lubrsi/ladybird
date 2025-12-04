@@ -10,7 +10,7 @@
 #include <AK/LEB128.h>
 #include <AK/MemoryStream.h>
 #include <AK/Variant.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/TinyVGLoader.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
@@ -94,7 +94,7 @@ struct TinyVGHeader {
     u32 color_count;
 };
 
-static ErrorOr<TinyVGHeader> decode_tinyvg_header(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+static ErrorOr<TinyVGHeader> decode_tinyvg_header(NonnullRefPtr<ImageDecoderStream> stream)
 {
     TinyVGHeader header {};
     Array<u8, 2> magic_bytes;
@@ -171,7 +171,7 @@ static ErrorOr<Vector<Color>> decode_color_table(Stream& stream, ColorEncoding e
 
 class TinyVGReader {
 public:
-    TinyVGReader(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, TinyVGHeader const& header, ReadonlySpan<Color> color_table)
+    TinyVGReader(NonnullRefPtr<ImageDecoderStream> stream, TinyVGHeader const& header, ReadonlySpan<Color> color_table)
         : m_stream(stream)
         , m_scale(powf(0.5, header.scale))
         , m_coordinate_range(header.coordinate_range)
@@ -342,18 +342,18 @@ public:
     }
 
 private:
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> m_stream;
+    NonnullRefPtr<ImageDecoderStream> m_stream;
     float m_scale {};
     CoordinateRange m_coordinate_range;
     ReadonlySpan<Color> m_color_table;
 };
 
-ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> TinyVGDecodedImageData::decode(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> TinyVGDecodedImageData::decode(NonnullRefPtr<ImageDecoderStream> stream)
 {
     return decode(stream, TRY(decode_tinyvg_header(stream)));
 }
 
-ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> TinyVGDecodedImageData::decode(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream, TinyVGHeader const& header)
+ErrorOr<NonnullRefPtr<TinyVGDecodedImageData>> TinyVGDecodedImageData::decode(NonnullRefPtr<ImageDecoderStream> stream, TinyVGHeader const& header)
 {
     if (header.version != 1)
         return Error::from_string_literal("Invalid TinyVG: Unsupported version");
@@ -489,7 +489,7 @@ void TinyVGDecodedImageData::draw(Painter& painter) const
 }
 
 struct TinyVGLoadingContext {
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
     TinyVGHeader header {};
     RefPtr<TinyVGDecodedImageData> decoded_image {};
     RefPtr<Bitmap> bitmap {};
@@ -533,21 +533,21 @@ static ErrorOr<void> ensure_fully_decoded(TinyVGLoadingContext& context)
     return {};
 }
 
-TinyVGImageDecoderPlugin::TinyVGImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+TinyVGImageDecoderPlugin::TinyVGImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream)
     : m_context { make<TinyVGLoadingContext>(stream) }
 {
 }
 
 TinyVGImageDecoderPlugin::~TinyVGImageDecoderPlugin() = default;
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> TinyVGImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> TinyVGImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) TinyVGImageDecoderPlugin(stream)));
     TRY(decode_header_and_update_context(*plugin->m_context));
     return plugin;
 }
 
-bool TinyVGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool TinyVGImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     return !decode_tinyvg_header(stream).is_error();
 }

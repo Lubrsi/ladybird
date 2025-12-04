@@ -7,7 +7,7 @@
 #include <AK/Debug.h>
 #include <AK/MemoryStream.h>
 #include <AK/Types.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/BMPLoader.h>
 #include <LibGfx/ImageFormats/ICOLoader.h>
 #include <LibGfx/ImageFormats/PNGLoader.h>
@@ -67,7 +67,7 @@ struct ICOImageDescriptor {
 };
 
 struct ICOLoadingContext {
-    ICOLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    ICOLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -79,7 +79,7 @@ struct ICOLoadingContext {
         BitmapDecoded
     };
     State state { NotDecoded };
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
     IconType file_type { IconType::ICO };
     Vector<ICOImageDescriptor> images;
     size_t largest_index;
@@ -194,20 +194,20 @@ ErrorOr<void> ICOImageDecoderPlugin::load_ico_bitmap(ICOLoadingContext& context)
     return {};
 }
 
-bool ICOImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool ICOImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     IconType file_type;
     return !decode_ico_header(stream, file_type).is_error();
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> ICOImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> ICOImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) ICOImageDecoderPlugin(move(stream))));
     TRY(load_ico_directory(*plugin->m_context));
     return plugin;
 }
 
-ICOImageDecoderPlugin::ICOImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ICOImageDecoderPlugin::ICOImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream)
 {
     m_context = make<ICOLoadingContext>(move(stream));
 }

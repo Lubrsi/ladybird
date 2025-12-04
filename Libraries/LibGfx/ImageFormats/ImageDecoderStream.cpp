@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 
-namespace Core {
+namespace Gfx {
 
-ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
+ErrorOr<Bytes> ImageDecoderStream::read_some(Bytes bytes)
 {
     Threading::MutexLocker locker(m_mutex);
 
@@ -57,12 +57,12 @@ ErrorOr<Bytes> SeekableSharedMemoryStream::read_some(Bytes bytes)
     return bytes.trim(read_bytes);
 }
 
-ErrorOr<size_t> SeekableSharedMemoryStream::write_some(ReadonlyBytes)
+ErrorOr<size_t> ImageDecoderStream::write_some(ReadonlyBytes)
 {
     return Error::from_errno(EBADF);
 }
 
-ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
+ErrorOr<size_t> ImageDecoderStream::seek(i64 offset, SeekMode seek_mode)
 {
     Threading::MutexLocker locker(m_mutex);
 
@@ -166,12 +166,12 @@ ErrorOr<size_t> SeekableSharedMemoryStream::seek(i64 offset, SeekMode seek_mode)
     VERIFY_NOT_REACHED();
 }
 
-ErrorOr<void> SeekableSharedMemoryStream::truncate(size_t)
+ErrorOr<void> ImageDecoderStream::truncate(size_t)
 {
     return Error::from_errno(EBADF);
 }
 
-bool SeekableSharedMemoryStream::is_eof() const
+bool ImageDecoderStream::is_eof() const
 {
     Threading::MutexLocker locker(m_mutex);
 
@@ -185,20 +185,20 @@ bool SeekableSharedMemoryStream::is_eof() const
         && m_offset_inside_chunk == m_chunks.find(m_chunk_index)->size();
 }
 
-bool SeekableSharedMemoryStream::is_open() const
+bool ImageDecoderStream::is_open() const
 {
     Threading::MutexLocker locker(m_mutex);
     return !m_closed;
 }
 
-void SeekableSharedMemoryStream::close()
+void ImageDecoderStream::close()
 {
     Threading::MutexLocker locker(m_mutex);
     m_closed = true;
     m_waiting_for_more_data.broadcast();
 }
 
-void SeekableSharedMemoryStream::append_chunk(ByteBuffer&& chunk)
+void ImageDecoderStream::append_chunk(ByteBuffer&& chunk)
 {
     Threading::MutexLocker locker(m_mutex);
 

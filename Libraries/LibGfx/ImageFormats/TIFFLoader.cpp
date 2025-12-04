@@ -12,7 +12,7 @@
 #include <LibCompress/Lzw.h>
 #include <LibCompress/PackBitsDecoder.h>
 #include <LibCompress/Zlib.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/CMYKBitmap.h>
 #include <LibGfx/ImageFormats/CCITTDecoder.h>
 #include <LibGfx/ImageFormats/ExifOrientedBitmap.h>
@@ -55,7 +55,7 @@ public:
         FrameDecoded,
     };
 
-    TIFFLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    TIFFLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : m_stream(move(stream))
     {
     }
@@ -728,7 +728,7 @@ private:
         return {};
     }
 
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> m_stream;
+    NonnullRefPtr<ImageDecoderStream> m_stream;
     State m_state {};
     RefPtr<Bitmap> m_bitmap {};
     RefPtr<CMYKBitmap> m_cmyk_bitmap {};
@@ -749,14 +749,14 @@ private:
 
 }
 
-TIFFImageDecoderPlugin::TIFFImageDecoderPlugin(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+TIFFImageDecoderPlugin::TIFFImageDecoderPlugin(NonnullRefPtr<ImageDecoderStream> stream)
 {
     m_context = make<TIFF::TIFFLoadingContext>(move(stream));
 }
 
 TIFFImageDecoderPlugin::~TIFFImageDecoderPlugin() = default;
 
-bool TIFFImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool TIFFImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     Array<u8, 4> bytes;
     auto maybe_error = stream->read_until_filled(bytes);
@@ -773,7 +773,7 @@ IntSize TIFFImageDecoderPlugin::size()
     return m_context->size();
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> TIFFImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> TIFFImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) TIFFImageDecoderPlugin(stream)));
     TRY(plugin->m_context->decode_image_header());
@@ -807,7 +807,7 @@ ErrorOr<Optional<ReadonlyBytes>> TIFFImageDecoderPlugin::icc_data()
     return m_context->metadata().icc_profile().map([](auto const& buffer) -> ReadonlyBytes { return buffer.bytes(); });
 }
 
-ErrorOr<NonnullOwnPtr<ExifMetadata>> TIFFImageDecoderPlugin::read_exif_metadata(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ExifMetadata>> TIFFImageDecoderPlugin::read_exif_metadata(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) TIFFImageDecoderPlugin(move(stream))));
     TRY(plugin->m_context->decode_image_header());

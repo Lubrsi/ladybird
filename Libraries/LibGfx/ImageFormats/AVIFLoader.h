@@ -15,8 +15,8 @@ class AVIFLoadingContext;
 
 class AVIFImageDecoderPlugin final : public ImageDecoderPlugin {
 public:
-    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream>);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream>);
+    static bool sniff(NonnullRefPtr<ImageDecoderStream>);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<ImageDecoderStream>);
 
     virtual ~AVIFImageDecoderPlugin() override;
 

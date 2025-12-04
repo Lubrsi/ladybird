@@ -14,8 +14,8 @@ class JPEGXLLoadingContext;
 
 class JPEGXLImageDecoderPlugin : public ImageDecoderPlugin {
 public:
-    static bool sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
-    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream);
+    static bool sniff(NonnullRefPtr<ImageDecoderStream> stream);
+    static ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> create(NonnullRefPtr<ImageDecoderStream> stream);
 
     virtual ~JPEGXLImageDecoderPlugin() override;
 

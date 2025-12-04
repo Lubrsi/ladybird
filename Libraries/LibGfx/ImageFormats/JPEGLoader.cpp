@@ -9,19 +9,16 @@
 
 #include <LibGfx/CMYKBitmap.h>
 #include <LibGfx/ImageFormats/JPEGLoader.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <jpeglib.h>
 #include <setjmp.h>
-#include <AK/Base64.h>
-#include <LibCore/File.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
 
 namespace Gfx {
 
 static constexpr size_t READ_BUFFER_SIZE = 8 * KiB;
 
-struct SourceManager {
-    jpeg_source_mgr source_manager;
-    Core::SeekableSharedMemoryStream* stream;
+struct SourceManager : public jpeg_source_mgr {
+    ImageDecoderStream* stream;
     Array<u8, READ_BUFFER_SIZE> read_buffer;
     ReadonlyBytes current_view_into_read_buffer;
 };
@@ -38,10 +35,10 @@ struct JPEGLoadingContext {
     RefPtr<Gfx::Bitmap> rgb_bitmap;
     RefPtr<Gfx::CMYKBitmap> cmyk_bitmap;
 
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
     Vector<u8> icc_data;
 
-    JPEGLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    JPEGLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -77,14 +74,14 @@ ErrorOr<void> JPEGLoadingContext::decode()
 
     source_manager.stream = stream.ptr();
 
-    source_manager.source_manager.bytes_in_buffer = 0;
-    source_manager.source_manager.next_input_byte = nullptr;
-    source_manager.source_manager.init_source = [](j_decompress_ptr context) {
+    source_manager.bytes_in_buffer = 0;
+    source_manager.next_input_byte = nullptr;
+    source_manager.init_source = [](j_decompress_ptr context) {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
         MUST(source_manager->stream->seek(0, SeekMode::SetPosition));
         source_manager->read_buffer.fill(0);
     };
-    source_manager.source_manager.fill_input_buffer = [](j_decompress_ptr context) -> boolean {
+    source_manager.fill_input_buffer = [](j_decompress_ptr context) -> boolean {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
         auto maybe_error = source_manager->stream->read_some(source_manager->read_buffer);
         if (maybe_error.is_error())
@@ -92,25 +89,25 @@ ErrorOr<void> JPEGLoadingContext::decode()
 
         auto bytes = maybe_error.release_value();
         source_manager->current_view_into_read_buffer = bytes;
-        source_manager->source_manager.next_input_byte = bytes.data();
-        source_manager->source_manager.bytes_in_buffer = bytes.size();
+        source_manager->next_input_byte = bytes.data();
+        source_manager->bytes_in_buffer = bytes.size();
         return true;
     };
-    source_manager.source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
+    source_manager.skip_input_data = [](j_decompress_ptr context, long num_bytes) {
         auto* source_manager = reinterpret_cast<SourceManager*>(context->src);
         if (num_bytes < 0)
             return;
 
         size_t num_bytes_as_size = static_cast<size_t>(num_bytes);
 
-        size_t current_offset_into_read_buffer = source_manager->source_manager.next_input_byte - source_manager->current_view_into_read_buffer.data();
+        size_t current_offset_into_read_buffer = source_manager->next_input_byte - source_manager->current_view_into_read_buffer.data();
         num_bytes_as_size += current_offset_into_read_buffer;
 
         if (num_bytes_as_size < source_manager->current_view_into_read_buffer.size()) {
             auto sliced_bytes = source_manager->current_view_into_read_buffer.slice(num_bytes_as_size);
             source_manager->current_view_into_read_buffer = sliced_bytes;
-            source_manager->source_manager.next_input_byte = sliced_bytes.data();
-            source_manager->source_manager.bytes_in_buffer = sliced_bytes.size();
+            source_manager->next_input_byte = sliced_bytes.data();
+            source_manager->bytes_in_buffer = sliced_bytes.size();
             return;
         }
 
@@ -122,10 +119,10 @@ ErrorOr<void> JPEGLoadingContext::decode()
         context->src->next_input_byte = nullptr;
         context->src->bytes_in_buffer = 0;
     };
-    source_manager.source_manager.resync_to_restart = jpeg_resync_to_restart;
-    source_manager.source_manager.term_source = [](j_decompress_ptr) { };
+    source_manager.resync_to_restart = jpeg_resync_to_restart;
+    source_manager.term_source = [](j_decompress_ptr) { };
 
-    cinfo.src = reinterpret_cast<jpeg_source_mgr*>(&source_manager);
+    cinfo.src = &source_manager;
 
     jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK)
@@ -274,7 +271,7 @@ IntSize JPEGImageDecoderPlugin::size()
     return {};
 }
 
-bool JPEGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool JPEGImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     Array<u8, 3> data;
     auto maybe_error = stream->read_until_filled(data);
@@ -286,7 +283,7 @@ bool JPEGImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStrea
         && data.data()[2] == 0xFF;
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> JPEGImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     return adopt_own(*new JPEGImageDecoderPlugin(make<JPEGLoadingContext>(move(stream))));
 }

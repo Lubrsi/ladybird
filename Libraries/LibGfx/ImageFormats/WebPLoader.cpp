@@ -6,7 +6,7 @@
  */
 
 #include <AK/Error.h>
-#include <LibCore/SeekableSharedMemoryStream.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibGfx/SkiaUtils.h>
@@ -21,7 +21,7 @@
 namespace Gfx {
 
 struct WebPLoadingContext {
-    WebPLoadingContext(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+    WebPLoadingContext(NonnullRefPtr<ImageDecoderStream> stream)
         : stream(move(stream))
     {
     }
@@ -47,7 +47,7 @@ struct WebPLoadingContext {
     };
 
     State state { State::NotDecoded };
-    NonnullRefPtr<Core::SeekableSharedMemoryStream> stream;
+    NonnullRefPtr<ImageDecoderStream> stream;
 
     // Image properties
     IntSize size;
@@ -260,13 +260,13 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
     }
 }
 
-bool WebPImageDecoderPlugin::sniff(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+bool WebPImageDecoderPlugin::sniff(NonnullRefPtr<ImageDecoderStream> stream)
 {
     WebPLoadingContext context(move(stream));
     return !decode_webp_header(context).is_error();
 }
 
-ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> WebPImageDecoderPlugin::create(NonnullRefPtr<Core::SeekableSharedMemoryStream> stream)
+ErrorOr<NonnullOwnPtr<ImageDecoderPlugin>> WebPImageDecoderPlugin::create(NonnullRefPtr<ImageDecoderStream> stream)
 {
     auto context = TRY(try_make<WebPLoadingContext>(move(stream)));
     auto plugin = TRY(adopt_nonnull_own_or_enomem(new (nothrow) WebPImageDecoderPlugin(move(context))));
