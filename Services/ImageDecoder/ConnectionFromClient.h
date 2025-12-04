@@ -7,10 +7,10 @@
 #pragma once
 
 #include <AK/HashMap.h>
-#include <LibCore/Forward.h>
 #include <ImageDecoder/Forward.h>
 #include <ImageDecoder/ImageDecoderClientEndpoint.h>
 #include <ImageDecoder/ImageDecoderServerEndpoint.h>
+#include <LibCore/Forward.h>
 #include <LibGfx/BitmapSequence.h>
 #include <LibGfx/ColorSpace.h>
 #include <LibIPC/ConnectionFromClient.h>

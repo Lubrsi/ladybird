@@ -16,8 +16,8 @@
 #include <AK/MemoryStream.h>
 #include <AK/Try.h>
 #include <AK/Vector.h>
-#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/BMPLoader.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 
 namespace Gfx {
 
@@ -899,8 +899,8 @@ static ErrorOr<void> decode_bmp_color_table(BMPLoadingContext& context)
             context.color_table.append(TRY(context.stream->read_value<u32>()) | 0xff'00'00'00);
         } else {
             u32 twenty_four_bit_color = TRY(context.stream->read_value<u8>())
-                                        | (TRY(context.stream->read_value<u8>()) << 8)
-                                        | (TRY(context.stream->read_value<u8>()) << 16);
+                | (TRY(context.stream->read_value<u8>()) << 8)
+                | (TRY(context.stream->read_value<u8>()) << 16);
             context.color_table.append(twenty_four_bit_color | 0xff'00'00'00);
         }
     }
@@ -1038,8 +1038,8 @@ static ErrorOr<void> uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuf
     if (compression == Compression::RLE24) {
         read_byte = [&]() -> ErrorOr<u32> {
             return TRY(context.stream->read_value<u8>())
-                    | (TRY(context.stream->read_value<u8>()) << 8)
-                    | (TRY(context.stream->read_value<u8>()) << 16);
+                | (TRY(context.stream->read_value<u8>()) << 8)
+                | (TRY(context.stream->read_value<u8>()) << 16);
         };
     } else {
         read_byte = [&]() -> ErrorOr<u32> {

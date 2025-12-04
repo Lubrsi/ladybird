@@ -12,6 +12,7 @@
 #include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImageFormats/ImageDecoder.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/TIFFMetadata.h>
 
 namespace ImageDecoder {

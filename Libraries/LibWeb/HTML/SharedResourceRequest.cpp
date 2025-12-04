@@ -117,7 +117,7 @@ void SharedResourceRequest::fetch_resource(JS::Realm& realm, GC::Ref<Fetch::Infr
             handle_successful_fetch_for_general_image_data(move(body_chunk));
         });
 
-        auto process_end_of_body = GC::create_function(heap(), [this]{
+        auto process_end_of_body = GC::create_function(heap(), [this] {
             handle_end_of_fetch_for_general_image_data();
         });
 

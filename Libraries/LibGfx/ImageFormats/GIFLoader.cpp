@@ -14,9 +14,9 @@
 #include <AK/Memory.h>
 #include <AK/MemoryStream.h>
 #include <AK/Try.h>
-#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibCompress/Lzw.h>
 #include <LibGfx/ImageFormats/GIFLoader.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/Painter.h>
 
 namespace Gfx {

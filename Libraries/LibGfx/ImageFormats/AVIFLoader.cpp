@@ -10,8 +10,8 @@
 #include <AK/GenericShorthands.h>
 #include <AK/MemoryStream.h>
 #include <AK/Stream.h>
-#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 #include <LibGfx/ImageFormats/AVIFLoader.h>
+#include <LibGfx/ImageFormats/ImageDecoderStream.h>
 
 #include <avif/avif.h>
 

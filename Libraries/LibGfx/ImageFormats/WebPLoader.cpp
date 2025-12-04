@@ -7,16 +7,16 @@
 
 #include <AK/Error.h>
 #include <LibGfx/ImageFormats/ImageDecoderStream.h>
+#include <LibGfx/ImageFormats/WebPLoader.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibGfx/SkiaUtils.h>
-#include <LibGfx/ImageFormats/WebPLoader.h>
+
 #include <core/SkCanvas.h>
 
 #include <webp/decode.h>
 #include <webp/demux.h>
 #include <webp/mux.h>
-#include <skia/codec/SkWebpDecoder.h>
 
 namespace Gfx {
 
@@ -128,7 +128,6 @@ static ErrorOr<void> decode_webp_header(WebPLoadingContext& context)
     auto height = WebPDemuxGetI(context.demuxer, WEBP_FF_CANVAS_HEIGHT);
     auto loop_count = WebPDemuxGetI(context.demuxer, WEBP_FF_LOOP_COUNT);
 
-
     // Image header now decoded, save some results for fast access in other parts of the plugin.
     context.size = IntSize { width, height };
     context.has_animation = (format_flags & ANIMATION_FLAG) != 0;
@@ -164,7 +163,7 @@ static ErrorOr<NonnullRefPtr<Bitmap>> decode_webp_frame(WebPLoadingContext& cont
     if (!context.current_frame_decoder) {
         auto bitmap_format = context.has_alpha ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888;
         context.current_frame_bitmap = TRY(Bitmap::create(bitmap_format, Gfx::AlphaType::Unpremultiplied, { frame.width, frame.height }));
-        context.current_frame_decoder = WebPINewRGB(MODE_BGRA, context.current_frame_bitmap->scanline_u8(0), context.current_frame_bitmap->size_in_bytes(), context.current_frame_bitmap->pitch());;
+        context.current_frame_decoder = WebPINewRGB(MODE_BGRA, context.current_frame_bitmap->scanline_u8(0), context.current_frame_bitmap->size_in_bytes(), context.current_frame_bitmap->pitch());
         if (!context.current_frame_decoder)
             return Error::from_string_literal("Failed to allocate WebP decoder");
     }
@@ -210,6 +209,7 @@ static ErrorOr<void> decode_webp_image(WebPLoadingContext& context)
             if (frame.complete)
                 return Error::from_string_literal("Failed to decode WebP: Encountered an empty frame");
 
+            free_frame.disarm();
             WebPDemuxReleaseIterator(&frame);
             TRY(context.populate_demuxer_with_more_data());
             continue;

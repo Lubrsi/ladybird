@@ -6,10 +6,9 @@
 
 #include "PNGWriter.h"
 
-
 #include <LibGfx/CMYKBitmap.h>
-#include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <LibGfx/ImageFormats/ImageDecoderStream.h>
+#include <LibGfx/ImageFormats/JPEGLoader.h>
 #include <jpeglib.h>
 #include <setjmp.h>
 
