@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "AK/GenericShorthands.h"
+
 #include <AK/HashTable.h>
 #include <AK/SourceLocation.h>
 #include <AK/TemporaryChange.h>
@@ -97,6 +99,8 @@ ErrorOr<void, ValidationError> Validator::validate(Module& module)
     for (auto& tag : module.tag_section().tags())
         m_context.tags.append(TagType(tag.type(), tag.flags()));
 
+    m_context.current_module = &module;
+
     // We need to build the set of declared functions to check that `ref.func` uses a specific set of predetermined functions, found in:
     // - Element initializer expressions
     // - Global initializer expressions
@@ -132,6 +136,9 @@ ErrorOr<void, ValidationError> Validator::validate(Module& module)
     TRY(validate(module.table_section()));
     TRY(validate(module.code_section()));
     TRY(validate(module.tag_section()));
+
+    for (auto& entry : module.code_section().functions())
+        module.set_minimum_call_record_allocation_size(max(entry.func().body().compiled_instructions.max_call_rec_size, module.minimum_call_record_allocation_size()));
 
     module.set_validation_status(Module::ValidationStatus::Valid, {});
     return {};
@@ -273,6 +280,19 @@ ErrorOr<void, ValidationError> Validator::validate(CodeSection const& section)
         auto results = TRY(function_validator.validate(function.body(), function_type.results()));
         if (results.result_types.size() != function_type.results().size())
             return Errors::invalid("function result"sv, function_type.results(), results.result_types);
+
+        if (function.body().compiled_instructions.max_call_rec_size != 0) {
+            size_t max_callee_locals = 0;
+            for (auto& insn : function.body().instructions()) {
+                if (!first_is_one_of(insn.opcode(), Instructions::call, Instructions::synthetic_call_with_record_0, Instructions::synthetic_call_with_record_1))
+                    continue;
+                auto callee_index = insn.arguments().template get<FunctionIndex>();
+                if (callee_index.value() - m_context.imported_function_count < section.functions().size())
+                    max_callee_locals = max(max_callee_locals, section.functions()[callee_index.value() - m_context.imported_function_count].func().total_local_count());
+            }
+
+            function.body().compiled_instructions.max_call_rec_size += max_callee_locals;
+        }
     }
 
     return {};
@@ -2088,6 +2108,11 @@ VALIDATE_INSTRUCTION(block)
     for (auto& parameter : parameters)
         stack.append(parameter);
 
+    args.meta = Instruction::StructuredInstructionArgs::Meta {
+        .arity = block_type.results().size(),
+        .parameter_count = parameters.size(),
+    };
+
     return {};
 }
 
@@ -2104,6 +2129,11 @@ VALIDATE_INSTRUCTION(loop)
     m_max_frame_size = max(m_max_frame_size, m_frames.size());
     for (auto& parameter : parameters)
         stack.append(parameter);
+
+    args.meta = Instruction::StructuredInstructionArgs::Meta {
+        .arity = block_type.results().size(),
+        .parameter_count = parameters.size(),
+    };
 
     return {};
 }
@@ -2125,6 +2155,11 @@ VALIDATE_INSTRUCTION(if_)
     m_max_frame_size = max(m_max_frame_size, m_frames.size());
     for (auto& parameter : parameters)
         stack.append(parameter);
+
+    args.meta = Instruction::StructuredInstructionArgs::Meta {
+        .arity = block_type.results().size(),
+        .parameter_count = parameters.size(),
+    };
 
     return {};
 }
@@ -2171,6 +2206,11 @@ VALIDATE_INSTRUCTION(try_table)
     auto& parameters = block_type.parameters();
     for (size_t i = 1; i <= parameters.size(); ++i)
         TRY(stack.take(parameters[parameters.size() - i]));
+
+    args.try_.meta = Instruction::StructuredInstructionArgs::Meta {
+        .arity = block_type.results().size(),
+        .parameter_count = parameters.size(),
+    };
 
     m_frames.empend(block_type, FrameKind::TryTable, stack.size());
     m_max_frame_size = max(m_max_frame_size, m_frames.size());
@@ -2220,12 +2260,16 @@ VALIDATE_INSTRUCTION(try_table)
 
 VALIDATE_INSTRUCTION(br)
 {
-    auto label = instruction.arguments().get<LabelIndex>();
-    TRY(validate(label));
+    auto& args = instruction.arguments().get<Instruction::BranchArgs>();
+    TRY(validate(args.label));
 
-    auto& type = m_frames[(m_frames.size() - 1) - label.value()].labels();
+    auto& target = m_frames[(m_frames.size() - 1) - args.label.value()];
+
+    auto& type = target.labels();
     for (size_t i = 1; i <= type.size(); ++i)
         TRY(stack.take(type[type.size() - i]));
+
+    args.has_stack_adjustment = target.initial_size != stack.size();
 
     m_frames.last().unreachable = true;
     stack.resize(m_frames.last().initial_size);
@@ -2234,12 +2278,13 @@ VALIDATE_INSTRUCTION(br)
 
 VALIDATE_INSTRUCTION(br_if)
 {
-    auto label = instruction.arguments().get<LabelIndex>();
-    TRY(validate(label));
+    auto& args = instruction.arguments().get<Instruction::BranchArgs>();
+    TRY(validate(args.label));
 
     TRY(stack.take<ValueType::I32>());
 
-    auto& type = m_frames[(m_frames.size() - 1) - label.value()].labels();
+    auto& target = m_frames[(m_frames.size() - 1) - args.label.value()];
+    auto& type = target.labels();
 
     Vector<StackEntry> entries;
     entries.ensure_capacity(type.size());
@@ -2252,6 +2297,8 @@ VALIDATE_INSTRUCTION(br_if)
 
     for (size_t i = 0; i < entries.size(); ++i)
         stack.append(entries[entries.size() - i - 1]);
+
+    args.has_stack_adjustment = target.initial_size != stack.size();
 
     return {};
 }

@@ -35,6 +35,7 @@ struct Context {
     RefPtr<RefRBTree> references { make_ref_counted<RefRBTree>() };
     size_t imported_function_count { 0 };
     size_t current_function_parameter_count { 0 };
+    Module const* current_module { nullptr };
 };
 
 struct ValidationError : public Error {
@@ -127,11 +128,6 @@ public:
 
     ErrorOr<LocalIndex, ValidationError> validate(LocalIndex index) const
     {
-        if (index.value() & LocalArgumentMarker)
-            index = index.value() & ~LocalArgumentMarker;
-        else
-            index = index.value() + m_context.current_function_parameter_count;
-
         if (index.value() < m_context.locals.size())
             return index;
         return Errors::invalid("LocalIndex"sv);

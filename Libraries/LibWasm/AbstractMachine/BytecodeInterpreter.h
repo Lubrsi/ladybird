@@ -63,12 +63,14 @@ struct WASM_API BytecodeInterpreter final : public Interpreter {
 
     enum class CallType {
         UsingRegisters,
+        UsingCallRecord,
         UsingStack,
     };
 
     template<bool HasCompiledList, bool HasDynamicInsnLimit, bool HaveDirectThreadingInfo>
     void interpret_impl(Configuration&, Expression const&);
 
+    template<bool NeedsStackAdjustment>
     InstructionPointer branch_to_label(Configuration&, LabelIndex);
     template<typename ReadT, typename PushT>
     bool load_and_push(Configuration&, Instruction const&, SourcesAndDestination const&);
