@@ -1,3 +1,4 @@
+include(mimalloc)
 include(${CMAKE_CURRENT_LIST_DIR}/utils.cmake)
 
 function(lagom_generate_export_header name fs_name)
@@ -69,6 +70,7 @@ function(lagom_lib target_name fs_name)
     )
     target_link_libraries(${target_name} PRIVATE ${LAGOM_LIBRARY_LIBS})
     target_link_libraries(${target_name} PUBLIC GenericClangPlugin)
+    target_link_libraries(${target_name} PRIVATE mimalloc-static)
 
     if (NOT "${target_name}" STREQUAL "AK")
         target_link_libraries(${target_name} PRIVATE AK)
@@ -114,7 +116,7 @@ function(lagom_test source)
         set(LAGOM_TEST_CUSTOM_MAIN "$<TARGET_OBJECTS:LibTestMain>")
     endif()
     add_executable(${LAGOM_TEST_NAME} ${source})
-    target_link_libraries(${LAGOM_TEST_NAME} PRIVATE AK LibCore LibFileSystem LibTest ${LAGOM_TEST_CUSTOM_MAIN} ${LAGOM_TEST_LIBS})
+    target_link_libraries(${LAGOM_TEST_NAME} PRIVATE AK LibCore LibFileSystem LibTest mimalloc-static ${LAGOM_TEST_CUSTOM_MAIN} ${LAGOM_TEST_LIBS})
     lagom_windows_bin(${LAGOM_TEST_NAME} CONSOLE)
 
     if (WIN32)
@@ -136,7 +138,7 @@ function(lagom_utility name)
     cmake_parse_arguments(LAGOM_UTILITY "" "" "SOURCES;LIBS" ${ARGN})
 
     add_executable("${name}" ${LAGOM_UTILITY_SOURCES})
-    target_link_libraries("${name}" PRIVATE AK LibCore ${LAGOM_UTILITY_LIBS})
+    target_link_libraries("${name}" PRIVATE AK LibCore mimalloc-static ${LAGOM_UTILITY_LIBS})
 endfunction()
 
 function(ladybird_test test_src sub_dir)

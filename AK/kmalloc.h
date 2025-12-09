@@ -11,27 +11,16 @@
 #include <AK/Platform.h>
 #include <new>
 #include <stdlib.h>
+#include <mimalloc.h>
 
-#define kcalloc calloc
-#define kmalloc malloc
-#define kmalloc_good_size malloc_good_size
+#define kcalloc mi_calloc
+#define kmalloc mi_malloc
+#define kmalloc_good_size mi_malloc_good_size
 
-inline void kfree_sized(void* ptr, size_t)
+inline void kfree_sized(void* ptr, size_t size)
 {
-    free(ptr);
+    mi_free_size(ptr, size);
 }
-
-#ifndef AK_OS_SERENITY
-#    include <AK/Types.h>
-
-#    ifndef AK_OS_MACOS
-extern "C" {
-inline size_t malloc_good_size(size_t size) { return size; }
-}
-#    else
-#        include <malloc/malloc.h>
-#    endif
-#endif
 
 using std::nothrow;
 

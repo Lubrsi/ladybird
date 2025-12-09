@@ -52,7 +52,7 @@ public:
 
     void operator delete(void* ptr)
     {
-        free(ptr);
+        mi_free(ptr);
     }
 
     [[nodiscard]] ALWAYS_INLINE bool operator==(Utf16StringData const& other) const

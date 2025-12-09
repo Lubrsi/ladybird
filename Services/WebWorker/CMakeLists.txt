@@ -1,3 +1,5 @@
+include(mimalloc)
+
 set(WEBWORKER_SOURCES
     ConnectionFromClient.cpp
     PageHost.cpp
@@ -15,11 +17,12 @@ target_include_directories(webworkerservice PRIVATE ${LADYBIRD_SOURCE_DIR}/Servi
 
 target_link_libraries(webworkerservice PUBLIC LibCore LibFileSystem LibGfx LibIPC LibJS LibRequests LibWeb LibWebView LibUnicode LibImageDecoderClient LibMain LibURL LibGC)
 target_link_libraries(webworkerservice PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+target_link_libraries(webworkerservice PRIVATE mimalloc-static)
 
 add_executable(WebWorker main.cpp)
 
 target_include_directories(WebWorker PRIVATE ${LADYBIRD_SOURCE_DIR})
-target_link_libraries(WebWorker PRIVATE webworkerservice)
+target_link_libraries(WebWorker PRIVATE webworkerservice mimalloc-static)
 
 if(WIN32)
     find_package(pthread REQUIRED)

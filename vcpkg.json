@@ -102,6 +102,7 @@
         "simd"
       ]
     },
+    "mimalloc",
     {
       "name": "mman",
       "platform": "windows"
@@ -281,6 +282,10 @@
     {
       "name": "libxml2",
       "version": "2.13.8#1"
+    },
+    {
+      "name": "mimalloc",
+      "version": "2.2.4#0"
     },
     {
       "name": "mman",

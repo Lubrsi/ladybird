@@ -13,14 +13,14 @@ namespace GC {
 
 class GC_API BlockAllocator {
 public:
-    BlockAllocator() = default;
+    BlockAllocator();
     ~BlockAllocator();
 
     void* allocate_block(char const* name);
     void deallocate_block(void*);
 
 private:
-    Vector<void*> m_blocks;
+    mi_heap_t* m_block_heap;
 };
 
 }

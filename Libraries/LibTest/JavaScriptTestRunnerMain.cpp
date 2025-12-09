@@ -9,6 +9,7 @@
 #include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/Environment.h>
+#include <LibCore/Process.h>
 #include <LibCore/System.h>
 #include <LibFileSystem/FileSystem.h>
 #include <LibTest/JavaScriptTestRunner.h>
@@ -73,6 +74,7 @@ static void handle_sigabrt(int)
 
 int main(int argc, char** argv)
 {
+    // Core::Process::wait_for_debugger_and_break();
     Vector<StringView> arguments;
     arguments.ensure_capacity(argc);
     for (auto i = 0; i < argc; ++i)

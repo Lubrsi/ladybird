@@ -1,3 +1,5 @@
+include(mimalloc)
+
 set(CMAKE_AUTOMOC OFF)
 set(CMAKE_AUTORCC OFF)
 set(CMAKE_AUTOUIC OFF)
@@ -22,8 +24,8 @@ add_executable(ImageDecoder main.cpp)
 target_include_directories(imagedecoderservice PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/../..)
 target_include_directories(imagedecoderservice PRIVATE ${LADYBIRD_SOURCE_DIR}/Services/)
 
-target_link_libraries(ImageDecoder PRIVATE imagedecoderservice LibCore LibMain LibThreading)
-target_link_libraries(imagedecoderservice PRIVATE LibCore LibGfx LibIPC LibImageDecoderClient LibMain LibThreading)
+target_link_libraries(ImageDecoder PRIVATE imagedecoderservice LibCore LibMain LibThreading mimalloc-static)
+target_link_libraries(imagedecoderservice PRIVATE LibCore LibGfx LibIPC LibImageDecoderClient LibMain LibThreading mimalloc-static)
 
 if (WIN32)
     lagom_windows_bin(ImageDecoder CONSOLE)

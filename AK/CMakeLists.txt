@@ -1,3 +1,5 @@
+include(mimalloc)
+
 set(SOURCES
     Assertions.cpp
     Base64.cpp
@@ -74,6 +76,9 @@ target_link_libraries(AK PRIVATE simdutf::simdutf)
 find_package(FastFloat CONFIG REQUIRED)
 swizzle_target_properties_for_swift(FastFloat::fast_float)
 target_link_libraries(AK PRIVATE FastFloat::fast_float)
+
+swizzle_target_properties_for_swift(mimalloc-static)
+target_link_libraries(AK PRIVATE mimalloc-static)
 
 # FIXME: Make this generic for all imported shared library dependencies and apply globally
 if (BUILD_SHARED_LIBS AND NOT CMAKE_SKIP_INSTALL_RULES AND NOT "${VCPKG_INSTALLED_DIR}" STREQUAL "")

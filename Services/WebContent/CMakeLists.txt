@@ -1,3 +1,4 @@
+include(mimalloc)
 include(audio)
 include(SDL3)
 
@@ -33,6 +34,7 @@ target_include_directories(webcontentservice PUBLIC $<BUILD_INTERFACE:${LADYBIRD
 target_link_libraries(webcontentservice PUBLIC LibCore LibCrypto LibFileSystem LibGfx LibIPC LibJS LibMain LibMedia LibWeb LibWebSocket LibRequests LibWebView LibImageDecoderClient LibGC)
 target_link_libraries(webcontentservice PRIVATE OpenSSL::Crypto OpenSSL::SSL)
 target_link_libraries(webcontentservice PRIVATE SDL3::SDL3)
+target_link_libraries(webcontentservice PRIVATE mimalloc-static)
 
 add_executable(WebContent main.cpp)
 
