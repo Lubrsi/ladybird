@@ -189,6 +189,7 @@ Optional<JS::PropertyDescriptor> cross_origin_get_own_property_helper(Variant<HT
 // 7.2.3.5 CrossOriginGet ( O, P, Receiver ), https://html.spec.whatwg.org/multipage/browsers.html#crossoriginget-(-o,-p,-receiver-)
 JS::ThrowCompletionOr<JS::Value> cross_origin_get(JS::VM& vm, JS::Object const& object, JS::PropertyKey const& property_key, JS::Value receiver)
 {
+    dbgln("cross origin get {}", property_key);
     // 1. Let desc be ? O.[[GetOwnProperty]](P).
     auto descriptor = TRY(object.internal_get_own_property(property_key));
 

@@ -345,6 +345,8 @@ public:
     }
 
     void extend_with_partial_interface(Interface const&);
+
+    void for_each_parent(AK::Function<IterationDecision(Interface const&)> callback);
 };
 
 class UnionType : public Type {

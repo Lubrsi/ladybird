@@ -151,6 +151,10 @@ private:
 
     u32 display_size() const;
 
+    virtual Optional<JS::Value> item_value(size_t index) const override;
+    virtual WebIDL::ExceptionOr<void> set_value_of_new_indexed_property(u32, JS::Value) override;
+    virtual WebIDL::ExceptionOr<void> set_value_of_existing_indexed_property(u32, JS::Value) override;
+
     mutable Vector<GC::Ref<HTMLOptionElement>> m_cached_list_of_options;
     mutable size_t m_cached_number_of_selected_options { 0 };
 

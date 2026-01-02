@@ -39,6 +39,10 @@ GC_DEFINE_ALLOCATOR(HTMLSelectElement);
 HTMLSelectElement::HTMLSelectElement(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
+    m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
+        .supports_indexed_properties = true,
+        .has_indexed_property_setter = true,
+    };
 }
 
 HTMLSelectElement::~HTMLSelectElement() = default;
@@ -158,6 +162,30 @@ HTMLOptionElement* HTMLSelectElement::named_item(FlyString const& name)
 {
     // The namedItem(name) method must return the value returned by the method of the same name on the options collection, when invoked with the same argument.
     return as<HTMLOptionElement>(const_cast<HTMLOptionsCollection&>(*options()).named_item(name));
+}
+
+Optional<JS::Value> HTMLSelectElement::item_value(size_t index) const
+{
+    if (auto* option_element = const_cast<HTMLSelectElement&>(*this).item(index))
+        return JS::Value(option_element);
+
+    return {};
+}
+
+// https://html.spec.whatwg.org/multipage/form-elements.html#the-select-element:set-the-value-of-a-new-indexed-property
+WebIDL::ExceptionOr<void> HTMLSelectElement::set_value_of_new_indexed_property(u32 index, JS::Value value)
+{
+    // When the user agent is to set the value of a new indexed property or set the value of an existing indexed property
+    // for a select element, it must instead run the corresponding algorithm on the select element's options collection.
+    return options()->set_value_of_new_indexed_property(index, value);
+}
+
+// https://html.spec.whatwg.org/multipage/form-elements.html#the-select-element:set-the-value-of-an-existing-indexed-property
+WebIDL::ExceptionOr<void> HTMLSelectElement::set_value_of_existing_indexed_property(u32 index, JS::Value value)
+{
+    // When the user agent is to set the value of a new indexed property or set the value of an existing indexed property
+    // for a select element, it must instead run the corresponding algorithm on the select element's options collection.
+    return options()->set_value_of_existing_indexed_property(index, value);
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-add

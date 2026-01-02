@@ -334,4 +334,22 @@ void Interface::extend_with_partial_interface(Interface const& partial)
     }
 }
 
+void Interface::for_each_parent(AK::Function<IterationDecision(Interface const&)> callback)
+{
+    Interface const* current_interface = this;
+    while (!current_interface->parent_name.is_empty()) {
+        auto parent_interface = imported_modules.find_if([current_interface](IDL::Interface const& imported_interface) {
+            return imported_interface.name == current_interface->parent_name;
+        });
+
+        if (parent_interface.is_end())
+            return;
+
+        current_interface = &*parent_interface;
+
+        if (callback(*current_interface) == IterationDecision::Break)
+            return;
+    }
+}
+
 }

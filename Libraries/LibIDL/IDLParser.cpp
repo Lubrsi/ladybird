@@ -658,8 +658,19 @@ void Parser::parse_setter(HashMap<ByteString, ByteString>& extended_attributes, 
         if (interface.indexed_property_setter.has_value())
             report_parsing_error("An interface can only have one indexed property setter."sv, filename, input, lexer.tell());
 
-        if (!interface.indexed_property_getter.has_value())
-            report_parsing_error("An indexed property setter must be accompanied by an indexed property getter."sv, filename, input, lexer.tell());
+        if (!interface.indexed_property_getter.has_value()) {
+            bool parent_has_indexed_property_getter = false;
+            interface.for_each_parent([&parent_has_indexed_property_getter](Interface const& parent_interface) {
+                if (!parent_interface.indexed_property_getter.has_value())
+                    return IterationDecision::Continue;
+
+                parent_has_indexed_property_getter = true;
+                return IterationDecision::Break;
+            });
+
+            if (!parent_has_indexed_property_getter)
+                report_parsing_error("An indexed property setter must be accompanied by an indexed property getter."sv, filename, input, lexer.tell());
+        }
 
         interface.indexed_property_setter = move(function);
     } else {
@@ -1216,6 +1227,8 @@ Interface& Parser::parse()
         }
     }
 
+    interface.imported_modules = move(imports);
+
     parse_non_interface_entities(true, interface);
 
     if (lexer.consume_specific("interface"sv))
@@ -1225,7 +1238,7 @@ Interface& Parser::parse()
 
     parse_non_interface_entities(false, interface);
 
-    for (auto& import : imports) {
+    for (auto& import : interface.imported_modules) {
         // FIXME: Instead of copying every imported entity into the current interface, query imports directly
         for (auto& partial_interface : import.partial_interfaces) {
             if (partial_interface->name == interface.name)
@@ -1399,8 +1412,6 @@ Interface& Parser::parse()
             }
         }
     }
-
-    interface.imported_modules = move(imports);
 
     if (top_level_parser() == this)
         VERIFY(import_stack.is_empty());

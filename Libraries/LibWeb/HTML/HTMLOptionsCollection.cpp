@@ -27,7 +27,6 @@ HTMLOptionsCollection::HTMLOptionsCollection(DOM::ParentNode& root, Function<boo
     : DOM::HTMLCollection(root, Scope::Descendants, move(filter))
 {
     m_legacy_platform_object_flags->has_indexed_property_setter = true;
-    m_legacy_platform_object_flags->indexed_property_setter_has_identifier = true;
 }
 
 HTMLOptionsCollection::~HTMLOptionsCollection() = default;
@@ -74,7 +73,7 @@ WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_length(WebIDL::UnsignedLong
 }
 
 // https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#dom-htmloptionscollection-setter
-WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_value_of_indexed_property(u32 index, JS::Value unconverted_option)
+WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_value_of_new_indexed_property(u32 index, JS::Value unconverted_option)
 {
     // The spec doesn't seem to require this, but it's consistent with length handling and other browsers
     if (index >= 100'000) {
@@ -87,9 +86,8 @@ WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_value_of_indexed_property(u
         return {};
     }
 
-    if (!unconverted_option.is_object() || !is<HTMLOptionElement>(unconverted_option.as_object())) {
-        return WebIDL::TypeMismatchError::create(realm(), "The value provided is not an HTMLOptionElement"_utf16);
-    }
+    if (!unconverted_option.is_object() || !is<HTMLOptionElement>(unconverted_option.as_object()))
+        return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "The value provided is not an HTMLOptionElement"sv };
 
     auto& option = static_cast<HTMLOptionElement&>(unconverted_option.as_object());
 
@@ -117,6 +115,11 @@ WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_value_of_indexed_property(u
     }
 
     return {};
+}
+
+WebIDL::ExceptionOr<void> HTMLOptionsCollection::set_value_of_existing_indexed_property(u32 index, JS::Value unconverted_option)
+{
+    return set_value_of_new_indexed_property(index, unconverted_option);
 }
 
 // https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#dom-htmloptionscollection-add
