@@ -18,6 +18,9 @@ GC_DEFINE_ALLOCATOR(VideoTrackList);
 VideoTrackList::VideoTrackList(JS::Realm& realm)
     : DOM::EventTarget(realm, MayInterfereWithIndexedPropertyAccess::Yes)
 {
+    m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
+        .supports_indexed_properties = true,
+    };
 }
 
 void VideoTrackList::initialize(JS::Realm& realm)
@@ -27,21 +30,15 @@ void VideoTrackList::initialize(JS::Realm& realm)
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-tracklist-item
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> VideoTrackList::internal_get_own_property(JS::PropertyKey const& property_name) const
+Optional<JS::Value> VideoTrackList::item_value(size_t index) const
 {
     // To determine the value of an indexed property for a given index index in an AudioTrackList or VideoTrackList
     // object list, the user agent must return the AudioTrack or VideoTrack object that represents the indexth track
     // in list.
-    if (property_name.is_number()) {
-        if (auto index = property_name.as_number(); index < m_video_tracks.size()) {
-            JS::PropertyDescriptor descriptor;
-            descriptor.value = m_video_tracks.at(index);
+    if (index < m_video_tracks.size())
+        return m_video_tracks.at(index);
 
-            return descriptor;
-        }
-    }
-
-    return Base::internal_get_own_property(property_name);
+    return {};
 }
 
 void VideoTrackList::add_track(Badge<HTMLMediaElement>, GC::Ref<VideoTrack> video_track)

@@ -52,15 +52,16 @@ void StringObject::visit_edges(Cell::Visitor& visitor)
 }
 
 // 10.4.3.5 StringGetOwnProperty ( S, P ), https://tc39.es/ecma262/#sec-stringgetownproperty
-static ThrowCompletionOr<Optional<PropertyDescriptor>> string_get_own_property(StringObject const& string, PropertyKey const& property_key)
+static ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> string_get_own_property(StringObject const& string, PropertyKey const& property_key)
 {
     auto& vm = string.vm();
+    auto& heap = string.heap();
 
     // 1. If P is not a String, return undefined.
     // NOTE: The spec only uses string and symbol keys, and later coerces to numbers -
     // this is not the case for PropertyKey, so '!property_key.is_string()' would be wrong.
     if (property_key.is_symbol())
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
 
     // 2. Let index be CanonicalNumericIndexString(P).
     auto index = canonical_numeric_index_string(property_key, CanonicalIndexMode::IgnoreNumericRoundtrip);
@@ -69,7 +70,7 @@ static ThrowCompletionOr<Optional<PropertyDescriptor>> string_get_own_property(S
     // 4. If index is not an integral Number, return undefined.
     // 5. If index is -0𝔽, return undefined.
     if (!index.is_index())
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
 
     // 6. Let str be S.[[StringData]].
     // 7. Assert: Type(str) is String.
@@ -80,28 +81,28 @@ static ThrowCompletionOr<Optional<PropertyDescriptor>> string_get_own_property(S
 
     // 9. If ℝ(index) < 0 or len ≤ ℝ(index), return undefined.
     if (length <= index.as_index())
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
 
     // 10. Let resultStr be the substring of str from ℝ(index) to ℝ(index) + 1.
     auto result_str = PrimitiveString::create(vm, str.substring_view(index.as_index(), 1));
 
     // 11. Return the PropertyDescriptor { [[Value]]: resultStr, [[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false }.
-    return PropertyDescriptor {
-        .value = result_str,
-        .writable = false,
-        .enumerable = true,
-        .configurable = false,
-    };
+    auto descriptor = heap.allocate<PropertyDescriptor>();
+    descriptor->value = result_str;
+    descriptor->writable = false;
+    descriptor->enumerable = true;
+    descriptor->configurable = false;
+    return descriptor;
 }
 
 // 10.4.3.1 [[GetOwnProperty]] ( P ), https://tc39.es/ecma262/#sec-string-exotic-objects-getownproperty-p
-ThrowCompletionOr<Optional<PropertyDescriptor>> StringObject::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> StringObject::internal_get_own_property(PropertyKey const& property_key) const
 {
     // 1. Let desc be OrdinaryGetOwnProperty(S, P).
     auto descriptor = MUST(Object::internal_get_own_property(property_key));
 
     // 2. If desc is not undefined, return desc.
-    if (descriptor.has_value())
+    if (descriptor)
         return descriptor;
 
     // 3. Return StringGetOwnProperty(S, P).
@@ -109,13 +110,13 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> StringObject::internal_get_own_p
 }
 
 // 10.4.3.2 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-string-exotic-objects-defineownproperty-p-desc
-ThrowCompletionOr<bool> StringObject::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> StringObject::internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor, GC::Ptr<PropertyDescriptor> precomputed_get_own_property)
 {
     // 1. Let stringDesc be StringGetOwnProperty(S, P).
     auto string_descriptor = TRY(string_get_own_property(*this, property_key));
 
     // 2. If stringDesc is not undefined, then
-    if (string_descriptor.has_value()) {
+    if (string_descriptor) {
         // a. Let extensible be S.[[Extensible]].
         auto extensible = m_is_extensible;
 

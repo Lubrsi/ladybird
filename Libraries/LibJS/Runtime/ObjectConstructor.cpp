@@ -150,7 +150,7 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectConstructor::assign)
             auto desc = TRY(from->internal_get_own_property(property_key));
 
             // 2. If desc is not undefined and desc.[[Enumerable]] is true, then
-            if (!desc.has_value() || !*desc->enumerable)
+            if (!desc || !*desc->enumerable)
                 continue;
 
             // a. Let propValue be ? Get(from, nextKey).

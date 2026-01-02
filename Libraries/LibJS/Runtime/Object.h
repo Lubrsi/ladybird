@@ -127,7 +127,7 @@ public:
     void create_method_property(PropertyKey const&, Value);
     ThrowCompletionOr<bool> create_data_property_or_throw(PropertyKey const&, Value);
     void create_non_enumerable_data_property_or_throw(PropertyKey const&, Value);
-    ThrowCompletionOr<void> define_property_or_throw(PropertyKey const&, PropertyDescriptor&);
+    ThrowCompletionOr<void> define_property_or_throw(PropertyKey const&, GC::Ref<PropertyDescriptor>);
     ThrowCompletionOr<void> delete_property_or_throw(PropertyKey const&);
     ThrowCompletionOr<bool> has_property(PropertyKey const&) const;
     ThrowCompletionOr<bool> has_own_property(PropertyKey const&) const;
@@ -151,8 +151,8 @@ public:
     virtual ThrowCompletionOr<bool> internal_set_prototype_of(Object* prototype);
     virtual ThrowCompletionOr<bool> internal_is_extensible() const;
     virtual ThrowCompletionOr<bool> internal_prevent_extensions();
-    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const;
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor&, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr);
+    virtual ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const;
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, GC::Ref<PropertyDescriptor>, GC::Ptr<PropertyDescriptor> precomputed_get_own_property = nullptr);
     virtual ThrowCompletionOr<bool> internal_has_property(PropertyKey const&) const;
     enum class PropertyLookupPhase {
         OwnProperty,
@@ -169,7 +169,7 @@ public:
     //       might not hold when property access behaves differently.
     bool may_interfere_with_indexed_property_access() const { return m_may_interfere_with_indexed_property_access; }
 
-    ThrowCompletionOr<bool> ordinary_set_with_own_descriptor(PropertyKey const&, Value, Value, Optional<PropertyDescriptor>, CacheableSetPropertyMetadata* = nullptr, PropertyLookupPhase = PropertyLookupPhase::OwnProperty);
+    ThrowCompletionOr<bool> ordinary_set_with_own_descriptor(PropertyKey const&, Value, Value, GC::Ptr<PropertyDescriptor>, CacheableSetPropertyMetadata* = nullptr, PropertyLookupPhase = PropertyLookupPhase::OwnProperty);
 
     // 10.4.7 Immutable Prototype Exotic Objects, https://tc39.es/ecma262/#sec-immutable-prototype-exotic-objects
 

@@ -112,7 +112,7 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectPrototype::property_is_enumerable)
     auto property_descriptor = TRY(this_object->internal_get_own_property(property_key));
 
     // 4. If desc is undefined, return false.
-    if (!property_descriptor.has_value())
+    if (!property_descriptor)
         return Value(false);
 
     // 5. Return desc.[[Enumerable]].
@@ -262,7 +262,10 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectPrototype::define_getter)
         return vm.throw_completion<TypeError>(ErrorType::NotAFunction, getter.to_string_without_side_effects());
 
     // 3. Let desc be PropertyDescriptor { [[Get]]: getter, [[Enumerable]]: true, [[Configurable]]: true }.
-    auto descriptor = PropertyDescriptor { .get = &getter.as_function(), .enumerable = true, .configurable = true };
+    auto descriptor = vm.heap().allocate<PropertyDescriptor>();
+    descriptor->get = &getter.as_function();
+    descriptor->enumerable = true;
+    descriptor->configurable = true;
 
     // 4. Let key be ? ToPropertyKey(P).
     auto key = TRY(property.to_property_key(vm));
@@ -288,7 +291,10 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectPrototype::define_setter)
         return vm.throw_completion<TypeError>(ErrorType::NotAFunction, setter.to_string_without_side_effects());
 
     // 3. Let desc be PropertyDescriptor { [[Set]]: setter, [[Enumerable]]: true, [[Configurable]]: true }.
-    auto descriptor = PropertyDescriptor { .set = &setter.as_function(), .enumerable = true, .configurable = true };
+    auto descriptor = vm.heap().allocate<PropertyDescriptor>();
+    descriptor->set = &setter.as_function();
+    descriptor->enumerable = true;
+    descriptor->configurable = true;
 
     // 4. Let key be ? ToPropertyKey(P).
     auto key = TRY(property.to_property_key(vm));
@@ -317,7 +323,7 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectPrototype::lookup_getter)
         auto desc = TRY(object->internal_get_own_property(key));
 
         // b. If desc is not undefined, then
-        if (desc.has_value()) {
+        if (desc) {
             // i. If IsAccessorDescriptor(desc) is true, return desc.[[Get]].
             if (desc->is_accessor_descriptor())
                 return *desc->get ?: js_undefined();
@@ -351,7 +357,7 @@ JS_DEFINE_NATIVE_FUNCTION(ObjectPrototype::lookup_setter)
         auto desc = TRY(object->internal_get_own_property(key));
 
         // b. If desc is not undefined, then
-        if (desc.has_value()) {
+        if (desc) {
             // i. If IsAccessorDescriptor(desc) is true, return desc.[[Set]].
             if (desc->is_accessor_descriptor())
                 return *desc->set ?: js_undefined();

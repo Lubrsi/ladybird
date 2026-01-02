@@ -37,9 +37,9 @@ public:
     [[nodiscard]] virtual bool implements_interface(String const&) const { return false; }
 
     // ^JS::Object
-    virtual JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const&) const override;
+    virtual JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const&) const override;
     virtual JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value, JS::Value, JS::CacheableSetPropertyMetadata* = nullptr, PropertyLookupPhase = PropertyLookupPhase::OwnProperty) override;
-    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, JS::PropertyDescriptor&, Optional<JS::PropertyDescriptor>* precomputed_get_own_property = nullptr) override;
+    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, GC::Ref<JS::PropertyDescriptor>, GC::Ptr<JS::PropertyDescriptor> precomputed_get_own_property = nullptr) override;
     virtual JS::ThrowCompletionOr<bool> internal_delete(JS::PropertyKey const&) override;
     virtual JS::ThrowCompletionOr<bool> internal_prevent_extensions() override;
     virtual JS::ThrowCompletionOr<GC::RootVector<JS::Value>> internal_own_property_keys() const override;
@@ -73,7 +73,7 @@ protected:
         No,
         Yes,
     };
-    JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> legacy_platform_object_get_own_property(JS::PropertyKey const&, IgnoreNamedProps ignore_named_props) const;
+    JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> legacy_platform_object_get_own_property(JS::PropertyKey const&, IgnoreNamedProps ignore_named_props) const;
 
     virtual Optional<JS::Value> item_value(size_t index) const;
     virtual JS::Value named_item_value(FlyString const& name) const;

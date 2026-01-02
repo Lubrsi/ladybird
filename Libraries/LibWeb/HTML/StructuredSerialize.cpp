@@ -401,7 +401,7 @@ public:
 
                 // 4. Let message be undefined if IsDataDescriptor(valueMessageDesc) is false, and ? ToString(valueMessageDesc.[[Value]]) otherwise.
                 Optional<Utf16String> message;
-                if (value_message_descriptor.has_value() && value_message_descriptor->is_data_descriptor())
+                if (value_message_descriptor && value_message_descriptor->is_data_descriptor())
                     message = TRY(value_message_descriptor->value->to_utf16_string(m_vm));
 
                 // 5. Set serialized to { [[Type]]: "Error", [[Name]]: name, [[Message]]: message }.

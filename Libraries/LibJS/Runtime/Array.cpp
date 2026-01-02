@@ -23,6 +23,7 @@ GC_DEFINE_ALLOCATOR(Array);
 ThrowCompletionOr<GC::Ref<Array>> Array::create(Realm& realm, u64 length, Object* prototype)
 {
     auto& vm = realm.vm();
+    auto& heap = realm.heap();
 
     // 1. If length > 2^32 - 1, throw a RangeError exception.
     if (length > NumericLimits<u32>::max())
@@ -38,7 +39,11 @@ ThrowCompletionOr<GC::Ref<Array>> Array::create(Realm& realm, u64 length, Object
     auto array = realm.create<Array>(realm, *prototype);
 
     // 6. Perform ! OrdinaryDefineOwnProperty(A, "length", PropertyDescriptor { [[Value]]: 𝔽(length), [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }).
-    PropertyDescriptor descriptor { .value = Value(length), .writable = true, .enumerable = false, .configurable = false };
+    auto descriptor = heap.allocate<PropertyDescriptor>();
+    descriptor->value = Value(length);
+    descriptor->writable = true;
+    descriptor->enumerable = false;
+    descriptor->configurable = false;
     MUST(array->internal_define_own_property(vm.names.length, descriptor));
 
     // 7. Return A.
@@ -275,7 +280,7 @@ ThrowCompletionOr<double> compare_array_elements(VM& vm, Value x, Value y, Funct
 }
 
 // NON-STANDARD: Used to return the value of the ephemeral length property
-ThrowCompletionOr<Optional<PropertyDescriptor>> Array::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> Array::internal_get_own_property(PropertyKey const& property_key) const
 {
     // OPTIMIZATION: Fast path for arrays with simple indexed properties storage.
     auto const* storage = indexed_properties().storage();
@@ -283,19 +288,25 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> Array::internal_get_own_property
         auto const& simple_storage = static_cast<SimpleIndexedPropertyStorage const&>(*storage);
         auto value_and_attributes = simple_storage.get(property_key.as_number());
         if (value_and_attributes.has_value()) {
-            PropertyDescriptor descriptor;
-            descriptor.value = value_and_attributes->value;
-            descriptor.writable = true;
-            descriptor.enumerable = true;
-            descriptor.configurable = true;
+            auto descriptor = heap().allocate<PropertyDescriptor>();
+            descriptor->value = value_and_attributes->value;
+            descriptor->writable = true;
+            descriptor->enumerable = true;
+            descriptor->configurable = true;
             return descriptor;
         }
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
     }
 
     auto& vm = this->vm();
-    if (property_key.is_string() && property_key.as_string() == vm.names.length.as_string())
-        return PropertyDescriptor { .value = Value(indexed_properties().array_like_size()), .writable = m_length_writable, .enumerable = false, .configurable = false };
+    if (property_key.is_string() && property_key.as_string() == vm.names.length.as_string()) {
+        auto descriptor = heap().allocate<PropertyDescriptor>();
+        descriptor->value = Value(indexed_properties().array_like_size());
+        descriptor->writable = m_length_writable;
+        descriptor->enumerable = false;
+        descriptor->configurable = false;
+        return descriptor;
+    }
 
     return Object::internal_get_own_property(property_key);
 }
@@ -338,7 +349,7 @@ ThrowCompletionOr<bool> Array::internal_set(PropertyKey const& property_key, Val
         if (property_key.is_number()) {
             auto index = property_key.as_number();
             auto property_descriptor = TRY(internal_get_own_property(property_key));
-            if (!property_descriptor.has_value()) {
+            if (!property_descriptor) {
                 if (!TRY(is_extensible()))
                     return false;
                 PropertyAttributes attributes;
@@ -368,7 +379,7 @@ ThrowCompletionOr<bool> Array::internal_set(PropertyKey const& property_key, Val
 }
 
 // 10.4.2.1 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-array-exotic-objects-defineownproperty-p-desc
-ThrowCompletionOr<bool> Array::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> Array::internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor, GC::Ptr<PropertyDescriptor> precomputed_get_own_property)
 {
     auto& vm = this->vm();
 
@@ -394,16 +405,16 @@ ThrowCompletionOr<bool> Array::internal_define_own_property(PropertyKey const& p
         // h. Let succeeded be ! OrdinaryDefineOwnProperty(A, P, Desc).
         bool succeeded = true;
         auto* storage = indexed_properties().storage();
-        auto attributes = property_descriptor.attributes();
+        auto attributes = property_descriptor->attributes();
         // OPTIMIZATION: Fast path for arrays with simple indexed properties storage.
-        if (property_descriptor.is_data_descriptor() && attributes == default_attributes && storage && storage->is_simple_storage()) {
+        if (property_descriptor->is_data_descriptor() && attributes == default_attributes && storage && storage->is_simple_storage()) {
             if (!m_is_extensible) {
                 auto existing_descriptor = TRY(internal_get_own_property(property_key));
-                if (!existing_descriptor.has_value())
+                if (!existing_descriptor)
                     return false;
             }
 
-            storage->put(property_key.as_number(), property_descriptor.value.value());
+            storage->put(property_key.as_number(), property_descriptor->value.value());
         } else {
             succeeded = MUST(Object::internal_define_own_property(property_key, property_descriptor, precomputed_get_own_property));
         }

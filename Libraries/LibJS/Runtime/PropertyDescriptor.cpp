@@ -14,6 +14,24 @@
 
 namespace JS {
 
+GC_DEFINE_ALLOCATOR(PropertyDescriptor);
+
+PropertyDescriptor::PropertyDescriptor() = default;
+PropertyDescriptor::~PropertyDescriptor() = default;
+
+void PropertyDescriptor::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    if (value.has_value())
+        visitor.visit(value.value());
+
+    if (get.has_value())
+        visitor.visit(get.value());
+
+    if (set.has_value())
+        visitor.visit(set.value());
+}
+
 // 6.2.5.1 IsAccessorDescriptor ( Desc ), https://tc39.es/ecma262/#sec-isaccessordescriptor
 bool PropertyDescriptor::is_accessor_descriptor() const
 {
@@ -66,11 +84,11 @@ bool PropertyDescriptor::is_generic_descriptor() const
 }
 
 // 6.2.5.4 FromPropertyDescriptor ( Desc ), https://tc39.es/ecma262/#sec-frompropertydescriptor
-Value from_property_descriptor(VM& vm, Optional<PropertyDescriptor> const& property_descriptor)
+Value from_property_descriptor(VM& vm, GC::Ptr<PropertyDescriptor const> property_descriptor)
 {
     auto& realm = *vm.current_realm();
 
-    if (!property_descriptor.has_value())
+    if (!property_descriptor)
         return js_undefined();
     auto object = Object::create(realm, realm.intrinsics().object_prototype());
     if (property_descriptor->value.has_value())
@@ -89,7 +107,7 @@ Value from_property_descriptor(VM& vm, Optional<PropertyDescriptor> const& prope
 }
 
 // 6.2.5.5 ToPropertyDescriptor ( Obj ), https://tc39.es/ecma262/#sec-topropertydescriptor
-ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argument)
+ThrowCompletionOr<GC::Ref<PropertyDescriptor>> to_property_descriptor(VM& vm, Value argument)
 {
     // 1. If Type(Obj) is not Object, throw a TypeError exception.
     if (!argument.is_object())
@@ -98,7 +116,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
     auto& object = argument.as_object();
 
     // 2. Let desc be a new Property Descriptor that initially has no fields.
-    PropertyDescriptor descriptor;
+    auto descriptor = vm.heap().allocate<PropertyDescriptor>();
 
     // 3. Let hasEnumerable be ? HasProperty(Obj, "enumerable").
     auto has_enumerable = TRY(object.has_property(vm.names.enumerable));
@@ -109,7 +127,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
         auto enumerable = TRY(object.get(vm.names.enumerable)).to_boolean();
 
         // b. Set desc.[[Enumerable]] to enumerable.
-        descriptor.enumerable = enumerable;
+        descriptor->enumerable = enumerable;
     }
 
     // 5. Let hasConfigurable be ? HasProperty(Obj, "configurable").
@@ -121,7 +139,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
         auto configurable = TRY(object.get(vm.names.configurable)).to_boolean();
 
         // b. Set desc.[[Configurable]] to configurable.
-        descriptor.configurable = configurable;
+        descriptor->configurable = configurable;
     }
 
     // 7. Let hasValue be ? HasProperty(Obj, "value").
@@ -133,7 +151,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
         auto value = TRY(object.get(vm.names.value));
 
         // b. Set desc.[[Value]] to value.
-        descriptor.value = value;
+        descriptor->value = value;
     }
 
     // 9. Let hasWritable be ? HasProperty(Obj, "writable").
@@ -145,7 +163,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
         auto writable = TRY(object.get(vm.names.writable)).to_boolean();
 
         // b. Set desc.[[Writable]] to writable.
-        descriptor.writable = writable;
+        descriptor->writable = writable;
     }
 
     // 11. Let hasGet be ? HasProperty(Obj, "get").
@@ -161,7 +179,7 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
             return vm.throw_completion<TypeError>(ErrorType::AccessorBadField, "get");
 
         // c. Set desc.[[Get]] to getter.
-        descriptor.get = getter.is_function() ? &getter.as_function() : nullptr;
+        descriptor->get = getter.is_function() ? &getter.as_function() : nullptr;
     }
 
     // 13. Let hasSet be ? HasProperty(Obj, "set").
@@ -177,13 +195,13 @@ ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM& vm, Value argum
             return vm.throw_completion<TypeError>(ErrorType::AccessorBadField, "set");
 
         // c. Set desc.[[Set]] to setter.
-        descriptor.set = setter.is_function() ? &setter.as_function() : nullptr;
+        descriptor->set = setter.is_function() ? &setter.as_function() : nullptr;
     }
 
     // 15. If desc has a [[Get]] field or desc has a [[Set]] field, then
-    if (descriptor.get.has_value() || descriptor.set.has_value()) {
+    if (descriptor->get.has_value() || descriptor->set.has_value()) {
         // a. If desc has a [[Value]] field or desc has a [[Writable]] field, throw a TypeError exception.
-        if (descriptor.value.has_value() || descriptor.writable.has_value())
+        if (descriptor->value.has_value() || descriptor->writable.has_value())
             return vm.throw_completion<TypeError>(ErrorType::AccessorValueOrWritable);
     }
 

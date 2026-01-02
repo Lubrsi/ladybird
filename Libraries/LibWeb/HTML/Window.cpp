@@ -138,6 +138,12 @@ void Window::visit_edges(JS::Cell::Visitor& visitor)
     visitor.visit(m_scrollbars);
     visitor.visit(m_statusbar);
     visitor.visit(m_toolbar);
+
+    for (auto& [key, value] : m_cross_origin_property_descriptor_map) {
+        visitor.visit(key.current_principal_settings_object);
+        visitor.visit(key.relevant_settings_object);
+        visitor.visit(value);
+    }
 }
 
 void Window::finalize()
@@ -1045,7 +1051,11 @@ WebIDL::ExceptionOr<void> Window::set_opener(JS::Value value)
 
     // 2. If the given value is non-null, then perform ? DefinePropertyOrThrow(this, "opener", { [[Value]]: the given value, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }).
     if (!value.is_null()) {
-        JS::PropertyDescriptor descriptor { .value = value, .writable = true, .enumerable = true, .configurable = true };
+        auto descriptor = heap().allocate<JS::PropertyDescriptor>();
+        descriptor->value = value;
+        descriptor->writable = true;
+        descriptor->enumerable = true;
+        descriptor->configurable = true;
         TRY(define_property_or_throw(vm().names.opener, descriptor));
     }
 

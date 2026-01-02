@@ -43,6 +43,7 @@ ThrowCompletionOr<Value> SuppressedErrorConstructor::call()
 ThrowCompletionOr<GC::Ref<Object>> SuppressedErrorConstructor::construct(FunctionObject& new_target)
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
     auto error = vm.argument(0);
     auto suppressed = vm.argument(1);
     auto message = vm.argument(2);
@@ -64,11 +65,19 @@ ThrowCompletionOr<GC::Ref<Object>> SuppressedErrorConstructor::construct(Functio
     TRY(suppressed_error->install_error_cause(options));
 
     // 5. Perform ! DefinePropertyOrThrow(O, "error", PropertyDescriptor { [[Configurable]]: true, [[Enumerable]]: false, [[Writable]]: true, [[Value]]: error }).
-    PropertyDescriptor error_descriptor { .value = error, .writable = true, .enumerable = false, .configurable = true };
+    auto error_descriptor = heap.allocate<PropertyDescriptor>();
+    error_descriptor->value = error;
+    error_descriptor->writable = true;
+    error_descriptor->enumerable = false;
+    error_descriptor->configurable = true;
     MUST(suppressed_error->define_property_or_throw(vm.names.error, error_descriptor));
 
     // 6. Perform ! DefinePropertyOrThrow(O, "suppressed", PropertyDescriptor { [[Configurable]]: true, [[Enumerable]]: false, [[Writable]]: true, [[Value]]: suppressed }).
-    PropertyDescriptor names_descriptor { .value = suppressed, .writable = true, .enumerable = false, .configurable = true };
+    auto names_descriptor = heap.allocate<PropertyDescriptor>();
+    names_descriptor->value = suppressed;
+    names_descriptor->writable = true;
+    names_descriptor->enumerable = false;
+    names_descriptor->configurable = true;
     MUST(suppressed_error->define_property_or_throw(vm.names.suppressed, names_descriptor));
 
     // 7. Return O.

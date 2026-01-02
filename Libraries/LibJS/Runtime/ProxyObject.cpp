@@ -238,7 +238,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_prevent_extensions()
 }
 
 // 10.5.5 [[GetOwnProperty]] ( P ), https://tc39.es/ecma262/#sec-proxy-object-internal-methods-and-internal-slots-getownproperty-p
-ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> ProxyObject::internal_get_own_property(PropertyKey const& property_key) const
 {
     LIMIT_PROXY_RECURSION_DEPTH();
 
@@ -273,8 +273,8 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
     // 10. If trapResultObj is undefined, then
     if (trap_result.is_undefined()) {
         // a. If targetDesc is undefined, return undefined.
-        if (!target_descriptor.has_value())
-            return Optional<PropertyDescriptor> {};
+        if (!target_descriptor)
+            return nullptr;
 
         // b. If targetDesc.[[Configurable]] is false, throw a TypeError exception.
         if (!*target_descriptor->configurable)
@@ -288,7 +288,7 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
             return vm.throw_completion<TypeError>(ErrorType::ProxyGetOwnDescriptorUndefinedReturn);
 
         // e. Return undefined.
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
     }
 
     // 11. Let extensibleTarget be ? IsExtensible(target).
@@ -298,7 +298,7 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
     auto result_desc = TRY(to_property_descriptor(vm, trap_result));
 
     // 13. Perform CompletePropertyDescriptor(resultDesc).
-    result_desc.complete();
+    result_desc->complete();
 
     // 14. Let valid be IsCompatiblePropertyDescriptor(extensibleTarget, resultDesc, targetDesc).
     auto valid = is_compatible_property_descriptor(extensible_target, result_desc, target_descriptor);
@@ -308,14 +308,14 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
         return vm.throw_completion<TypeError>(ErrorType::ProxyGetOwnDescriptorInvalidDescriptor);
 
     // 16. If resultDesc.[[Configurable]] is false, then
-    if (!*result_desc.configurable) {
+    if (!*result_desc->configurable) {
         // a. If targetDesc is undefined or targetDesc.[[Configurable]] is true, then
-        if (!target_descriptor.has_value() || *target_descriptor->configurable)
+        if (!target_descriptor || *target_descriptor->configurable)
             // i. Throw a TypeError exception.
             return vm.throw_completion<TypeError>(ErrorType::ProxyGetOwnDescriptorInvalidNonConfig);
 
         // b. If resultDesc has a [[Writable]] field and resultDesc.[[Writable]] is false, then
-        if (result_desc.writable.has_value() && !*result_desc.writable) {
+        if (result_desc->writable.has_value() && !*result_desc->writable) {
             // i. If targetDesc.[[Writable]] is true, throw a TypeError exception.
             if (*target_descriptor->writable)
                 return vm.throw_completion<TypeError>(ErrorType::ProxyGetOwnDescriptorNonConfigurableNonWritable);
@@ -327,7 +327,7 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ProxyObject::internal_get_own_pr
 }
 
 // 10.5.6 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-proxy-object-internal-methods-and-internal-slots-defineownproperty-p-desc
-ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>*)
+ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor, GC::Ptr<PropertyDescriptor>)
 {
     LIMIT_PROXY_RECURSION_DEPTH();
 
@@ -369,13 +369,13 @@ ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey co
     bool setting_config_false = false;
 
     // 13. If Desc has a [[Configurable]] field and if Desc.[[Configurable]] is false, then
-    if (property_descriptor.configurable.has_value() && !*property_descriptor.configurable) {
+    if (property_descriptor->configurable.has_value() && !*property_descriptor->configurable) {
         // a. Let settingConfigFalse be true.
         setting_config_false = true;
     }
 
     // 14. If targetDesc is undefined, then
-    if (!target_descriptor.has_value()) {
+    if (!target_descriptor) {
         // a. If extensibleTarget is false, throw a TypeError exception.
         if (!extensible_target)
             return vm.throw_completion<TypeError>(ErrorType::ProxyDefinePropNonExtensible);
@@ -397,7 +397,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_define_own_property(PropertyKey co
         // c. If IsDataDescriptor(targetDesc) is true, targetDesc.[[Configurable]] is false, and targetDesc.[[Writable]] is true, then
         if (target_descriptor->is_data_descriptor() && !*target_descriptor->configurable && *target_descriptor->writable) {
             // i. If Desc has a [[Writable]] field and Desc.[[Writable]] is false, throw a TypeError exception.
-            if (property_descriptor.writable.has_value() && !*property_descriptor.writable)
+            if (property_descriptor->writable.has_value() && !*property_descriptor->writable)
                 return vm.throw_completion<TypeError>(ErrorType::ProxyDefinePropNonWritable);
         }
     }
@@ -451,7 +451,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_has_property(PropertyKey const& pr
         auto target_descriptor = TRY(m_target->internal_get_own_property(property_key));
 
         // b. If targetDesc is not undefined, then
-        if (target_descriptor.has_value()) {
+        if (target_descriptor) {
             // i. If targetDesc.[[Configurable]] is false, throw a TypeError exception.
             if (!*target_descriptor->configurable)
                 return vm.throw_completion<TypeError>(ErrorType::ProxyHasExistingNonConfigurable);
@@ -519,7 +519,7 @@ ThrowCompletionOr<Value> ProxyObject::internal_get(PropertyKey const& property_k
     auto target_descriptor = TRY(m_target->internal_get_own_property(property_key));
 
     // 9. If targetDesc is not undefined and targetDesc.[[Configurable]] is false, then
-    if (target_descriptor.has_value() && !*target_descriptor->configurable) {
+    if (target_descriptor && !*target_descriptor->configurable) {
         // a. If IsDataDescriptor(targetDesc) is true and targetDesc.[[Writable]] is false, then
         if (target_descriptor->is_data_descriptor() && !*target_descriptor->writable) {
             // i. If SameValue(trapResult, targetDesc.[[Value]]) is false, throw a TypeError exception.
@@ -591,7 +591,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_set(PropertyKey const& property_ke
     auto target_descriptor = TRY(m_target->internal_get_own_property(property_key));
 
     // 10. If targetDesc is not undefined and targetDesc.[[Configurable]] is false, then
-    if (target_descriptor.has_value() && !*target_descriptor->configurable) {
+    if (target_descriptor && !*target_descriptor->configurable) {
         // a. If IsDataDescriptor(targetDesc) is true and targetDesc.[[Writable]] is false, then
         if (target_descriptor->is_data_descriptor() && !*target_descriptor->writable) {
             // i. If SameValue(V, targetDesc.[[Value]]) is false, throw a TypeError exception.
@@ -644,7 +644,7 @@ ThrowCompletionOr<bool> ProxyObject::internal_delete(PropertyKey const& property
     auto target_descriptor = TRY(m_target->internal_get_own_property(property_key));
 
     // 10. If targetDesc is undefined, return true.
-    if (!target_descriptor.has_value())
+    if (!target_descriptor)
         return true;
 
     // 11. If targetDesc.[[Configurable]] is false, throw a TypeError exception.
@@ -725,7 +725,7 @@ ThrowCompletionOr<GC::RootVector<Value>> ProxyObject::internal_own_property_keys
         auto descriptor = TRY(m_target->internal_get_own_property(property_key));
 
         // b. If desc is not undefined and desc.[[Configurable]] is false, then
-        if (descriptor.has_value() && !*descriptor->configurable) {
+        if (descriptor && !*descriptor->configurable) {
             // i. Append key as an element of targetNonconfigurableKeys.
             target_nonconfigurable_keys.append(key);
         }

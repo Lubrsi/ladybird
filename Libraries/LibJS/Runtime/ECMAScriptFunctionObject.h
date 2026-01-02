@@ -125,7 +125,7 @@ private:
         PrivateEnvironment* private_environment,
         Object& prototype);
 
-    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
+    virtual ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
 
     virtual bool is_strict_mode() const override { return shared_data().m_strict; }
 

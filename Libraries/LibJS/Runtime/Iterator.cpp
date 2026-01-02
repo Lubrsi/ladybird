@@ -451,7 +451,7 @@ ThrowCompletionOr<void> setter_that_ignores_prototype_properties(VM& vm, Value t
     auto desc = TRY(this_object.internal_get_own_property(property));
 
     // 4. If desc is undefined, then
-    if (!desc.has_value()) {
+    if (!desc) {
         // a. Perform ? CreateDataPropertyOrThrow(this, p, v).
         TRY(this_object.create_data_property_or_throw(property, value));
     }

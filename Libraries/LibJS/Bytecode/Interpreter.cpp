@@ -2039,7 +2039,7 @@ ThrowCompletionOr<void> SetGlobal::execute_impl(Bytecode::Interpreter& interpret
             auto property_or_error = binding_object.internal_get_own_property(identifier);
             if (!property_or_error.is_error()) {
                 auto property = property_or_error.release_value();
-                if (property.has_value() && !property->writable.value_or(true)) {
+                if (property && !property->writable.value_or(true)) {
                     return vm.throw_completion<TypeError>(ErrorType::DescWriteNonWritable, identifier);
                 }
             }

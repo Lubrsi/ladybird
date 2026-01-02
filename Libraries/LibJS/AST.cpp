@@ -112,6 +112,8 @@ static ThrowCompletionOr<ClassElementName> class_key_to_property_name(VM& vm, Ex
 // 15.4.5 Runtime Semantics: MethodDefinitionEvaluation, https://tc39.es/ecma262/#sec-runtime-semantics-methoddefinitionevaluation
 ThrowCompletionOr<ClassElement::ClassValue> ClassMethod::class_element_evaluation(VM& vm, Object& target, Value property_key) const
 {
+    auto& heap = vm.heap();
+
     auto property_key_or_private_name = TRY(class_key_to_property_name(vm, *m_key, property_key));
 
     auto& method_function = *ECMAScriptFunctionObject::create_from_function_node(
@@ -147,19 +149,29 @@ ThrowCompletionOr<ClassElement::ClassValue> ClassMethod::class_element_evaluatio
         switch (kind()) {
         case ClassMethod::Kind::Method: {
             set_function_name();
-            PropertyDescriptor descriptor { .value = method_value, .writable = true, .enumerable = false, .configurable = true };
+            auto descriptor = heap.allocate<PropertyDescriptor>();
+            descriptor->value = method_value;
+            descriptor->writable = true;
+            descriptor->enumerable = false;
+            descriptor->configurable = true;
             TRY(target.define_property_or_throw(property_key, descriptor));
             break;
         }
         case ClassMethod::Kind::Getter: {
             set_function_name("get"sv);
-            PropertyDescriptor descriptor { .get = &method_function, .enumerable = false, .configurable = true };
+            auto descriptor = heap.allocate<PropertyDescriptor>();
+            descriptor->get = &method_function;
+            descriptor->enumerable = false;
+            descriptor->configurable = true;
             TRY(target.define_property_or_throw(property_key, descriptor));
             break;
         }
         case ClassMethod::Kind::Setter: {
             set_function_name("set"sv);
-            PropertyDescriptor descriptor { .set = &method_function, .enumerable = false, .configurable = true };
+            auto descriptor = heap.allocate<PropertyDescriptor>();
+            descriptor->set = &method_function;
+            descriptor->enumerable = false;
+            descriptor->configurable = true;
             TRY(target.define_property_or_throw(property_key, descriptor));
             break;
         }

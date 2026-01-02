@@ -20,8 +20,8 @@ public:
     virtual void initialize(Realm&) override;
     virtual ~ArgumentsObject() override = default;
 
-    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor&, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override;
+    virtual ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, GC::Ref<PropertyDescriptor>, GC::Ptr<PropertyDescriptor> precomputed_get_own_property = nullptr) override;
     virtual ThrowCompletionOr<Value> internal_get(PropertyKey const&, Value receiver, CacheableGetPropertyMetadata*, PropertyLookupPhase) const override;
     virtual ThrowCompletionOr<bool> internal_set(PropertyKey const&, Value value, Value receiver, CacheableSetPropertyMetadata*, PropertyLookupPhase) override;
     virtual ThrowCompletionOr<bool> internal_delete(PropertyKey const&) override;

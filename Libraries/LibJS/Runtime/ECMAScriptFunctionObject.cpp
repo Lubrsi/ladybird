@@ -209,6 +209,7 @@ ECMAScriptFunctionObject::ECMAScriptFunctionObject(
 void ECMAScriptFunctionObject::initialize(Realm& realm)
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
     Base::initialize(realm);
     // Note: The ordering of these properties must be: length, name, prototype which is the order
     //       they are defined in the spec: https://tc39.es/ecma262/#sec-function-instances .
@@ -223,9 +224,18 @@ void ECMAScriptFunctionObject::initialize(Realm& realm)
         put_direct(realm.intrinsics().normal_function_name_offset(), m_name_string);
         m_may_need_lazy_prototype_instantiation = true;
     } else {
-        PropertyDescriptor length_descriptor { .value = Value(function_length()), .writable = false, .enumerable = false, .configurable = true };
+        auto length_descriptor = heap.allocate<PropertyDescriptor>();
+        length_descriptor->value = Value(function_length());
+        length_descriptor->writable = false;
+        length_descriptor->enumerable = false;
+        length_descriptor->configurable = true;
         MUST(define_property_or_throw(vm.names.length, length_descriptor));
-        PropertyDescriptor name_descriptor { .value = m_name_string, .writable = false, .enumerable = false, .configurable = true };
+
+        auto name_descriptor = heap.allocate<PropertyDescriptor>();
+        name_descriptor->value = m_name_string;
+        name_descriptor->writable = false;
+        name_descriptor->enumerable = false;
+        name_descriptor->configurable = true;
         MUST(define_property_or_throw(vm.names.name, name_descriptor));
 
         if (!is_arrow_function()) {
@@ -667,7 +677,11 @@ void ECMAScriptFunctionObject::set_name(Utf16FlyString const& name)
     auto& vm = this->vm();
     const_cast<SharedFunctionInstanceData&>(shared_data()).m_name = name;
     m_name_string = PrimitiveString::create(vm, name);
-    PropertyDescriptor descriptor { .value = m_name_string, .writable = false, .enumerable = false, .configurable = true };
+    auto descriptor = heap().allocate<PropertyDescriptor>();
+    descriptor->value = m_name_string;
+    descriptor->writable = false;
+    descriptor->enumerable = false;
+    descriptor->configurable = true;
     MUST(define_property_or_throw(vm.names.name, descriptor));
 }
 
@@ -683,7 +697,7 @@ Utf16String ECMAScriptFunctionObject::name_for_call_stack() const
     return m_name_string->utf16_string();
 }
 
-ThrowCompletionOr<Optional<PropertyDescriptor>> ECMAScriptFunctionObject::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> ECMAScriptFunctionObject::internal_get_own_property(PropertyKey const& property_key) const
 {
     if (m_may_need_lazy_prototype_instantiation && property_key == vm().names.prototype) {
         auto& realm = *this->realm();

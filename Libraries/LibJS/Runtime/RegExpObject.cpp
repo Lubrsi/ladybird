@@ -384,7 +384,10 @@ ThrowCompletionOr<GC::Ref<RegExpObject>> regexp_alloc(VM& vm, FunctionObject& ne
     }
 
     // 6. Perform ! DefinePropertyOrThrow(obj, "lastIndex", PropertyDescriptor { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }).
-    PropertyDescriptor descriptor { .writable = true, .enumerable = false, .configurable = false };
+    auto descriptor = vm.heap().allocate<PropertyDescriptor>();
+    descriptor->writable = true;
+    descriptor->enumerable = false;
+    descriptor->configurable = false;
     MUST(regexp_object->define_property_or_throw(vm.names.lastIndex, descriptor));
 
     // 7. Return obj.

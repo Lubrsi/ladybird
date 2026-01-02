@@ -17,6 +17,9 @@ GC_DEFINE_ALLOCATOR(TextTrackCueList);
 TextTrackCueList::TextTrackCueList(JS::Realm& realm)
     : DOM::EventTarget(realm, MayInterfereWithIndexedPropertyAccess::Yes)
 {
+    m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
+        .supports_indexed_properties = true,
+    };
 }
 
 TextTrackCueList::~TextTrackCueList() = default;
@@ -34,20 +37,14 @@ void TextTrackCueList::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-texttrackcuelist-item
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> TextTrackCueList::internal_get_own_property(JS::PropertyKey const& property_name) const
+Optional<JS::Value> TextTrackCueList::item_value(size_t index) const
 {
     // To determine the value of an indexed property for a given index index, the user agent must return the indexth text track cue in the list
     // represented by the TextTrackCueList object.
-    if (property_name.is_number()) {
-        if (auto index = property_name.as_number(); index < m_cues.size()) {
-            JS::PropertyDescriptor descriptor;
-            descriptor.value = m_cues.at(index);
+    if (index < m_cues.size())
+        return m_cues.at(index);
 
-            return descriptor;
-        }
-    }
-
-    return Base::internal_get_own_property(property_name);
+    return {};
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-texttrackcuelist-length

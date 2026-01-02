@@ -38,6 +38,12 @@ void Location::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_default_properties);
+
+    for (auto& [key, value] : m_cross_origin_property_descriptor_map) {
+        visitor.visit(key.current_principal_settings_object);
+        visitor.visit(key.relevant_settings_object);
+        visitor.visit(value);
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#the-location-interface
@@ -48,27 +54,26 @@ void Location::initialize(JS::Realm& realm)
     Bindings::LocationPrototype::define_unforgeable_attributes(realm, *this);
 
     auto& vm = this->vm();
+    auto& heap = this->heap();
 
     // 2. Let valueOf be location's relevant realm.[[Intrinsics]].[[%Object.prototype.valueOf%]].
     auto& intrinsics = realm.intrinsics();
     auto value_of_function = intrinsics.object_prototype()->get_without_side_effects(vm.names.valueOf);
 
     // 3. Perform ! location.[[DefineOwnProperty]]("valueOf", { [[Value]]: valueOf, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }).
-    auto value_of_property_descriptor = JS::PropertyDescriptor {
-        .value = value_of_function,
-        .writable = false,
-        .enumerable = false,
-        .configurable = false,
-    };
+    auto value_of_property_descriptor = heap.allocate<JS::PropertyDescriptor>();
+    value_of_property_descriptor->value = value_of_function;
+    value_of_property_descriptor->writable = false;
+    value_of_property_descriptor->enumerable = false;
+    value_of_property_descriptor->configurable = false;
     MUST(internal_define_own_property(vm.names.valueOf, value_of_property_descriptor));
 
     // 4. Perform ! location.[[DefineOwnProperty]](%Symbol.toPrimitive%, { [[Value]]: undefined, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false }).
-    auto to_primitive_property_descriptor = JS::PropertyDescriptor {
-        .value = JS::js_undefined(),
-        .writable = false,
-        .enumerable = false,
-        .configurable = false,
-    };
+    auto to_primitive_property_descriptor = heap.allocate<JS::PropertyDescriptor>();
+    to_primitive_property_descriptor->value = JS::js_undefined();
+    to_primitive_property_descriptor->writable = false;
+    to_primitive_property_descriptor->enumerable = false;
+    to_primitive_property_descriptor->configurable = false;
     MUST(internal_define_own_property(vm.well_known_symbol_to_primitive(), to_primitive_property_descriptor));
 
     // 5. Set the value of the [[DefaultProperties]] internal slot of location to location.[[OwnPropertyKeys]]().
@@ -613,7 +618,7 @@ JS::ThrowCompletionOr<bool> Location::internal_prevent_extensions()
 }
 
 // 7.10.5.5 [[GetOwnProperty]] ( P ), https://html.spec.whatwg.org/multipage/history.html#location-getownproperty
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> Location::internal_get_own_property(JS::PropertyKey const& property_key) const
+JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> Location::internal_get_own_property(JS::PropertyKey const& property_key) const
 {
     auto& vm = this->vm();
 
@@ -638,7 +643,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> Location::internal_get_o
     auto property = HTML::cross_origin_get_own_property_helper(const_cast<Location*>(this), property_key);
 
     // 3. If property is not undefined, then return property.
-    if (property.has_value())
+    if (property)
         return property;
 
     // 4. Return ? CrossOriginPropertyFallback(P).
@@ -646,7 +651,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> Location::internal_get_o
 }
 
 // 7.10.5.6 [[DefineOwnProperty]] ( P, Desc ), https://html.spec.whatwg.org/multipage/history.html#location-defineownproperty
-JS::ThrowCompletionOr<bool> Location::internal_define_own_property(JS::PropertyKey const& property_key, JS::PropertyDescriptor& descriptor, Optional<JS::PropertyDescriptor>* precomputed_get_own_property)
+JS::ThrowCompletionOr<bool> Location::internal_define_own_property(JS::PropertyKey const& property_key, GC::Ref<JS::PropertyDescriptor> descriptor, GC::Ptr<JS::PropertyDescriptor> precomputed_get_own_property)
 {
     // 1. If IsPlatformObjectSameOrigin(this) is true, then:
     if (HTML::is_platform_object_same_origin(*this)) {

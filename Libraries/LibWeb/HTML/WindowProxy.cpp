@@ -65,9 +65,10 @@ JS::ThrowCompletionOr<bool> WindowProxy::internal_prevent_extensions()
 }
 
 // 7.4.5 [[GetOwnProperty]] ( P ), https://html.spec.whatwg.org/multipage/window-object.html#windowproxy-getownproperty
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> WindowProxy::internal_get_own_property(JS::PropertyKey const& property_key) const
+JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> WindowProxy::internal_get_own_property(JS::PropertyKey const& property_key) const
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
 
     // 1. Let W be the value of the [[Window]] internal slot of this.
 
@@ -95,14 +96,19 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> WindowProxy::internal_ge
         if (!value.has_value()) {
             // 1. If IsPlatformObjectSameOrigin(W) is true, then return undefined.
             if (is_platform_object_same_origin(*m_window))
-                return Optional<JS::PropertyDescriptor> {};
+                return nullptr;
 
             // 2. Throw a "SecurityError" DOMException.
             return throw_completion(WebIDL::SecurityError::create(m_window->realm(), Utf16String::formatted("Can't access property '{}' on cross-origin object", property_key)));
         }
 
         // 6. Return PropertyDescriptor { [[Value]]: value, [[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: true }.
-        return JS::PropertyDescriptor { .value = move(value), .writable = false, .enumerable = true, .configurable = true };
+        auto descriptor = heap.allocate<JS::PropertyDescriptor>();
+        descriptor->value = move(value);
+        descriptor->writable = false;
+        descriptor->enumerable = true;
+        descriptor->configurable = true;
+        return descriptor;
     }
 
     // 3. If IsPlatformObjectSameOrigin(W) is true, then return ! OrdinaryGetOwnProperty(W, P).
@@ -114,7 +120,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> WindowProxy::internal_ge
     auto property = cross_origin_get_own_property_helper(const_cast<Window*>(m_window.ptr()), property_key);
 
     // 5. If property is not undefined, then return property.
-    if (property.has_value())
+    if (property)
         return property;
 
     // 6. If property is undefined and P is in W's document-tree child navigable target name property set, then:
@@ -127,7 +133,12 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> WindowProxy::internal_ge
 
         // 2. Return PropertyDescriptor { [[Value]]: value, [[Enumerable]]: false, [[Writable]]: false, [[Configurable]]: true }.
         // NOTE: The reason the property descriptors are non-enumerable, despite this mismatching the same-origin behavior, is for compatibility with existing web content. See issue #3183 for details.
-        return JS::PropertyDescriptor { .value = value, .writable = false, .enumerable = false, .configurable = true };
+        auto descriptor = heap.allocate<JS::PropertyDescriptor>();
+        descriptor->value = value;
+        descriptor->writable = false;
+        descriptor->enumerable = false;
+        descriptor->configurable = true;
+        return descriptor;
     }
 
     // 7. Return ? CrossOriginPropertyFallback(P).
@@ -135,7 +146,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> WindowProxy::internal_ge
 }
 
 // 7.4.6 [[DefineOwnProperty]] ( P, Desc ), https://html.spec.whatwg.org/multipage/window-object.html#windowproxy-defineownproperty
-JS::ThrowCompletionOr<bool> WindowProxy::internal_define_own_property(JS::PropertyKey const& property_key, JS::PropertyDescriptor& descriptor, Optional<JS::PropertyDescriptor>*)
+JS::ThrowCompletionOr<bool> WindowProxy::internal_define_own_property(JS::PropertyKey const& property_key, GC::Ref<JS::PropertyDescriptor> descriptor, GC::Ptr<JS::PropertyDescriptor>)
 {
     // 1. Let W be the value of the [[Window]] internal slot of this.
 
@@ -214,7 +225,7 @@ JS::ThrowCompletionOr<bool> WindowProxy::internal_delete(JS::PropertyKey const& 
             auto descriptor = MUST(internal_get_own_property(property_key));
 
             // 2. If desc is undefined, then return true.
-            if (!descriptor.has_value())
+            if (!descriptor)
                 return true;
 
             // 3. Return false.

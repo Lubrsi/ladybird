@@ -188,6 +188,7 @@ ThrowCompletionOr<Value> PromiseAnyRejectElementFunction::resolve_element()
 {
     auto& vm = this->vm();
     auto& realm = *vm.current_realm();
+    auto& heap = realm.heap();
 
     // 8. Set errors[index] to x.
     m_values->values()[m_index] = vm.argument(0);
@@ -200,7 +201,11 @@ ThrowCompletionOr<Value> PromiseAnyRejectElementFunction::resolve_element()
 
         // b. Perform ! DefinePropertyOrThrow(error, "errors", PropertyDescriptor { [[Configurable]]: true, [[Enumerable]]: false, [[Writable]]: true, [[Value]]: CreateArrayFromList(errors) }).
         auto errors_array = Array::create_from(realm, m_values->values());
-        PropertyDescriptor descriptor { .value = errors_array, .writable = true, .enumerable = false, .configurable = true };
+        auto descriptor = heap.allocate<PropertyDescriptor>();
+        descriptor->value = errors_array;
+        descriptor->writable = true;
+        descriptor->enumerable = false;
+        descriptor->configurable = true;
         MUST(error->define_property_or_throw(vm.names.errors, descriptor));
 
         // c. Return ? Call(promiseCapability.[[Reject]], undefined, « error »).

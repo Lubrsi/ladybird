@@ -66,7 +66,11 @@ ThrowCompletionOr<void> ObjectEnvironment::create_mutable_binding(VM&, Utf16FlyS
 {
     // 1. Let bindingObject be envRec.[[BindingObject]].
     // 2. Perform ? DefinePropertyOrThrow(bindingObject, N, PropertyDescriptor { [[Value]]: undefined, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: D }).
-    PropertyDescriptor descriptor { .value = js_undefined(), .writable = true, .enumerable = true, .configurable = can_be_deleted };
+    auto descriptor = heap().allocate<PropertyDescriptor>();
+    descriptor->value = js_undefined();
+    descriptor->writable = true;
+    descriptor->enumerable = true;
+    descriptor->configurable = can_be_deleted;
     TRY(m_binding_object->define_property_or_throw(name, descriptor));
 
     // 3. Return unused.
@@ -123,7 +127,7 @@ ThrowCompletionOr<void> ObjectEnvironment::set_mutable_binding(VM&, Utf16FlyStri
         if (property_or_error.is_error())
             return result_or_error.release_error();
         auto property = property_or_error.release_value();
-        if (property.has_value() && !property->writable.value_or(true)) {
+        if (property && !property->writable.value_or(true)) {
             return vm.throw_completion<TypeError>(ErrorType::DescWriteNonWritable, name);
         }
     }

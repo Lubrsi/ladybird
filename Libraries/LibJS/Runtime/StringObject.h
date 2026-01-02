@@ -28,8 +28,8 @@ protected:
     StringObject(PrimitiveString&, Object& prototype);
 
 private:
-    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, PropertyDescriptor&, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override;
+    virtual ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> internal_get_own_property(PropertyKey const&) const override;
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const&, GC::Ref<PropertyDescriptor>, GC::Ptr<PropertyDescriptor> precomputed_get_own_property = nullptr) override;
     virtual ThrowCompletionOr<GC::RootVector<Value>> internal_own_property_keys() const override;
 
     virtual bool is_string_object() const final { return true; }
