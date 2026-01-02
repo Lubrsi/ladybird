@@ -168,17 +168,16 @@ ThrowCompletionOr<void> Object::set(PropertyKey const& property_key, Value value
 ThrowCompletionOr<bool> Object::create_data_property(PropertyKey const& property_key, Value value, Optional<u32>* new_property_offset)
 {
     // 1. Let newDesc be the PropertyDescriptor { [[Value]]: V, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }.
-    auto new_descriptor = PropertyDescriptor {
-        .value = value,
-        .writable = true,
-        .enumerable = true,
-        .configurable = true,
-    };
+    auto new_descriptor = heap().allocate<PropertyDescriptor>();
+    new_descriptor->value = value;
+    new_descriptor->writable = true;
+    new_descriptor->enumerable = true;
+    new_descriptor->configurable = true;
 
     // 2. Return ? O.[[DefineOwnProperty]](P, newDesc).
     auto result = internal_define_own_property(property_key, new_descriptor);
-    if (new_property_offset && new_descriptor.property_offset.has_value())
-        *new_property_offset = new_descriptor.property_offset.value();
+    if (new_property_offset && new_descriptor->property_offset.has_value())
+        *new_property_offset = new_descriptor->property_offset.value();
     return result;
 }
 
@@ -190,12 +189,11 @@ void Object::create_method_property(PropertyKey const& property_key, Value value
     // 1. Assert: O is an ordinary, extensible object with no non-configurable properties.
 
     // 2. Let newDesc be the PropertyDescriptor { [[Value]]: V, [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }.
-    auto new_descriptor = PropertyDescriptor {
-        .value = value,
-        .writable = true,
-        .enumerable = false,
-        .configurable = true,
-    };
+    auto new_descriptor = heap().allocate<PropertyDescriptor>();
+    new_descriptor->value = value;
+    new_descriptor->writable = true;
+    new_descriptor->enumerable = false;
+    new_descriptor->configurable = true;
 
     // 3. Perform ! O.[[DefineOwnProperty]](P, newDesc).
     MUST(internal_define_own_property(property_key, new_descriptor));
@@ -231,7 +229,11 @@ void Object::create_non_enumerable_data_property_or_throw(PropertyKey const& pro
     // 1. Assert: O is an ordinary, extensible object with no non-configurable properties.
 
     // 2. Let newDesc be the PropertyDescriptor { [[Value]]: V, [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }.
-    auto new_description = PropertyDescriptor { .value = value, .writable = true, .enumerable = false, .configurable = true };
+    auto new_description = heap().allocate<PropertyDescriptor>();
+    new_description->value = value;
+    new_description->writable = true;
+    new_description->enumerable = false;
+    new_description->configurable = true;
 
     // 3. Perform ! DefinePropertyOrThrow(O, P, newDesc).
     MUST(define_property_or_throw(property_key, new_description));
@@ -240,7 +242,7 @@ void Object::create_non_enumerable_data_property_or_throw(PropertyKey const& pro
 }
 
 // 7.3.9 DefinePropertyOrThrow ( O, P, desc ), https://tc39.es/ecma262/#sec-definepropertyorthrow
-ThrowCompletionOr<void> Object::define_property_or_throw(PropertyKey const& property_key, PropertyDescriptor& property_descriptor)
+ThrowCompletionOr<void> Object::define_property_or_throw(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor)
 {
     auto& vm = this->vm();
 
@@ -289,7 +291,7 @@ ThrowCompletionOr<bool> Object::has_own_property(PropertyKey const& property_key
     auto descriptor = TRY(internal_get_own_property(property_key));
 
     // 2. If desc is undefined, return false.
-    if (!descriptor.has_value())
+    if (!descriptor)
         return false;
 
     // 3. Return true.
@@ -300,6 +302,7 @@ ThrowCompletionOr<bool> Object::has_own_property(PropertyKey const& property_key
 ThrowCompletionOr<bool> Object::set_integrity_level(IntegrityLevel level)
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
 
     // 1. Let status be ? O.[[PreventExtensions]]().
     auto status = TRY(internal_prevent_extensions());
@@ -318,7 +321,8 @@ ThrowCompletionOr<bool> Object::set_integrity_level(IntegrityLevel level)
             auto property_key = MUST(PropertyKey::from_value(vm, key));
 
             // i. Perform ? DefinePropertyOrThrow(O, k, PropertyDescriptor { [[Configurable]]: false }).
-            PropertyDescriptor descriptor { .configurable = false };
+            auto descriptor = heap.allocate<PropertyDescriptor>();
+            descriptor->configurable = false;
             TRY(define_property_or_throw(property_key, descriptor));
         }
     }
@@ -334,20 +338,21 @@ ThrowCompletionOr<bool> Object::set_integrity_level(IntegrityLevel level)
             auto current_descriptor = TRY(internal_get_own_property(property_key));
 
             // ii. If currentDesc is not undefined, then
-            if (!current_descriptor.has_value())
+            if (!current_descriptor)
                 continue;
 
-            PropertyDescriptor descriptor;
+            GC::Ref<PropertyDescriptor> descriptor = heap.allocate<PropertyDescriptor>();
 
             // 1. If IsAccessorDescriptor(currentDesc) is true, then
             if (current_descriptor->is_accessor_descriptor()) {
                 // a. Let desc be the PropertyDescriptor { [[Configurable]]: false }.
-                descriptor = { .configurable = false };
+                descriptor->configurable = false;
             }
             // 2. Else,
             else {
                 // a. Let desc be the PropertyDescriptor { [[Configurable]]: false, [[Writable]]: false }.
-                descriptor = { .writable = false, .configurable = false };
+                descriptor->writable = false;
+                descriptor->configurable = false;
             }
 
             // 3. Perform ? DefinePropertyOrThrow(O, k, desc).
@@ -383,7 +388,7 @@ ThrowCompletionOr<bool> Object::test_integrity_level(IntegrityLevel level) const
         auto current_descriptor = TRY(internal_get_own_property(property_key));
 
         // b. If currentDesc is not undefined, then
-        if (!current_descriptor.has_value())
+        if (!current_descriptor)
             continue;
         // i. If currentDesc.[[Configurable]] is true, return false.
         if (*current_descriptor->configurable)
@@ -429,7 +434,7 @@ ThrowCompletionOr<GC::RootVector<Value>> Object::enumerable_own_property_names(P
                 return {};
         } else {
             auto descriptor = TRY(internal_get_own_property(property_key));
-            if (!descriptor.has_value() || !*descriptor->enumerable)
+            if (!descriptor || !*descriptor->enumerable)
                 return {};
         }
 
@@ -498,7 +503,7 @@ ThrowCompletionOr<void> Object::copy_data_properties(VM& vm, Value source, HashT
         auto desc = TRY(from->internal_get_own_property(next_key));
 
         // ii. If desc is not undefined and desc.[[Enumerable]] is true, then
-        if (desc.has_value() && desc->attributes().is_enumerable()) {
+        if (desc && desc->attributes().is_enumerable()) {
             // 1. Let propValue be ? Get(from, nextKey).
             auto prop_value = TRY(from->get(next_key));
 
@@ -825,15 +830,15 @@ ThrowCompletionOr<bool> Object::internal_prevent_extensions()
 
 // 10.1.5 [[GetOwnProperty]] ( P ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-getownproperty-p
 // 10.1.5.1 OrdinaryGetOwnProperty ( O, P ) https://tc39.es/ecma262/#sec-ordinarygetownproperty
-ThrowCompletionOr<Optional<PropertyDescriptor>> Object::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> Object::internal_get_own_property(PropertyKey const& property_key) const
 {
     // 1. If O does not have an own property with key P, return undefined.
     auto maybe_storage_entry = storage_get(property_key);
     if (!maybe_storage_entry.has_value())
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
 
     // 2. Let D be a newly created Property Descriptor with no fields.
-    PropertyDescriptor descriptor;
+    auto descriptor = heap().allocate<PropertyDescriptor>();
 
     // 3. Let X be O's own property whose key is P.
     auto [value, attributes, property_offset] = *maybe_storage_entry;
@@ -842,36 +847,36 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> Object::internal_get_own_propert
     if (attributes.is_unimplemented()) {
         if (vm().on_unimplemented_property_access)
             vm().on_unimplemented_property_access(*this, property_key);
-        descriptor.unimplemented = true;
+        descriptor->unimplemented = true;
     }
 
     // 4. If X is a data property, then
     if (!value.is_accessor()) {
         // a. Set D.[[Value]] to the value of X's [[Value]] attribute.
-        descriptor.value = value;
+        descriptor->value = value;
 
         // b. Set D.[[Writable]] to the value of X's [[Writable]] attribute.
-        descriptor.writable = attributes.is_writable();
+        descriptor->writable = attributes.is_writable();
     }
     // 5. Else,
     else {
         // a. Assert: X is an accessor property.
 
         // b. Set D.[[Get]] to the value of X's [[Get]] attribute.
-        descriptor.get = value.as_accessor().getter();
+        descriptor->get = value.as_accessor().getter();
 
         // c. Set D.[[Set]] to the value of X's [[Set]] attribute.
-        descriptor.set = value.as_accessor().setter();
+        descriptor->set = value.as_accessor().setter();
     }
 
     // 6. Set D.[[Enumerable]] to the value of X's [[Enumerable]] attribute.
-    descriptor.enumerable = attributes.is_enumerable();
+    descriptor->enumerable = attributes.is_enumerable();
 
     // 7. Set D.[[Configurable]] to the value of X's [[Configurable]] attribute.
-    descriptor.configurable = attributes.is_configurable();
+    descriptor->configurable = attributes.is_configurable();
 
     // Non-standard: Add the property offset to the descriptor. This is used to populate CacheablePropertyMetadata.
-    descriptor.property_offset = property_offset;
+    descriptor->property_offset = property_offset;
 
     // 8. Return D.
     return descriptor;
@@ -879,10 +884,10 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> Object::internal_get_own_propert
 
 // 10.1.6 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-defineownproperty-p-desc
 // 10.1.6.1 OrdinaryDefineOwnProperty ( O, P, Desc ), https://tc39.es/ecma262/#sec-ordinarydefineownproperty
-ThrowCompletionOr<bool> Object::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> Object::internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor, GC::Ptr<PropertyDescriptor> precomputed_get_own_property)
 {
     // 1. Let current be ? O.[[GetOwnProperty]](P).
-    auto current = precomputed_get_own_property ? *precomputed_get_own_property : TRY(internal_get_own_property(property_key));
+    GC::Ptr<PropertyDescriptor> current = precomputed_get_own_property ? *precomputed_get_own_property : TRY(internal_get_own_property(property_key));
 
     // 2. Let extensible be ? IsExtensible(O).
     auto extensible = TRY(is_extensible());
@@ -899,7 +904,7 @@ ThrowCompletionOr<bool> Object::internal_has_property(PropertyKey const& propert
     auto has_own = TRY(internal_get_own_property(property_key));
 
     // 2. If hasOwn is not undefined, return true.
-    if (has_own.has_value())
+    if (has_own)
         return true;
 
     // 3. Let parent be ? O.[[GetPrototypeOf]]().
@@ -927,7 +932,7 @@ ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, V
     auto descriptor = TRY(internal_get_own_property(property_key));
 
     // 2. If desc is undefined, then
-    if (!descriptor.has_value()) {
+    if (!descriptor) {
         // a. Let parent be ? O.[[GetPrototypeOf]]().
         auto* parent = TRY(internal_get_prototype_of());
 
@@ -997,16 +1002,17 @@ ThrowCompletionOr<bool> Object::internal_set(PropertyKey const& property_key, Va
 }
 
 // 10.1.9.2 OrdinarySetWithOwnDescriptor ( O, P, V, Receiver, ownDesc ), https://tc39.es/ecma262/#sec-ordinarysetwithowndescriptor
-ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey const& property_key, Value value, Value receiver, Optional<PropertyDescriptor> own_descriptor, CacheableSetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
+ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey const& property_key, Value value, Value receiver, GC::Ptr<PropertyDescriptor> own_descriptor, CacheableSetPropertyMetadata* cacheable_metadata, PropertyLookupPhase phase)
 {
     VERIFY(!value.is_special_empty_value());
     VERIFY(!receiver.is_special_empty_value());
 
     auto& vm = this->vm();
-    bool own_descriptor_was_undefined = !own_descriptor.has_value();
+    auto& heap = this->heap();
+    bool own_descriptor_was_undefined = !own_descriptor;
 
     // 1. If ownDesc is undefined, then
-    if (!own_descriptor.has_value()) {
+    if (!own_descriptor) {
         // a. Let parent be ? O.[[GetPrototypeOf]]().
         auto* parent = TRY(internal_get_prototype_of());
 
@@ -1018,12 +1024,11 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
         // c. Else,
         else {
             // i. Set ownDesc to the PropertyDescriptor { [[Value]]: undefined, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }.
-            own_descriptor = PropertyDescriptor {
-                .value = js_undefined(),
-                .writable = true,
-                .enumerable = true,
-                .configurable = true,
-            };
+            own_descriptor = heap.allocate<PropertyDescriptor>();
+            own_descriptor->value = js_undefined();
+            own_descriptor->writable = true;
+            own_descriptor->enumerable = true;
+            own_descriptor->configurable = true;
         }
     }
 
@@ -1062,14 +1067,14 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
 
         // c. Let existingDescriptor be ? Receiver.[[GetOwnProperty]](P).
         // OPTIMIZATION: If we were called with an ownDescriptor, and receiver == this, don't do [[GetOwnProperty]] again.
-        Optional<PropertyDescriptor> existing_descriptor;
+        GC::Ptr<PropertyDescriptor> existing_descriptor;
         if (!own_descriptor_was_undefined && &receiver_object == this)
             existing_descriptor = own_descriptor;
         else
             existing_descriptor = TRY(receiver_object.internal_get_own_property(property_key));
 
         // d. If existingDescriptor is not undefined, then
-        if (existing_descriptor.has_value()) {
+        if (existing_descriptor) {
             // i. If IsAccessorDescriptor(existingDescriptor) is true, return false.
             if (existing_descriptor->is_accessor_descriptor())
                 return false;
@@ -1079,7 +1084,8 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
                 return false;
 
             // iii. Let valueDesc be the PropertyDescriptor { [[Value]]: V }.
-            auto value_descriptor = PropertyDescriptor { .value = value };
+            auto value_descriptor = heap.allocate<PropertyDescriptor>();
+            value_descriptor->value = value;
 
             // NOTE: We don't cache non-setter properties in the prototype chain, as that's a weird
             //       use-case, and doesn't seem like something in need of optimization.
@@ -1087,7 +1093,7 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
                 update_inline_cache_for_property_change();
 
             // iv. Return ? Receiver.[[DefineOwnProperty]](P, valueDesc).
-            return TRY(receiver_object.internal_define_own_property(property_key, value_descriptor, &existing_descriptor));
+            return TRY(receiver_object.internal_define_own_property(property_key, value_descriptor, existing_descriptor));
         }
         // e. Else,
         else {
@@ -1137,7 +1143,7 @@ ThrowCompletionOr<bool> Object::internal_delete(PropertyKey const& property_key)
     auto descriptor = TRY(internal_get_own_property(property_key));
 
     // 2. If desc is undefined, return true.
-    if (!descriptor.has_value())
+    if (!descriptor)
         return true;
 
     // 3. If desc.[[Configurable]] is true, then
@@ -1398,7 +1404,7 @@ ThrowCompletionOr<void> Object::for_each_own_property_with_enumerability(Functio
                 continue;
             auto descriptor = TRY(internal_get_own_property(property_key));
             bool enumerable = false;
-            if (descriptor.has_value())
+            if (descriptor)
                 enumerable = *descriptor->enumerable;
             TRY(callback(property_key, enumerable));
         }
@@ -1448,7 +1454,7 @@ ThrowCompletionOr<Object*> Object::define_properties(Value properties)
 
     struct NameAndDescriptor {
         PropertyKey name;
-        PropertyDescriptor descriptor;
+        GC::Root<PropertyDescriptor> descriptor;
     };
 
     // 3. Let descriptors be a new empty List.
@@ -1462,7 +1468,7 @@ ThrowCompletionOr<Object*> Object::define_properties(Value properties)
         auto property_descriptor = TRY(props->internal_get_own_property(property_key));
 
         // b. If propDesc is not undefined and propDesc.[[Enumerable]] is true, then
-        if (property_descriptor.has_value() && *property_descriptor->enumerable) {
+        if (property_descriptor && *property_descriptor->enumerable) {
             // i. Let descObj be ? Get(props, nextKey).
             auto descriptor_object = TRY(props->get(property_key));
 
@@ -1480,7 +1486,7 @@ ThrowCompletionOr<Object*> Object::define_properties(Value properties)
         // b. Let desc be the second element of pair.
 
         // c. Perform ? DefinePropertyOrThrow(O, P, desc).
-        TRY(define_property_or_throw(name, descriptor));
+        TRY(define_property_or_throw(name, *descriptor));
     }
 
     // 6. Return O.
@@ -1511,7 +1517,7 @@ Optional<Completion> Object::enumerate_object_properties(Function<Optional<Compl
             if (visited.contains(property_key))
                 continue;
             auto descriptor = TRY(target->internal_get_own_property(property_key));
-            if (!descriptor.has_value())
+            if (!descriptor)
                 continue;
             visited.set(property_key);
             if (!*descriptor->enumerable)

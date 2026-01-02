@@ -173,7 +173,7 @@ ThrowCompletionOr<bool> GlobalEnvironment::has_restricted_global_property(Utf16F
     auto existing_prop = TRY(global_object.internal_get_own_property(name));
 
     // 4. If existingProp is undefined, return false.
-    if (!existing_prop.has_value())
+    if (!existing_prop)
         return false;
 
     // 5. If existingProp.[[Configurable]] is true, return false.
@@ -213,7 +213,7 @@ ThrowCompletionOr<bool> GlobalEnvironment::can_declare_global_function(Utf16FlyS
     auto existing_prop = TRY(global_object.internal_get_own_property(name));
 
     // 4. If existingProp is undefined, return ? IsExtensible(globalObject).
-    if (!existing_prop.has_value())
+    if (!existing_prop)
         return TRY(global_object.is_extensible());
 
     // 5. If existingProp.[[Configurable]] is true, return true.
@@ -266,17 +266,20 @@ ThrowCompletionOr<void> GlobalEnvironment::create_global_function_binding(Utf16F
     // 3. Let existingProp be ? globalObject.[[GetOwnProperty]](N).
     auto existing_prop = TRY(global_object.internal_get_own_property(name));
 
-    PropertyDescriptor desc;
+    auto desc = heap().allocate<PropertyDescriptor>();
 
     // 4. If existingProp is undefined or existingProp.[[Configurable]] is true, then
-    if (!existing_prop.has_value() || *existing_prop->configurable) {
+    if (!existing_prop || *existing_prop->configurable) {
         //     a. Let desc be the PropertyDescriptor { [[Value]]: V, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: D }.
-        desc = { .value = value, .writable = true, .enumerable = true, .configurable = can_be_deleted };
+        desc->value = value;
+        desc->writable = true;
+        desc->enumerable = true;
+        desc->configurable = can_be_deleted;
     }
     // 5. Else,
     else {
         // a. Let desc be the PropertyDescriptor { [[Value]]: V }.
-        desc = { .value = value };
+        desc->value = value;
     }
 
     // 6. Perform ? DefinePropertyOrThrow(globalObject, N, desc).

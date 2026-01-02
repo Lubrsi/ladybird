@@ -48,7 +48,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::is_named_property_exposed_on_object(
     // NOTE: This has to be done manually instead of using Object::has_own_property, as that would use the overridden internal_get_own_property.
     auto own_property_named_p = MUST(Object::internal_get_own_property(property_key));
 
-    if (own_property_named_p.has_value())
+    if (own_property_named_p)
         return false;
 
     // 3. If O implements an interface that has the [LegacyOverrideBuiltIns] extended attribute, then return true.
@@ -77,8 +77,10 @@ JS::ThrowCompletionOr<bool> PlatformObject::is_named_property_exposed_on_object(
 }
 
 // https://webidl.spec.whatwg.org/#PlatformObjectGetOwnProperty
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> PlatformObject::legacy_platform_object_get_own_property(JS::PropertyKey const& property_name, IgnoreNamedProps ignore_named_props) const
+JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> PlatformObject::legacy_platform_object_get_own_property(JS::PropertyKey const& property_name, IgnoreNamedProps ignore_named_props) const
 {
+    auto& heap = this->heap();
+
     // 1. If O supports indexed properties and P is an array index, then:
     if (m_legacy_platform_object_flags->supports_indexed_properties && property_name.is_number()) {
         // 1. Let index be the result of calling ToUint32(P).
@@ -93,17 +95,17 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> PlatformObject::legacy_p
             auto value = maybe_value.release_value();
 
             // 5. Let desc be a newly created Property Descriptor with no fields.
-            JS::PropertyDescriptor descriptor;
+            auto descriptor = heap.allocate<JS::PropertyDescriptor>();
 
             // 6. Set desc.[[Value]] to the result of converting value to an ECMAScript value.
-            descriptor.value = value;
+            descriptor->value = value;
 
             // 7. If O implements an interface with an indexed property setter, then set desc.[[Writable]] to true, otherwise set it to false.
-            descriptor.writable = m_legacy_platform_object_flags->has_indexed_property_setter;
+            descriptor->writable = m_legacy_platform_object_flags->has_indexed_property_setter;
 
             // 8. Set desc.[[Enumerable]] and desc.[[Configurable]] to true.
-            descriptor.enumerable = true;
-            descriptor.configurable = true;
+            descriptor->enumerable = true;
+            descriptor->configurable = true;
 
             // 9. Return desc.
             return descriptor;
@@ -127,19 +129,19 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> PlatformObject::legacy_p
             auto value = named_item_value(property_name_string);
 
             // 5. Let desc be a newly created Property Descriptor with no fields.
-            JS::PropertyDescriptor descriptor;
+            auto descriptor = heap.allocate<JS::PropertyDescriptor>();;
 
             // 6. Set desc.[[Value]] to the result of converting value to an ECMAScript value.
-            descriptor.value = value;
+            descriptor->value = value;
 
             // 7. If O implements an interface with a named property setter, then set desc.[[Writable]] to true, otherwise set it to false.
-            descriptor.writable = m_legacy_platform_object_flags->has_named_property_setter;
+            descriptor->writable = m_legacy_platform_object_flags->has_named_property_setter;
 
             // 8. If O implements an interface with the [LegacyUnenumerableNamedProperties] extended attribute, then set desc.[[Enumerable]] to false, otherwise set it to true.
-            descriptor.enumerable = !m_legacy_platform_object_flags->has_legacy_unenumerable_named_properties_interface_extended_attribute;
+            descriptor->enumerable = !m_legacy_platform_object_flags->has_legacy_unenumerable_named_properties_interface_extended_attribute;
 
             // 9. Set desc.[[Configurable]] to true.
-            descriptor.configurable = true;
+            descriptor->configurable = true;
 
             // 10. Return desc.
             return descriptor;
@@ -204,7 +206,7 @@ WebIDL::ExceptionOr<void> PlatformObject::invoke_named_property_setter(FlyString
 }
 
 // https://webidl.spec.whatwg.org/#legacy-platform-object-getownproperty
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> PlatformObject::internal_get_own_property(JS::PropertyKey const& property_name) const
+JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> PlatformObject::internal_get_own_property(JS::PropertyKey const& property_name) const
 {
     if (m_legacy_platform_object_flags.has_value() && !m_legacy_platform_object_flags->has_global_interface_extended_attribute) {
         // 1. Return ? PlatformObjectGetOwnProperty(O, P, false).
@@ -253,10 +255,8 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_set(JS::PropertyKey const& 
 }
 
 // https://webidl.spec.whatwg.org/#legacy-platform-object-defineownproperty
-JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::PropertyKey const& property_name, JS::PropertyDescriptor& property_descriptor, Optional<JS::PropertyDescriptor>* precomputed_get_own_property)
+JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::PropertyKey const& property_name, GC::Ref<JS::PropertyDescriptor> property_descriptor, GC::Ptr<JS::PropertyDescriptor> precomputed_get_own_property)
 {
-    Optional<JS::PropertyDescriptor> get_own_property_result = {};
-
     if (!m_legacy_platform_object_flags.has_value() || m_legacy_platform_object_flags->has_global_interface_extended_attribute)
         return Base::internal_define_own_property(property_name, property_descriptor, precomputed_get_own_property);
 
@@ -265,7 +265,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::Pro
     // 1. If O supports indexed properties and P is an array index, then:
     if (m_legacy_platform_object_flags->supports_indexed_properties && property_name.is_number()) {
         // 1. If the result of calling IsDataDescriptor(Desc) is false, then return false.
-        if (!property_descriptor.is_data_descriptor())
+        if (!property_descriptor->is_data_descriptor())
             return false;
 
         // 2. If O does not implement an interface with an indexed property setter, then return false.
@@ -273,7 +273,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::Pro
             return false;
 
         // 3. Invoke the indexed property setter on O with P and Desc.[[Value]].
-        TRY(throw_dom_exception_if_needed(vm, [&] { return invoke_indexed_property_setter(property_name, property_descriptor.value.value()); }));
+        TRY(throw_dom_exception_if_needed(vm, [&] { return invoke_indexed_property_setter(property_name, property_descriptor->value.value()); }));
 
         // 4. Return true.
         return true;
@@ -291,12 +291,10 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::Pro
         // NOTE: Own property lookup has to be done manually instead of using Object::has_own_property, as that would use the overridden internal_get_own_property.
         if (!m_legacy_platform_object_flags->has_legacy_override_built_ins_interface_extended_attribute) {
             // AD-HOC: Avoid computing the [[GetOwnProperty]] multiple times.
-            if (!precomputed_get_own_property) {
-                get_own_property_result = TRY(Object::internal_get_own_property(property_name));
-                precomputed_get_own_property = &get_own_property_result;
-            }
+            if (!precomputed_get_own_property)
+                precomputed_get_own_property = TRY(Object::internal_get_own_property(property_name));
         }
-        if (m_legacy_platform_object_flags->has_legacy_override_built_ins_interface_extended_attribute || !precomputed_get_own_property->has_value()) {
+        if (m_legacy_platform_object_flags->has_legacy_override_built_ins_interface_extended_attribute || !precomputed_get_own_property) {
             // 1. If creating is false and O does not implement an interface with a named property setter, then return false.
             if (!creating && !m_legacy_platform_object_flags->has_named_property_setter)
                 return false;
@@ -304,11 +302,11 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_define_own_property(JS::Pro
             // 2. If O implements an interface with a named property setter, then:
             if (m_legacy_platform_object_flags->has_named_property_setter) {
                 // 1. If the result of calling IsDataDescriptor(Desc) is false, then return false.
-                if (!property_descriptor.is_data_descriptor())
+                if (!property_descriptor->is_data_descriptor())
                     return false;
 
                 // 2. Invoke the named property setter on O with P and Desc.[[Value]].
-                TRY(throw_dom_exception_if_needed(vm, [&] { return invoke_named_property_setter(property_name_as_string, property_descriptor.value.value()); }));
+                TRY(throw_dom_exception_if_needed(vm, [&] { return invoke_named_property_setter(property_name_as_string, property_descriptor->value.value()); }));
 
                 // 3. Return true.
                 return true;
@@ -375,7 +373,7 @@ JS::ThrowCompletionOr<bool> PlatformObject::internal_delete(JS::PropertyKey cons
     // NOTE: This has to be done manually instead of using Object::has_own_property, as that would use the overridden internal_get_own_property.
     auto own_property_named_p_descriptor = TRY(Object::internal_get_own_property(property_name));
 
-    if (own_property_named_p_descriptor.has_value()) {
+    if (own_property_named_p_descriptor) {
         // 1. If the property is not configurable, then return false.
         if (!own_property_named_p_descriptor->configurable.value())
             return false;

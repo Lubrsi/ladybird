@@ -1243,7 +1243,7 @@ static void generate_to_cpp(SourceGenerator& generator, ParameterType& parameter
 
         auto descriptor@recursion_depth@ = TRY(@js_name@@js_suffix@_object.internal_get_own_property(property_key@recursion_depth@));
 
-        if (!descriptor@recursion_depth@.has_value() || !descriptor@recursion_depth@->enumerable.has_value() || !descriptor@recursion_depth@->enumerable.value())
+        if (!descriptor@recursion_depth@ || !descriptor@recursion_depth@->enumerable.has_value() || !descriptor@recursion_depth@->enumerable.value())
             continue;
 )~~~");
 
@@ -3394,8 +3394,8 @@ public:
 
     JS::Realm& realm() const { return m_realm; }
 private:
-    virtual JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const&) const override;
-    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, JS::PropertyDescriptor&, Optional<JS::PropertyDescriptor>* precomputed_get_own_property = nullptr) override;
+    virtual JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const&) const override;
+    virtual JS::ThrowCompletionOr<bool> internal_define_own_property(JS::PropertyKey const&, GC::Ref<JS::PropertyDescriptor>, GC::Ptr<JS::PropertyDescriptor> precomputed_get_own_property = nullptr) override;
     virtual JS::ThrowCompletionOr<bool> internal_delete(JS::PropertyKey const&) override;
     virtual JS::ThrowCompletionOr<bool> internal_set_prototype_of(JS::Object* prototype) override;
     virtual JS::ThrowCompletionOr<bool> internal_prevent_extensions() override;
@@ -3463,9 +3463,10 @@ void @named_properties_class@::initialize(JS::Realm& realm)
 };
 
 // https://webidl.spec.whatwg.org/#named-properties-object-getownproperty
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> @named_properties_class@::internal_get_own_property(JS::PropertyKey const& property_name) const
+JS::ThrowCompletionOr<GC::Ptr<JS::PropertyDescriptor>> @named_properties_class@::internal_get_own_property(JS::PropertyKey const& property_name) const
 {
     auto& realm = this->realm();
+    auto& heap = this->heap();
 
     // 1. Let A be the interface for the named properties object O.
     using A = @name@;
@@ -3485,26 +3486,26 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> @named_properties_class@
         auto value = object.named_item_value(property_name_string);
 
         // 5. Let desc be a newly created Property Descriptor with no fields.
-        JS::PropertyDescriptor descriptor;
+        auto descriptor = heap.allocate<JS::PropertyDescriptor>();
 
         // 6. Set desc.[[Value]] to the result of converting value to an ECMAScript value.
-        descriptor.value = value;
+        descriptor->value = value;
 )~~~");
     if (interface.extended_attributes.contains("LegacyUnenumerableNamedProperties"))
         generator.append(R"~~~(
         // 7. If A implements an interface with the [LegacyUnenumerableNamedProperties] extended attribute, then set desc.[[Enumerable]] to false, otherwise set it to true.
-        descriptor.enumerable = true;
+        descriptor->enumerable = true;
 )~~~");
     else {
         generator.append(R"~~~(
         // 7. If A implements an interface with the [LegacyUnenumerableNamedProperties] extended attribute, then set desc.[[Enumerable]] to false, otherwise set it to true.
-        descriptor.enumerable = false;
+        descriptor->enumerable = false;
 )~~~");
     }
     generator.append(R"~~~(
         // 8. Set desc.[[Writable]] to true and desc.[[Configurable]] to true.
-        descriptor.writable = true;
-        descriptor.configurable = true;
+        descriptor->writable = true;
+        descriptor->configurable = true;
 
         // 9. Return desc.
         return descriptor;
@@ -3515,7 +3516,7 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> @named_properties_class@
 }
 
 // https://webidl.spec.whatwg.org/#named-properties-object-defineownproperty
-JS::ThrowCompletionOr<bool> @named_properties_class@::internal_define_own_property(JS::PropertyKey const&, JS::PropertyDescriptor&, Optional<JS::PropertyDescriptor>*)
+JS::ThrowCompletionOr<bool> @named_properties_class@::internal_define_own_property(JS::PropertyKey const&, GC::Ref<JS::PropertyDescriptor>, GC::Ptr<JS::PropertyDescriptor>)
 {
     // 1. Return false.
     return false;
@@ -4549,7 +4550,9 @@ JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.setter_callback@)
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::BadArgCountOne, "@namespaced_name@ setter");
 
     auto* impl = TRY(impl_from(vm));
-    JS::PropertyDescriptor descriptor { .value = vm.argument(0), .writable = true };
+    auto descriptor = vm.heap().allocate<JS::PropertyDescriptor>();
+    descriptor->value = vm.argument(0);
+    descriptor->writable = true;
     TRY(impl->internal_define_own_property("@attribute.name@"_utf16_fly_string, descriptor));
     return JS::js_undefined();
 }

@@ -61,7 +61,7 @@ ThrowCompletionOr<bool> ModuleNamespaceObject::internal_prevent_extensions()
 }
 
 // 10.4.6.5 [[GetOwnProperty]] ( P ), https://tc39.es/ecma262/#sec-module-namespace-exotic-objects-getownproperty-p
-ThrowCompletionOr<Optional<PropertyDescriptor>> ModuleNamespaceObject::internal_get_own_property(PropertyKey const& property_key) const
+ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> ModuleNamespaceObject::internal_get_own_property(PropertyKey const& property_key) const
 {
     // 1. If Type(P) is Symbol, return OrdinaryGetOwnProperty(O, P).
     if (property_key.is_symbol())
@@ -71,17 +71,22 @@ ThrowCompletionOr<Optional<PropertyDescriptor>> ModuleNamespaceObject::internal_
     // 3. If P is not an element of exports, return undefined.
     auto export_element = m_exports.find(property_key.to_string());
     if (export_element.is_end())
-        return Optional<PropertyDescriptor> {};
+        return nullptr;
 
     // 4. Let value be ? O.[[Get]](P, O).
     auto value = TRY(internal_get(property_key, this));
 
     // 5. Return PropertyDescriptor { [[Value]]: value, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: false }.
-    return PropertyDescriptor { .value = value, .writable = true, .enumerable = true, .configurable = false };
+    auto descriptor = heap().allocate<PropertyDescriptor>();
+    descriptor->value = value;
+    descriptor->writable = true;
+    descriptor->enumerable = true;
+    descriptor->configurable = false;
+    return descriptor;
 }
 
 // 10.4.6.6 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-module-namespace-exotic-objects-defineownproperty-p-desc
-ThrowCompletionOr<bool> ModuleNamespaceObject::internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property)
+ThrowCompletionOr<bool> ModuleNamespaceObject::internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> descriptor, GC::Ptr<PropertyDescriptor> precomputed_get_own_property)
 {
     // 1. If Type(P) is Symbol, return ! OrdinaryDefineOwnProperty(O, P, Desc).
     if (property_key.is_symbol())
@@ -91,28 +96,28 @@ ThrowCompletionOr<bool> ModuleNamespaceObject::internal_define_own_property(Prop
     auto current = TRY(internal_get_own_property(property_key));
 
     // 3. If current is undefined, return false.
-    if (!current.has_value())
+    if (!current)
         return false;
 
     // 4. If Desc has a [[Configurable]] field and Desc.[[Configurable]] is true, return false.
-    if (descriptor.configurable.has_value() && descriptor.configurable.value())
+    if (descriptor->configurable.has_value() && descriptor->configurable.value())
         return false;
 
     // 5. If Desc has an [[Enumerable]] field and Desc.[[Enumerable]] is false, return false.
-    if (descriptor.enumerable.has_value() && !descriptor.enumerable.value())
+    if (descriptor->enumerable.has_value() && !descriptor->enumerable.value())
         return false;
 
     // 6. If IsAccessorDescriptor(Desc) is true, return false.
-    if (descriptor.is_accessor_descriptor())
+    if (descriptor->is_accessor_descriptor())
         return false;
 
     // 7. If Desc has a [[Writable]] field and Desc.[[Writable]] is false, return false.
-    if (descriptor.writable.has_value() && !descriptor.writable.value())
+    if (descriptor->writable.has_value() && !descriptor->writable.value())
         return false;
 
     // 8. If Desc has a [[Value]] field, return SameValue(Desc.[[Value]], current.[[Value]]).
-    if (descriptor.value.has_value())
-        return same_value(descriptor.value.value(), current->value.value());
+    if (descriptor->value.has_value())
+        return same_value(descriptor->value.value(), current->value.value());
 
     // 9. Return true.
     return true;

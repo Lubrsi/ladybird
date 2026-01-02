@@ -227,7 +227,7 @@ public:
     }
 
     // 10.4.5.2 [[GetOwnProperty]] ( P ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-getownproperty-p
-    virtual ThrowCompletionOr<Optional<PropertyDescriptor>> internal_get_own_property(PropertyKey const& property_key) const override
+    virtual ThrowCompletionOr<GC::Ptr<PropertyDescriptor>> internal_get_own_property(PropertyKey const& property_key) const override
     {
         // NOTE: If the property name is a number type (An implementation-defined optimized
         // property key type), it can be treated as a string property that will transparently be
@@ -245,15 +245,15 @@ public:
 
                 // ii. If value is undefined, return undefined.
                 if (value.is_undefined())
-                    return Optional<PropertyDescriptor> {};
+                    return nullptr;
 
                 // iii. Return the PropertyDescriptor { [[Value]]: value, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }.
-                return PropertyDescriptor {
-                    .value = value,
-                    .writable = true,
-                    .enumerable = true,
-                    .configurable = true,
-                };
+                auto descriptor = heap().template allocate<PropertyDescriptor>();
+                descriptor->value = value;
+                descriptor->writable = true;
+                descriptor->enumerable = true;
+                descriptor->configurable = true;
+                return descriptor;
             }
         }
 
@@ -283,7 +283,7 @@ public:
     }
 
     // 10.4.5.4 [[DefineOwnProperty]] ( P, Desc ), https://tc39.es/ecma262/#sec-integer-indexed-exotic-objects-defineownproperty-p-desc
-    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, PropertyDescriptor& property_descriptor, Optional<PropertyDescriptor>* precomputed_get_own_property = nullptr) override
+    virtual ThrowCompletionOr<bool> internal_define_own_property(PropertyKey const& property_key, GC::Ref<PropertyDescriptor> property_descriptor, GC::Ptr<PropertyDescriptor> precomputed_get_own_property = nullptr) override
     {
         // NOTE: If the property name is a number type (An implementation-defined optimized
         // property key type), it can be treated as a string property that will transparently be
@@ -301,24 +301,24 @@ public:
                     return false;
 
                 // ii. If Desc has a [[Configurable]] field and if Desc.[[Configurable]] is false, return false.
-                if (property_descriptor.configurable.has_value() && !*property_descriptor.configurable)
+                if (property_descriptor->configurable.has_value() && !*property_descriptor->configurable)
                     return false;
 
                 // iii. If Desc has an [[Enumerable]] field and if Desc.[[Enumerable]] is false, return false.
-                if (property_descriptor.enumerable.has_value() && !*property_descriptor.enumerable)
+                if (property_descriptor->enumerable.has_value() && !*property_descriptor->enumerable)
                     return false;
 
                 // iv. If IsAccessorDescriptor(Desc) is true, return false.
-                if (property_descriptor.is_accessor_descriptor())
+                if (property_descriptor->is_accessor_descriptor())
                     return false;
 
                 // v. If Desc has a [[Writable]] field and if Desc.[[Writable]] is false, return false.
-                if (property_descriptor.writable.has_value() && !*property_descriptor.writable)
+                if (property_descriptor->writable.has_value() && !*property_descriptor->writable)
                     return false;
 
                 // vi. If Desc has a [[Value]] field, perform ? TypedArraySetElement(O, numericIndex, Desc.[[Value]]).
-                if (property_descriptor.value.has_value())
-                    TRY(typed_array_set_element<T>(*this, numeric_index, *property_descriptor.value));
+                if (property_descriptor->value.has_value())
+                    TRY(typed_array_set_element<T>(*this, numeric_index, *property_descriptor->value));
 
                 // vii. Return true.
                 return true;

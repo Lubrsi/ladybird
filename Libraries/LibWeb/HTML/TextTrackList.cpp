@@ -17,6 +17,9 @@ GC_DEFINE_ALLOCATOR(TextTrackList);
 TextTrackList::TextTrackList(JS::Realm& realm)
     : DOM::EventTarget(realm, MayInterfereWithIndexedPropertyAccess::Yes)
 {
+    m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
+        .supports_indexed_properties = true,
+    };
 }
 
 TextTrackList::~TextTrackList() = default;
@@ -34,20 +37,14 @@ void TextTrackList::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-texttracklist-item
-JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> TextTrackList::internal_get_own_property(JS::PropertyKey const& property_name) const
+Optional<JS::Value> TextTrackList::item_value(size_t index) const
 {
     // To determine the value of an indexed property of a TextTrackList object for a given index index, the user
     // agent must return the indexth text track in the list represented by the TextTrackList object.
-    if (property_name.is_number()) {
-        if (auto index = property_name.as_number(); index < m_text_tracks.size()) {
-            JS::PropertyDescriptor descriptor;
-            descriptor.value = m_text_tracks.at(index);
+    if (index < m_text_tracks.size())
+        return m_text_tracks.at(index);
 
-            return descriptor;
-        }
-    }
-
-    return Base::internal_get_own_property(property_name);
+    return {};
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-texttracklist-length

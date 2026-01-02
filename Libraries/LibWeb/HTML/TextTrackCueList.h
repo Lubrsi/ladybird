@@ -30,7 +30,8 @@ private:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Visitor&) override;
 
-    virtual JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> internal_get_own_property(JS::PropertyKey const& property_name) const override;
+    // ^PlatformObject
+    virtual Optional<JS::Value> item_value(size_t index) const override;
 
     Vector<GC::Ref<TextTrackCue>> m_cues;
 };

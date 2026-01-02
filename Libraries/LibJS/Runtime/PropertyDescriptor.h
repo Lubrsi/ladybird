@@ -8,6 +8,7 @@
 
 #include <AK/Optional.h>
 #include <AK/String.h>
+#include <LibGC/CellAllocator.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/Value.h>
@@ -16,10 +17,13 @@ namespace JS {
 
 // 6.2.5 The Property Descriptor Specification Type, https://tc39.es/ecma262/#sec-property-descriptor-specification-type
 
-Value from_property_descriptor(VM&, Optional<PropertyDescriptor> const&);
-ThrowCompletionOr<PropertyDescriptor> to_property_descriptor(VM&, Value);
+Value from_property_descriptor(VM&, GC::Ptr<PropertyDescriptor const>);
+ThrowCompletionOr<GC::Ref<PropertyDescriptor>> to_property_descriptor(VM&, Value);
 
-class JS_API PropertyDescriptor {
+class JS_API PropertyDescriptor : public GC::Cell {
+    GC_CELL(PropertyDescriptor, GC::Cell);
+    GC_DECLARE_ALLOCATOR(PropertyDescriptor);
+
 public:
     [[nodiscard]] bool is_accessor_descriptor() const;
     [[nodiscard]] bool is_data_descriptor() const;
@@ -35,6 +39,8 @@ public:
         return !value.has_value() && !get.has_value() && !set.has_value() && !writable.has_value() && !enumerable.has_value() && !configurable.has_value() && !unimplemented.has_value();
     }
 
+    virtual void visit_edges(Visitor& visitor) override;
+
     Optional<Value> value {};
     Optional<GC::Ptr<FunctionObject>> get {};
     Optional<GC::Ptr<FunctionObject>> set {};
@@ -44,6 +50,10 @@ public:
     Optional<bool> unimplemented {};
 
     Optional<u32> property_offset {};
+
+private:
+    PropertyDescriptor();
+    virtual ~PropertyDescriptor() override;
 };
 
 }

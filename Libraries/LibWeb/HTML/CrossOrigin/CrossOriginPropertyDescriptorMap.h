@@ -22,12 +22,12 @@ struct CrossOriginProperty {
 };
 
 struct CrossOriginKey {
-    FlatPtr current_principal_settings_object;
-    FlatPtr relevant_settings_object;
+    GC::Ref<EnvironmentSettingsObject> current_principal_settings_object;
+    GC::Ref<EnvironmentSettingsObject> relevant_settings_object;
     JS::PropertyKey property_key;
 };
 
-using CrossOriginPropertyDescriptorMap = HashMap<CrossOriginKey, JS::PropertyDescriptor>;
+using CrossOriginPropertyDescriptorMap = HashMap<CrossOriginKey, GC::Ref<JS::PropertyDescriptor>>;
 
 }
 
@@ -39,7 +39,7 @@ struct Traits<Web::HTML::CrossOriginKey> : public DefaultTraits<Web::HTML::Cross
     {
         return pair_int_hash(
             Traits<JS::PropertyKey>::hash(key.property_key),
-            pair_int_hash(ptr_hash(key.current_principal_settings_object), ptr_hash(key.relevant_settings_object)));
+            pair_int_hash(ptr_hash(key.current_principal_settings_object.ptr()), ptr_hash(key.relevant_settings_object.ptr())));
     }
 
     static bool equals(Web::HTML::CrossOriginKey const& a, Web::HTML::CrossOriginKey const& b)

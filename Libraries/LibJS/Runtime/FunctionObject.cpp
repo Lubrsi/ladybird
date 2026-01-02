@@ -77,6 +77,7 @@ GC::Ref<PrimitiveString> FunctionObject::make_function_name(Variant<PropertyKey,
 void FunctionObject::set_function_name(Variant<PropertyKey, PrivateName> const& name_arg, Optional<StringView> const& prefix)
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
 
     // 1. Assert: F is an extensible object that does not have a "name" own property.
     VERIFY(m_is_extensible);
@@ -85,7 +86,11 @@ void FunctionObject::set_function_name(Variant<PropertyKey, PrivateName> const& 
     auto name = make_function_name(name_arg, prefix);
 
     // 6. Perform ! DefinePropertyOrThrow(F, "name", PropertyDescriptor { [[Value]]: name, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }).
-    PropertyDescriptor descriptor { .value = name, .writable = false, .enumerable = false, .configurable = true };
+    auto descriptor = heap.allocate<PropertyDescriptor>();
+    descriptor->value = name;
+    descriptor->writable = false;
+    descriptor->enumerable = false;
+    descriptor->configurable = true;
     MUST(define_property_or_throw(vm.names.name, descriptor));
 
     // 7. Return unused.
@@ -95,6 +100,7 @@ void FunctionObject::set_function_name(Variant<PropertyKey, PrivateName> const& 
 void FunctionObject::set_function_length(double length)
 {
     auto& vm = this->vm();
+    auto& heap = this->heap();
 
     // "length (a non-negative integer or +∞)"
     VERIFY(trunc(length) == length || __builtin_isinf_sign(length) == 1);
@@ -104,7 +110,11 @@ void FunctionObject::set_function_length(double length)
     VERIFY(!storage_has(vm.names.length));
 
     // 2. Perform ! DefinePropertyOrThrow(F, "length", PropertyDescriptor { [[Value]]: 𝔽(length), [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }).
-    PropertyDescriptor descriptor { .value = Value { length }, .writable = false, .enumerable = false, .configurable = true };
+    auto descriptor = heap.allocate<PropertyDescriptor>();
+    descriptor->value = Value { length };
+    descriptor->writable = false;
+    descriptor->enumerable = false;
+    descriptor->configurable = true;
     MUST(define_property_or_throw(vm.names.length, descriptor));
 
     // 3. Return unused.

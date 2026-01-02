@@ -240,19 +240,19 @@ ThrowCompletionOr<Realm*> get_function_realm(VM& vm, FunctionObject const& funct
 }
 
 // 10.1.6.2 IsCompatiblePropertyDescriptor ( Extensible, Desc, Current ), https://tc39.es/ecma262/#sec-iscompatiblepropertydescriptor
-bool is_compatible_property_descriptor(bool extensible, PropertyDescriptor& descriptor, Optional<PropertyDescriptor> const& current)
+bool is_compatible_property_descriptor(bool extensible, GC::Ref<PropertyDescriptor> descriptor, GC::Ptr<PropertyDescriptor const> current)
 {
     // 1. Return ValidateAndApplyPropertyDescriptor(undefined, "", Extensible, Desc, Current).
     return validate_and_apply_property_descriptor(nullptr, Utf16FlyString {}, extensible, descriptor, current);
 }
 
 // 10.1.6.3 ValidateAndApplyPropertyDescriptor ( O, P, extensible, Desc, current ), https://tc39.es/ecma262/#sec-validateandapplypropertydescriptor
-bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& property_key, bool extensible, PropertyDescriptor& descriptor, Optional<PropertyDescriptor> const& current)
+bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& property_key, bool extensible, GC::Ref<PropertyDescriptor> descriptor, GC::Ptr<PropertyDescriptor const> current)
 {
     // 1. Assert: IsPropertyKey(P) is true.
 
     // 2. If current is undefined, then
-    if (!current.has_value()) {
+    if (!current) {
         // a. If extensible is false, return false.
         if (!extensible)
             return false;
@@ -262,18 +262,18 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
             return true;
 
         // c. If IsAccessorDescriptor(Desc) is true, then
-        if (descriptor.is_accessor_descriptor()) {
+        if (descriptor->is_accessor_descriptor()) {
             // i. Create an own accessor property named P of object O whose [[Get]], [[Set]], [[Enumerable]], and [[Configurable]] attributes are set to the value of the corresponding field in Desc if Desc has that field, or to the attribute's default value otherwise.
-            auto accessor = Accessor::create(object->vm(), descriptor.get.value_or(nullptr), descriptor.set.value_or(nullptr));
-            auto offset = object->storage_set(property_key, { accessor, descriptor.attributes() });
-            descriptor.property_offset = offset;
+            auto accessor = Accessor::create(object->vm(), descriptor->get.value_or(nullptr), descriptor->set.value_or(nullptr));
+            auto offset = object->storage_set(property_key, { accessor, descriptor->attributes() });
+            descriptor->property_offset = offset;
         }
         // d. Else,
         else {
             // i. Create an own data property named P of object O whose [[Value]], [[Writable]], [[Enumerable]], and [[Configurable]] attributes are set to the value of the corresponding field in Desc if Desc has that field, or to the attribute's default value otherwise.
-            auto value = descriptor.value.value_or(js_undefined());
-            auto offset = object->storage_set(property_key, { value, descriptor.attributes() });
-            descriptor.property_offset = offset;
+            auto value = descriptor->value.value_or(js_undefined());
+            auto offset = object->storage_set(property_key, { value, descriptor->attributes() });
+            descriptor->property_offset = offset;
         }
 
         // e. Return true.
@@ -283,41 +283,41 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
     // 3. Assert: current is a fully populated Property Descriptor.
 
     // 4. If Desc does not have any fields, return true.
-    if (descriptor.is_empty())
+    if (descriptor->is_empty())
         return true;
 
     // 5. If current.[[Configurable]] is false, then
     if (!*current->configurable) {
         // a. If Desc has a [[Configurable]] field and Desc.[[Configurable]] is true, return false.
-        if (descriptor.configurable.has_value() && *descriptor.configurable)
+        if (descriptor->configurable.has_value() && *descriptor->configurable)
             return false;
 
         // b. If Desc has an [[Enumerable]] field and SameValue(Desc.[[Enumerable]], current.[[Enumerable]]) is false, return false.
-        if (descriptor.enumerable.has_value() && *descriptor.enumerable != *current->enumerable)
+        if (descriptor->enumerable.has_value() && *descriptor->enumerable != *current->enumerable)
             return false;
 
         // c. If IsGenericDescriptor(Desc) is false and SameValue(IsAccessorDescriptor(Desc), IsAccessorDescriptor(current)) is false, return false.
-        if (!descriptor.is_generic_descriptor() && (descriptor.is_accessor_descriptor() != current->is_accessor_descriptor()))
+        if (!descriptor->is_generic_descriptor() && (descriptor->is_accessor_descriptor() != current->is_accessor_descriptor()))
             return false;
 
         // d. If IsAccessorDescriptor(current) is true, then
         if (current->is_accessor_descriptor()) {
             // i. If Desc has a [[Get]] field and SameValue(Desc.[[Get]], current.[[Get]]) is false, return false.
-            if (descriptor.get.has_value() && *descriptor.get != *current->get)
+            if (descriptor->get.has_value() && *descriptor->get != *current->get)
                 return false;
 
             // ii. If Desc has a [[Set]] field and SameValue(Desc.[[Set]], current.[[Set]]) is false, return false.
-            if (descriptor.set.has_value() && *descriptor.set != *current->set)
+            if (descriptor->set.has_value() && *descriptor->set != *current->set)
                 return false;
         }
         // e. Else if current.[[Writable]] is false, then
         else if (!*current->writable) {
             // i. If Desc has a [[Writable]] field and Desc.[[Writable]] is true, return false.
-            if (descriptor.writable.has_value() && *descriptor.writable)
+            if (descriptor->writable.has_value() && *descriptor->writable)
                 return false;
 
             // ii. If Desc has a [[Value]] field and SameValue(Desc.[[Value]], current.[[Value]]) is false, return false.
-            if (descriptor.value.has_value() && (*descriptor.value != *current->value))
+            if (descriptor->value.has_value() && (*descriptor->value != *current->value))
                 return false;
         }
     }
@@ -325,55 +325,55 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
     // 6. If O is not undefined, then
     if (object != nullptr) {
         // a. If IsDataDescriptor(current) is true and IsAccessorDescriptor(Desc) is true, then
-        if (current->is_data_descriptor() && descriptor.is_accessor_descriptor()) {
+        if (current->is_data_descriptor() && descriptor->is_accessor_descriptor()) {
             // i. If Desc has a [[Configurable]] field, let configurable be Desc.[[Configurable]], else let configurable be current.[[Configurable]].
-            auto configurable = descriptor.configurable.value_or(*current->configurable);
+            auto configurable = descriptor->configurable.value_or(*current->configurable);
 
             // ii. If Desc has a [[Enumerable]] field, let enumerable be Desc.[[Enumerable]], else let enumerable be current.[[Enumerable]].
-            auto enumerable = descriptor.enumerable.value_or(*current->enumerable);
+            auto enumerable = descriptor->enumerable.value_or(*current->enumerable);
 
             // iii. Replace the property named P of object O with an accessor property having [[Configurable]] and [[Enumerable]] attributes set to configurable and enumerable, respectively, and each other attribute set to its corresponding value in Desc if present, otherwise to its default value.
-            auto accessor = Accessor::create(object->vm(), descriptor.get.value_or(nullptr), descriptor.set.value_or(nullptr));
+            auto accessor = Accessor::create(object->vm(), descriptor->get.value_or(nullptr), descriptor->set.value_or(nullptr));
             PropertyAttributes attributes;
             attributes.set_enumerable(enumerable);
             attributes.set_configurable(configurable);
             auto offset = object->storage_set(property_key, { accessor, attributes });
-            descriptor.property_offset = offset;
+            descriptor->property_offset = offset;
         }
         // b. Else if IsAccessorDescriptor(current) is true and IsDataDescriptor(Desc) is true, then
-        else if (current->is_accessor_descriptor() && descriptor.is_data_descriptor()) {
+        else if (current->is_accessor_descriptor() && descriptor->is_data_descriptor()) {
             // i. If Desc has a [[Configurable]] field, let configurable be Desc.[[Configurable]], else let configurable be current.[[Configurable]].
-            auto configurable = descriptor.configurable.value_or(*current->configurable);
+            auto configurable = descriptor->configurable.value_or(*current->configurable);
 
             // ii. If Desc has a [[Enumerable]] field, let enumerable be Desc.[[Enumerable]], else let enumerable be current.[[Enumerable]].
-            auto enumerable = descriptor.enumerable.value_or(*current->enumerable);
+            auto enumerable = descriptor->enumerable.value_or(*current->enumerable);
 
             // iii. Replace the property named P of object O with a data property having [[Configurable]] and [[Enumerable]] attributes set to configurable and enumerable, respectively, and each other attribute set to its corresponding value in Desc if present, otherwise to its default value.
-            auto value = descriptor.value.value_or(js_undefined());
+            auto value = descriptor->value.value_or(js_undefined());
             PropertyAttributes attributes;
-            attributes.set_writable(descriptor.writable.value_or(false));
+            attributes.set_writable(descriptor->writable.value_or(false));
             attributes.set_enumerable(enumerable);
             attributes.set_configurable(configurable);
             auto offset = object->storage_set(property_key, { value, attributes });
-            descriptor.property_offset = offset;
+            descriptor->property_offset = offset;
         }
         // c. Else,
         else {
             // i. For each field of Desc, set the corresponding attribute of the property named P of object O to the value of the field.
             Value value;
-            if (descriptor.is_accessor_descriptor() || (current->is_accessor_descriptor() && !descriptor.is_data_descriptor())) {
-                auto getter = descriptor.get.value_or(current->get.value_or(nullptr));
-                auto setter = descriptor.set.value_or(current->set.value_or(nullptr));
+            if (descriptor->is_accessor_descriptor() || (current->is_accessor_descriptor() && !descriptor->is_data_descriptor())) {
+                auto getter = descriptor->get.value_or(current->get.value_or(nullptr));
+                auto setter = descriptor->set.value_or(current->set.value_or(nullptr));
                 value = Accessor::create(object->vm(), getter, setter);
             } else {
-                value = descriptor.value.value_or(current->value.value_or({}));
+                value = descriptor->value.value_or(current->value.value_or({}));
             }
             PropertyAttributes attributes;
-            attributes.set_writable(descriptor.writable.value_or(current->writable.value_or(false)));
-            attributes.set_enumerable(descriptor.enumerable.value_or(current->enumerable.value_or(false)));
-            attributes.set_configurable(descriptor.configurable.value_or(current->configurable.value_or(false)));
+            attributes.set_writable(descriptor->writable.value_or(current->writable.value_or(false)));
+            attributes.set_enumerable(descriptor->enumerable.value_or(current->enumerable.value_or(false)));
+            attributes.set_configurable(descriptor->configurable.value_or(current->configurable.value_or(false)));
             auto offset = object->storage_set(property_key, { value, attributes });
-            descriptor.property_offset = offset;
+            descriptor->property_offset = offset;
         }
     }
 
