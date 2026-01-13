@@ -1754,4 +1754,25 @@ ThrowCompletionOr<DifferenceSettings> get_difference_settings(VM& vm, DurationOp
     return DifferenceSettings { .smallest_unit = smallest_unit_value, .largest_unit = largest_unit_value, .rounding_mode = rounding_mode, .rounding_increment = rounding_increment };
 }
 
+i64 clip_bigint_to_sane_time(Crypto::SignedBigInteger const& value)
+{
+    static Crypto::SignedBigInteger const min_bigint { NumericLimits<i64>::min() };
+    static Crypto::SignedBigInteger const max_bigint { NumericLimits<i64>::max() };
+
+    // The provided epoch (nano)seconds value is potentially out of range for AK::Duration and subsequently
+    // get_time_zone_offset(). We can safely assume that the TZDB has no useful information that far
+    // into the past and future anyway, so clamp it to the i64 range.
+    if (value < min_bigint)
+        return NumericLimits<i64>::min();
+    if (value > max_bigint)
+        return NumericLimits<i64>::max();
+
+    return value.to_i64();
+}
+
+double to_epoch_milliseconds(Crypto::SignedBigInteger const& epoch_nanoseconds)
+{
+    return big_floor(epoch_nanoseconds, NANOSECONDS_PER_MILLISECOND).to_double();
+}
+
 }

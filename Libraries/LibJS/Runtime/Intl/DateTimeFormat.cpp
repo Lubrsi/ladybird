@@ -8,6 +8,7 @@
 #include <LibJS/Runtime/Date.h>
 #include <LibJS/Runtime/Intl/DateTimeFormat.h>
 #include <LibJS/Runtime/NativeFunction.h>
+#include <LibJS/Runtime/Temporal/AbstractOperations.h>
 #include <LibJS/Runtime/Temporal/Instant.h>
 #include <LibJS/Runtime/Temporal/PlainDate.h>
 #include <LibJS/Runtime/Temporal/PlainDateTime.h>
@@ -507,11 +508,6 @@ bool same_temporal_type(FormattableDateTime const& x, FormattableDateTime const&
     return x.index() == y.index();
 }
 
-static double to_epoch_milliseconds(Crypto::SignedBigInteger const& epoch_nanoseconds)
-{
-    return big_floor(epoch_nanoseconds, Temporal::NANOSECONDS_PER_MILLISECOND).to_double();
-}
-
 // 15.9.15 HandleDateTimeTemporalDate ( dateTimeFormat, temporalDate ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldate
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainDate const& temporal_date)
 {
@@ -533,7 +529,7 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date(VM& vm, DateTimeFo
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainDate"sv);
 
     // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
 // 15.9.16 HandleDateTimeTemporalYearMonth ( dateTimeFormat, temporalYearMonth ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalyearmonth
@@ -559,7 +555,7 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_year_month(VM& vm, Date
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainYearMonth"sv);
 
     // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
 // 15.9.17 HandleDateTimeTemporalMonthDay ( dateTimeFormat, temporalMonthDay ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalmonthday
@@ -585,7 +581,7 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_month_day(VM& vm, DateT
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainMonthDay"sv);
 
     // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
 // 15.9.18 HandleDateTimeTemporalTime ( dateTimeFormat, temporalTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaltime
@@ -608,7 +604,7 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_time(VM& vm, DateTimeFo
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainTime"sv);
 
     // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
 // 15.9.19 HandleDateTimeTemporalDateTime ( dateTimeFormat, dateTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldatetime
@@ -628,7 +624,7 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date_time(VM& vm, DateT
     VERIFY(formatter.has_value());
 
     // 4. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
 // 15.9.20 HandleDateTimeTemporalInstant ( dateTimeFormat, instant ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalinstant
@@ -639,7 +635,7 @@ ValueFormat handle_date_time_temporal_instant(DateTimeFormat& date_time_format, 
     VERIFY(formatter.has_value());
 
     // 2. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: instant.[[EpochNanoseconds]]  }.
-    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(instant.epoch_nanoseconds()->big_integer()) };
+    return ValueFormat { .formatter = *formatter, .epoch_milliseconds = Temporal::to_epoch_milliseconds(instant.epoch_nanoseconds()->big_integer()) };
 }
 
 // 15.9.21 HandleDateTimeOthers ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimeothers

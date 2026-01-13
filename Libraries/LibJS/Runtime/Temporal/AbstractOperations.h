@@ -199,6 +199,9 @@ ThrowCompletionOr<String> to_offset_string(VM&, Value argument);
 CalendarFields iso_date_to_fields(StringView calendar, ISODate, DateType);
 ThrowCompletionOr<DifferenceSettings> get_difference_settings(VM&, DurationOperation, Object const& options, UnitGroup, ReadonlySpan<Unit> disallowed_units, Unit fallback_smallest_unit, Unit smallest_largest_default_unit);
 
+i64 clip_bigint_to_sane_time(Crypto::SignedBigInteger const& value);
+double to_epoch_milliseconds(Crypto::SignedBigInteger const& epoch_nanoseconds);
+
 // 13.40 ToIntegerWithTruncation ( argument ), https://tc39.es/proposal-temporal/#sec-tointegerwithtruncation
 template<typename... Args>
 ThrowCompletionOr<double> to_integer_with_truncation(VM& vm, Value argument, ErrorType const& error_type, Args&&... args)
