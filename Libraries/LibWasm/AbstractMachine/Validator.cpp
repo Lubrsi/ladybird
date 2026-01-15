@@ -2109,8 +2109,8 @@ VALIDATE_INSTRUCTION(block)
         stack.append(parameter);
 
     args.meta = Instruction::StructuredInstructionArgs::Meta {
-        .arity = block_type.results().size(),
-        .parameter_count = parameters.size(),
+        .arity = static_cast<u32>(block_type.results().size()),
+        .parameter_count = static_cast<u32>(parameters.size()),
     };
 
     return {};
@@ -2131,8 +2131,8 @@ VALIDATE_INSTRUCTION(loop)
         stack.append(parameter);
 
     args.meta = Instruction::StructuredInstructionArgs::Meta {
-        .arity = block_type.results().size(),
-        .parameter_count = parameters.size(),
+        .arity = static_cast<u32>(block_type.results().size()),
+        .parameter_count = static_cast<u32>(parameters.size()),
     };
 
     return {};
@@ -2157,8 +2157,8 @@ VALIDATE_INSTRUCTION(if_)
         stack.append(parameter);
 
     args.meta = Instruction::StructuredInstructionArgs::Meta {
-        .arity = block_type.results().size(),
-        .parameter_count = parameters.size(),
+        .arity = static_cast<u32>(block_type.results().size()),
+        .parameter_count = static_cast<u32>(parameters.size()),
     };
 
     return {};
@@ -2208,8 +2208,8 @@ VALIDATE_INSTRUCTION(try_table)
         TRY(stack.take(parameters[parameters.size() - i]));
 
     args.try_.meta = Instruction::StructuredInstructionArgs::Meta {
-        .arity = block_type.results().size(),
-        .parameter_count = parameters.size(),
+        .arity = static_cast<u32>(block_type.results().size()),
+        .parameter_count = static_cast<u32>(parameters.size()),
     };
 
     m_frames.empend(block_type, FrameKind::TryTable, stack.size());
