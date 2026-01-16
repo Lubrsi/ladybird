@@ -421,8 +421,9 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
                             offset, instance->size())
                     };
                 }
+
                 if (!data.init.is_empty())
-                    instance->data().overwrite(offset, data.init.data(), data.init.size());
+                    AK::TypedTransfer<u8>::copy(instance->data() + offset, data.init.data(), data.init.size());
                 return {};
             },
             [&](DataSection::Data::Passive const& passive) -> Optional<InstantiationError> {

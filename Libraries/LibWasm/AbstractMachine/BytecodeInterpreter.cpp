@@ -2231,9 +2231,11 @@ HANDLE_INSTRUCTION(memory_fill)
         auto const value = static_cast<u8>(configuration.take_source<source_address_mix>(1, addresses.sources).template to<u32>());
         auto const destination_offset = configuration.take_source<source_address_mix>(2, addresses.sources).template to<u32>();
 
-        Checked<u64> checked_end = destination_offset;
-        checked_end += count;
-        TRAP_IN_LOOP_IF_NOT(!checked_end.has_overflow() && static_cast<size_t>(checked_end.value()) <= instance->data().size());
+        if (!instance->backed_by_virtual_memory()) [[unlikely]] {
+            Checked<u64> checked_end = destination_offset;
+            checked_end += count;
+            TRAP_IN_LOOP_IF_NOT(!checked_end.has_overflow() && static_cast<size_t>(checked_end.value()) <= instance->size());
+        }
 
         if (count == 0)
             TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
@@ -2262,12 +2264,17 @@ HANDLE_INSTRUCTION(memory_copy)
     auto source_offset = configuration.take_source<source_address_mix>(1, addresses.sources).template to<i32>();
     auto destination_offset = configuration.take_source<source_address_mix>(2, addresses.sources).template to<i32>();
 
-    Checked<size_t> source_position = source_offset;
-    source_position.saturating_add(count);
-    Checked<size_t> destination_position = destination_offset;
-    destination_position.saturating_add(count);
-    TRAP_IN_LOOP_IF_NOT(source_position <= source_instance->data().size());
-    TRAP_IN_LOOP_IF_NOT(destination_position <= destination_instance->data().size());
+    if (!source_instance->backed_by_virtual_memory()) [[unlikely]] {
+        Checked<size_t> source_position = source_offset;
+        source_position.saturating_add(count);
+        TRAP_IN_LOOP_IF_NOT(source_position <= source_instance->size());
+    }
+
+    if (!destination_instance->backed_by_virtual_memory()) [[unlikely]] {
+        Checked<size_t> destination_position = destination_offset;
+        destination_position.saturating_add(count);
+        TRAP_IN_LOOP_IF_NOT(destination_position <= destination_instance->size());
+    }
 
     if (count == 0)
         TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
@@ -2305,10 +2312,13 @@ HANDLE_INSTRUCTION(memory_init)
 
     Checked<size_t> source_position = source_offset;
     source_position.saturating_add(count);
-    Checked<size_t> destination_position = destination_offset;
-    destination_position.saturating_add(count);
     TRAP_IN_LOOP_IF_NOT(source_position <= data.data().size());
-    TRAP_IN_LOOP_IF_NOT(destination_position <= memory->data().size());
+
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        Checked<size_t> destination_position = destination_offset;
+        destination_position.saturating_add(count);
+        TRAP_IN_LOOP_IF_NOT(destination_position <= memory->size());
+    }
 
     if (count == 0)
         TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
@@ -5018,13 +5028,15 @@ bool BytecodeInterpreter::load_and_push(Configuration& configuration, Instructio
     auto base = entry.template to<i32>();
     u64 instance_address = static_cast<u64>(bit_cast<u32>(base)) + arg.offset;
     dbgln_if(WASM_TRACE_DEBUG, "load({} : {}) -> stack", instance_address, sizeof(ReadType));
-    if (instance_address + sizeof(ReadType) > memory->size()) {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln_if(WASM_TRACE_DEBUG, "LibWasm: load_and_push - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + sizeof(ReadType), memory->size());
-        return true;
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        if (instance_address + sizeof(ReadType) > memory->size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln_if(WASM_TRACE_DEBUG, "LibWasm: load_and_push - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + sizeof(ReadType), memory->size());
+            return true;
+        }
     }
-    auto slice = memory->data().bytes().slice(instance_address, sizeof(ReadType));
-    entry = Value(static_cast<PushType>(read_value<ReadType>(slice)));
+    auto* data = memory->data() + instance_address;
+    entry = Value(static_cast<PushType>(read_value<ReadType>(data)));
     dbgln_if(WASM_TRACE_DEBUG, "  loaded value: {}", entry.value());
     return false;
 }
@@ -5045,20 +5057,22 @@ bool BytecodeInterpreter::load_and_push_mxn(Configuration& configuration, Instru
     auto base = entry.template to<i32>();
     u64 instance_address = static_cast<u64>(bit_cast<u32>(base)) + arg.offset;
     dbgln_if(WASM_TRACE_DEBUG, "vec-load({} : {}) -> stack", instance_address, M * N / 8);
-    if (instance_address + M * N / 8 > memory->size()) {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln("LibWasm: load_and_push_mxn - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + M * N / 8, memory->size());
-        return true;
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        if (instance_address + M * N / 8 > memory->size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln("LibWasm: load_and_push_mxn - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + M * N / 8, memory->size());
+            return true;
+        }
     }
-    auto slice = memory->data().bytes().slice(instance_address, M * N / 8);
+    auto* data = memory->data() + instance_address;
     using V64 = NativeVectorType<M, N, SetSign>;
     using V128 = NativeVectorType<M * 2, N, SetSign>;
 
     V64 bytes { 0 };
-    if (bit_cast<FlatPtr>(slice.data()) % sizeof(V64) == 0)
-        bytes = *bit_cast<V64*>(slice.data());
+    if (bit_cast<FlatPtr>(data) % sizeof(V64) == 0)
+        bytes = *bit_cast<V64*>(data);
     else
-        ByteReader::load(slice.data(), bytes);
+        ByteReader::load(data, bytes);
 
     entry = Value(bit_cast<u128>(convert_vector<V128>(bytes)));
     dbgln_if(WASM_TRACE_DEBUG, "  loaded value: {}", entry.value());
@@ -5076,14 +5090,16 @@ bool BytecodeInterpreter::load_and_push_lane_n(Configuration& configuration, Ins
     auto base = configuration.take_source<SourceAddressMix::Any>(1, addresses.sources).template to<u32>();
     u64 instance_address = static_cast<u64>(bit_cast<u32>(base)) + memarg_and_lane.memory.offset;
     dbgln_if(WASM_TRACE_DEBUG, "load-lane({} : {}, lane {}) -> stack", instance_address, N / 8, memarg_and_lane.lane);
-    if (instance_address + N / 8 > memory->size()) {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln("LibWasm: load_and_push_lane_n - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + N / 8, memory->size());
-        return true;
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        if (instance_address + N / 8 > memory->size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln("LibWasm: load_and_push_lane_n - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + N / 8, memory->size());
+            return true;
+        }
     }
-    auto slice = memory->data().bytes().slice(instance_address, N / 8);
+    auto* data = memory->data() + instance_address;
     auto dst = bit_cast<u8*>(&vector) + memarg_and_lane.lane * N / 8;
-    memcpy(dst, slice.data(), N / 8);
+    memcpy(dst, data, N / 8);
     dbgln_if(WASM_TRACE_DEBUG, "  loaded value: {}", vector);
     configuration.push_to_destination<SourceAddressMix::Any>(Value(vector), addresses.destination);
     return false;
@@ -5099,14 +5115,16 @@ bool BytecodeInterpreter::load_and_push_zero_n(Configuration& configuration, Ins
     auto base = configuration.take_source<SourceAddressMix::Any>(0, addresses.sources).template to<u32>();
     u64 instance_address = static_cast<u64>(bit_cast<u32>(base)) + memarg_and_lane.offset;
     dbgln_if(WASM_TRACE_DEBUG, "load-zero({} : {}) -> stack", instance_address, N / 8);
-    if (instance_address + N / 8 > memory->size()) {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln("LibWasm: load_and_push_zero_n - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + N / 8, memory->size());
-        return true;
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        if (instance_address + N / 8 > memory->size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln("LibWasm: load_and_push_zero_n - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + N / 8, memory->size());
+            return true;
+        }
     }
-    auto slice = memory->data().bytes().slice(instance_address, N / 8);
+    auto* data = memory->data() + instance_address;
     u128 vector = 0;
-    memcpy(&vector, slice.data(), N / 8);
+    memcpy(&vector, data, N / 8);
     dbgln_if(WASM_TRACE_DEBUG, "  loaded value: {}", vector);
     configuration.push_to_destination<SourceAddressMix::Any>(Value(vector), addresses.destination);
     return false;
@@ -5122,13 +5140,15 @@ bool BytecodeInterpreter::load_and_push_m_splat(Configuration& configuration, In
     auto base = entry.template to<i32>();
     u64 instance_address = static_cast<u64>(bit_cast<u32>(base)) + arg.offset;
     dbgln_if(WASM_TRACE_DEBUG, "vec-splat({} : {}) -> stack", instance_address, M / 8);
-    if (instance_address + M / 8 > memory->size()) {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln("LibWasm: load_and_push_m_splat - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + M / 8, memory->size());
-        return true;
+    if (!memory->backed_by_virtual_memory()) [[unlikely]] {
+        if (instance_address + M / 8 > memory->size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln("LibWasm: load_and_push_m_splat - Memory access out of bounds (expected {} to be less than or equal to {})", instance_address + M / 8, memory->size());
+            return true;
+        }
     }
-    auto slice = memory->data().bytes().slice(instance_address, M / 8);
-    auto value = read_value<NativeIntegralType<M>>(slice);
+    auto* data = memory->data() + instance_address;
+    auto value = read_value<NativeIntegralType<M>>(data);
     dbgln_if(WASM_TRACE_DEBUG, "  loaded value: {}", value);
     set_top_m_splat<M, NativeIntegralType>(configuration, value, addresses);
     return false;
@@ -5347,48 +5367,50 @@ bool BytecodeInterpreter::store_to_memory(Configuration& configuration, Instruct
 template<typename T>
 bool BytecodeInterpreter::store_to_memory(MemoryInstance& memory, u64 address, T value)
 {
-    Checked addition { address };
     size_t data_size;
     if constexpr (IsSame<ReadonlyBytes, T>)
         data_size = value.size();
     else
         data_size = sizeof(T);
 
-    addition += data_size;
-    if (addition.has_overflow() || addition.value() > memory.size()) [[unlikely]] {
-        m_trap = Trap::from_string("Memory access out of bounds");
-        dbgln("LibWasm: store_to_memory - Memory access out of bounds (expected 0 <= {} and {} <= {})", address, address + data_size, memory.size());
-        return true;
+    if (!memory.backed_by_virtual_memory()) [[unlikely]] {
+        Checked addition { address };
+        addition += data_size;
+        if (addition.has_overflow() || addition.value() > memory.size()) [[unlikely]] {
+            m_trap = Trap::from_string("Memory access out of bounds");
+            dbgln("LibWasm: store_to_memory - Memory access out of bounds (expected 0 <= {} and {} <= {})", address, address + data_size, memory.size());
+            return true;
+        }
     }
 
     dbgln_if(WASM_TRACE_DEBUG, "temporary({}b) -> store({})", data_size, address);
+    auto* data = memory.data() + address;
     if constexpr (IsSame<ReadonlyBytes, T>)
-        (void)value.copy_to(memory.data().bytes().slice(address, data_size));
+        (void)value.copy_to({ data, data_size });
     else
-        memcpy(memory.data().bytes().offset_pointer(address), &value, data_size);
+        memcpy(memory.data() + address, &value, data_size);
     return false;
 }
 
 template<typename T>
-T BytecodeInterpreter::read_value(ReadonlyBytes data)
+T BytecodeInterpreter::read_value(u8* data)
 {
-    VERIFY(sizeof(T) <= data.size());
-    if (bit_cast<FlatPtr>(data.data()) % alignof(T)) {
+    if (bit_cast<FlatPtr>(data) % alignof(T)) {
         alignas(T) u8 buf[sizeof(T)];
-        memcpy(buf, data.data(), sizeof(T));
+        memcpy(buf, data, sizeof(T));
         return bit_cast<LittleEndian<T>>(buf);
     }
-    return *bit_cast<LittleEndian<T> const*>(data.data());
+    return *bit_cast<LittleEndian<T> const*>(data);
 }
 
 template<>
-float BytecodeInterpreter::read_value<float>(ReadonlyBytes data)
+float BytecodeInterpreter::read_value<float>(u8* data)
 {
     return bit_cast<float>(read_value<u32>(data));
 }
 
 template<>
-double BytecodeInterpreter::read_value<double>(ReadonlyBytes data)
+double BytecodeInterpreter::read_value<double>(u8* data)
 {
     return bit_cast<double>(read_value<u64>(data));
 }

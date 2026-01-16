@@ -113,7 +113,7 @@ struct WASM_API BytecodeInterpreter final : public Interpreter {
     }
 
     template<typename T>
-    T read_value(ReadonlyBytes data);
+    T read_value(u8* data);
 
     ALWAYS_INLINE bool trap_if_not(bool value, StringView reason)
     {

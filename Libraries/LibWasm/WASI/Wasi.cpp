@@ -237,7 +237,7 @@ ErrorOr<Vector<T>> copy_typed_array(Configuration& configuration, Pointer<T> sou
     }
 
     for (Size i = 0; i < count; i += 1) {
-        values.unchecked_append(T::read_from(Array { ReadonlyBytes { memory->data().bytes().slice(address, size) } }));
+        values.unchecked_append(T::read_from(Array { ReadonlyBytes { memory->data() + address, size } }));
         address += size;
     }
 
@@ -257,7 +257,7 @@ ErrorOr<void> copy_typed_value_to(Configuration& configuration, T const& value, 
         return Error::from_errno(ENOBUFS);
     }
 
-    ABI::serialize(value, Array { Bytes { memory->data().bytes().slice(address, size) } });
+    ABI::serialize(value, Array { Bytes { memory->data() + address, size } });
     return {};
 }
 
@@ -273,8 +273,7 @@ ErrorOr<Span<T>> slice_typed_memory(Configuration& configuration, Pointer<T> sou
     if (memory->size() < address || memory->size() <= address + (size * count))
         return Error::from_errno(ENOBUFS);
 
-    auto untyped_slice = memory->data().bytes().slice(address, size * count);
-    return Span<T>(untyped_slice.data(), count);
+    return Span<T>(memory->data() + address, count);
 }
 
 template<typename T>
@@ -289,8 +288,7 @@ ErrorOr<Span<T const>> slice_typed_memory(Configuration& configuration, ConstPoi
     if (memory->size() < address || memory->size() <= address + (size * count))
         return Error::from_errno(ENOBUFS);
 
-    auto untyped_slice = memory->data().bytes().slice(address, size * count);
-    return Span<T const>(untyped_slice.data(), count);
+    return Span<T const>(memory->data() + address, count);
 }
 
 static ErrorOr<size_t> copy_string_including_terminating_null(Configuration& configuration, StringView string, Pointer<u8> target)
@@ -850,9 +848,10 @@ template<size_t N>
 static Array<Bytes, N> address_spans(Span<Value> values, Configuration& configuration)
 {
     Array<Bytes, N> result;
-    auto memory = configuration.store().get(MemoryAddress { 0 })->data().span();
+    auto memory = configuration.store().get(MemoryAddress { 0 });
+    auto memory_span = Bytes { memory->data(), memory->size() };
     for (size_t i = 0; i < N; ++i)
-        result[i] = memory.slice(values[i].to<i32>());
+        result[i] = memory_span.slice(values[i].to<i32>());
     return result;
 }
 

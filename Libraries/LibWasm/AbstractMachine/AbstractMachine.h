@@ -15,6 +15,7 @@
 #include <AK/UFixedBigInt.h>
 #include <LibWasm/Export.h>
 #include <LibWasm/Types.h>
+#include <sys/mman.h>
 
 namespace Wasm {
 
@@ -458,6 +459,11 @@ private:
 
 class MemoryInstance {
 public:
+    enum class Backing {
+        ByteBuffer,
+        VirtualMemory,
+    };
+
     static ErrorOr<MemoryInstance> create(MemoryType const& type)
     {
         MemoryInstance instance { type };
@@ -468,10 +474,27 @@ public:
         return { move(instance) };
     }
 
+    MemoryInstance(MemoryInstance&& other)
+        : m_type(move(other.m_type))
+        , m_backing(exchange(other.m_backing, Backing::ByteBuffer))
+        , m_size(exchange(other.m_size, 0))
+        , m_data(move(other.m_data))
+        , m_base_ptr(exchange(other.m_base_ptr, nullptr))
+    {
+    }
+
+    ~MemoryInstance()
+    {
+        if (m_backing == Backing::VirtualMemory)
+            munmap(m_base_ptr, m_size);
+    }
+
     auto& type() const { return m_type; }
     auto size() const { return m_size; }
-    auto& data() const { return m_data; }
-    auto& data() { return m_data; }
+    auto* data() const { return m_base_ptr; }
+    auto* data() { return m_base_ptr; }
+
+    ALWAYS_INLINE bool backed_by_virtual_memory() const { return m_backing == Backing::VirtualMemory; }
 
     enum class InhibitGrowCallback {
         No,
@@ -487,7 +510,7 @@ public:
     {
         if (size_to_grow == 0)
             return true;
-        u64 new_size = m_data.size() + size_to_grow;
+        u64 new_size = m_size + size_to_grow;
         // Can't grow past 2^16 pages.
         if (new_size >= Constants::page_size * 65536)
             return false;
@@ -495,12 +518,26 @@ public:
             if (max.value() * Constants::page_size < new_size)
                 return false;
         }
-        auto previous_size = m_size;
-        if (m_data.try_resize(new_size).is_error())
-            return false;
+
+        switch (m_backing) {
+        case Backing::ByteBuffer: {
+            auto previous_size = m_size;
+            if (m_data.try_resize(new_size).is_error())
+                return false;
+            m_base_ptr = m_data.data();
+            // The spec requires that we zero out everything on grow
+            __builtin_memset(m_data.offset_pointer(previous_size), 0, size_to_grow);
+            break;
+        }
+        case Backing::VirtualMemory: {
+            if (mprotect(m_base_ptr + m_size, size_to_grow, PROT_READ | PROT_WRITE) != 0)
+                return false;
+
+            break;
+        }
+        }
+
         m_size = new_size;
-        // The spec requires that we zero out everything on grow
-        __builtin_memset(m_data.offset_pointer(previous_size), 0, size_to_grow);
 
         // NOTE: This exists because wasm-js-api wants to execute code after a successful grow,
         //       See [this issue](https://github.com/WebAssembly/spec/issues/1635) for more details.
@@ -524,11 +561,29 @@ private:
     explicit MemoryInstance(MemoryType const& type)
         : m_type(type)
     {
+#ifdef AK_ARCH_64_BIT
+        if (type.limits().address_type() == AddressType::I32) {
+            // 32-bit base pointer + 32-bit offset + sizeof(WasmType)
+            constexpr size_t space_to_reserve = (8 * GiB) + Constants::page_size;
+            auto* base_ptr = static_cast<u8*>(mmap(nullptr, space_to_reserve, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0));
+            if (base_ptr != MAP_FAILED) {
+                m_backing = Backing::VirtualMemory;
+                m_base_ptr = base_ptr;
+                return;
+            }
+        }
+#endif
+
+        m_backing = Backing::ByteBuffer;
+        m_base_ptr = m_data.data();
     }
 
     MemoryType m_type;
+    Backing m_backing;
     size_t m_size { 0 };
     ByteBuffer m_data;
+
+    u8* m_base_ptr { nullptr };
 };
 
 class GlobalInstance {
