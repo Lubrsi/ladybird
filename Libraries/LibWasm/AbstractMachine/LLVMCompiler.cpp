@@ -8,6 +8,7 @@
   #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
   #include <llvm/IR/Verifier.h>
   #include <llvm/Support/TargetSelect.h>
+#include <llvm/TargetParser/Host.h>
 
 namespace Wasm {
 
@@ -16,7 +17,11 @@ ErrorOr<NonnullOwnPtr<LLVMCompiler>> LLVMCompiler::create()
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
 
-  auto jit = llvm::orc::LLJITBuilder().create();
+  auto jit = llvm::orc::LLJITBuilder()
+    .setJITTargetMachineBuilder(
+        llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::None)
+    )
+    .create();
   if (!jit)
       return Error::from_string_literal("Failed to create LLJIT");
 
@@ -95,6 +100,9 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
   compile_global_section(*llvm_module, builder, ctx);
   compile_functions(*llvm_module, builder, ctx);
 
+    if (llvm::verifyModule(*llvm_module, &llvm::errs()))
+        VERIFY_NOT_REACHED();
+
   // JIT compile
   auto tsm = llvm::orc::ThreadSafeModule(move(llvm_module), move(m_context));
   if (auto err = m_jit->addIRModule(move(tsm)))
@@ -104,10 +112,11 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
   if (!symbol)
       return Error::from_string_literal("Failed to find compiled function");
 
+    dbgln("{:p}", symbol->getValue());
   return reinterpret_cast<void*>(symbol->getValue());
 }
 
-void LLVMCompiler::compile_functions(CodeSection const& code_section, FunctionSection const& function_section, TypeSection const& type_section, llvm::Module& llvm_module, llvm::IRBuilder<>& builder, CompilationContext& context)
+void LLVMCompiler::compile_functions(llvm::Module& llvm_module, llvm::IRBuilder<>& builder, CompilationContext& context)
 {
     size_t code_index = 0;
     auto const& code_section = context.module.code_section();
@@ -151,8 +160,9 @@ void LLVMCompiler::compile_functions(CodeSection const& code_section, FunctionSe
         compile_expression(code.func().body(), builder, context);
 
         // Verify the function
-        // if (llvm::verifyFunction(*function, &llvm::errs()))
-        //     return Error::from_string_literal("LLVM function verification failed");
+        if (llvm::verifyFunction(*llvm_function, &llvm::errs()))
+            VERIFY_NOT_REACHED();
+
         ++code_index;
     }
 }
@@ -180,6 +190,7 @@ void LLVMCompiler::compile_expression(Expression const& expression, llvm::IRBuil
 
 void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<>& builder, CompilationContext& ctx)
 {
+    dbgln("{:#08x}", insn.opcode().value());
     switch (insn.opcode().value()) {
 
     // === Constants ===
@@ -206,19 +217,19 @@ void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<
 
     // === Locals ===
     case Instructions::local_get.value(): {
-      auto idx = insn.arguments().get<LocalIndex>().value();
+      auto idx = insn.local_index().value();
       auto* value = builder.CreateLoad(ctx.locals[idx]->getAllocatedType(), ctx.locals[idx]);
       ctx.stack.append(value);
       break;
     }
     case Instructions::local_set.value(): {
-      auto idx = insn.arguments().get<LocalIndex>().value();
+      auto idx = insn.local_index().value();
       auto* value = ctx.stack.take_last();
       builder.CreateStore(value, ctx.locals[idx]);
       break;
     }
     case Instructions::local_tee.value(): {
-      auto idx = insn.arguments().get<LocalIndex>().value();
+      auto idx = insn.local_index().value();
       auto* value = ctx.stack.last();
       builder.CreateStore(value, ctx.locals[idx]);
       break;
@@ -339,21 +350,19 @@ void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<
       auto const& arg = insn.arguments().get<Instruction::MemoryArgument>();
         auto& address = ctx.memories.data()[arg.memory_index.value()];
         auto* memory = ctx.store.get(address);
-      auto* offset_val = ctx.stack.take_last();
-      auto* effective_addr = builder.CreateAdd(offset_val, builder.getInt64(arg.offset));
+      auto* base = ctx.stack.take_last();
+      auto* effective_addr = builder.CreateAdd(base, memory->type().limits().address_type() == AddressType::I32 ? builder.getInt32(arg.offset) : builder.getInt64(arg.offset));
       auto* addr_i64 = builder.CreateZExt(effective_addr, builder.getInt64Ty());
 
       // Bounds check (simplified - should trap on OOB)
       // auto* in_bounds = builder.CreateICmpULT(addr_i64, ctx.memory_size);
 
         // Convert the C++ pointer to an LLVM constant pointer
-        auto* memory_base_int = builder.getInt64(reinterpret_cast<uintptr_t>(memory->data()));
+        auto* memory_base_int = builder.getInt64(reinterpret_cast<FlatPtr>(memory->data()));
         auto* memory_base_ptr = builder.CreateIntToPtr(memory_base_int, builder.getPtrTy());
 
-        memory->data();
-      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory->data(), addr_i64);
-      auto* typed_ptr = builder.CreateBitCast(ptr, llvm::PointerType::getInt32Ty(*m_context));
-      ctx.stack.append(builder.CreateLoad(builder.getInt32Ty(), typed_ptr));
+      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory_base_ptr, addr_i64);
+      ctx.stack.append(builder.CreateLoad(builder.getInt32Ty(), ptr));
       break;
     }
     case Instructions::i32_store.value(): {
@@ -362,12 +371,13 @@ void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<
         auto* memory = ctx.store.get(address);
       auto* value = ctx.stack.take_last();
       auto* offset_val = ctx.stack.take_last();
-      auto* effective_addr = builder.CreateAdd(offset_val, builder.getInt32(arg.offset));
+      auto* effective_addr = builder.CreateAdd(offset_val, memory->type().limits().address_type() == AddressType::I32 ? builder.getInt32(arg.offset) : builder.getInt64(arg.offset));
       auto* addr_i64 = builder.CreateZExt(effective_addr, builder.getInt64Ty());
 
-      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory->data(), addr_i64);
-      auto* typed_ptr = builder.CreateBitCast(ptr, llvm::PointerType::getInt32Ty(*m_context));
-      builder.CreateStore(value, typed_ptr);
+        auto* memory_base_int = builder.getInt64(reinterpret_cast<FlatPtr>(memory->data()));
+        auto* memory_base_ptr = builder.CreateIntToPtr(memory_base_int, builder.getPtrTy());
+      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory_base_ptr, addr_i64);
+      builder.CreateStore(value, ptr);
       break;
     }
 
@@ -466,8 +476,8 @@ void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<
       break;
     }
     case Instructions::br_if.value(): {
-      auto depth = insn.arguments().get<LabelIndex>().value();
-      auto& frame = ctx.control_stack[ctx.control_stack.size() - 1 - depth];
+      auto depth = insn.arguments().get<Instruction::BranchArgs>().label;
+      auto& frame = ctx.control_stack[ctx.control_stack.size() - 1 - depth.value()];
 
       auto* condition = ctx.stack.take_last();
       auto* cond_bool = builder.CreateICmpNE(condition, builder.getInt32(0));
@@ -505,7 +515,11 @@ void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<
       break;
     }
     case Instructions::synthetic_end_expression.value():
-        builder.CreateRetVoid();
+      if (ctx.stack.is_empty()) {
+          builder.CreateRetVoid();
+      } else {
+          builder.CreateRet(ctx.stack.take_last());
+      }
         break;
     case Instructions::nop.value():
       break;
