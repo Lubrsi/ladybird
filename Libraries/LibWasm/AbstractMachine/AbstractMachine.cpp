@@ -6,6 +6,9 @@
 
 #include <AK/Enumerate.h>
 #include <LibWasm/AbstractMachine/AbstractMachine.h>
+
+#include "LLVMCompiler.h"
+
 #include <LibWasm/AbstractMachine/BytecodeInterpreter.h>
 #include <LibWasm/AbstractMachine/Configuration.h>
 #include <LibWasm/AbstractMachine/Interpreter.h>
@@ -273,6 +276,10 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
         else if (auto* ptr = entry.get_pointer<FunctionAddress>())
             auxiliary_instance.functions().append(*ptr);
     }
+
+    auto llvm_compiler = MUST(LLVMCompiler::create());
+    MUST(llvm_compiler->compile_module(module));
+
 
     Vector<FunctionAddress> module_functions;
     module_functions.ensure_capacity(module.function_section().types().size());

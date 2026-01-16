@@ -6,6 +6,9 @@
 
 #include <AK/MemoryStream.h>
 #include <LibWasm/AbstractMachine/Configuration.h>
+
+#include "LLVMCompiler.h"
+
 #include <LibWasm/AbstractMachine/Interpreter.h>
 #include <LibWasm/Printer/Printer.h>
 

@@ -103,7 +103,7 @@ struct ConvertToRaw<double> {
 #define LOG_INSN_UNGUARDED                                                                    \
     do {                                                                                      \
         LOAD_ADDRESSES();                                                                     \
-        warnln("[{:04}]", short_ip.current_ip_value);                                 \
+        warnln("[{:04}]", short_ip.current_ip_value);                                         \
         ssize_t in_count = 0;                                                                 \
         ssize_t out_count = 0;                                                                \
         switch (instruction->opcode().value()) {                                              \
@@ -160,12 +160,12 @@ struct ShortenedIP {
 
 static_assert(sizeof(ShortenedIP) == sizeof(u32));
 
-#define HANDLER_PARAMS(S)                             \
-    S(BytecodeInterpreter&, interpreter),             \
-        S(Configuration&, configuration),             \
-        S(Instruction const*, instruction),           \
-        S(ShortenedIP, short_ip), \
-        S(Dispatch const*, cc),                       \
+#define HANDLER_PARAMS(S)                   \
+    S(BytecodeInterpreter&, interpreter),   \
+        S(Configuration&, configuration),   \
+        S(Instruction const*, instruction), \
+        S(ShortenedIP, short_ip),           \
+        S(Dispatch const*, cc),             \
         S(SourcesAndDestination const*, addresses_ptr)
 
 #define DECOMPOSE_PARAMS(t, n) [[maybe_unused]] t n
@@ -4960,23 +4960,23 @@ FLATTEN void BytecodeInterpreter::interpret_impl(Configuration& configuration, E
                 : instruction->opcode())
                                 .value();
 
-#define RUN_NEXT_INSTRUCTION()               \
-    {                                        \
+#define RUN_NEXT_INSTRUCTION()       \
+    {                                \
         ++short_ip.current_ip_value; \
-        break;                               \
+        break;                       \
     }
 
-#define HANDLE_INSTRUCTION_NEW(name, ...)                                                                                                                                                        \
-    case Instructions::name.value(): {                                                                                                                                                           \
+#define HANDLE_INSTRUCTION_NEW(name, ...)                                                                                                                                                \
+    case Instructions::name.value(): {                                                                                                                                                   \
         auto outcome = handle_instruction<Instructions::name.value(), HasDynamicInsnLimit, Skip, SourceAddressMix::Any>(*this, configuration, instruction, short_ip, cc, addresses_ptr); \
-        if (outcome == Outcome::Return)                                                                                                                                                          \
-            return;                                                                                                                                                                              \
+        if (outcome == Outcome::Return)                                                                                                                                                  \
+            return;                                                                                                                                                                      \
         short_ip.current_ip_value = to_underlying(outcome);                                                                                                                              \
-        if constexpr (Instructions::name == Instructions::return_call || Instructions::name == Instructions::return_call_indirect) {                                                             \
-            cc = configuration.frame().expression().compiled_instructions.dispatches.data();                                                                                                     \
-            addresses_ptr = configuration.frame().expression().compiled_instructions.src_dst_mappings.data();                                                                                    \
-        }                                                                                                                                                                                        \
-        RUN_NEXT_INSTRUCTION();                                                                                                                                                                  \
+        if constexpr (Instructions::name == Instructions::return_call || Instructions::name == Instructions::return_call_indirect) {                                                     \
+            cc = configuration.frame().expression().compiled_instructions.dispatches.data();                                                                                             \
+            addresses_ptr = configuration.frame().expression().compiled_instructions.src_dst_mappings.data();                                                                            \
+        }                                                                                                                                                                                \
+        RUN_NEXT_INSTRUCTION();                                                                                                                                                          \
     }
 
         dbgln_if(WASM_TRACE_DEBUG, "Executing instruction {} at current_ip_value {}", instruction_name(instruction->opcode()), short_ip.current_ip_value);

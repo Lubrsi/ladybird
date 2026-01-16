@@ -85,6 +85,13 @@
       ]
     },
     {
+      "name": "llvm",
+      "default-features": false,
+      "features": [
+        "target-platform-specific"
+      ]
+    },
+    {
       "name": "libproxy",
       "platform": "!(android | bsd)"
     },
@@ -295,6 +302,10 @@
     {
       "name": "libxml2",
       "version": "2.13.8#1"
+    },
+    {
+      "name": "llvm",
+      "version": "21.1.8#0"
     },
     {
       "name": "mman",

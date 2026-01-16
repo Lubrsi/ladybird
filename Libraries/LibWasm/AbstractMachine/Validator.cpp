@@ -11,6 +11,9 @@
 #include <AK/TemporaryChange.h>
 #include <AK/Try.h>
 #include <LibWasm/AbstractMachine/Validator.h>
+
+#include "LLVMCompiler.h"
+
 #include <LibWasm/Printer/Printer.h>
 
 namespace Wasm {

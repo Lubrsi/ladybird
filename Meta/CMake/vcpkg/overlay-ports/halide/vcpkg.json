@@ -1,0 +1,53 @@
+{
+  "name": "halide",
+  "version": "21.0.0",
+  "description": "Halide is a programming language designed to make it easier to write high-performance image and array processing code on modern machines.",
+  "homepage": "https://github.com/halide/Halide",
+  "license": "MIT",
+  "supports": "!uwp",
+  "dependencies": [
+    {
+      "name": "llvm",
+      "default-features": false,
+      "features": [
+        "clang",
+        "enable-rtti",
+        "lld",
+        "target-platform-specific",
+        "target-webassembly",
+        "target-x86"
+      ]
+    },
+    "spirv-headers",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    "vulkan-headers"
+  ],
+  "default-features": [
+    "autoschedulers"
+  ],
+  "features": {
+    "autoschedulers": {
+      "description": "Build the Halide autoschedulers"
+    },
+    "python-bindings": {
+      "description": "Halide's native Python module (not the whole pip package)",
+      "dependencies": [
+        "pybind11",
+        "python3"
+      ]
+    },
+    "serialization": {
+      "description": "Include experimental Serialization/Deserialization code",
+      "dependencies": [
+        "flatbuffers"
+      ]
+    }
+  }
+}

@@ -34,10 +34,22 @@ DecoderErrorOr<ColorConverter> ColorConverter::create(u8 bit_depth, CodingIndepe
     size_t maximum_value = (1u << bit_depth) - 1;
     float scale = 1.0f / maximum_value;
     FloatMatrix4x4 integer_scaling_matrix = {
-        scale, 0.0f, 0.0f, 0.0f, // y
-        0.0f, scale, 0.0f, 0.0f, // u
-        0.0f, 0.0f, scale, 0.0f, // v
-        0.0f, 0.0f, 0.0f, 1.0f,  // w
+        scale,
+        0.0f,
+        0.0f,
+        0.0f, // y
+        0.0f,
+        scale,
+        0.0f,
+        0.0f, // u
+        0.0f,
+        0.0f,
+        scale,
+        0.0f, // v
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f, // w
     };
 
     // 2. Scale YUV values into usable ranges.
@@ -63,10 +75,22 @@ DecoderErrorOr<ColorConverter> ColorConverter::create(u8 bit_depth, CodingIndepe
     auto clip_uv_scale = 2.0f / (uv_max - uv_min);
 
     FloatMatrix4x4 range_scaling_matrix = {
-        clip_y_scale, 0.0f, 0.0f, -y_min * clip_y_scale,             // y
-        0.0f, clip_uv_scale, 0.0f, -(uv_min * clip_uv_scale + 1.0f), // u
-        0.0f, 0.0f, clip_uv_scale, -(uv_min * clip_uv_scale + 1.0f), // v
-        0.0f, 0.0f, 0.0f, 1.0f,                                      // w
+        clip_y_scale,
+        0.0f,
+        0.0f,
+        -y_min * clip_y_scale, // y
+        0.0f,
+        clip_uv_scale,
+        0.0f,
+        -(uv_min * clip_uv_scale + 1.0f), // u
+        0.0f,
+        0.0f,
+        clip_uv_scale,
+        -(uv_min * clip_uv_scale + 1.0f), // v
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f, // w
     };
 
     // 3. Convert YUV values to RGB.
@@ -79,27 +103,63 @@ DecoderErrorOr<ColorConverter> ColorConverter::create(u8 bit_depth, CodingIndepe
     case MatrixCoefficients::BT470BG:
     case MatrixCoefficients::BT601:
         color_conversion_matrix = {
-            1.0f, 0.0f, 0.70100f, 0.0f,       // y
-            1.0f, -0.17207f, -0.35707f, 0.0f, // u
-            1.0f, 0.88600f, 0.0f, 0.0f,       // v
-            0.0f, 0.0f, 0.0f, 1.0f,           // w
+            1.0f,
+            0.0f,
+            0.70100f,
+            0.0f, // y
+            1.0f,
+            -0.17207f,
+            -0.35707f,
+            0.0f, // u
+            1.0f,
+            0.88600f,
+            0.0f,
+            0.0f, // v
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f, // w
         };
         break;
     case MatrixCoefficients::BT709:
         color_conversion_matrix = {
-            1.0f, 0.0f, 0.78740f, 0.0f,       // y
-            1.0f, -0.09366f, -0.23406f, 0.0f, // u
-            1.0f, 0.92780f, 0.0f, 0.0f,       // v
-            0.0f, 0.0f, 0.0f, 1.0f,           // w
+            1.0f,
+            0.0f,
+            0.78740f,
+            0.0f, // y
+            1.0f,
+            -0.09366f,
+            -0.23406f,
+            0.0f, // u
+            1.0f,
+            0.92780f,
+            0.0f,
+            0.0f, // v
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f, // w
         };
         break;
     case MatrixCoefficients::BT2020ConstantLuminance:
     case MatrixCoefficients::BT2020NonConstantLuminance:
         color_conversion_matrix = {
-            1.0f, 0.0f, 0.73730f, 0.0f,       // y
-            1.0f, -0.08228f, -0.28568f, 0.0f, // u
-            1.0f, 0.94070f, 0.0f, 0.0f,       // v
-            0.0f, 0.0f, 0.0f, 1.0f,           // w
+            1.0f,
+            0.0f,
+            0.73730f,
+            0.0f, // y
+            1.0f,
+            -0.08228f,
+            -0.28568f,
+            0.0f, // u
+            1.0f,
+            0.94070f,
+            0.0f,
+            0.0f, // v
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f, // w
         };
         break;
     default:
