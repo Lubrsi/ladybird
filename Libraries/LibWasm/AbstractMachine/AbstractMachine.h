@@ -485,8 +485,11 @@ public:
 
     ~MemoryInstance()
     {
-        if (m_backing == Backing::VirtualMemory)
+        if (m_backing == Backing::VirtualMemory) {
+            dbgln("munmap");
+            dump_backtrace();
             munmap(m_base_ptr, m_size);
+        }
     }
 
     auto& type() const { return m_type; }

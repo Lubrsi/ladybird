@@ -4,534 +4,707 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-  #include "LLVMCompiler.h"
-  #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
-  #include <llvm/IR/Verifier.h>
-  #include <llvm/Support/TargetSelect.h>
+#include "LLVMCompiler.h"
+
+#include <LibWasm/Printer/Printer.h>
+#include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
 namespace Wasm {
 
+// === LLVMCompiler implementation ===
+
 ErrorOr<NonnullOwnPtr<LLVMCompiler>> LLVMCompiler::create()
 {
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
 
-  auto jit = llvm::orc::LLJITBuilder()
-    .setJITTargetMachineBuilder(
-        llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::None)
-    )
-    .create();
-  if (!jit)
-      return Error::from_string_literal("Failed to create LLJIT");
+    auto jit = llvm::orc::LLJITBuilder()
+        .setJITTargetMachineBuilder(
+            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::Default))
+        .create();
+    if (!jit)
+        return Error::from_string_literal("Failed to create LLJIT");
 
-  return adopt_nonnull_own_or_enomem(new LLVMCompiler(std::move(*jit)));
+    return adopt_nonnull_own_or_enomem(new LLVMCompiler(std::move(*jit)));
 }
 
 LLVMCompiler::LLVMCompiler(std::unique_ptr<llvm::orc::LLJIT> jit)
-  : m_jit(move(jit))
-  , m_context(new llvm::LLVMContext())
+    : m_jit(move(jit))
+    , m_context(new llvm::LLVMContext())
 {
 }
 
 llvm::Type* LLVMCompiler::wasm_type_to_llvm(ValueType type)
 {
-  switch (type.kind()) {
-  case ValueType::I32:
-      return llvm::Type::getInt32Ty(*m_context);
-  case ValueType::I64:
-      return llvm::Type::getInt64Ty(*m_context);
-  case ValueType::F32:
-      return llvm::Type::getFloatTy(*m_context);
-  case ValueType::F64:
-      return llvm::Type::getDoubleTy(*m_context);
-  case ValueType::V128:
-      return llvm::VectorType::get(llvm::Type::getInt8Ty(*m_context), 16, false);
-  case ValueType::FunctionReference:
-  case ValueType::ExternReference:
-      return llvm::Type::getInt64Ty(*m_context); // Opaque pointer as i64
-  default:
-      VERIFY_NOT_REACHED();
-  }
+    switch (type.kind()) {
+    case ValueType::I32:
+        return llvm::Type::getInt32Ty(*m_context);
+    case ValueType::I64:
+        return llvm::Type::getInt64Ty(*m_context);
+    case ValueType::F32:
+        return llvm::Type::getFloatTy(*m_context);
+    case ValueType::F64:
+        return llvm::Type::getDoubleTy(*m_context);
+    case ValueType::V128:
+        return llvm::VectorType::get(llvm::Type::getInt8Ty(*m_context), 16, false);
+    case ValueType::FunctionReference:
+    case ValueType::ExternReference:
+        return llvm::Type::getInt64Ty(*m_context); // Opaque pointer as i64
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 llvm::FunctionType* LLVMCompiler::wasm_func_type_to_llvm(FunctionType const& type)
 {
-  Vector<llvm::Type*> param_types;
+    Vector<llvm::Type*> param_types;
 
-  // Wasm parameters
-  for (auto const& param : type.parameters())
-      param_types.append(wasm_type_to_llvm(param));
+    for (auto const& param : type.parameters())
+        param_types.append(wasm_type_to_llvm(param));
 
-  // Return type (simplified: single return or void)
-  llvm::Type* return_type;
-  if (type.results().is_empty()) {
-      return_type = llvm::Type::getVoidTy(*m_context);
-  } else if (type.results().size() == 1) {
-      return_type = wasm_type_to_llvm(type.results()[0]);
-  } else {
-      // Multiple returns: use a struct
-      Vector<llvm::Type*> result_types;
-      for (auto const& result : type.results())
-          result_types.append(wasm_type_to_llvm(result));
-      return_type = llvm::StructType::get(*m_context, { result_types.data(), result_types.size() });
-  }
+    llvm::Type* return_type;
+    if (type.results().is_empty()) {
+        return_type = llvm::Type::getVoidTy(*m_context);
+    } else if (type.results().size() == 1) {
+        return_type = wasm_type_to_llvm(type.results()[0]);
+    } else {
+        Vector<llvm::Type*> result_types;
+        for (auto const& result : type.results())
+            result_types.append(wasm_type_to_llvm(result));
+        return_type = llvm::StructType::get(*m_context, { result_types.data(), result_types.size() });
+    }
 
-  return llvm::FunctionType::get(return_type, { param_types.data(), param_types.size() }, false);
+    return llvm::FunctionType::get(return_type, { param_types.data(), param_types.size() }, false);
 }
 
 ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
 {
-  std::unique_ptr<llvm::Module> llvm_module(new llvm::Module("wasm_module", *m_context));
-  llvm::IRBuilder<> builder(*m_context);
-
-  CompilationContext ctx {
-      .module = module,
-  };
-
-    for (auto& memory : module.memory_section().memories()) {
-        auto memory_address = ctx.store.allocate(memory.type());
+    // Allocate memories first - must happen before compilation so pointers are stable
+    for (auto const& memory : module.memory_section().memories()) {
+        auto memory_address = m_store.allocate(memory.type());
         if (!memory_address.has_value())
             return Error::from_string_literal("Failed to allocate memory");
-
-        ctx.memories.append(memory_address.release_value());
+        m_memories.append(memory_address.release_value());
     }
 
-  compile_global_section(*llvm_module, builder, ctx);
-  compile_functions(*llvm_module, builder, ctx);
+    std::unique_ptr<llvm::Module> llvm_module(new llvm::Module("wasm_module", *m_context));
+
+    compile_global_section(*llvm_module, module);
+    compile_functions(*llvm_module, module);
 
     if (llvm::verifyModule(*llvm_module, &llvm::errs()))
         VERIFY_NOT_REACHED();
 
-  // JIT compile
-  auto tsm = llvm::orc::ThreadSafeModule(move(llvm_module), move(m_context));
-  if (auto err = m_jit->addIRModule(move(tsm)))
-      return Error::from_string_literal("Failed to add module to JIT");
+    // JIT compile
+    auto tsm = llvm::orc::ThreadSafeModule(move(llvm_module), move(m_context));
+    if (auto err = m_jit->addIRModule(move(tsm)))
+        return Error::from_string_literal("Failed to add module to JIT");
 
-  auto symbol = m_jit->lookup("wasm_func");
-  if (!symbol)
-      return Error::from_string_literal("Failed to find compiled function");
+    for (size_t index = 0; index < m_function_declarations.size(); ++index) {
+        auto name = MUST(String::formatted("wasm_func_{}", index));
+        auto sv = name.bytes_as_string_view();
+        auto symbol = m_jit->lookup(llvm::StringRef(sv.characters_without_null_termination(), sv.length()));
+        if (!symbol)
+            return Error::from_string_literal("Failed to find compiled function");
 
-    dbgln("{:p}", symbol->getValue());
-  return reinterpret_cast<void*>(symbol->getValue());
+        dbgln("{}: {:p}", index, symbol->getValue());
+    }
+
+    auto symbol = m_jit->lookup("wasm_func_2");
+    if (!symbol)
+        VERIFY_NOT_REACHED();
+
+    auto* ptr = symbol->toPtr<void()>();
+    ptr();
+    return reinterpret_cast<void*>(ptr);
 }
 
-void LLVMCompiler::compile_functions(llvm::Module& llvm_module, llvm::IRBuilder<>& builder, CompilationContext& context)
+void LLVMCompiler::compile_global_section(llvm::Module& llvm_module, Module const& module)
 {
-    size_t code_index = 0;
-    auto const& code_section = context.module.code_section();
-    auto const& function_section = context.module.function_section();
-    auto const& type_section = context.module.type_section();
-    for (auto& code : code_section.functions()) {
-        auto function_type_index = function_section.types()[code_index];
-        auto& function_type = type_section.types()[function_type_index.value()];
-        auto* llvm_function_type = wasm_func_type_to_llvm(function_type);
-        auto* llvm_function = llvm::Function::Create(
-            llvm_function_type,
-            llvm::Function::ExternalLinkage,
-            "wasm_func",
-            llvm_module
-        );
+    // For global initializers, we need a temporary stack to evaluate constant expressions
+    Vector<llvm::Value*> init_stack;
 
-        // Set up compilation context
-        context.function = llvm_function;
-
-        // Entry block
-        auto* entry = llvm::BasicBlock::Create(*m_context, "entry", llvm_function);
-        builder.SetInsertPoint(entry);
-        context.current_block = entry;
-
-        // Allocate locals (parameters + local variables)
-        size_t param_idx = 0;
-        for (auto const& param_type : function_type.parameters()) {
-            auto* alloca = builder.CreateAlloca(wasm_type_to_llvm(param_type));
-            builder.CreateStore(llvm_function->getArg(param_idx++), alloca);
-            context.locals.append(alloca);
-        }
-        for (auto const& local : code.func().locals()) {
-            for (size_t local_index = 0; local_index < local.n(); local_index++) {
-                auto* llvm_type = wasm_type_to_llvm(local.type());
-                auto* alloca = builder.CreateAlloca(llvm_type);
-                builder.CreateStore(llvm::Constant::getNullValue(llvm_type), alloca);
-                context.locals.append(alloca);
+    for (auto const& global_entry : module.global_section().entries()) {
+        // Evaluate the initializer expression (must be constant)
+        for (auto const& instruction : global_entry.expression().instructions()) {
+            switch (instruction.opcode().value()) {
+            case Instructions::i32_const.value():
+                init_stack.append(llvm::ConstantInt::get(llvm::Type::getInt32Ty(*m_context), instruction.arguments().get<i32>()));
+                break;
+            case Instructions::i64_const.value():
+                init_stack.append(llvm::ConstantInt::get(llvm::Type::getInt64Ty(*m_context), instruction.arguments().get<i64>()));
+                break;
+            case Instructions::f32_const.value():
+                init_stack.append(llvm::ConstantFP::get(llvm::Type::getFloatTy(*m_context), instruction.arguments().get<float>()));
+                break;
+            case Instructions::f64_const.value():
+                init_stack.append(llvm::ConstantFP::get(llvm::Type::getDoubleTy(*m_context), instruction.arguments().get<double>()));
+                break;
+            case Instructions::global_get.value(): {
+                auto global_index = instruction.arguments().get<GlobalIndex>();
+                auto* g = m_globals[global_index.value()].ptr();
+                // For constant initializers, we need the initializer value, not a load
+                init_stack.append(g->getInitializer());
+                break;
+            }
+            case Instructions::structured_end.value():
+            case Instructions::synthetic_end_expression.value():
+                // End markers, ignore
+                break;
+            default:
+                dbgln("Unsupported global initializer instruction: {:#x}", instruction.opcode().value());
+                VERIFY_NOT_REACHED();
             }
         }
 
-        compile_expression(code.func().body(), builder, context);
-
-        // Verify the function
-        if (llvm::verifyFunction(*llvm_function, &llvm::errs()))
-            VERIFY_NOT_REACHED();
-
-        ++code_index;
-    }
-}
-
-void LLVMCompiler::compile_global_section(llvm::Module& llvm_module, llvm::IRBuilder<>& builder, CompilationContext& context)
-{
-    for (auto& global_entry : context.module.global_section().entries()) {
-        compile_expression(global_entry.expression(), builder, context);
-        auto* global_initial_value = context.stack.take_last();
+        auto* global_initial_value = init_stack.take_last();
 
         if (auto* constant = llvm::dyn_cast<llvm::Constant>(global_initial_value)) {
             auto* wasm_type = wasm_type_to_llvm(global_entry.type().type());
-            context.globals.append(make<llvm::GlobalVariable>(llvm_module, wasm_type, !global_entry.type().is_mutable(), llvm::GlobalValue::InternalLinkage, constant));
+            m_globals.append(make<llvm::GlobalVariable>(llvm_module, wasm_type, !global_entry.type().is_mutable(), llvm::GlobalValue::InternalLinkage, constant));
         } else {
             VERIFY_NOT_REACHED();
         }
     }
 }
 
-void LLVMCompiler::compile_expression(Expression const& expression, llvm::IRBuilder<>& builder, CompilationContext& ctx)
+void LLVMCompiler::compile_functions(llvm::Module& llvm_module, Module const& module)
 {
-    for (auto const& instruction : expression.instructions())
-        compile_instruction(instruction, builder, ctx);
+    auto const& code_section = module.code_section();
+    auto const& function_section = module.function_section();
+    auto const& type_section = module.type_section();
+
+    size_t code_index = 0;
+    for (auto& code : code_section.functions()) {
+        auto function_type_index = function_section.types()[code_index];
+        auto const& function_type = type_section.types()[function_type_index.value()];
+        auto* llvm_function_type = wasm_func_type_to_llvm(function_type);
+
+        auto function_name = MUST(String::formatted("wasm_func_{}", code_index));
+        auto function_name_view = function_name.bytes_as_string_view();
+
+        auto* llvm_function = llvm::Function::Create(
+            llvm_function_type,
+            llvm::Function::ExternalLinkage,
+            llvm::StringRef(function_name_view.characters_without_null_termination(), function_name_view.length()),
+            llvm_module);
+        m_function_declarations.append(FunctionDeclaration {
+            .llvm_function = *llvm_function,
+            .wasm_function_type = function_type,
+            .wasm_code = code,
+        });
+
+        ++code_index;
+    }
+
+    for (auto const& function_declaration : m_function_declarations) {
+        LLVMFunctionGenerator generator(*this, llvm_module, function_declaration.llvm_function, module);
+
+        // Entry block
+        auto entry = generator.make_block("entry"sv);
+        generator.switch_to_basic_block(entry);
+
+        // Allocate locals (parameters + local variables)
+        size_t param_idx = 0;
+        for (auto const& param_type : function_declaration.wasm_function_type.parameters()) {
+            auto* alloca = generator.builder().CreateAlloca(generator.wasm_type_to_llvm(param_type));
+            generator.builder().CreateStore(function_declaration.llvm_function.getArg(param_idx++), alloca);
+            generator.append_local(alloca);
+        }
+        for (auto const& local : function_declaration.wasm_code.func().locals()) {
+            for (size_t local_index = 0; local_index < local.n(); local_index++) {
+                auto* llvm_type = generator.wasm_type_to_llvm(local.type());
+                auto* alloca = generator.builder().CreateAlloca(llvm_type);
+                generator.builder().CreateStore(llvm::Constant::getNullValue(llvm_type), alloca);
+                generator.append_local(alloca);
+            }
+        }
+
+        generator.compile_expression(function_declaration.wasm_code.func().body());
+
+        // Verify the function
+        if (llvm::verifyFunction(function_declaration.llvm_function, &llvm::errs()))
+            VERIFY_NOT_REACHED();
+
+        ++code_index;
+    }
 }
 
-void LLVMCompiler::compile_instruction(Instruction const& insn, llvm::IRBuilder<>& builder, CompilationContext& ctx)
+// === LLVMFunctionGenerator implementation ===
+
+LLVMFunctionGenerator::LLVMFunctionGenerator(LLVMCompiler& compiler, llvm::Module& module, llvm::Function& function, Module const& wasm_module)
+    : m_compiler(compiler)
+    , m_module(module)
+    , m_function(function)
+    , m_builder(compiler.context())
+    , m_wasm_module(wasm_module)
 {
-    dbgln("{:#08x}", insn.opcode().value());
+}
+
+llvm::LLVMContext& LLVMFunctionGenerator::context()
+{
+    return m_compiler.context();
+}
+
+WasmBasicBlock LLVMFunctionGenerator::make_block(StringView name)
+{
+    String block_name;
+    if (name.is_empty())
+        block_name = String::number(m_next_block++);
+    else
+        block_name = MUST(String::formatted("{}_{}", name, m_next_block++));
+
+    auto sv = block_name.bytes_as_string_view();
+    auto* block = llvm::BasicBlock::Create(context(), llvm::StringRef(sv.characters_without_null_termination(), sv.length()), &m_function);
+    return WasmBasicBlock {
+        .llvm_basic_block = block,
+        .stack = current_block().stack,
+    };
+}
+
+void LLVMFunctionGenerator::switch_to_basic_block(WasmBasicBlock block)
+{
+    m_current_block = move(block);
+    m_builder.SetInsertPoint(block.llvm_basic_block);
+}
+
+bool LLVMFunctionGenerator::is_current_block_terminated() const
+{
+    return m_current_block.llvm_basic_block->getTerminator() != nullptr;
+}
+
+void LLVMFunctionGenerator::push_control_frame(WasmBasicBlock branch_target, WasmBasicBlock end_block, Optional<WasmBasicBlock> else_block)
+{
+    m_control_stack.append({
+        .branch_target = move(branch_target),
+        .end_block = move(end_block),
+        .else_block = move(else_block),
+    });
+}
+
+ControlFrame LLVMFunctionGenerator::pop_control_frame()
+{
+    return m_control_stack.take_last();
+}
+
+ControlFrame& LLVMFunctionGenerator::control_frame_at_depth(size_t depth)
+{
+    return m_control_stack[m_control_stack.size() - 1 - depth];
+}
+
+FunctionDeclaration const& LLVMFunctionGenerator::function_declaration(size_t index)
+{
+    return m_compiler.m_function_declarations[index];
+}
+
+llvm::GlobalVariable* LLVMFunctionGenerator::global(size_t index)
+{
+    return m_compiler.m_globals[index].ptr();
+}
+
+MemoryInstance* LLVMFunctionGenerator::memory(size_t index)
+{
+    return m_compiler.m_store.get(m_compiler.m_memories[index]);
+}
+
+llvm::Type* LLVMFunctionGenerator::wasm_type_to_llvm(ValueType type)
+{
+    return m_compiler.wasm_type_to_llvm(type);
+}
+
+void LLVMFunctionGenerator::compile_expression(Expression const& expression)
+{
+    dbgln("== expression");
+    for (auto const& instruction : expression.instructions())
+        compile_instruction(instruction);
+
+    dbgln("== end expression");
+}
+
+void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
+{
+    auto& b = builder();
+    dbgln("{}", instruction_name(insn.opcode()));
+
     switch (insn.opcode().value()) {
 
     // === Constants ===
     case Instructions::i32_const.value(): {
-      auto value = insn.arguments().get<i32>();
-      ctx.stack.append(builder.getInt32(value));
-      break;
+        auto value = insn.arguments().get<i32>();
+        push(b.getInt32(value));
+        break;
     }
     case Instructions::i64_const.value(): {
-      auto value = insn.arguments().get<i64>();
-      ctx.stack.append(builder.getInt64(value));
-      break;
+        auto value = insn.arguments().get<i64>();
+        push(b.getInt64(value));
+        break;
     }
     case Instructions::f32_const.value(): {
-      auto value = insn.arguments().get<float>();
-      ctx.stack.append(llvm::ConstantFP::get(builder.getFloatTy(), value));
-      break;
+        auto value = insn.arguments().get<float>();
+        push(llvm::ConstantFP::get(b.getFloatTy(), value));
+        break;
     }
     case Instructions::f64_const.value(): {
-      auto value = insn.arguments().get<double>();
-      ctx.stack.append(llvm::ConstantFP::get(builder.getDoubleTy(), value));
-      break;
+        auto value = insn.arguments().get<double>();
+        push(llvm::ConstantFP::get(b.getDoubleTy(), value));
+        break;
     }
 
     // === Locals ===
     case Instructions::local_get.value(): {
-      auto idx = insn.local_index().value();
-      auto* value = builder.CreateLoad(ctx.locals[idx]->getAllocatedType(), ctx.locals[idx]);
-      ctx.stack.append(value);
-      break;
+        auto idx = insn.local_index().value();
+        auto* alloca = local(idx);
+        auto* value = b.CreateLoad(alloca->getAllocatedType(), alloca);
+        push(value);
+        break;
     }
     case Instructions::local_set.value(): {
-      auto idx = insn.local_index().value();
-      auto* value = ctx.stack.take_last();
-      builder.CreateStore(value, ctx.locals[idx]);
-      break;
+        auto idx = insn.local_index().value();
+        auto* value = pop();
+        b.CreateStore(value, local(idx));
+        break;
     }
     case Instructions::local_tee.value(): {
-      auto idx = insn.local_index().value();
-      auto* value = ctx.stack.last();
-      builder.CreateStore(value, ctx.locals[idx]);
-      break;
+        auto idx = insn.local_index().value();
+        auto* value = peek();
+        b.CreateStore(value, local(idx));
+        break;
     }
 
     case Instructions::global_get.value(): {
         auto global_index = insn.arguments().get<GlobalIndex>();
-        auto* global = ctx.globals[global_index.value()].ptr();
-        auto* value = builder.CreateLoad(global->getValueType(), global);
-        ctx.stack.append(value);
+        auto* g = global(global_index.value());
+        auto* value = b.CreateLoad(g->getValueType(), g);
+        push(value);
+        break;
+    }
+
+    case Instructions::global_set.value(): {
+        auto global_index = insn.arguments().get<GlobalIndex>();
+        auto* g = global(global_index.value());
+        auto* value = pop();
+        b.CreateStore(value, g);
         break;
     }
 
     // === Arithmetic (i32) ===
-    case Instructions::i32_add.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateAdd(lhs, rhs));
-      break;
+    case Instructions::i32_add.value():
+    case Instructions::i64_add.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateAdd(lhs, rhs));
+        break;
     }
-    case Instructions::i32_sub.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateSub(lhs, rhs));
-      break;
+    case Instructions::i32_sub.value():
+    case Instructions::i64_sub.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateSub(lhs, rhs));
+        break;
     }
-    case Instructions::i32_mul.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateMul(lhs, rhs));
-      break;
+    case Instructions::i32_mul.value():
+    case Instructions::i64_mul.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateMul(lhs, rhs));
+        break;
     }
-    case Instructions::i32_divs.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      // TODO: Trap on division by zero
-      ctx.stack.append(builder.CreateSDiv(lhs, rhs));
-      break;
+    case Instructions::i32_divs.value():
+    case Instructions::i64_divs.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        // TODO: Trap on division by zero
+        push(b.CreateSDiv(lhs, rhs));
+        break;
     }
-    case Instructions::i32_divu.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateUDiv(lhs, rhs));
-      break;
+    case Instructions::i32_divu.value():
+    case Instructions::i64_divu.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateUDiv(lhs, rhs));
+        break;
     }
-    case Instructions::i32_and.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateAnd(lhs, rhs));
-      break;
+    case Instructions::i32_and.value():
+    case Instructions::i64_and.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateAnd(lhs, rhs));
+        break;
     }
-    case Instructions::i32_or.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateOr(lhs, rhs));
-      break;
+    case Instructions::i32_or.value():
+    case Instructions::i64_or.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateOr(lhs, rhs));
+        break;
     }
-    case Instructions::i32_xor.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      ctx.stack.append(builder.CreateXor(lhs, rhs));
-      break;
+    case Instructions::i32_xor.value():
+    case Instructions::i64_xor.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateXor(lhs, rhs));
+        break;
     }
     case Instructions::i32_shl.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      // Wasm: shift amount is masked to 5 bits
-      auto* masked = builder.CreateAnd(rhs, builder.getInt32(31));
-      ctx.stack.append(builder.CreateShl(lhs, masked));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        // Wasm: shift amount is masked to 5 bits
+        auto* masked = b.CreateAnd(rhs, b.getInt32(31));
+        push(b.CreateShl(lhs, masked));
+        break;
     }
     case Instructions::i32_shrs.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      auto* masked = builder.CreateAnd(rhs, builder.getInt32(31));
-      ctx.stack.append(builder.CreateAShr(lhs, masked));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* masked = b.CreateAnd(rhs, b.getInt32(sizeof(i32) * 8 - 1));
+        push(b.CreateAShr(lhs, masked));
+        break;
     }
     case Instructions::i32_shru.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      auto* masked = builder.CreateAnd(rhs, builder.getInt32(31));
-      ctx.stack.append(builder.CreateLShr(lhs, masked));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* masked = b.CreateAnd(rhs, b.getInt32(sizeof(i32) * 8 - 1));
+        push(b.CreateLShr(lhs, masked));
+        break;
+    }
+
+    case Instructions::i64_shru.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* masked = b.CreateAnd(rhs, b.getInt64(sizeof(i64) * 8 - 1));
+        push(b.CreateLShr(lhs, masked));
+        break;
+    }
+
+    case Instructions::i32_wrap_i64.value(): {
+        auto* i64_value = pop();
+        push(b.CreateTrunc(i64_value, b.getInt32Ty()));
+        break;
     }
 
     // === Comparisons (i32) ===
     case Instructions::i32_eqz.value(): {
-      auto* value = ctx.stack.take_last();
-      auto* result = builder.CreateICmpEQ(value, builder.getInt32(0));
-      ctx.stack.append(builder.CreateZExt(result, builder.getInt32Ty()));
-      break;
+        auto* value = pop();
+        auto* result = b.CreateICmpEQ(value, b.getInt32(0));
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
     }
     case Instructions::i32_eq.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      auto* result = builder.CreateICmpEQ(lhs, rhs);
-      ctx.stack.append(builder.CreateZExt(result, builder.getInt32Ty()));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateICmpEQ(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
+    }
+    case Instructions::i32_ne.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateICmpNE(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
     }
     case Instructions::i32_lts.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      auto* result = builder.CreateICmpSLT(lhs, rhs);
-      ctx.stack.append(builder.CreateZExt(result, builder.getInt32Ty()));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateICmpSLT(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
     }
     case Instructions::i32_ltu.value(): {
-      auto* rhs = ctx.stack.take_last();
-      auto* lhs = ctx.stack.take_last();
-      auto* result = builder.CreateICmpULT(lhs, rhs);
-      ctx.stack.append(builder.CreateZExt(result, builder.getInt32Ty()));
-      break;
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateICmpULT(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
     }
 
     // === Memory Operations ===
     case Instructions::i32_load.value(): {
-      auto const& arg = insn.arguments().get<Instruction::MemoryArgument>();
-        auto& address = ctx.memories.data()[arg.memory_index.value()];
-        auto* memory = ctx.store.get(address);
-      auto* base = ctx.stack.take_last();
-      auto* effective_addr = builder.CreateAdd(base, memory->type().limits().address_type() == AddressType::I32 ? builder.getInt32(arg.offset) : builder.getInt64(arg.offset));
-      auto* addr_i64 = builder.CreateZExt(effective_addr, builder.getInt64Ty());
-
-      // Bounds check (simplified - should trap on OOB)
-      // auto* in_bounds = builder.CreateICmpULT(addr_i64, ctx.memory_size);
-
-        // Convert the C++ pointer to an LLVM constant pointer
-        auto* memory_base_int = builder.getInt64(reinterpret_cast<FlatPtr>(memory->data()));
-        auto* memory_base_ptr = builder.CreateIntToPtr(memory_base_int, builder.getPtrTy());
-
-      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory_base_ptr, addr_i64);
-      ctx.stack.append(builder.CreateLoad(builder.getInt32Ty(), ptr));
-      break;
+        auto* base = pop();
+        auto* ptr = get_memory_pointer(insn.arguments().get<Instruction::MemoryArgument>(), base);
+        push(b.CreateLoad(b.getInt32Ty(), ptr));
+        break;
     }
-    case Instructions::i32_store.value(): {
-      auto const& arg = insn.arguments().get<Instruction::MemoryArgument>();
-        auto& address = ctx.memories.data()[arg.memory_index.value()];
-        auto* memory = ctx.store.get(address);
-      auto* value = ctx.stack.take_last();
-      auto* offset_val = ctx.stack.take_last();
-      auto* effective_addr = builder.CreateAdd(offset_val, memory->type().limits().address_type() == AddressType::I32 ? builder.getInt32(arg.offset) : builder.getInt64(arg.offset));
-      auto* addr_i64 = builder.CreateZExt(effective_addr, builder.getInt64Ty());
-
-        auto* memory_base_int = builder.getInt64(reinterpret_cast<FlatPtr>(memory->data()));
-        auto* memory_base_ptr = builder.CreateIntToPtr(memory_base_int, builder.getPtrTy());
-      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), memory_base_ptr, addr_i64);
-      builder.CreateStore(value, ptr);
-      break;
+    case Instructions::i64_load.value(): {
+        auto* base = pop();
+        auto* ptr = get_memory_pointer(insn.arguments().get<Instruction::MemoryArgument>(), base);
+        push(b.CreateLoad(b.getInt64Ty(), ptr));
+        break;
+    }
+    case Instructions::i32_store.value():
+    case Instructions::i64_store.value(): {
+        auto* value = pop();
+        auto* base = pop();
+        auto* ptr = get_memory_pointer(insn.arguments().get<Instruction::MemoryArgument>(), base);
+        b.CreateStore(value, ptr);
+        break;
     }
 
     // === Control Flow ===
     case Instructions::block.value(): {
-      auto* continuation = llvm::BasicBlock::Create(*m_context, "block_end", ctx.function);
-
-      ctx.control_stack.append({
-          .continuation = continuation,
-          .else_block = nullptr,
-          .stack_height = ctx.stack.size(),
-      });
-      break;
+        auto end_block = make_block("block_end"sv);
+        push_control_frame(end_block, end_block);
+        break;
     }
     case Instructions::loop.value(): {
-      auto* loop_header = llvm::BasicBlock::Create(*m_context, "loop", ctx.function);
+        auto loop_header = make_block("loop"sv);
+        auto loop_end = make_block("loop_end"sv);
 
-      builder.CreateBr(loop_header);
-      builder.SetInsertPoint(loop_header);
-      ctx.current_block = loop_header;
+        b.CreateBr(loop_header.llvm_basic_block);
+        switch_to_basic_block(loop_header);
 
-      ctx.control_stack.append({
-          .continuation = loop_header,  // For loops, br targets the header
-          .else_block = nullptr,
-          .stack_height = ctx.stack.size(),
-      });
-      break;
+        push_control_frame(move(loop_header), move(loop_end));
+        break;
     }
     case Instructions::if_.value(): {
-      auto* condition = ctx.stack.take_last();
-      auto* cond_bool = builder.CreateICmpNE(condition, builder.getInt32(0));
+        auto* condition = pop();
+        auto* cond_bool = b.CreateICmpNE(condition, b.getInt32(0));
 
-      auto* then_block = llvm::BasicBlock::Create(*m_context, "then", ctx.function);
-      auto* else_block = llvm::BasicBlock::Create(*m_context, "else", ctx.function);
-      auto* continuation = llvm::BasicBlock::Create(*m_context, "if_end", ctx.function);
+        auto then_block = make_block("then"sv);
+        auto else_block = make_block("else"sv);
+        auto end_block = make_block("if_end"sv);
 
-      builder.CreateCondBr(cond_bool, then_block, else_block);
-      builder.SetInsertPoint(then_block);
-      ctx.current_block = then_block;
+        b.CreateCondBr(cond_bool, then_block.llvm_basic_block, else_block.llvm_basic_block);
+        switch_to_basic_block(then_block);
 
-      ctx.control_stack.append({
-          .continuation = continuation,
-          .else_block = else_block,
-          .stack_height = ctx.stack.size(),
-      });
-      break;
+        push_control_frame(end_block, end_block, move(else_block));
+        break;
     }
     case Instructions::structured_else.value(): {
-      auto& frame = ctx.control_stack.last();
+        auto& frame = control_frame_at_depth(0);
 
-      // Branch from end of then-block to continuation
-      builder.CreateBr(frame.continuation);
+        // Branch from end of then-block to end
+        b.CreateBr(frame.end_block.llvm_basic_block);
 
-      // Switch to else block
-      builder.SetInsertPoint(frame.else_block);
-      ctx.current_block = frame.else_block;
-
-      // Reset stack to block entry height
-      ctx.stack.shrink(frame.stack_height);
-      break;
+        // Switch to else block
+        switch_to_basic_block(frame.else_block.value());
+        break;
     }
     case Instructions::structured_end.value(): {
-      if (ctx.control_stack.is_empty()) {
-          // Function end - create return
-          if (ctx.stack.is_empty()) {
-              builder.CreateRetVoid();
-          } else {
-              builder.CreateRet(ctx.stack.take_last());
-          }
-      } else {
-          auto frame = ctx.control_stack.take_last();
+        if (control_stack_size() == 0) {
+            // Function end - create return
+            if (stack_is_empty()) {
+                b.CreateRetVoid();
+            } else {
+                b.CreateRet(pop());
+            }
+        } else {
+            auto frame = pop_control_frame();
 
-          // If there's an else block that was never used, fill it
-          if (frame.else_block && frame.else_block->empty()) {
-              auto* current = builder.GetInsertBlock();
-              builder.SetInsertPoint(frame.else_block);
-              builder.CreateBr(frame.continuation);
-              builder.SetInsertPoint(current);
-          }
+            // If there's an else block that was never used, fill it
+            if (frame.else_block.has_value() && frame.else_block->llvm_basic_block->empty()) {
+                auto* current = &current_block();
+                switch_to_basic_block(*frame.else_block);
+                b.CreateBr(frame.end_block.llvm_basic_block);
+                switch_to_basic_block(*current);
+            }
 
-          builder.CreateBr(frame.continuation);
-          builder.SetInsertPoint(frame.continuation);
-          ctx.current_block = frame.continuation;
-      }
-      break;
+            b.CreateBr(frame.end_block.llvm_basic_block);
+            switch_to_basic_block(frame.end_block);
+        }
+        break;
     }
     case Instructions::br.value(): {
-      auto depth = insn.arguments().get<LabelIndex>().value();
-      auto& frame = ctx.control_stack[ctx.control_stack.size() - 1 - depth];
-      builder.CreateBr(frame.continuation);
+        auto depth = insn.arguments().get<LabelIndex>().value();
+        auto& frame = control_frame_at_depth(depth);
+        b.CreateBr(frame.branch_target.llvm_basic_block);
 
-      // Create unreachable block for subsequent instructions
-      auto* unreachable = llvm::BasicBlock::Create(*m_context, "unreachable", ctx.function);
-      builder.SetInsertPoint(unreachable);
-      ctx.current_block = unreachable;
-      break;
+        // Create unreachable block for subsequent instructions
+        switch_to_basic_block(make_block("unreachable"sv));
+        break;
     }
     case Instructions::br_if.value(): {
-      auto depth = insn.arguments().get<Instruction::BranchArgs>().label;
-      auto& frame = ctx.control_stack[ctx.control_stack.size() - 1 - depth.value()];
+        auto depth = insn.arguments().get<Instruction::BranchArgs>().label;
+        auto& frame = control_frame_at_depth(depth.value());
 
-      auto* condition = ctx.stack.take_last();
-      auto* cond_bool = builder.CreateICmpNE(condition, builder.getInt32(0));
+        auto* condition = pop();
+        auto* cond_bool = b.CreateICmpNE(condition, b.getInt32(0));
 
-      auto* continue_block = llvm::BasicBlock::Create(*m_context, "br_if_continue", ctx.function);
-      builder.CreateCondBr(cond_bool, frame.continuation, continue_block);
-      builder.SetInsertPoint(continue_block);
-      ctx.current_block = continue_block;
-      break;
+        auto continue_block = make_block("br_if_continue"sv);
+        b.CreateCondBr(cond_bool, frame.branch_target.llvm_basic_block, continue_block.llvm_basic_block);
+        switch_to_basic_block(move(continue_block));
+        break;
     }
     case Instructions::return_.value(): {
-      if (ctx.stack.is_empty()) {
-          builder.CreateRetVoid();
-      } else {
-          builder.CreateRet(ctx.stack.take_last());
-      }
+        if (stack_is_empty()) {
+            b.CreateRetVoid();
+        } else {
+            b.CreateRet(pop());
+        }
 
-      auto* unreachable = llvm::BasicBlock::Create(*m_context, "unreachable", ctx.function);
-      builder.SetInsertPoint(unreachable);
-      ctx.current_block = unreachable;
-      break;
+        switch_to_basic_block(make_block("unreachable"sv));
+        break;
     }
 
     // === Misc ===
     case Instructions::drop.value(): {
-      ctx.stack.take_last();
-      break;
+        (void)pop();
+        break;
     }
     case Instructions::select.value(): {
-      auto* condition = ctx.stack.take_last();
-      auto* val2 = ctx.stack.take_last();
-      auto* val1 = ctx.stack.take_last();
-      auto* cond_bool = builder.CreateICmpNE(condition, builder.getInt32(0));
-      ctx.stack.append(builder.CreateSelect(cond_bool, val1, val2));
-      break;
+        auto* condition = pop();
+        auto* val2 = pop();
+        auto* val1 = pop();
+        auto* cond_bool = b.CreateICmpNE(condition, b.getInt32(0));
+        push(b.CreateSelect(cond_bool, val1, val2));
+        break;
     }
     case Instructions::synthetic_end_expression.value():
-      if (ctx.stack.is_empty()) {
-          builder.CreateRetVoid();
-      } else {
-          builder.CreateRet(ctx.stack.take_last());
-      }
+        if (stack_is_empty()) {
+            b.CreateRetVoid();
+        } else {
+            b.CreateRet(pop());
+        }
         break;
     case Instructions::nop.value():
-      break;
+        break;
     case Instructions::unreachable.value():
-      builder.CreateUnreachable();
-      break;
+        b.CreateUnreachable();
+        break;
+    case Instructions::call.value(): {
+        auto function_index = insn.arguments().get<FunctionIndex>();
+        auto& function_to_call = function_declaration(function_index.value());
 
-    default:
-      // TODO: Implement remaining instructions
-      dbgln("Unimplemented instruction: {:#x}", insn.opcode().value());
-      break;
+        Vector<llvm::Value*> arguments;
+        for (size_t parameter_index = 0; parameter_index < function_to_call.wasm_function_type.parameters().size(); ++parameter_index)
+            arguments.append(pop());
+
+        llvm::FunctionCallee function_callee(function_to_call.llvm_function.getFunctionType(), &function_to_call.llvm_function);
+        llvm::ArrayRef arguments_as_llvm_array { arguments.data(), arguments.size() };
+        auto* call = b.CreateCall(function_callee, arguments_as_llvm_array);
+
+        auto const& results = function_to_call.wasm_function_type.results();
+        if (results.size() == 1) {
+            push(call);
+        } else if (results.size() > 1) {
+            for (size_t result_index = 0; result_index < results.size(); ++result_index)
+                push(b.CreateExtractValue(call, result_index));
+        }
+        break;
     }
+    default:
+        dbgln("Unimplemented instruction: {:#x}", insn.opcode().value());
+        break;
+    }
+}
+
+llvm::Value* LLVMFunctionGenerator::get_memory_pointer(Instruction::MemoryArgument const& memory_argument, llvm::Value* base)
+{
+    auto& b = builder();
+
+    auto* mem = memory(memory_argument.memory_index.value());
+
+    dbgln("memory at {}", mem->data());
+
+    auto* effective_addr = b.CreateAdd(base, mem->type().limits().address_type() == AddressType::I32 ? b.getInt32(memory_argument.offset) : b.getInt64(memory_argument.offset));
+    auto* addr_i64 = b.CreateZExt(effective_addr, b.getInt64Ty());
+
+    auto* memory_base_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->data()));
+    auto* memory_base_ptr = b.CreateIntToPtr(memory_base_int, b.getPtrTy());
+    return b.CreateGEP(b.getInt8Ty(), memory_base_ptr, addr_i64);
 }
 
 } // namespace Wasm
