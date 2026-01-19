@@ -566,7 +566,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     parser.add_positional_argument(args_if_wasi, "Arguments to pass to the WASI module", "args", Core::ArgsParser::Required::No);
     parser.parse(arguments);
 
-    Core::Process::wait_for_debugger_and_break();
+    // Core::Process::wait_for_debugger_and_break();
 
     if (!exported_function_to_execute.is_empty())
         attempt_instantiate = true;

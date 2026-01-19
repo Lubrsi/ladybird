@@ -6,6 +6,8 @@
 
 #include "LLVMCompiler.h"
 
+#include <AK/Enumerate.h>
+#include <LibCore/ElapsedTimer.h>
 #include <LibWasm/Printer/Printer.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/Verifier.h>
@@ -23,7 +25,7 @@ ErrorOr<NonnullOwnPtr<LLVMCompiler>> LLVMCompiler::create()
 
     auto jit = llvm::orc::LLJITBuilder()
         .setJITTargetMachineBuilder(
-            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::Default))
+            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::Aggressive))
         .create();
     if (!jit)
         return Error::from_string_literal("Failed to create LLJIT");
@@ -118,7 +120,10 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
         VERIFY_NOT_REACHED();
 
     auto* ptr = symbol->toPtr<void()>();
+    auto elapsed_timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
     ptr();
+    auto ms = elapsed_timer.elapsed_milliseconds();
+    dbgln("took {} ms to run!", ms);
     return reinterpret_cast<void*>(ptr);
 }
 
@@ -177,13 +182,12 @@ void LLVMCompiler::compile_functions(llvm::Module& llvm_module, Module const& mo
     auto const& function_section = module.function_section();
     auto const& type_section = module.type_section();
 
-    size_t code_index = 0;
-    for (auto& code : code_section.functions()) {
-        auto function_type_index = function_section.types()[code_index];
+    size_t function_number = 0;
+    auto create_function_declaration = [&](TypeIndex function_type_index, CodeSection::Code const* code = nullptr) {
         auto const& function_type = type_section.types()[function_type_index.value()];
         auto* llvm_function_type = wasm_func_type_to_llvm(function_type);
 
-        auto function_name = MUST(String::formatted("wasm_func_{}", code_index));
+        auto function_name = MUST(String::formatted("wasm_func_{}", function_number));
         auto function_name_view = function_name.bytes_as_string_view();
 
         auto* llvm_function = llvm::Function::Create(
@@ -196,11 +200,30 @@ void LLVMCompiler::compile_functions(llvm::Module& llvm_module, Module const& mo
             .wasm_function_type = function_type,
             .wasm_code = code,
         });
+        
+        ++function_number;
+    };
 
-        ++code_index;
+    for (auto& import_ : module.import_section().imports()) {
+        auto* type_index = import_.description().get_pointer<TypeIndex>();
+        if (!type_index) {
+            dbgln("FIXME: Non-function import");
+            continue;
+        }
+
+        create_function_declaration(*type_index);
+    }
+
+    for (auto [code_index, code] : enumerate(code_section.functions())) {
+        create_function_declaration(function_section.types()[code_index], &code);
     }
 
     for (auto const& function_declaration : m_function_declarations) {
+        if (!function_declaration.wasm_code) {
+            dbgln("FIXME: Imported function");
+            continue;
+        }
+        
         LLVMFunctionGenerator generator(*this, llvm_module, function_declaration.llvm_function, module);
 
         // Entry block
@@ -214,7 +237,7 @@ void LLVMCompiler::compile_functions(llvm::Module& llvm_module, Module const& mo
             generator.builder().CreateStore(function_declaration.llvm_function.getArg(param_idx++), alloca);
             generator.append_local(alloca);
         }
-        for (auto const& local : function_declaration.wasm_code.func().locals()) {
+        for (auto const& local : function_declaration.wasm_code->func().locals()) {
             for (size_t local_index = 0; local_index < local.n(); local_index++) {
                 auto* llvm_type = generator.wasm_type_to_llvm(local.type());
                 auto* alloca = generator.builder().CreateAlloca(llvm_type);
@@ -223,13 +246,11 @@ void LLVMCompiler::compile_functions(llvm::Module& llvm_module, Module const& mo
             }
         }
 
-        generator.compile_expression(function_declaration.wasm_code.func().body());
+        generator.compile_expression(function_declaration.wasm_code->func().body());
 
         // Verify the function
         if (llvm::verifyFunction(function_declaration.llvm_function, &llvm::errs()))
             VERIFY_NOT_REACHED();
-
-        ++code_index;
     }
 }
 
@@ -327,6 +348,7 @@ void LLVMFunctionGenerator::compile_expression(Expression const& expression)
 void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
 {
     auto& b = builder();
+
     dbgln("{}", instruction_name(insn.opcode()));
 
     switch (insn.opcode().value()) {
@@ -611,8 +633,6 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         auto depth = insn.arguments().get<LabelIndex>().value();
         auto& frame = control_frame_at_depth(depth);
         b.CreateBr(frame.branch_target.llvm_basic_block);
-
-        // Create unreachable block for subsequent instructions
         switch_to_basic_block(make_block("unreachable"sv));
         break;
     }
@@ -634,7 +654,6 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         } else {
             b.CreateRet(pop());
         }
-
         switch_to_basic_block(make_block("unreachable"sv));
         break;
     }
@@ -663,6 +682,7 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         break;
     case Instructions::unreachable.value():
         b.CreateUnreachable();
+        switch_to_basic_block(make_block("unreachable"sv));
         break;
     case Instructions::call.value(): {
         auto function_index = insn.arguments().get<FunctionIndex>();

@@ -34,7 +34,7 @@ struct ControlFrame {
 struct FunctionDeclaration {
     llvm::Function& llvm_function;
     FunctionType const& wasm_function_type;
-    CodeSection::Code const& wasm_code;
+    CodeSection::Code const* wasm_code { nullptr };
 };
 
 // Generator-style class for compiling a single Wasm function to LLVM IR
