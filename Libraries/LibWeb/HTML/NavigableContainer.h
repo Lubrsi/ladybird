@@ -38,6 +38,7 @@ public:
     void destroy_the_child_navigable();
 
     bool content_navigable_has_session_history_entry_and_ready_for_navigation() const;
+    bool currently_delays_the_load_event() const;
 
 protected:
     NavigableContainer(DOM::Document&, DOM::QualifiedName);

@@ -110,7 +110,6 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(GC::Ptr
 
     // 9. Set element's content navigable to navigable.
     m_content_navigable = navigable;
-    // dbgln("{:p} create new child navigable", this);
     check_if_currently_delays_the_load_event();
 
     // 10. Let historyEntry be navigable's active session history entry.
@@ -350,59 +349,45 @@ void NavigableContainer::destroy_the_child_navigable()
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#potentially-delays-the-load-event
 void NavigableContainer::check_if_currently_delays_the_load_event()
 {
-    if (!content_navigable_has_session_history_entry_and_ready_for_navigation()) {
-        // dbgln("{:p} 1", this);
+    if (currently_delays_the_load_event())
         delay_load_event();
-        return;
-    }
-
-    if (!m_potentially_delays_the_load_event) {
-        // dbgln("{:p} 2", this);
+    else
         do_not_delay_load_event();
-        return;
-    }
+}
 
+bool NavigableContainer::currently_delays_the_load_event() const
+{
     // If an element type potentially delays the load event, then for each element element of that type,
     // the user agent must delay the load event of element's node document if element's content navigable is non-null
     // and any of the following are true:
-    if (!m_content_navigable) {
-        // dbgln("{:p} 3", this);
-        do_not_delay_load_event();
-        return;
-    }
+    if (!m_potentially_delays_the_load_event)
+        return false;
 
-    // dbgln("{:p} navigable: {:p} doc: {:p} {}", this, m_content_navigable.ptr(), m_content_navigable->active_document().ptr(), m_content_navigable->active_document()->url_string());
+    // AD-HOC: If the navigable doesn't exist yet, or exists but doesn't have a session history entry
+    // and isn't ready for navigation yet, delay. We'll be called again when the navigable is created
+    // (via create_new_child_navigable) or when it becomes ready for navigation.
+    if (!content_navigable_has_session_history_entry_and_ready_for_navigation())
+        return true;
 
     // - element's content navigable's active document is not ready for post-load tasks;
-    if (!m_content_navigable->active_document()->ready_for_post_load_tasks()) {
-        // dbgln("{:p} 4", this);
-        delay_load_event();
-        return;
-    }
+    if (!m_content_navigable->active_document()->ready_for_post_load_tasks())
+        return true;
 
     // - element's content navigable's is delaying load events is true; or
-    if (m_content_navigable->is_delaying_load_events()) {
-        // dbgln("{:p} 5", this);
-        delay_load_event();
-        return;
-    }
+    if (m_content_navigable->is_delaying_load_events())
+        return true;
 
     // - anything is delaying the load event of element's content navigable's active document.
-    if (m_content_navigable->active_document()->anything_is_delaying_the_load_event()) {
-        // dbgln("{:p} 6", this);
-        delay_load_event();
-        return;
-    }
+    if (m_content_navigable->active_document()->anything_is_delaying_the_load_event())
+        return true;
 
-    // dbgln("{:p} 7", this);
-    do_not_delay_load_event();
+    return false;
 }
 
 void NavigableContainer::delay_load_event()
 {
     auto& realm = this->realm();
 
-    // dbgln("{:p} delaying load", this);
     if (m_content_navigable) {
         if (!m_document_observer) {
             m_document_observer = realm.create<DOM::DocumentObserver>(realm, m_content_navigable->active_document().as_nonnull());
@@ -437,7 +422,6 @@ void NavigableContainer::delay_load_event()
 
 void NavigableContainer::do_not_delay_load_event()
 {
-    // dbgln("{:p} not delaying load", this);
     if (m_document_observer) {
         m_document_observer->set_document_has_no_load_delays({});
         m_document_observer->set_document_is_ready_for_post_load_tasks({});

@@ -1,0 +1,1 @@
+PASS: window.onload fired after object fallback

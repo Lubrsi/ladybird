@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let loadOrder = [];
+
+        for (let i = 0; i < 5; i++) {
+            const iframe = document.createElement('iframe');
+            iframe.id = `iframe${i}`;
+            iframe.onload = () => {
+                loadOrder.push(`iframe${i}`);
+            };
+            iframe.src = 'about:blank';
+            document.body.appendChild(iframe);
+        }
+
+        window.onload = () => {
+            loadOrder.push('window');
+            // All iframes should have loaded before window.onload
+            const iframeCount = loadOrder.filter(x => x.startsWith('iframe')).length;
+            println(`iframe count before window.onload: ${iframeCount}`);
+            println(loadOrder[loadOrder.length - 1] === 'window' ? 'PASS' : 'FAIL');
+            done();
+        };
+    });
+</script>

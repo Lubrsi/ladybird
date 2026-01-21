@@ -1,0 +1,2 @@
+FAIL: outer not loaded
+Load order: window

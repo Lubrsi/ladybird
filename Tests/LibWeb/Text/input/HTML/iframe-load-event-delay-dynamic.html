@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let windowLoaded = false;
+        let iframeLoaded = false;
+
+        window.onload = () => {
+            windowLoaded = true;
+            println(iframeLoaded ? 'PASS: iframe loaded before window' : 'FAIL: window loaded before iframe');
+            done();
+        };
+
+        // Create iframe after DOMContentLoaded but before window.onload
+        document.addEventListener('DOMContentLoaded', () => {
+            const iframe = document.createElement('iframe');
+            iframe.onload = () => {
+                iframeLoaded = true;
+            };
+            iframe.src = 'about:blank';
+            document.body.appendChild(iframe);
+        });
+    });
+</script>

@@ -1,0 +1,2 @@
+iframe count before window.onload: 5
+PASS

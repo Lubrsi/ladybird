@@ -3328,7 +3328,6 @@ EventTarget* Document::get_parent(Event const& event)
 
 void Document::set_ready_for_post_load_tasks()
 {
-    dbgln("{:p} ready for post load", this);
     m_ready_for_post_load_tasks = true;
     notify_each_document_observer([&](auto const& document_observer) {
         return document_observer.document_is_ready_for_post_load_tasks();

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let windowLoaded = false;
+
+        window.onload = () => {
+            windowLoaded = true;
+            println('PASS: window.onload fired after object fallback');
+            done();
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Object with invalid data should fall back and not block load event
+            const obj = document.createElement('object');
+            obj.data = 'nonexistent-file-that-does-not-exist.xyz';
+            obj.innerHTML = '<p>Fallback content</p>';
+            document.body.appendChild(obj);
+        });
+    });
+</script>

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let windowLoaded = false;
+
+        window.onload = () => {
+            windowLoaded = true;
+            println('PASS: window.onload fired after iframe removed');
+            done();
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const iframe = document.createElement('iframe');
+            iframe.src = 'about:blank';
+            document.body.appendChild(iframe);
+
+            // Remove iframe immediately - should not block window.onload
+            iframe.remove();
+        });
+    });
+</script>

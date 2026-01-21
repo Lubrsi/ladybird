@@ -131,7 +131,6 @@ void HTMLIFrameElement::post_connection()
             traversable->append_session_history_traversal_steps(GC::create_function(heap(), [this] {
                 // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
                 auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
-                dbgln("marking {:p} as ready for navigation {}", this, m_content_navigable->active_document()->url_string());
                 set_content_navigable_has_session_history_entry_and_ready_for_navigation();
                 signal_to_continue_session_history_processing->resolve({});
                 return signal_to_continue_session_history_processing;

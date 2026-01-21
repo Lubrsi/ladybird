@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<iframe id="outer" src="../../data/HTML/iframe-load-event-delay-nested-outer.html"></iframe>
+<script>
+    asyncTest(done => {
+        let loadOrder = [];
+
+        document.getElementById('outer').onload = () => {
+            loadOrder.push('outer');
+        };
+
+        window.onload = () => {
+            loadOrder.push('window');
+            // Outer iframe should have loaded before window.onload
+            println(loadOrder.includes('outer') ? 'PASS: outer loaded before window' : 'FAIL: outer not loaded');
+            println(`Load order: ${loadOrder.join(', ')}`);
+            done();
+        };
+    });
+</script>

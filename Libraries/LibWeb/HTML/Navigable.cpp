@@ -247,8 +247,6 @@ bool Navigable::is_script_closable()
 
 void Navigable::set_delaying_load_events(bool value)
 {
-    // dbgln("set_delaying_load_events {}", value);
-    // dump_backtrace();
     if (value) {
         auto document = container_document();
         VERIFY(document);
@@ -258,7 +256,6 @@ void Navigable::set_delaying_load_events(bool value)
     }
 
     for (auto& navigation_observer : m_navigation_observers) {
-        // dbgln("should be notifying {:p}", navigation_observer);
         if (navigation_observer.delaying_load_events_changed())
             navigation_observer.delaying_load_events_changed()->function()();
     }
@@ -2395,8 +2392,9 @@ void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryH
 
     // 1. FIXME: Assert: this is running on navigable's traversable navigable's session history traversal queue.
 
-    // 2. Set navigable's is delaying load events to false.
-    navigable->set_delaying_load_events(false);
+    // AD-HOC: We move step 2 (set is delaying load events to false) to after step 10 (apply the push/replace history step).
+    // The spec assumes step 10 is synchronous, but our implementation queues work that runs during the spin in
+    // apply_the_history_step. Moving this ensures the new document is active before we notify observers.
 
     // 3. If historyEntry's document is null, then return.
     if (!history_entry->document())
@@ -2457,6 +2455,10 @@ void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryH
 
     // 10. Apply the push/replace history step targetStep to traversable given historyHandling and userInvolvement.
     traversable->apply_the_push_or_replace_history_step(target_step, history_handling, user_involvement, TraversableNavigable::SynchronousNavigation::No);
+
+    // AD-HOC: Step 2 moved here - Set navigable's is delaying load events to false.
+    // This ensures the new document is active before we notify observers about the load event delay change.
+    navigable->set_delaying_load_events(false);
 
     // AD-HOC: If we're inside a navigable container, let's trigger a relayout in the container document.
     //         This allows size negotiation between the containing document and SVG documents to happen.

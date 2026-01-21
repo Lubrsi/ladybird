@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(done => {
+        let loadOrder = [];
+
+        const iframe = document.createElement('iframe');
+        iframe.onload = () => {
+            loadOrder.push('iframe');
+        };
+
+        window.onload = () => {
+            loadOrder.push('window');
+            println(loadOrder.join(', '));
+            done();
+        };
+
+        iframe.src = 'about:blank';
+        document.body.appendChild(iframe);
+    });
+</script>

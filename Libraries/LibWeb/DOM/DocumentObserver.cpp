@@ -30,6 +30,7 @@ void DocumentObserver::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_document_visibility_state_observer);
     visitor.visit(m_document_page_showing_observer);
     visitor.visit(m_document_has_no_load_delays);
+    visitor.visit(m_document_is_ready_for_post_load_tasks);
 }
 
 void DocumentObserver::finalize()
