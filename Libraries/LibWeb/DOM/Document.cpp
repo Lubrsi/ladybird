@@ -3963,8 +3963,6 @@ void Document::unregister_document_observer(Badge<DocumentObserver>, DocumentObs
 void Document::increment_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>)
 {
     ++m_number_of_things_delaying_the_load_event;
-    // dbgln("{:p} increased to {}", this, m_number_of_things_delaying_the_load_event);
-    // dump_backtrace();
 
     page().client().page_did_update_resource_count(m_number_of_things_delaying_the_load_event);
 }
@@ -3973,13 +3971,9 @@ void Document::decrement_number_of_things_delaying_the_load_event(Badge<Document
 {
     VERIFY(m_number_of_things_delaying_the_load_event);
     --m_number_of_things_delaying_the_load_event;
-    // dbgln("{:p} decreased to {}", this, m_number_of_things_delaying_the_load_event);
-    // dump_backtrace();
 
     if (m_number_of_things_delaying_the_load_event == 0) {
-        // dbgln("should be notifying");
         notify_each_document_observer([](auto const& document_observer) {
-            // dbgln("hello");
             return document_observer.document_has_no_load_delays();
         });
     }
@@ -4534,7 +4528,7 @@ struct DocumentDestructionState : public GC::Cell {
         , after_all(after)
         , timeout(Platform::Timer::create_single_shot(heap(), TIMEOUT_MS, GC::create_function(heap(), [this] {
             if (remaining_children > 0)
-                dbgln("FIXME: Document destruction timed out with {} remaining children", remaining_children);
+                VERIFY_NOT_REACHED();
         })))
     {
         timeout->start();
@@ -4572,6 +4566,7 @@ GC_DEFINE_ALLOCATOR(DocumentDestructionState);
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#destroy-a-document-and-its-descendants
 void Document::destroy_a_document_and_its_descendants(GC::Ptr<GC::Function<void()>> after_all_destruction)
 {
+
     // 1. If document is not fully active, then:
     if (!is_fully_active()) {
         // 1. Let reason be a string from user-agent specific blocking reasons.
@@ -4591,14 +4586,13 @@ void Document::destroy_a_document_and_its_descendants(GC::Ptr<GC::Function<void(
 
     // NOTE: Not in the spec but we could avoid allocating destruction state in case there's no child navigables.
     if (child_navigables.is_empty()) {
-        HTML::queue_global_task(HTML::Task::Source::NavigationAndTraversal, relevant_global_object(*this), GC::create_function(heap(), [document = this, after_all_destruction] {
-            // 1. Destroy document.
-            document->destroy();
+        // AD-HOC: Destroy the document synchronously instead of queuing a task.
+        //         The spec says to queue a task, but our event loop may not process tasks for documents
+        //         that are no longer fully active, causing the destruction to never complete.
+        destroy();
 
-            // 2. If afterAllDestruction was given, then run it.
-            if (after_all_destruction)
-                after_all_destruction->function()();
-        }));
+        if (after_all_destruction)
+            after_all_destruction->function()();
         return;
     }
 
@@ -4608,7 +4602,9 @@ void Document::destroy_a_document_and_its_descendants(GC::Ptr<GC::Function<void(
     // 4. For each childNavigable of childNavigables, queue a global task on the navigation and traversal task source
     //    given childNavigable's active window to perform the following steps:
     for (auto& child_navigable : child_navigables) {
+        dbgln("Queueing destruction task for child navigable {} (active doc: {})", child_navigable->id(), child_navigable->active_document()->url());
         queue_global_task(HTML::Task::Source::NavigationAndTraversal, *child_navigable->active_window(), GC::create_function(heap(), [&heap = heap(), destruction_state, child_navigable] {
+            dbgln("Running destruction task for child navigable {} (active doc: {})", child_navigable->id(), child_navigable->active_document()->url());
             // 1. Let incrementDestroyed be an algorithm step which increments numberDestroyed.
             auto increment_destroyed = GC::create_function(heap, [destruction_state] { destruction_state->increment_destroyed(); });
 

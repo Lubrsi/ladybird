@@ -66,8 +66,9 @@ void EventLoop::schedule()
         }));
     }
 
-    if (!m_system_event_loop_timer->is_active())
+    if (!m_system_event_loop_timer->is_active()) {
         m_system_event_loop_timer->restart();
+    }
 }
 
 EventLoop& main_thread_event_loop()
@@ -180,6 +181,7 @@ void EventLoop::process()
 
         // 3. Set oldestTask to the first runnable task in taskQueue, and remove it from taskQueue.
         oldest_task = task_queue->take_first_runnable();
+        // dbgln("EventLoop::process: running task source {} (doc: {})", static_cast<int>(oldest_task->source()), oldest_task->document() ? oldest_task->document()->url().to_string() : "null"_string);
 
         // FIXME: 4. If oldestTask's document is not null, then record task start time given taskStartTime and oldestTask's document.
 
@@ -227,8 +229,12 @@ void EventLoop::process()
     }
 
     // If there are eligible tasks in the queue, schedule a new round of processing. :^)
-    if (m_task_queue->has_runnable_tasks() || (!m_microtask_queue->is_empty() && !m_performing_a_microtask_checkpoint)) {
+    bool has_runnable = m_task_queue->has_runnable_tasks();
+    bool has_microtasks = !m_microtask_queue->is_empty() && !m_performing_a_microtask_checkpoint;
+    if (has_runnable || has_microtasks) {
         schedule();
+    } else if (!m_task_queue->is_empty()) {
+        dbgln("EventLoop::process: non-runnable tasks in queue (not scheduling)");
     }
 }
 

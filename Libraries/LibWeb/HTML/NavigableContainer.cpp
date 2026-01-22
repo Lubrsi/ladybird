@@ -363,9 +363,9 @@ bool NavigableContainer::currently_delays_the_load_event() const
     if (!m_potentially_delays_the_load_event)
         return false;
 
-    // AD-HOC: If the navigable doesn't exist yet, or exists but doesn't have a session history entry
-    // and isn't ready for navigation yet, delay. We'll be called again when the navigable is created
-    // (via create_new_child_navigable) or when it becomes ready for navigation.
+    if (!m_content_navigable)
+        return false;
+
     if (!content_navigable_has_session_history_entry_and_ready_for_navigation())
         return true;
 

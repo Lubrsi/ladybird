@@ -366,11 +366,9 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
         document->load_timing_info().dom_content_loaded_event_start_time = HighResolutionTime::current_high_resolution_time(relevant_global_object(*document));
 
         // 2. Fire an event named DOMContentLoaded at the Document object, with its bubbles attribute initialized to true.
-        dbgln("firing DOMContentLoaded");
         auto content_loaded_event = DOM::Event::create(document->realm(), HTML::EventNames::DOMContentLoaded);
         content_loaded_event->set_bubbles(true);
         document->dispatch_event(content_loaded_event);
-        dbgln("done");
 
         // 3. Set the Document's load timing info's DOM content loaded event end time to the current high resolution time given the Document's relevant global object.
         document->load_timing_info().dom_content_loaded_event_end_time = HighResolutionTime::current_high_resolution_time(relevant_global_object(*document));
@@ -392,14 +390,18 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
 
     // 8. Spin the event loop until there is nothing that delays the load event in the Document.
     auto after_nothing_delays_the_load_event = [document, parser, document_observer = GC::make_root(document_observer)] {
+        dbgln("after_nothing_delays_the_load_event called for {}", document->url());
         document_observer->set_document_has_no_load_delays({});
 
         // 9. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following steps:
         queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(document->heap(), [document, parser] {
+            dbgln("load event task running for {}", document->url());
             // AD-HOC: If the Document's browsing context is null, the document has been unloaded or destroyed.
             // This can happen when this task runs during a spin_until in navigation processing.
-            if (!document->browsing_context())
+            if (!document->browsing_context()) {
+                dbgln("load event task: browsing context is null for {}", document->url());
                 return;
+            }
 
             // FIXME: 10. If the Document's print when loaded flag is set, then run the printing steps.
 
@@ -454,9 +456,19 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
     // doesn't do this, so we manually queue a task here to ensure DOMContentLoaded handlers (which may
     // create elements that delay the load event) have a chance to run before we check for load delays.
     queue_global_task(HTML::Task::Source::DOMManipulation, *document, GC::create_function(heap, [document, document_observer = GC::make_root(document_observer), after_nothing_delays_the_load_event = move(after_nothing_delays_the_load_event)]() mutable {
+        dbgln("the_end queued task: anything_is_delaying={} for {}", document->anything_is_delaying_the_load_event(), document->url());
         if (document->anything_is_delaying_the_load_event()) {
             document_observer->set_document_has_no_load_delays(move(after_nothing_delays_the_load_event));
+            // Check if the condition is already met (the notification might have fired before we set the callback)
+            if (!document->anything_is_delaying_the_load_event()) {
+                dbgln("the_end: condition already met for {}", document->url());
+                if (auto callback = document_observer->document_has_no_load_delays()) {
+                    document_observer->set_document_has_no_load_delays({});
+                    callback->function()();
+                }
+            }
         } else {
+            dbgln("the_end: calling continuation immediately for {}", document->url());
             after_nothing_delays_the_load_event();
         }
     }));

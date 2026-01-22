@@ -477,18 +477,21 @@ static void unregister(JS::VM& vm, GC::Ref<Job> job)
 // https://w3c.github.io/ServiceWorker/#run-job-algorithm
 static void run_job(JS::VM& vm, JobQueue& job_queue)
 {
+    dbgln("run_job called");
     // 1. Assert: jobQueue is not empty.
     VERIFY(!job_queue.is_empty());
 
     // 2. Queue a task to run these steps:
     auto job_run_steps = GC::create_function(vm.heap(), [&vm, &job_queue] {
+        dbgln("run_job task executing");
         // 1. Let job be the first item in jobQueue.
         auto& job = job_queue.first();
 
         // FIXME: Do these really need to be in parallel to the HTML event loop? Sounds fishy
         switch (job->job_type) {
         case Job::Type::Register:
-            // 2. If job’s job type is register, run Register with job in parallel.
+            dbgln("run_job: calling register_");
+            // 2. If job's job type is register, run Register with job in parallel.
             register_(vm, job);
             break;
         case Job::Type::Update:
@@ -602,10 +605,11 @@ static void reject_job_promise(GC::Ref<Job> job, Utf16String message)
 // https://w3c.github.io/ServiceWorker/#schedule-job-algorithm
 void schedule_job(JS::VM& vm, GC::Ref<Job> job)
 {
+    dbgln("schedule_job called for {}", job->script_url);
     // 1. Let jobQueue be null.
     // Note: See below for how we ensure job queue
 
-    // 2. Let jobScope be job’s scope url, serialized.
+    // 2. Let jobScope be job's scope url, serialized.
     // FIXME: Suspect that spec should specify to not use fragment here
     auto job_scope = job->scope_url.serialize().to_byte_string();
 

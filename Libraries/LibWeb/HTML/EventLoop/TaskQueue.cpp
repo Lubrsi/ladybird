@@ -31,13 +31,18 @@ void TaskQueue::add(GC::Ref<Task> task)
 {
     // AD-HOC: Don't enqueue tasks for temporary (inert) documents used for fragment parsing.
     // FIXME: There's ongoing spec work to remove such documents: https://github.com/whatwg/html/pull/11970
-    if (task->document() && task->document()->is_temporary_document_for_fragment_parsing())
+    if (task->document() && task->document()->is_temporary_document_for_fragment_parsing()) {
+        // dbgln("TaskQueue::add: skipping task for temporary fragment parsing doc");
         return;
+    }
 
     // AD-HOC: Don't enqueue tasks for documents that haven't been browsing context associated.
-    if (task->document() && !task->document()->has_been_browsing_context_associated())
+    if (task->document() && !task->document()->has_been_browsing_context_associated()) {
+        // dbgln("TaskQueue::add: skipping task for doc without browsing context: {}", task->document()->url());
         return;
+    }
 
+    // dbgln("TaskQueue::add: adding task from source {} (doc: {}), queue size now {}", static_cast<int>(task->source()), task->document() ? task->document()->url().to_string() : "null"_string, m_tasks.size() + 1);
     m_tasks.append(task);
     m_event_loop->schedule();
 }
@@ -50,16 +55,20 @@ GC::Ptr<Task> TaskQueue::take_first_runnable()
     for (size_t i = 0; i < m_tasks.size(); ++i) {
         if (m_event_loop->running_rendering_task() && m_tasks[i]->source() == Task::Source::Rendering)
             continue;
-        if (m_tasks[i]->is_runnable())
+        if (m_tasks[i]->is_runnable()) {
+            // dbgln("TaskQueue::take_first_runnable: taking task {} from index {}/{}", static_cast<int>(m_tasks[i]->source()), i, m_tasks.size());
             return m_tasks.take(i);
+        }
     }
     return nullptr;
 }
 
 bool TaskQueue::has_runnable_tasks() const
 {
-    if (m_event_loop->execution_paused())
+    if (m_event_loop->execution_paused()) {
+        // dbgln("TaskQueue::has_runnable_tasks: execution paused");
         return false;
+    }
 
     for (auto& task : m_tasks) {
         if (m_event_loop->running_rendering_task() && task->source() == Task::Source::Rendering)
@@ -67,6 +76,8 @@ bool TaskQueue::has_runnable_tasks() const
         if (task->is_runnable())
             return true;
     }
+    // if (!m_tasks.is_empty())
+    //     dbgln("TaskQueue::has_runnable_tasks: {} tasks, none runnable", m_tasks.size());
     return false;
 }
 

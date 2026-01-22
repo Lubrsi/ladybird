@@ -264,6 +264,7 @@ AK::JsonObject Heap::dump_graph()
 
 void Heap::collect_garbage(CollectionType collection_type, bool print_report)
 {
+    return;
     VERIFY(!m_collecting_garbage);
 
     {
@@ -604,7 +605,7 @@ void Heap::sweep_dead_cells(bool print_report, Core::ElapsedTimer const& measure
         bool block_was_full = block.is_full();
         block.template for_each_cell_in_state<Cell::State::Live>([&](Cell* cell) {
             if (!cell->is_marked()) {
-                dbgln_if(HEAP_DEBUG, "  ~ {}", cell);
+                dbgln_if(1, "  ~ {} ({})", cell, cell->class_name());
                 block.deallocate(cell);
                 ++collected_cells;
                 collected_cell_bytes += block.cell_size();
