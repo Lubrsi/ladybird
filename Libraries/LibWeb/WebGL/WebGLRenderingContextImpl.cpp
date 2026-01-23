@@ -1069,8 +1069,7 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
         return JS::Value(m_renderbuffer_binding);
     }
     case GL_RENDERER: {
-        auto result = reinterpret_cast<char const*>(glGetString(GL_RENDERER));
-        return JS::PrimitiveString::create(realm().vm(), ByteString { result });
+        return JS::PrimitiveString::create(realm().vm(), "WebKit WebGL"_utf16);
     }
     case GL_SAMPLE_ALPHA_TO_COVERAGE: {
         GLboolean result { GL_FALSE };
@@ -1117,8 +1116,7 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
         return JS::Value(result == GL_TRUE);
     }
     case GL_SHADING_LANGUAGE_VERSION: {
-        auto result = reinterpret_cast<char const*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
-        return JS::PrimitiveString::create(realm().vm(), ByteString { result });
+        return JS::PrimitiveString::create(realm().vm(), "WebGL GLSL ES 1.0"_utf16);
     }
     case GL_STENCIL_BACK_FAIL: {
         GLint result { 0 };
@@ -1226,12 +1224,10 @@ JS::Value WebGLRenderingContextImpl::get_parameter(WebIDL::UnsignedLong pname)
         return JS::Value(result);
     }
     case GL_VENDOR: {
-        auto result = reinterpret_cast<char const*>(glGetString(GL_VENDOR));
-        return JS::PrimitiveString::create(realm().vm(), ByteString { result });
+        return JS::PrimitiveString::create(realm().vm(), "WebKit"_utf16);
     }
     case GL_VERSION: {
-        auto result = reinterpret_cast<char const*>(glGetString(GL_VERSION));
-        return JS::PrimitiveString::create(realm().vm(), ByteString { result });
+        return JS::PrimitiveString::create(realm().vm(), "WebGL 1.0"_utf16);
     }
     case GL_VIEWPORT: {
         Array<GLint, 4> result;
