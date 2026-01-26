@@ -701,6 +701,17 @@ void initialize_main_thread_vm(AgentType type)
 
         return default_host_grow_shared_array_buffer(buffer, new_byte_length);
     };
+
+    // 6.2.3 DefaultLocale ( ), https://tc39.es/ecma402/#sec-defaultlocale
+    s_main_thread_vm->host_get_default_locale = [] {
+        // The implementation-defined abstract operation DefaultLocale takes no arguments and returns a Unicode
+        // canonicalized locale identifier. The returned String value represents the structurally valid (6.2.1)
+        // and canonicalized (6.2.2) language tag for the host environment's current locale. It must not contain
+        // a Unicode locale extension sequence.
+        // Spec Note: The returned value is a potential fingerprinting vector. In browser environments, it
+        //            should match navigator.language to avoid providing any additional distinguishing information.
+        return ResourceLoader::the().preferred_languages()[0];
+    };
 }
 
 JS::VM& main_thread_vm()

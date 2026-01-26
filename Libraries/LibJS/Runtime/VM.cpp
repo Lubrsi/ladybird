@@ -34,6 +34,7 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibJS/SourceTextModule.h>
 #include <LibJS/SyntheticModule.h>
+#include <LibUnicode/Locale.h>
 
 namespace JS {
 
@@ -235,6 +236,20 @@ VM::VM(ErrorMessages error_messages)
 
     // AD-HOC: Inform the host that we received a date string we were unable to parse.
     host_unrecognized_date_string = [](StringView) {
+    };
+
+    // AD-HOC: Not necessarily a defined hook, but the ECMA262 specs says this should match navigator.language in web browsers
+    //         to not add a fingerprinting vector.
+    // 6.2.3 DefaultLocale ( ), https://tc39.es/ecma402/#sec-defaultlocale
+    host_get_default_locale = [] {
+        // The implementation-defined abstract operation DefaultLocale takes no arguments and returns a Unicode
+        // canonicalized locale identifier. The returned String value represents the structurally valid (6.2.1)
+        // and canonicalized (6.2.2) language tag for the host environment's current locale. It must not contain
+        // a Unicode locale extension sequence.
+        // Spec Note: The returned value is a potential fingerprinting vector. In browser environments, it
+        //            should match navigator.language to avoid providing any additional distinguishing information.
+        auto locale = Unicode::default_locale();
+        return String::from_utf8_without_validation(locale.bytes());
     };
 }
 

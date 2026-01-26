@@ -440,7 +440,7 @@ static Vector<LocaleKey> available_keyword_values(StringView locale, StringView 
 }
 
 // 9.2.7 ResolveLocale ( availableLocales, requestedLocales, options, relevantExtensionKeys, localeData ), https://tc39.es/ecma402/#sec-resolvelocale
-ResolvedLocale resolve_locale(ReadonlySpan<String> requested_locales, LocaleOptions const& options, ReadonlySpan<StringView> relevant_extension_keys)
+ResolvedLocale resolve_locale(VM& vm, ReadonlySpan<String> requested_locales, LocaleOptions const& options, ReadonlySpan<StringView> relevant_extension_keys)
 {
     static auto true_string = "true"_string;
 
@@ -462,7 +462,7 @@ ResolvedLocale resolve_locale(ReadonlySpan<String> requested_locales, LocaleOpti
 
     // 4. If r is undefined, set r to the Record { [[locale]]: DefaultLocale(), [[extension]]: empty }.
     if (!matcher_result.has_value())
-        matcher_result = MatchedLocale { MUST(String::from_utf8(Unicode::default_locale())), {} };
+        matcher_result = MatchedLocale { vm.host_get_default_locale(), {} };
 
     // 5. Let foundLocale be r.[[locale]].
     auto found_locale = move(matcher_result->locale);
@@ -662,7 +662,7 @@ ThrowCompletionOr<ResolvedOptions> resolve_options(VM& vm, IntlObject& object, V
         modify_resolution_options(opt);
 
     // 8. Let resolution be ResolveLocale(constructor.[[AvailableLocales]], requestedLocales, opt, constructor.[[RelevantExtensionKeys]], localeData).
-    auto resolution = resolve_locale(requested_locales, opt, object.relevant_extension_keys());
+    auto resolution = resolve_locale(vm, requested_locales, opt, object.relevant_extension_keys());
 
     // 9. Return the Record { [[Options]]: options, [[ResolvedLocale]]: resolution, [[ResolutionOptions]]: opt }.
     return ResolvedOptions { .options = options, .resolved_locale = move(resolution), .resolution_options = move(opt) };

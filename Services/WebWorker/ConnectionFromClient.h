@@ -12,8 +12,8 @@
 #include <LibJS/Forward.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Loader/FileRequest.h>
-#include <LibWeb/Worker/WebWorkerClientEndpoint.h>
-#include <LibWeb/Worker/WebWorkerServerEndpoint.h>
+#include <WebWorker/WebWorkerClientEndpoint.h>
+#include <WebWorker/WebWorkerServerEndpoint.h>
 #include <WebWorker/Forward.h>
 #include <WebWorker/PageHost.h>
 

@@ -1369,7 +1369,7 @@ static ThrowCompletionOr<String> transform_case(VM& vm, String const& string, Va
     // 3. Else,
     else {
         // a. Let requestedLocale be ! DefaultLocale().
-        requested_locale = String::from_utf8_without_validation(Unicode::default_locale().bytes());
+        requested_locale = vm.host_get_default_locale();
     }
 
     // 4. Let availableLocales be an Available Locales List which includes the language tags for which the Unicode Character Database contains language-sensitive case mappings. If the implementation supports additional locale-sensitive case mappings, availableLocales should also include their corresponding language tags.

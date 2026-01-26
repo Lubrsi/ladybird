@@ -73,7 +73,7 @@ ThrowCompletionOr<Vector<String>> canonicalize_locale_list(VM&, Value locales);
 Optional<MatchedLocale> lookup_matching_locale_by_prefix(ReadonlySpan<String> requested_locales);
 Optional<MatchedLocale> lookup_matching_locale_by_best_fit(ReadonlySpan<String> requested_locales);
 String insert_unicode_extension_and_canonicalize(Unicode::LocaleID locale_id, Vector<String> attributes, Vector<Unicode::Keyword> keywords);
-ResolvedLocale resolve_locale(ReadonlySpan<String> requested_locales, LocaleOptions const& options, ReadonlySpan<StringView> relevant_extension_keys);
+ResolvedLocale resolve_locale(VM& vm, ReadonlySpan<String> requested_locales, LocaleOptions const& options, ReadonlySpan<StringView> relevant_extension_keys);
 ThrowCompletionOr<ResolvedOptions> resolve_options(VM& vm, IntlObject& object, Value locales, Value options_value, SpecialBehaviors special_behaviours = SpecialBehaviors::None, Function<void(LocaleOptions&)> modify_resolution_options = {});
 ThrowCompletionOr<GC::Ref<Array>> filter_locales(VM& vm, ReadonlySpan<String> requested_locales, Value options);
 ThrowCompletionOr<GC::Ref<Object>> coerce_options_to_object(VM&, Value options);

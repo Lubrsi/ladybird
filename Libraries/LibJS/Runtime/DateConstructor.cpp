@@ -60,7 +60,7 @@ ThrowCompletionOr<Value> DateConstructor::call()
     auto& vm = this->vm();
 
     // 1. If NewTarget is undefined, return ToDateString(SystemUTCEpochMilliseconds()).
-    return PrimitiveString::create(vm, to_date_string(Temporal::system_utc_epoch_milliseconds(vm)));
+    return PrimitiveString::create(vm, to_date_string(vm, Temporal::system_utc_epoch_milliseconds(vm)));
 }
 
 // 21.4.2.1 Date ( ...values ), https://tc39.es/ecma262/#sec-date
