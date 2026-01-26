@@ -5,9 +5,11 @@
  */
 
 #include <LibCore/System.h>
-#include <LibWeb/Worker/WebWorkerClient.h>
+#include <LibWebView/Application.h>
+#include <LibWebView/CookieJar.h>
+#include <LibWebView/WebWorkerClient.h>
 
-namespace Web::HTML {
+namespace WebView {
 
 void WebWorkerClient::die()
 {
@@ -20,21 +22,14 @@ void WebWorkerClient::did_close_worker()
         on_worker_close();
 }
 
-Messages::WebWorkerClient::DidRequestCookieResponse WebWorkerClient::did_request_cookie(URL::URL url, Cookie::Source source)
+Messages::WebWorkerClient::DidRequestCookieResponse WebWorkerClient::did_request_cookie(URL::URL url, Web::Cookie::Source source)
 {
-    if (on_request_cookie)
-        return on_request_cookie(url, source);
-    return String {};
+    return Application::cookie_jar().get_cookie(url, source);
 }
 
 WebWorkerClient::WebWorkerClient(NonnullOwnPtr<IPC::Transport> transport)
     : IPC::ConnectionToServer<WebWorkerClientEndpoint, WebWorkerServerEndpoint>(*this, move(transport))
 {
-}
-
-IPC::File WebWorkerClient::clone_transport()
-{
-    return MUST(m_transport->clone_for_transfer());
 }
 
 }

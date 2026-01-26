@@ -219,6 +219,8 @@ compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebContent/WebDriverClient.ipc Ser
 compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebContent/WebDriverServer.ipc Services/WebContent/WebDriverServerEndpoint.h)
 compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebContent/WebUIClient.ipc Services/WebContent/WebUIClientEndpoint.h)
 compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebContent/WebUIServer.ipc Services/WebContent/WebUIServerEndpoint.h)
+compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebWorker/WebWorkerClient.ipc Services/WebWorker/WebWorkerClientEndpoint.h)
+compile_ipc(${LADYBIRD_PROJECT_ROOT}/Services/WebWorker/WebWorkerServer.ipc Services/WebWorker/WebWorkerServerEndpoint.h)
 
 add_ladybird_subdirectory(Libraries)
 

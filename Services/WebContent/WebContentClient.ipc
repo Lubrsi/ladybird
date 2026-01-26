@@ -7,6 +7,8 @@
 #include <LibRequests/RequestTimingInfo.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/Bindings/RequestPrototype.h>
+#include <LibWeb/Bindings/WorkerPrototype.h>
 #include <LibWeb/Clipboard/SystemClipboard.h>
 #include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
@@ -15,8 +17,10 @@
 #include <LibWeb/HTML/ActivateTab.h>
 #include <LibWeb/HTML/AudioPlayState.h>
 #include <LibWeb/HTML/FileFilter.h>
+#include <LibWeb/HTML/Scripting/SerializedEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/SelectedFile.h>
 #include <LibWeb/HTML/SelectItem.h>
+#include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/WebViewHints.h>
 #include <LibWeb/Page/EventResult.h>
 #include <LibWeb/Page/Page.h>
@@ -129,5 +133,14 @@ endpoint WebContentClient
 
     did_find_in_page(u64 page_id, size_t current_match_index, Optional<size_t> total_match_count) =|
 
-    request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type) => (IPC::File socket) // FIXME: Add required attributes to select a SharedWorker Agent
+    start_worker_agent(
+        u64 page_id,
+        URL::URL url,
+        Web::Bindings::WorkerType type,
+        Web::Bindings::RequestCredentials credentials,
+        String name,
+        Web::HTML::TransferDataEncoder message_port,
+        Web::HTML::SerializedEnvironmentSettingsObject outside_settings,
+        Web::Bindings::AgentType agent_type
+    ) => (u64 worker_id)
 }

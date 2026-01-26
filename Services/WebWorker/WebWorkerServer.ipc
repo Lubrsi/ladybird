@@ -18,4 +18,7 @@ endpoint WebWorkerServer {
     close_worker() =|
 
     handle_file_return(i32 error, Optional<IPC::File> file, i32 request_id) =|
+
+    set_preferred_languages(Vector<String> preferred_languages) =|
+    set_enable_global_privacy_control(bool enable) =|
 }

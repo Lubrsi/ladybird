@@ -23,6 +23,8 @@ class Settings;
 class ViewImplementation;
 class WebContentClient;
 class WebUI;
+class WebWorkerClient;
+class WorkerImplementation;
 
 #if defined(AK_OS_MACOS)
 class MachPortServer;

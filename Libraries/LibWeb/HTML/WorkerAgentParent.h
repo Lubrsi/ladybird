@@ -30,8 +30,6 @@ protected:
     virtual void visit_edges(Cell::Visitor&) override;
 
 private:
-    void setup_worker_ipc_callbacks(JS::Realm&);
-
     WorkerOptions m_worker_options;
     Bindings::AgentType m_agent_type { Bindings::AgentType::DedicatedWorker };
     URL::URL m_url;
@@ -40,7 +38,7 @@ private:
     GC::Ptr<MessagePort> m_outside_port;
     GC::Ref<EnvironmentSettingsObject> m_outside_settings;
 
-    RefPtr<Web::HTML::WebWorkerClient> m_worker_ipc;
+    u64 m_worker_id { 0 };
 };
 
 }

@@ -5,6 +5,7 @@
  */
 
 #include <LibCore/EventLoop.h>
+#include <LibWeb/Loader/ResourceLoader.h>
 #include <WebWorker/ConnectionFromClient.h>
 #include <WebWorker/PageHost.h>
 #include <WebWorker/WorkerHost.h>
@@ -83,6 +84,16 @@ void ConnectionFromClient::handle_file_return(i32 error, Optional<IPC::File> fil
     VERIFY(file_request.value().on_file_request_finish);
 
     file_request.value().on_file_request_finish(error != 0 ? Error::from_errno(error) : ErrorOr<i32> { file->take_fd() });
+}
+
+void ConnectionFromClient::set_preferred_languages(Vector<String> preferred_languages)
+{
+    Web::ResourceLoader::the().set_preferred_languages(move(preferred_languages));
+}
+
+void ConnectionFromClient::set_enable_global_privacy_control(bool enable)
+{
+    Web::ResourceLoader::the().set_enable_global_privacy_control(enable);
 }
 
 }

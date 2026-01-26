@@ -134,4 +134,6 @@ endpoint WebContentServer
 
     system_time_zone_changed() =|
     cookies_changed(Vector<Web::Cookie::Cookie> cookies) =|
+
+    worker_agent_did_close(u64 worker_id) =|
 }

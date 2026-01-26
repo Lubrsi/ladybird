@@ -43,6 +43,8 @@ private:
 
     virtual void start_worker(URL::URL url, Web::Bindings::WorkerType type, Web::Bindings::RequestCredentials credentials, String name, Web::HTML::TransferDataEncoder, Web::HTML::SerializedEnvironmentSettingsObject, Web::Bindings::AgentType) override;
     virtual void handle_file_return(i32 error, Optional<IPC::File> file, i32 request_id) override;
+    virtual void set_preferred_languages(Vector<String>) override;
+    virtual void set_enable_global_privacy_control(bool) override;
 
     GC::Root<PageHost> m_page_host;
 

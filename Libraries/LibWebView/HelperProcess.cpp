@@ -10,6 +10,7 @@
 #include <LibWebView/Application.h>
 #include <LibWebView/HelperProcess.h>
 #include <LibWebView/Utilities.h>
+#include <LibWebView/WebWorkerClient.h>
 
 namespace WebView {
 
@@ -55,7 +56,7 @@ static ErrorOr<NonnullRefPtr<ClientType>> launch_server_process(
             if constexpr (requires { client->set_pid(pid_t {}); })
                 client->set_pid(process.pid());
 
-            if constexpr (requires { client->transport().set_peer_pid(0); } && !IsSame<ClientType, Web::HTML::WebWorkerClient>) {
+            if constexpr (requires { client->transport().set_peer_pid(0); } && !IsSame<ClientType, WebWorkerClient>) {
                 auto response = client->template send_sync<typename ClientType::InitTransport>(Core::System::getpid());
                 client->transport().set_peer_pid(response->peer_pid());
             }
@@ -176,7 +177,7 @@ ErrorOr<NonnullRefPtr<ImageDecoderClient::Client>> launch_image_decoder_process(
     return launch_server_process<ImageDecoderClient::Client>("ImageDecoder"sv, arguments);
 }
 
-ErrorOr<NonnullRefPtr<Web::HTML::WebWorkerClient>> launch_web_worker_process(Web::Bindings::AgentType type)
+ErrorOr<NonnullRefPtr<WebWorkerClient>> launch_web_worker_process(Web::Bindings::AgentType type)
 {
     auto const& web_content_options = WebView::Application::web_content_options();
 
@@ -208,7 +209,7 @@ ErrorOr<NonnullRefPtr<Web::HTML::WebWorkerClient>> launch_web_worker_process(Web
         VERIFY_NOT_REACHED();
     }
 
-    return launch_server_process<Web::HTML::WebWorkerClient>("WebWorker"sv, move(arguments));
+    return launch_server_process<WebWorkerClient>("WebWorker"sv, move(arguments));
 }
 
 ErrorOr<NonnullRefPtr<Requests::RequestClient>> launch_request_server_process()

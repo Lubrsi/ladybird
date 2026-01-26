@@ -14,14 +14,19 @@
 #include <LibRequests/NetworkError.h>
 #include <LibRequests/RequestTimingInfo.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/Bindings/RequestPrototype.h>
+#include <LibWeb/Bindings/WorkerPrototype.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
 #include <LibWeb/HTML/ActivateTab.h>
 #include <LibWeb/HTML/FileFilter.h>
+#include <LibWeb/HTML/Scripting/SerializedEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/SelectItem.h>
+#include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/WebViewHints.h>
 #include <LibWeb/Page/EventResult.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/Forward.h>
+#include <LibWebView/WorkerImplementation.h>
 #include <WebContent/WebContentClientEndpoint.h>
 #include <WebContent/WebContentServerEndpoint.h>
 
@@ -146,7 +151,15 @@ private:
     virtual void did_change_audio_play_state(u64 page_id, Web::HTML::AudioPlayState) override;
     virtual void did_update_navigation_buttons_state(u64 page_id, bool back_enabled, bool forward_enabled) override;
     virtual void did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap, i32 back_bitmap_id, Gfx::ShareableBitmap) override;
-    virtual Messages::WebContentClient::RequestWorkerAgentResponse request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type) override;
+    virtual Messages::WebContentClient::StartWorkerAgentResponse start_worker_agent(
+        u64 page_id,
+        URL::URL url,
+        Web::Bindings::WorkerType type,
+        Web::Bindings::RequestCredentials credentials,
+        String name,
+        Web::HTML::TransferDataEncoder message_port,
+        Web::HTML::SerializedEnvironmentSettingsObject outside_settings,
+        Web::Bindings::AgentType agent_type) override;
 
     Optional<ViewImplementation&> view_for_page_id(u64, SourceLocation = SourceLocation::current());
 
@@ -156,6 +169,10 @@ private:
     ProcessHandle m_process_handle;
 
     RefPtr<WebUI> m_web_ui;
+
+    // DedicatedWorkers are per-WebContentClient (tied to page lifetime)
+    HashMap<u64, NonnullRefPtr<WorkerImplementation>> m_dedicated_workers;
+    u64 m_next_dedicated_worker_id { 1 };
 
     static HashTable<WebContentClient*> s_clients;
 };

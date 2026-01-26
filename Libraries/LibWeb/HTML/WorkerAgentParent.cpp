@@ -8,7 +8,6 @@
 #include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/WorkerAgentParent.h>
 #include <LibWeb/Page/Page.h>
-#include <LibWeb/Worker/WebWorkerClient.h>
 
 namespace Web::HTML {
 
@@ -38,29 +37,15 @@ void WorkerAgentParent::initialize(JS::Realm& realm)
     //        so let's do it here for now.
     m_outside_port->start();
 
-    // NOTE: This blocking IPC call may launch another process.
-    //    If spinning the event loop for this can cause other javascript to execute, we're in trouble.
-    auto worker_socket_file = Bindings::principal_host_defined_page(realm).client().request_worker_agent(m_agent_type);
-
-    auto worker_socket = MUST(Core::LocalSocket::adopt_fd(worker_socket_file.take_fd()));
-    MUST(worker_socket->set_blocking(true));
-
-    // TODO: Mach IPC
-    auto transport = make<IPC::Transport>(move(worker_socket));
-
-    m_worker_ipc = make_ref_counted<WebWorkerClient>(move(transport));
-    setup_worker_ipc_callbacks(realm);
-
-    m_worker_ipc->async_start_worker(m_url, m_worker_options.type, m_worker_options.credentials, m_worker_options.name, move(data_holder), m_outside_settings->serialize(), m_agent_type);
-}
-
-void WorkerAgentParent::setup_worker_ipc_callbacks(JS::Realm& realm)
-{
-    // NOTE: As long as WorkerAgentParent is alive, realm and m_worker_ipc will be alive.
-    m_worker_ipc->on_request_cookie = [realm = GC::RawRef { realm }](URL::URL const& url, Cookie::Source source) {
-        auto& client = Bindings::principal_host_defined_page(realm).client();
-        return client.page_did_request_cookie(url, source);
-    };
+    // Call new IPC - UI layer handles everything (cookie handling, settings forwarding, etc.)
+    m_worker_id = Bindings::principal_host_defined_page(realm).client().start_worker_agent(
+        m_url,
+        m_worker_options.type,
+        m_worker_options.credentials,
+        m_worker_options.name,
+        move(data_holder),
+        m_outside_settings->serialize(),
+        m_agent_type);
 }
 
 void WorkerAgentParent::visit_edges(Cell::Visitor& visitor)

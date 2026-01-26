@@ -1364,4 +1364,11 @@ void ConnectionFromClient::cookies_changed(Vector<Web::Cookie::Cookie> cookies)
     }
 }
 
+void ConnectionFromClient::worker_agent_did_close(u64 worker_id)
+{
+    // TODO: Need mechanism to find WorkerAgentParent by worker_id
+    // This may require WorkerAgentParent to register itself somewhere
+    (void)worker_id;
+}
+
 }

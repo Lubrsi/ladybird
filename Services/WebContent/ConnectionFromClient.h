@@ -163,6 +163,7 @@ private:
 
     virtual void system_time_zone_changed() override;
     virtual void cookies_changed(Vector<Web::Cookie::Cookie>) override;
+    virtual void worker_agent_did_close(u64 worker_id) override;
 
     NonnullOwnPtr<PageHost> m_page_host;
 

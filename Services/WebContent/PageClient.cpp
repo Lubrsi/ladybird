@@ -671,15 +671,23 @@ void PageClient::page_did_allocate_backing_stores(i32 front_bitmap_id, Gfx::Shar
     client().async_did_allocate_backing_stores(m_id, front_bitmap_id, front_bitmap, back_bitmap_id, back_bitmap);
 }
 
-IPC::File PageClient::request_worker_agent(Web::Bindings::AgentType type)
+u64 PageClient::start_worker_agent(
+    URL::URL url,
+    Web::Bindings::WorkerType type,
+    Web::Bindings::RequestCredentials credentials,
+    String name,
+    Web::HTML::TransferDataEncoder message_port,
+    Web::HTML::SerializedEnvironmentSettingsObject outside_settings,
+    Web::Bindings::AgentType agent_type)
 {
-    auto response = client().send_sync_but_allow_failure<Messages::WebContentClient::RequestWorkerAgent>(m_id, type);
+    auto response = client().send_sync_but_allow_failure<Messages::WebContentClient::StartWorkerAgent>(
+        m_id, url, type, credentials, name, move(message_port), move(outside_settings), agent_type);
     if (!response) {
-        dbgln("WebContent client disconnected during RequestWorkerAgent. Exiting peacefully.");
+        dbgln("WebContent client disconnected during StartWorkerAgent. Exiting peacefully.");
         exit(0);
     }
 
-    return response->take_socket();
+    return response->worker_id();
 }
 
 void PageClient::page_did_mutate_dom(FlyString const& type, Web::DOM::Node const& target, Web::DOM::NodeList& added_nodes, Web::DOM::NodeList& removed_nodes, GC::Ptr<Web::DOM::Node>, GC::Ptr<Web::DOM::Node>, Optional<String> const& attribute_name)

@@ -24,6 +24,8 @@
 #include <LibRequests/RequestTimingInfo.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Bindings/AgentType.h>
+#include <LibWeb/Bindings/RequestPrototype.h>
+#include <LibWeb/Bindings/WorkerPrototype.h>
 #include <LibWeb/CSS/PreferredColorScheme.h>
 #include <LibWeb/CSS/PreferredContrast.h>
 #include <LibWeb/CSS/PreferredMotion.h>
@@ -35,6 +37,8 @@
 #include <LibWeb/HTML/ColorPickerUpdateState.h>
 #include <LibWeb/HTML/FileFilter.h>
 #include <LibWeb/HTML/HTMLMediaElement.h>
+#include <LibWeb/HTML/Scripting/SerializedEnvironmentSettingsObject.h>
+#include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/SelectItem.h>
 #include <LibWeb/HTML/TokenizedFeatures.h>
 #include <LibWeb/HTML/WebViewHints.h>
@@ -426,7 +430,17 @@ public:
     virtual void page_did_receive_network_response_body([[maybe_unused]] u64 request_id, [[maybe_unused]] ReadonlyBytes data) { }
     virtual void page_did_finish_network_request([[maybe_unused]] u64 request_id, [[maybe_unused]] u64 body_size, [[maybe_unused]] Requests::RequestTimingInfo const& timing_info, [[maybe_unused]] Optional<Requests::NetworkError> const& network_error) { }
 
-    virtual IPC::File request_worker_agent([[maybe_unused]] Web::Bindings::AgentType worker_type) { return IPC::File {}; }
+    virtual u64 start_worker_agent(
+        [[maybe_unused]] URL::URL url,
+        [[maybe_unused]] Bindings::WorkerType type,
+        [[maybe_unused]] Bindings::RequestCredentials credentials,
+        [[maybe_unused]] String name,
+        [[maybe_unused]] HTML::TransferDataEncoder message_port,
+        [[maybe_unused]] HTML::SerializedEnvironmentSettingsObject outside_settings,
+        [[maybe_unused]] Bindings::AgentType agent_type)
+    {
+        return 0;
+    }
 
     virtual void page_did_mutate_dom([[maybe_unused]] FlyString const& type, [[maybe_unused]] DOM::Node const& target, [[maybe_unused]] DOM::NodeList& added_nodes, [[maybe_unused]] DOM::NodeList& removed_nodes, [[maybe_unused]] GC::Ptr<DOM::Node> previous_sibling, [[maybe_unused]] GC::Ptr<DOM::Node> next_sibling, [[maybe_unused]] Optional<String> const& attribute_name) { }
 

@@ -30,6 +30,7 @@
 #include <LibWebView/ProcessManager.h>
 #include <LibWebView/Settings.h>
 #include <LibWebView/StorageJar.h>
+#include <LibWebView/WorkerImplementation.h>
 
 namespace WebView {
 
@@ -58,6 +59,11 @@ public:
     static StorageJar& storage_jar() { return *the().m_storage_jar; }
 
     static ProcessManager& process_manager() { return *the().m_process_manager; }
+
+    // SharedWorker management (global, shared across all WebContentClients)
+    u64 create_shared_worker(NonnullRefPtr<WebWorkerClient>);
+    void remove_shared_worker(u64 worker_id);
+    WorkerImplementation* shared_worker(u64 worker_id);
 
     ErrorOr<NonnullRefPtr<WebContentClient>> launch_web_content_process(ViewImplementation&);
 
@@ -263,6 +269,10 @@ private:
     OwnPtr<DevTools::DevToolsServer> m_devtools;
 
     mutable HashMap<u64, u64> m_navigation_listener_ids;
+
+    // SharedWorkers stored globally (shared across all WebContentClients per spec)
+    HashMap<u64, NonnullRefPtr<WorkerImplementation>> m_shared_workers;
+    u64 m_next_shared_worker_id { 1 };
 } SWIFT_IMMORTAL_REFERENCE;
 
 }

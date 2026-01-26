@@ -183,7 +183,14 @@ private:
     virtual void page_did_request_clipboard_entries(u64 request_id) override;
     virtual void page_did_change_audio_play_state(Web::HTML::AudioPlayState) override;
     virtual void page_did_allocate_backing_stores(i32 front_bitmap_id, Gfx::ShareableBitmap front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap back_bitmap) override;
-    virtual IPC::File request_worker_agent(Web::Bindings::AgentType) override;
+    virtual u64 start_worker_agent(
+        URL::URL url,
+        Web::Bindings::WorkerType type,
+        Web::Bindings::RequestCredentials credentials,
+        String name,
+        Web::HTML::TransferDataEncoder message_port,
+        Web::HTML::SerializedEnvironmentSettingsObject outside_settings,
+        Web::Bindings::AgentType agent_type) override;
     virtual void page_did_mutate_dom(FlyString const& type, Web::DOM::Node const& target, Web::DOM::NodeList& added_nodes, Web::DOM::NodeList& removed_nodes, GC::Ptr<Web::DOM::Node> previous_sibling, GC::Ptr<Web::DOM::Node> next_sibling, Optional<String> const& attribute_name) override;
     virtual void page_did_paint(Gfx::IntRect const& content_rect, i32 bitmap_id) override;
     virtual void page_did_take_screenshot(Gfx::ShareableBitmap const& screenshot) override;

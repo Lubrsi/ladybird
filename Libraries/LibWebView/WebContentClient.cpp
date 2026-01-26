@@ -12,6 +12,7 @@
 #include <LibWebView/ViewImplementation.h>
 #include <LibWebView/WebContentClient.h>
 #include <LibWebView/WebUI.h>
+#include <LibWebView/WebWorkerClient.h>
 
 namespace WebView {
 
@@ -759,14 +760,48 @@ void WebContentClient::did_allocate_backing_stores(u64 page_id, i32 front_bitmap
         view->did_allocate_backing_stores({}, front_bitmap_id, front_bitmap, back_bitmap_id, back_bitmap);
 }
 
-Messages::WebContentClient::RequestWorkerAgentResponse WebContentClient::request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type)
+Messages::WebContentClient::StartWorkerAgentResponse WebContentClient::start_worker_agent(
+    u64 page_id, URL::URL url, Web::Bindings::WorkerType type,
+    Web::Bindings::RequestCredentials credentials, String name,
+    Web::HTML::TransferDataEncoder message_port,
+    Web::HTML::SerializedEnvironmentSettingsObject outside_settings,
+    Web::Bindings::AgentType agent_type)
 {
-    if (auto view = view_for_page_id(page_id); view.has_value()) {
-        auto worker_client = MUST(WebView::launch_web_worker_process(worker_type));
-        return worker_client->clone_transport();
-    }
+    (void)page_id;
 
-    return IPC::File {};
+    auto worker_client = MUST(WebView::launch_web_worker_process(agent_type));
+
+    // Send start_worker from UI layer
+    worker_client->async_start_worker(url, type, credentials, name,
+        move(message_port), outside_settings, agent_type);
+
+    bool is_shared = agent_type == Web::Bindings::AgentType::SharedWorker;
+
+    if (is_shared) {
+        // SharedWorkers stored globally in Application
+        auto worker_id = Application::the().create_shared_worker(worker_client);
+        auto* impl = Application::the().shared_worker(worker_id);
+        impl->on_close = [worker_id]() {
+            // Notify all WebContentClients that have references to this worker
+            WebContentClient::for_each_client([worker_id](auto& client) {
+                client.async_worker_agent_did_close(worker_id);
+                return IterationDecision::Continue;
+            });
+            Application::the().remove_shared_worker(worker_id);
+        };
+        return worker_id;
+    } else {
+        // DedicatedWorkers stored per-WebContentClient
+        auto worker_id = m_next_dedicated_worker_id++;
+        auto impl = WorkerImplementation::create(worker_id, move(worker_client));
+        impl->on_close = [this, worker_id]() {
+            async_worker_agent_did_close(worker_id);
+            m_dedicated_workers.remove(worker_id);
+        };
+        impl->initialize_client();
+        m_dedicated_workers.set(worker_id, move(impl));
+        return worker_id;
+    }
 }
 
 Optional<ViewImplementation&> WebContentClient::view_for_page_id(u64 page_id, SourceLocation location)

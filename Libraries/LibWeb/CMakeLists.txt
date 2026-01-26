@@ -1122,7 +1122,6 @@ set(SOURCES
     WebVTT/VTTCue.cpp
     WebVTT/VTTRegion.cpp
     WebXR/XRSystem.cpp
-    Worker/WebWorkerClient.cpp
     XHR/EventNames.cpp
     XHR/FormData.cpp
     XHR/FormDataIterator.cpp
@@ -1139,9 +1138,6 @@ set(SOURCES
     XPath/XPathNSResolver.cpp
     XPath/XPathResult.cpp
 )
-
-compile_ipc(Worker/WebWorkerClient.ipc Worker/WebWorkerClientEndpoint.h)
-compile_ipc(Worker/WebWorkerServer.ipc Worker/WebWorkerServerEndpoint.h)
 
 invoke_cpp_generator(
     "AriaRoles.cpp"

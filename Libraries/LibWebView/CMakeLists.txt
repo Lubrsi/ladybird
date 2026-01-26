@@ -30,6 +30,8 @@ set(SOURCES
     WebUI.cpp
     WebUI/ProcessesUI.cpp
     WebUI/SettingsUI.cpp
+    WebWorkerClient.cpp
+    WorkerImplementation.cpp
 )
 
 if (APPLE)

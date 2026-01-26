@@ -25,6 +25,7 @@
 #include <LibWebView/UserAgent.h>
 #include <LibWebView/Utilities.h>
 #include <LibWebView/WebContentClient.h>
+#include <LibWebView/WebWorkerClient.h>
 
 #if defined(AK_OS_MACOS)
 #    include <LibWebView/MachPortServer.h>
@@ -1386,6 +1387,27 @@ void Application::did_disconnect_devtools_client(DevTools::TabDescription const&
         return;
 
     view->did_disconnect_devtools_client();
+}
+
+u64 Application::create_shared_worker(NonnullRefPtr<WebWorkerClient> client)
+{
+    auto worker_id = m_next_shared_worker_id++;
+    auto impl = WorkerImplementation::create(worker_id, move(client));
+    impl->initialize_client();
+    m_shared_workers.set(worker_id, move(impl));
+    return worker_id;
+}
+
+void Application::remove_shared_worker(u64 worker_id)
+{
+    m_shared_workers.remove(worker_id);
+}
+
+WorkerImplementation* Application::shared_worker(u64 worker_id)
+{
+    if (auto it = m_shared_workers.find(worker_id); it != m_shared_workers.end())
+        return it->value.ptr();
+    return nullptr;
 }
 
 }
