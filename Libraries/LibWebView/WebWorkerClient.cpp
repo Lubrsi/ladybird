@@ -27,6 +27,26 @@ Messages::WebWorkerClient::DidRequestCookieResponse WebWorkerClient::did_request
     return Application::cookie_jar().get_cookie(url, source);
 }
 
+void WebWorkerClient::did_set_cookie(URL::URL url, Web::Cookie::ParsedCookie cookie, Web::Cookie::Source source)
+{
+    Application::cookie_jar().set_cookie(url, cookie, source);
+}
+
+void WebWorkerClient::did_update_cookie(Web::Cookie::Cookie cookie)
+{
+    Application::cookie_jar().update_cookie(move(cookie));
+}
+
+Messages::WebWorkerClient::DidRequestAllCookiesCookiestoreResponse WebWorkerClient::did_request_all_cookies_cookiestore(URL::URL url)
+{
+    return Application::cookie_jar().get_all_cookies_cookiestore(url);
+}
+
+Messages::WebWorkerClient::DidRequestNamedCookieResponse WebWorkerClient::did_request_named_cookie(URL::URL url, String name)
+{
+    return Application::cookie_jar().get_named_cookie(url, name);
+}
+
 WebWorkerClient::WebWorkerClient(NonnullOwnPtr<IPC::Transport> transport)
     : IPC::ConnectionToServer<WebWorkerClientEndpoint, WebWorkerServerEndpoint>(*this, move(transport))
 {

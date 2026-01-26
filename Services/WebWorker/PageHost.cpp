@@ -92,6 +92,26 @@ String PageHost::page_did_request_cookie(URL::URL const& url, Web::Cookie::Sourc
     return m_client.did_request_cookie(url, source);
 }
 
+void PageHost::page_did_set_cookie(URL::URL const& url, Web::Cookie::ParsedCookie const& cookie, Web::Cookie::Source source)
+{
+    m_client.did_set_cookie(url, cookie, source);
+}
+
+void PageHost::page_did_update_cookie(Web::Cookie::Cookie const& cookie)
+{
+    m_client.async_did_update_cookie(cookie);
+}
+
+Vector<Web::Cookie::Cookie> PageHost::page_did_request_all_cookies_cookiestore(URL::URL const& url)
+{
+    return m_client.did_request_all_cookies_cookiestore(url);
+}
+
+Optional<Web::Cookie::Cookie> PageHost::page_did_request_named_cookie(URL::URL const& url, String const& name)
+{
+    return m_client.did_request_named_cookie(url, name);
+}
+
 void PageHost::request_file(Web::FileRequest request)
 {
     m_client.request_file(move(request));

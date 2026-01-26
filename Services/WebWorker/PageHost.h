@@ -36,6 +36,10 @@ public:
     virtual Web::CSS::PreferredMotion preferred_motion() const override;
     virtual size_t screen_count() const override { return 1; }
     virtual String page_did_request_cookie(URL::URL const&, Web::Cookie::Source) override;
+    virtual void page_did_set_cookie(URL::URL const&, Web::Cookie::ParsedCookie const&, Web::Cookie::Source) override;
+    virtual void page_did_update_cookie(Web::Cookie::Cookie const&) override;
+    virtual Vector<Web::Cookie::Cookie> page_did_request_all_cookies_cookiestore(URL::URL const&) override;
+    virtual Optional<Web::Cookie::Cookie> page_did_request_named_cookie(URL::URL const&, String const&) override;
     virtual void request_file(Web::FileRequest) override;
     virtual Web::DisplayListPlayerType display_list_player_type() const override { VERIFY_NOT_REACHED(); }
     virtual bool is_headless() const override { VERIFY_NOT_REACHED(); }
