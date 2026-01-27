@@ -45,6 +45,7 @@ public:
     // Basic block management (Generator-style API)
     WasmBasicBlock make_block(StringView name = {});
     void switch_to_basic_block(WasmBasicBlock block);
+    void switch_to_unreachable_block();
     [[nodiscard]] WasmBasicBlock& current_block() { return m_current_block; }
     [[nodiscard]] WasmBasicBlock const& current_block() const { return m_current_block; }
     [[nodiscard]] bool is_current_block_terminated() const;
@@ -70,6 +71,8 @@ public:
 
     // Memory access
     [[nodiscard]] MemoryInstance* memory(size_t index);
+    [[nodiscard]] TableInstance* table(size_t index);
+    [[nodiscard]] llvm::GlobalVariable* function_pointer_table();
 
     // IR Builder access
     [[nodiscard]] llvm::IRBuilder<>& builder() { return m_builder; }
@@ -79,6 +82,7 @@ public:
 
     // Type conversion
     [[nodiscard]] llvm::Type* wasm_type_to_llvm(ValueType type);
+    [[nodiscard]] llvm::FunctionType* wasm_func_type_to_llvm(FunctionType const& type);
 
     // Expression/instruction compilation
     void compile_expression(Expression const& expression);
@@ -98,6 +102,7 @@ private:
     size_t m_next_block { 0 };
 
     llvm::Value* get_memory_pointer(Instruction::MemoryArgument const& memory_argument, llvm::Value* base);
+    llvm::Value* get_memory_pointer(MemoryIndex, llvm::Value* pointer);
 };
 
 class LLVMCompiler {
@@ -118,9 +123,16 @@ private:
     llvm::Type* wasm_type_to_llvm(ValueType);
     llvm::FunctionType* wasm_func_type_to_llvm(FunctionType const&);
 
+    // Constant expression evaluation (for globals, data offsets, element offsets)
+    u64 evaluate_constant_expression(Expression const&);
+
     // Compilation phases
+    void compile_function_declarations(llvm::Module&, Module const&);
     void compile_global_section(llvm::Module&, Module const&);
-    void compile_functions(llvm::Module&, Module const&);
+    void compile_data_section(Module const&);
+    void compile_table_section(Module const&);
+    void compile_element_section(Module const&);
+    void compile_function_bodies(llvm::Module&, Module const&);
 
     Vector<FunctionDeclaration> m_function_declarations;
     Vector<NonnullOwnPtr<llvm::GlobalVariable>> m_globals;
@@ -128,6 +140,15 @@ private:
     // Memory - must outlive JIT code execution
     Vector<MemoryAddress> m_memories;
     Store m_store;
+
+    // Tables for call_indirect
+    Vector<TableAddress> m_tables;
+
+    // Function pointer table for call_indirect (maps function index to function pointer)
+    llvm::GlobalVariable* m_function_pointer_table { nullptr };
+
+    // Passive data segments for memory.init
+    Vector<ByteBuffer> m_passive_data_segments;
 
     std::unique_ptr<llvm::orc::LLJIT> m_jit;
     std::unique_ptr<llvm::LLVMContext> m_context;

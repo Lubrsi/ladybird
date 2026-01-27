@@ -494,6 +494,7 @@ public:
 
     auto& type() const { return m_type; }
     auto size() const { return m_size; }
+    size_t* size_ptr() { return &m_size; }
     auto* data() const { return m_base_ptr; }
     auto* data() { return m_base_ptr; }
 
