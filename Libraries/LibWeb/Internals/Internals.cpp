@@ -315,7 +315,7 @@ void Internals::pinch(double x, double y, double scale_delta)
 {
     auto& page = this->page();
     auto position = page.css_to_device_point({ x, y });
-    page.handle_pinch_event(position, scale_delta);
+    page.handle_pinch_event(position, scale_delta, 0);
 }
 
 String Internals::current_cursor()

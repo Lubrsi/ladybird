@@ -16,7 +16,7 @@
 
 namespace Ladybird {
 
-static Web::UIEvents::KeyModifier ns_modifiers_to_key_modifiers(NSEventModifierFlags modifier_flags, Optional<Web::UIEvents::MouseButton&> button = {})
+Web::UIEvents::KeyModifier ns_modifiers_to_key_modifiers(NSEventModifierFlags modifier_flags, Optional<Web::UIEvents::MouseButton&> button)
 {
     unsigned modifiers = Web::UIEvents::KeyModifier::Mod_None;
 

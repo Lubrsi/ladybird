@@ -1125,7 +1125,7 @@ EventResult EventHandler::handle_drag_and_drop_event(DragEvent::Type type, CSSPi
     VERIFY_NOT_REACHED();
 }
 
-EventResult EventHandler::handle_pinch_event(CSSPixelPoint point, double scale_delta)
+EventResult EventHandler::handle_pinch_event(CSSPixelPoint point, double scale_delta, unsigned modifiers)
 {
     auto document = m_navigable->active_document();
     if (!document)
@@ -1134,6 +1134,76 @@ EventResult EventHandler::handle_pinch_event(CSSPixelPoint point, double scale_d
         return EventResult::Dropped;
 
     auto visual_viewport = document->visual_viewport();
+    auto viewport_position = visual_viewport->map_to_layout_viewport(point);
+
+    document->update_layout(DOM::UpdateLayoutReason::EventHandlerHandlePinch);
+
+    if (!paint_root())
+        return EventResult::Dropped;
+
+    constexpr double SCALE_DELTA_TO_MOUSE_EVENT_DELTA_FACTOR = 100.0;
+
+    double delta_x = 0.0;
+    double delta_y = -scale_delta * SCALE_DELTA_TO_MOUSE_EVENT_DELTA_FACTOR;
+
+    GC::Ptr<Painting::Paintable> paintable;
+    if (auto result = target_for_mouse_position(viewport_position); result.has_value())
+        paintable = result->paintable;
+
+    auto handled_event = EventResult::Dropped;
+
+    if (paintable) {
+        auto node = dom_node_for_event_dispatch(*paintable);
+
+        if (node) {
+            // Handle iframe recursion - dispatch event to nested navigable
+            if (auto* navigable_container = as_if<HTML::NavigableContainer>(*node)) {
+                if (auto content_navigable = navigable_container->content_navigable()) {
+                    auto position = compute_position_in_nested_navigable(
+                        as<Painting::NavigableContainerViewportPaintable>(*paintable), viewport_position);
+                    auto result = content_navigable->event_handler().handle_pinch_event(position, scale_delta, modifiers);
+
+                    if (result == EventResult::Cancelled)
+                        return EventResult::Cancelled;
+
+                    handled_event = EventResult::Handled;
+                }
+            } else {
+                // Dispatch wheel event to the target element
+                GC::Ptr<Layout::Node> layout_node;
+                if (!parent_element_for_event_dispatch(*paintable, node, layout_node))
+                    return EventResult::Dropped;
+
+                auto page_offset = compute_mouse_event_page_offset(viewport_position);
+                auto const& offset_paintable = layout_node->first_paintable() ? layout_node->first_paintable() : paintable.ptr();
+                auto offset = compute_mouse_event_offset(page_offset, *offset_paintable);
+
+                auto wheel_event = UIEvents::WheelEvent::create_from_platform_event(
+                    node->realm(),
+                    m_navigable->active_window_proxy(),
+                    UIEvents::EventNames::wheel,
+                    point,
+                    page_offset,
+                    viewport_position,
+                    offset,
+                    delta_x,
+                    delta_y,
+                    0,
+                    0,
+                    modifiers | UIEvents::KeyModifier::Mod_Ctrl
+                ).release_value_but_fixme_should_propagate_errors();
+
+                if (!node->dispatch_event(wheel_event))
+                    return EventResult::Cancelled;
+
+                handled_event = EventResult::Handled;
+            }
+        }
+    }
+
+    if (handled_event != EventResult::Handled)
+        return handled_event;
+
     visual_viewport->zoom(point, scale_delta);
     return EventResult::Handled;
 }

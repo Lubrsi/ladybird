@@ -14,6 +14,8 @@
 
 namespace Ladybird {
 
+Web::UIEvents::KeyModifier ns_modifiers_to_key_modifiers(NSEventModifierFlags modifier_flags, Optional<Web::UIEvents::MouseButton&> button = {});
+
 Web::MouseEvent ns_event_to_mouse_event(Web::MouseEvent::Type, NSEvent*, NSView*, Web::UIEvents::MouseButton);
 
 Web::DragEvent ns_event_to_drag_event(Web::DragEvent::Type, id<NSDraggingInfo>, NSView*);

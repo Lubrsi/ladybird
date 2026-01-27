@@ -145,8 +145,6 @@ void DevToolsConsoleClient::send_console_output(WebView::ConsoleOutput console_o
 // 2.3. Printer(logLevel, args[, options]), https://console.spec.whatwg.org/#printer
 JS::ThrowCompletionOr<JS::Value> DevToolsConsoleClient::printer(JS::Console::LogLevel log_level, PrinterArguments arguments)
 {
-    return JS::js_undefined();
-
     // FIXME: Implement these.
     if (first_is_one_of(log_level, JS::Console::LogLevel::Table, JS::Console::LogLevel::Trace, JS::Console::LogLevel::Group, JS::Console::LogLevel::GroupCollapsed))
         return JS::js_undefined();

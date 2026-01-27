@@ -266,7 +266,7 @@ ErrorOr<void> print_function(JS::PrintContext& print_context, JS::FunctionObject
 ErrorOr<void> print_date(JS::PrintContext& print_context, JS::Date const& date, HashTable<JS::Object*>&)
 {
     TRY(print_type(print_context, "Date"sv));
-    TRY(js_out(print_context, " \033[34;1m{}\033[0m", JS::to_date_string(date.date_value())));
+    TRY(js_out(print_context, " \033[34;1m{}\033[0m", JS::to_date_string(print_context.vm, date.date_value())));
     return {};
 }
 
