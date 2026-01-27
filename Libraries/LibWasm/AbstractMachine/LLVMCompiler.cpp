@@ -34,7 +34,7 @@ ErrorOr<NonnullOwnPtr<LLVMCompiler>> LLVMCompiler::create()
 
     auto jit = llvm::orc::LLJITBuilder()
         .setJITTargetMachineBuilder(
-            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::Aggressive))
+            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::None))
         .create();
     if (!jit)
         return Error::from_string_literal("Failed to create LLJIT");
@@ -151,7 +151,7 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
     if (auto err = m_jit->addIRModule(move(tsm)))
         return Error::from_string_literal("Failed to add module to JIT");
 
-    for (size_t index = 4; index < m_function_declarations.size(); ++index) {
+    for (size_t index = 0; index < m_function_declarations.size(); ++index) {
         auto name = MUST(String::formatted("wasm_func_{}", index));
         auto sv = name.bytes_as_string_view();
         auto symbol = m_jit->lookup(llvm::StringRef(sv.characters_without_null_termination(), sv.length()));
@@ -161,7 +161,7 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
         dbgln("{}: {:p}", index, symbol->getValue());
     }
 
-    auto symbol = m_jit->lookup("wasm_func_2");
+    auto symbol = m_jit->lookup("wasm_func_1");
     if (!symbol)
         VERIFY_NOT_REACHED();
 
@@ -1221,11 +1221,22 @@ llvm::Value* LLVMFunctionGenerator::get_memory_pointer(Instruction::MemoryArgume
 
     dbgln("memory at {}", mem->data());
 
+    llvm::Value* memory_base_ptr = nullptr;
+
+    if (!mem->backed_by_virtual_memory()) {
+        auto* ptr_to_data_ptr_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->ptr_to_data()));
+        auto* ptr_to_data_ptr = b.CreateIntToPtr(ptr_to_data_ptr_int, b.getPtrTy());
+        memory_base_ptr = b.CreateIntToPtr(b.CreateLoad(b.getInt64Ty(), ptr_to_data_ptr), b.getPtrTy());
+    } else {
+        auto* memory_base_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->data()));
+        memory_base_ptr = b.CreateIntToPtr(memory_base_int, b.getPtrTy());
+    }
+
+    VERIFY(memory_base_ptr);
+
+    // FIXME: trap if address is out of bounds (this is done by the MMU when using VM backing)
     auto* effective_addr = b.CreateAdd(base, mem->type().limits().address_type() == AddressType::I32 ? b.getInt32(memory_argument.offset) : b.getInt64(memory_argument.offset));
     auto* addr_i64 = b.CreateZExt(effective_addr, b.getInt64Ty());
-
-    auto* memory_base_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->data()));
-    auto* memory_base_ptr = b.CreateIntToPtr(memory_base_int, b.getPtrTy());
     return b.CreateGEP(b.getInt8Ty(), memory_base_ptr, addr_i64);
 }
 
@@ -1237,11 +1248,22 @@ llvm::Value* LLVMFunctionGenerator::get_memory_pointer(MemoryIndex memory_index,
 
     dbgln("memory at {}", mem->data());
 
+    llvm::Value* memory_base_ptr = nullptr;
+
+    if (!mem->backed_by_virtual_memory()) {
+        auto* ptr_to_data_ptr_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->ptr_to_data()));
+        auto* ptr_to_data_ptr = b.CreateIntToPtr(ptr_to_data_ptr_int, b.getPtrTy());
+        memory_base_ptr = b.CreateIntToPtr(b.CreateLoad(b.getInt64Ty(), ptr_to_data_ptr), b.getPtrTy());
+    } else {
+        auto* memory_base_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->data()));
+        memory_base_ptr = b.CreateIntToPtr(memory_base_int, b.getPtrTy());
+    }
+
+    VERIFY(memory_base_ptr);
+
+    // FIXME: trap if address is out of bounds (this is done by the MMU when using VM backing)
     auto* effective_addr = b.getInt64(reinterpret_cast<FlatPtr>(pointer));
     auto* addr_i64 = b.CreateZExt(effective_addr, b.getInt64Ty());
-
-    auto* memory_base_int = b.getInt64(reinterpret_cast<FlatPtr>(mem->data()));
-    auto* memory_base_ptr = b.CreateIntToPtr(memory_base_int, b.getPtrTy());
     return b.CreateGEP(b.getInt8Ty(), memory_base_ptr, addr_i64);
 }
 

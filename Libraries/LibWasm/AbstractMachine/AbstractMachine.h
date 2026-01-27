@@ -496,7 +496,9 @@ public:
     auto size() const { return m_size; }
     size_t* size_ptr() { return &m_size; }
     auto* data() const { return m_base_ptr; }
+    auto* ptr_to_data() const { return &m_base_ptr; }
     auto* data() { return m_base_ptr; }
+    auto* ptr_to_data() { return &m_base_ptr; }
 
     ALWAYS_INLINE bool backed_by_virtual_memory() const { return m_backing == Backing::VirtualMemory; }
 
