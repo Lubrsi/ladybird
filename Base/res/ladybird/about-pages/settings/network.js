@@ -4,7 +4,10 @@ const dnsForciblyEnabled = document.querySelector("#dns-forcibly-enabled");
 const dnsUpstream = document.querySelector("#dns-upstream");
 const dnsType = document.querySelector("#dns-type");
 const dnsServer = document.querySelector("#dns-server");
+const dnsServerLabel = document.querySelector("#dns-server-label");
+const dnsServerInvalidMessage = document.querySelector("#dns-server-invalid-message");
 const dnsPort = document.querySelector("#dns-port");
+const dnsPortGroup = document.querySelector("#dns-port-group");
 const dnssecToggle = document.querySelector("#dnssec-toggle");
 
 let DNS_SETTINGS = {};
@@ -23,6 +26,14 @@ function loadDnsSettings() {
         dnsPort.value = DNS_SETTINGS.port;
         dnssecToggle.checked = DNS_SETTINGS.dnssec;
 
+        if (dnsType.value === "https") {
+            dnsServerLabel.textContent = "Resolver URL";
+            dnsPortGroup.classList.add("hidden");
+        } else {
+            dnsServerLabel.textContent = "DNS Server (IP or hostname)";
+            dnsPortGroup.classList.remove("hidden");
+        }
+
         customDnsSettings.classList.remove("hidden");
     } else {
         dnsType.value = "udp";
@@ -30,6 +41,8 @@ function loadDnsSettings() {
         dnsPort.value = "53";
         dnssecToggle.checked = false;
 
+        dnsServerLabel.textContent = "DNS Server (IP or hostname)";
+        dnsPortGroup.classList.remove("hidden");
         customDnsSettings.classList.add("hidden");
     }
 
@@ -76,10 +89,54 @@ function updateDnsSettings() {
         dnsPort.value = dnsPort.placeholder;
     }
 
+    const type = dnsType.value;
+
+    let server;
+
+    if (type !== "https") {
+        server = dnsServer.value;
+        dnsServerLabel.textContent = "DNS Server (IP or hostname)";
+        dnsPortGroup.classList.remove("hidden");
+    } else {
+        dnsServerLabel.textContent = "Resolver URL";
+        dnsPortGroup.classList.add("hidden");
+
+        const showInvalidURLMessage = (reason) => {
+            dnsServer.classList.add("invalid");
+            dnsServerInvalidMessage.classList.remove("hidden");
+            dnsServerInvalidMessage.innerText = `Unable to use this resolver URL: ${reason}`;
+        };
+        
+        const resolverUrl = URL.parse(dnsServer.value);
+        if (resolverUrl === null) {
+            showInvalidURLMessage("Invalid URL");
+            return;
+        }
+
+        if (resolverUrl.protocol !== "https:") {
+            showInvalidURLMessage("URL must use the HTTPS protocol");
+            return;
+        }
+
+        if (resolverUrl.hostname === "") {
+            showInvalidURLMessage("URL must have a hostname");
+            return;
+        }
+
+        if (resolverUrl.username !== "" || resolverUrl.password !== "" || resolverUrl.search !== "" || resolverUrl.hash !== "") {
+            showInvalidURLMessage("URL can only have a protocol, hostname, port and path");
+            return;
+        }
+
+        server = resolverUrl.href;
+        dnsServer.classList.remove("invalid");
+        dnsServerInvalidMessage.classList.add("hidden");
+    }
+
     ladybird.sendMessage("setDNSSettings", {
         mode: "custom",
-        type: dnsType.value,
-        server: dnsServer.value,
+        type,
+        server,
         port: dnsPort.value | 0,
         dnssec: dnssecToggle.checked,
     });
