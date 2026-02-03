@@ -27,58 +27,55 @@ struct curl_slist;
 
 namespace RequestServer {
 
-class Request final : public HTTP::CacheRequest {
+class Request : public HTTP::CacheRequest {
 public:
-    static NonnullOwnPtr<Request> fetch(
-        u64 request_id,
-        Optional<HTTP::DiskCache&> disk_cache,
-        HTTP::CacheMode cache_mode,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        ByteString method,
-        NonnullRefPtr<HTTP::HeaderList> request_headers,
-        ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Core::ProxyData proxy_data);
-
-    static NonnullOwnPtr<Request> connect(
-        u64 request_id,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        CacheLevel cache_level);
-
-    static NonnullOwnPtr<Request> revalidate(
-        u64 request_id,
-        Optional<HTTP::DiskCache&> disk_cache,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        ByteString method,
-        NonnullRefPtr<HTTP::HeaderList> request_headers,
-        ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Core::ProxyData proxy_data);
-
-    virtual ~Request() override;
-
     enum class Type : u8 {
         Fetch,
+        ResolveOnly,
         Connect,
         BackgroundRevalidation,
     };
 
+    virtual ~Request() override;
+
     u64 request_id() const { return m_request_id; }
     Type type() const { return m_type; }
+    URL::URL const& url() const { return m_url; }
+    ByteString const& method() const { return m_method; }
 
     virtual void notify_request_unblocked(Badge<HTTP::DiskCache>) override;
-    void notify_fetch_complete(Badge<ConnectionFromClient>, int result_code);
+    void notify_fetch_complete(Badge<CURLMultiHandleSession>, int result_code);
 
-private:
+protected:
+    virtual void on_request_started([[maybe_unused]] int reader_fd) { }
+    virtual void on_headers_became_available([[maybe_unused]] NonnullRefPtr<HTTP::HeaderList> response_headers, [[maybe_unused]] Optional<u32> status_code, [[maybe_unused]] Optional<String> reason_phrase) { }
+    virtual void on_request_finished([[maybe_unused]] u64 total_size, [[maybe_unused]] Requests::RequestTimingInfo timing_info, [[maybe_unused]] Optional<Requests::NetworkError> network_error) { }
+    virtual void on_request_complete() { }
+    virtual void on_start_revalidation_request([[maybe_unused]] ByteString method, [[maybe_unused]] URL::URL url, [[maybe_unused]] NonnullRefPtr<HTTP::HeaderList> request_headers, [[maybe_unused]] ByteBuffer request_body, [[maybe_unused]] Core::ProxyData proxy_data) { }
+
+    Request(
+        u64 request_id,
+        Type type,
+        Optional<HTTP::DiskCache&> disk_cache,
+        HTTP::CacheMode cache_mode,
+        void* curl_multi,
+        Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
+        URL::URL url,
+        ByteString method,
+        NonnullRefPtr<HTTP::HeaderList> request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+    Request(
+        u64 request_id,
+        Type type,
+        void* curl_multi,
+        Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> dns,
+        URL::URL url);
+
+    void process();
+
     enum class State : u8 {
         Init,              // Decide whether to service this request from cache or the network.
         ReadCache,         // Read the cached response from disk.
@@ -92,6 +89,9 @@ private:
         Error,             // Any error occured during the request's lifetime.
     };
 
+    void transition_to_state(State);
+
+private:
     static constexpr StringView state_name(State state)
     {
         switch (state) {
@@ -118,31 +118,6 @@ private:
         }
         VERIFY_NOT_REACHED();
     }
-
-    Request(
-        u64 request_id,
-        Type type,
-        Optional<HTTP::DiskCache&> disk_cache,
-        HTTP::CacheMode cache_mode,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url,
-        ByteString method,
-        NonnullRefPtr<HTTP::HeaderList> request_headers,
-        ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Core::ProxyData proxy_data);
-
-    Request(
-        u64 request_id,
-        ConnectionFromClient& client,
-        void* curl_multi,
-        Resolver& resolver,
-        URL::URL url);
-
-    void transition_to_state(State);
-    void process();
 
     void handle_initial_state();
     void handle_read_cache_state();
@@ -175,15 +150,14 @@ private:
 
     Optional<HTTP::DiskCache&> m_disk_cache;
     HTTP::CacheMode m_cache_mode { HTTP::CacheMode::Default };
-    ConnectionFromClient& m_client;
 
     void* m_curl_multi_handle { nullptr };
     void* m_curl_easy_handle { nullptr };
     Vector<curl_slist*> m_curl_string_lists;
     Optional<int> m_curl_result_code;
 
-    NonnullRefPtr<Resolver> m_resolver;
-    RefPtr<DNS::LookupResult const> m_dns_result;
+    Variant<NonnullRefPtr<Resolver>, NonnullRefPtr<DNS::LookupResult const>> m_dns;
+    RefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>> m_pending_dns_request;
 
     URL::URL m_url;
     ByteString m_method;
@@ -207,6 +181,76 @@ private:
     size_t m_bytes_transferred_to_client { 0 };
 
     Optional<Requests::NetworkError> m_network_error;
+};
+
+class RequestFromClient final : public Request {
+public:
+    static NonnullOwnPtr<RequestFromClient> fetch(
+        u64 request_id,
+        Optional<HTTP::DiskCache&> disk_cache,
+        HTTP::CacheMode cache_mode,
+        ConnectionFromClient& client,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        ByteString method,
+        NonnullRefPtr<HTTP::HeaderList> request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+    static NonnullOwnPtr<RequestFromClient> connect(
+        u64 request_id,
+        ConnectionFromClient& client,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        CacheLevel cache_level);
+
+    static NonnullOwnPtr<RequestFromClient> revalidate(
+        u64 request_id,
+        Optional<HTTP::DiskCache&> disk_cache,
+        ConnectionFromClient& client,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        ByteString method,
+        NonnullRefPtr<HTTP::HeaderList> request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+private:
+    RequestFromClient(
+        u64 request_id,
+        Type type,
+        Optional<HTTP::DiskCache&> disk_cache,
+        HTTP::CacheMode cache_mode,
+        ConnectionFromClient& client,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url,
+        ByteString method,
+        NonnullRefPtr<HTTP::HeaderList> request_headers,
+        ByteBuffer request_body,
+        ByteString alt_svc_cache_path,
+        Core::ProxyData proxy_data);
+
+    RequestFromClient(
+        u64 request_id,
+        Type type,
+        ConnectionFromClient& client,
+        void* curl_multi,
+        Resolver& resolver,
+        URL::URL url);
+
+    virtual void on_request_started(int reader_fd) override;
+    virtual void on_headers_became_available(NonnullRefPtr<HTTP::HeaderList> response_headers, Optional<u32> status_code, Optional<String> reason_phrase) override;
+    virtual void on_request_finished(u64 total_size, Requests::RequestTimingInfo timing_info, Optional<Requests::NetworkError> network_error) override;
+    virtual void on_request_complete() override;
+    virtual void on_start_revalidation_request(ByteString method, URL::URL url, NonnullRefPtr<HTTP::HeaderList> request_headers, ByteBuffer request_body, Core::ProxyData proxy_data) override;
+
+    ConnectionFromClient& m_client;
 };
 
 }

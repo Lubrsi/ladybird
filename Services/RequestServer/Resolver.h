@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2024, Ali Mohammad Pur <mpfard@serenityos.org>
  * Copyright (c) 2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2025, Luke Wilde <luke@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,16 +13,30 @@
 #include <AK/Weakable.h>
 #include <LibCore/Forward.h>
 #include <LibDNS/Resolver.h>
+#include <RequestServer/Forward.h>
 
 namespace RequestServer {
+
+struct DNSOverUDPSocketInfo {
+    Core::SocketAddress server_address;
+};
+
+struct DNSOverTLSSocketInfo {
+    Core::SocketAddress server_address;
+    ByteString server_hostname;
+};
+
+struct DNSOverHTTPSInfo {
+    URL::URL resolver_url;
+};
+
+struct DNSOverSystemResolverInfo {
+};
 
 struct DNSInfo {
     static DNSInfo& the();
 
-    Optional<Core::SocketAddress> server_address;
-    Optional<ByteString> server_hostname;
-    u16 port { 0 };
-    bool use_dns_over_tls { true };
+    Variant<DNSOverUDPSocketInfo, DNSOverTLSSocketInfo, DNSOverHTTPSInfo, DNSOverSystemResolverInfo> info { DNSOverSystemResolverInfo {} };
     bool validate_dnssec_locally { false };
 
 private:
@@ -36,7 +51,7 @@ struct Resolver
     DNS::Resolver dns;
 
 private:
-    explicit Resolver(DNS::Resolver::CreateSocketFunction create_socket);
+    explicit Resolver(DNS::Resolver::CreateTunnelFunction create_tunnel);
 };
 
 ByteString const& default_certificate_path();

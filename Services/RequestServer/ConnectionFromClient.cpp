@@ -35,40 +35,19 @@ void ConnectionFromClient::set_connections(HashMap<int, NonnullRefPtr<Connection
 
 ConnectionFromClient::ConnectionFromClient(NonnullOwnPtr<IPC::Transport> transport)
     : IPC::ConnectionFromClient<RequestClientEndpoint, RequestServerEndpoint>(*this, move(transport), s_client_ids.allocate())
+    , m_curl_multi_handle_session(adopt_own(*new CURLMultiHandleSession()))
     , m_resolver(Resolver::default_resolver())
 {
     g_connections->set(client_id(), *this);
-
-    m_alt_svc_cache_path = ByteString::formatted("{}/Ladybird/alt-svc-cache.txt", Core::StandardPaths::cache_directory());
-
-    m_curl_multi = curl_multi_init();
-
-    auto set_option = [this](auto option, auto value) {
-        auto result = curl_multi_setopt(m_curl_multi, option, value);
-        VERIFY(result == CURLM_OK);
-    };
-    set_option(CURLMOPT_SOCKETFUNCTION, &on_socket_callback);
-    set_option(CURLMOPT_SOCKETDATA, this);
-    set_option(CURLMOPT_TIMERFUNCTION, &on_timeout_callback);
-    set_option(CURLMOPT_TIMERDATA, this);
-
-    m_timer = Core::Timer::create_single_shot(0, [this] {
-        auto result = curl_multi_socket_action(m_curl_multi, CURL_SOCKET_TIMEOUT, 0, nullptr);
-        VERIFY(result == CURLM_OK);
-        check_active_requests();
-    });
 }
 
 ConnectionFromClient::~ConnectionFromClient()
 {
     m_active_requests.clear();
     m_active_revalidation_requests.clear();
-
-    curl_multi_cleanup(m_curl_multi);
-    m_curl_multi = nullptr;
 }
 
-void ConnectionFromClient::request_complete(Badge<Request>, Request const& request)
+void ConnectionFromClient::request_complete(Badge<RequestFromClient>, Request const& request)
 {
     Core::deferred_invoke([weak_self = make_weak_ptr<ConnectionFromClient>(), request_id = request.request_id(), type = request.type()] {
         if (auto self = weak_self.strong_ref()) {
@@ -153,12 +132,9 @@ Messages::RequestServer::IsSupportedProtocolResponse ConnectionFromClient::is_su
     return protocol == "http"sv || protocol == "https"sv;
 }
 
-void ConnectionFromClient::set_dns_server(ByteString host_or_address, u16 port, bool use_tls, bool validate_dnssec_locally)
+void ConnectionFromClient::set_socket_dns_server(ByteString host_or_address, u16 port, bool use_tls, bool validate_dnssec_locally)
 {
     auto& dns_info = DNSInfo::the();
-
-    if (host_or_address == dns_info.server_hostname && port == dns_info.port && use_tls == dns_info.use_dns_over_tls && validate_dnssec_locally == dns_info.validate_dnssec_locally)
-        return;
 
     auto result = [&] -> ErrorOr<void> {
         Core::SocketAddress addr;
@@ -169,10 +145,17 @@ void ConnectionFromClient::set_dns_server(ByteString host_or_address, u16 port, 
         else
             TRY(m_resolver->dns.lookup(host_or_address)->await())->cached_addresses().first().visit([&](auto& address) { addr = { address, port }; });
 
-        dns_info.server_address = addr;
-        dns_info.server_hostname = host_or_address;
-        dns_info.port = port;
-        dns_info.use_dns_over_tls = use_tls;
+        if (!use_tls) {
+            dns_info.info = DNSOverUDPSocketInfo {
+                .server_address = addr,
+            };
+        } else {
+            dns_info.info = DNSOverTLSSocketInfo {
+                .server_address = addr,
+                .server_hostname = host_or_address,
+            };
+        }
+
         dns_info.validate_dnssec_locally = validate_dnssec_locally;
         return {};
     }();
@@ -183,12 +166,27 @@ void ConnectionFromClient::set_dns_server(ByteString host_or_address, u16 port, 
         m_resolver->dns.reset_connection();
 }
 
+void ConnectionFromClient::set_https_dns_server(URL::URL resolver_url, bool validate_dnssec_locally)
+{
+    auto& dns_info = DNSInfo::the();
+
+    if (auto* existing_https_info = dns_info.info.get_pointer<DNSOverHTTPSInfo>(); existing_https_info) {
+        if (resolver_url == existing_https_info->resolver_url && validate_dnssec_locally == dns_info.validate_dnssec_locally)
+            return;
+    }
+
+    dns_info.info = DNSOverHTTPSInfo {
+        .resolver_url = move(resolver_url),
+    };
+    dns_info.validate_dnssec_locally = validate_dnssec_locally;
+
+    m_resolver->dns.reset_connection();
+}
+
 void ConnectionFromClient::set_use_system_dns()
 {
     auto& dns_info = DNSInfo::the();
-    dns_info.server_hostname = {};
-    dns_info.server_address = {};
-
+    dns_info.info = DNSOverSystemResolverInfo {};
     m_resolver->dns.reset_connection();
 }
 
@@ -196,104 +194,18 @@ void ConnectionFromClient::start_request(u64 request_id, ByteString method, URL:
 {
     dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_request({}, {})", request_id, url);
 
-    auto request = Request::fetch(request_id, g_disk_cache, cache_mode, *this, m_curl_multi, m_resolver, move(url), move(method), HTTP::HeaderList::create(move(request_headers)), move(request_body), m_alt_svc_cache_path, proxy_data);
+    auto request = RequestFromClient::fetch(request_id, g_disk_cache, cache_mode, *this, m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), move(method), HTTP::HeaderList::create(move(request_headers)), move(request_body), m_curl_multi_handle_session->alt_svc_cache_path(), proxy_data);
     m_active_requests.set(request_id, move(request));
 }
 
-void ConnectionFromClient::start_revalidation_request(Badge<Request>, ByteString method, URL::URL url, NonnullRefPtr<HTTP::HeaderList> request_headers, ByteBuffer request_body, Core::ProxyData proxy_data)
+void ConnectionFromClient::start_revalidation_request(Badge<RequestFromClient>, ByteString method, URL::URL url, NonnullRefPtr<HTTP::HeaderList> request_headers, ByteBuffer request_body, Core::ProxyData proxy_data)
 {
     auto request_id = m_next_revalidation_request_id++;
 
     dbgln_if(REQUESTSERVER_DEBUG, "RequestServer: start_revalidation_request({}, {})", request_id, url);
 
-    auto request = Request::revalidate(request_id, g_disk_cache, *this, m_curl_multi, m_resolver, move(url), move(method), move(request_headers), move(request_body), m_alt_svc_cache_path, proxy_data);
+    auto request = RequestFromClient::revalidate(request_id, g_disk_cache, *this, m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), move(method), move(request_headers), move(request_body), m_curl_multi_handle_session->alt_svc_cache_path(), proxy_data);
     m_active_revalidation_requests.set(request_id, move(request));
-}
-
-int ConnectionFromClient::on_socket_callback(CURL*, int sockfd, int what, void* user_data, void*)
-{
-    auto* client = static_cast<ConnectionFromClient*>(user_data);
-
-    if (what == CURL_POLL_REMOVE) {
-        client->m_read_notifiers.remove(sockfd);
-        client->m_write_notifiers.remove(sockfd);
-        return 0;
-    }
-
-    if (what & CURL_POLL_IN) {
-        client->m_read_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
-            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Read);
-            notifier->on_activation = [client, sockfd, multi] {
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_IN, nullptr);
-                VERIFY(result == CURLM_OK);
-
-                client->check_active_requests();
-            };
-
-            notifier->set_enabled(true);
-            return notifier;
-        });
-    }
-
-    if (what & CURL_POLL_OUT) {
-        client->m_write_notifiers.ensure(sockfd, [client, sockfd, multi = client->m_curl_multi] {
-            auto notifier = Core::Notifier::construct(sockfd, Core::NotificationType::Write);
-            notifier->on_activation = [client, sockfd, multi] {
-                auto result = curl_multi_socket_action(multi, sockfd, CURL_CSELECT_OUT, nullptr);
-                VERIFY(result == CURLM_OK);
-
-                client->check_active_requests();
-            };
-
-            notifier->set_enabled(true);
-            return notifier;
-        });
-    }
-
-    return 0;
-}
-
-int ConnectionFromClient::on_timeout_callback(void*, long timeout_ms, void* user_data)
-{
-    auto* client = static_cast<ConnectionFromClient*>(user_data);
-    if (!client->m_timer)
-        return 0;
-
-    if (timeout_ms < 0)
-        client->m_timer->stop();
-    else
-        client->m_timer->restart(timeout_ms);
-
-    return 0;
-}
-
-void ConnectionFromClient::check_active_requests()
-{
-    int msgs_in_queue = 0;
-    while (auto* msg = curl_multi_info_read(m_curl_multi, &msgs_in_queue)) {
-        if (msg->msg != CURLMSG_DONE)
-            continue;
-
-        void* application_private = nullptr;
-        auto result = curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &application_private);
-        VERIFY(result == CURLE_OK);
-        VERIFY(application_private != nullptr);
-
-        // FIXME: Come up with a unified way to track websockets and standard fetches instead of this nasty tagged pointer
-        if (reinterpret_cast<uintptr_t>(application_private) & websocket_private_tag) {
-            auto* websocket_impl = reinterpret_cast<WebSocketImplCurl*>(reinterpret_cast<uintptr_t>(application_private) & ~websocket_private_tag);
-            if (msg->data.result == CURLE_OK) {
-                if (!websocket_impl->did_connect())
-                    websocket_impl->on_connection_error();
-            } else {
-                websocket_impl->on_connection_error();
-            }
-            continue;
-        }
-
-        auto* request = static_cast<Request*>(application_private);
-        request->notify_fetch_complete({}, msg->data.result);
-    }
 }
 
 Messages::RequestServer::StopRequestResponse ConnectionFromClient::stop_request(u64 request_id)
@@ -317,7 +229,7 @@ Messages::RequestServer::SetCertificateResponse ConnectionFromClient::set_certif
 
 void ConnectionFromClient::ensure_connection(u64 request_id, URL::URL url, ::RequestServer::CacheLevel cache_level)
 {
-    auto request = Request::connect(request_id, *this, m_curl_multi, m_resolver, move(url), cache_level);
+    auto request = RequestFromClient::connect(request_id, *this, m_curl_multi_handle_session->curl_multi_handle(), m_resolver, move(url), cache_level);
     m_active_requests.set(request_id, move(request));
 }
 
@@ -363,7 +275,7 @@ void ConnectionFromClient::websocket_connect(u64 websocket_id, URL::URL url, Byt
             if (auto const& path = default_certificate_path(); !path.is_empty())
                 connection_info.set_root_certificates_path(path);
 
-            auto impl = WebSocketImplCurl::create(m_curl_multi);
+            auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session->curl_multi_handle());
             auto connection = WebSocket::WebSocket::create(move(connection_info), move(impl));
 
             connection->on_open = [this, websocket_id]() {

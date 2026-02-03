@@ -21,15 +21,17 @@ namespace Requests {
 
 class RequestClient;
 
-class ReadStream {
+class ReadStream final : public Stream {
 public:
     static ErrorOr<NonnullOwnPtr<ReadStream>> create(int reader_fd);
 
     NonnullRefPtr<Core::Notifier> const& notifier() const { return m_notifier; }
 
-    bool is_eof() const { return m_stream->is_eof(); }
-
-    ErrorOr<Bytes> read_some(Bytes bytes) { return m_stream->read_some(bytes); }
+    virtual ErrorOr<Bytes> read_some(Bytes bytes) override { return m_stream->read_some(bytes); }
+    virtual ErrorOr<size_t> write_some(ReadonlyBytes) override { return Error::from_errno(ENOTSUP); }
+    virtual bool is_eof() const override { return m_stream->is_eof(); }
+    virtual bool is_open() const override { return m_stream->is_open(); }
+    virtual void close() override { m_stream->close(); }
 
 private:
     ReadStream(NonnullOwnPtr<Stream> stream, NonnullRefPtr<Core::Notifier> notifier)

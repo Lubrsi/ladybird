@@ -43,11 +43,15 @@ struct ApplicationSettingsObserver : public SettingsObserver {
             },
             [](DNSOverTLS const& dns_over_tls) {
                 dbgln("Setting DNS server to {}:{} with TLS ({} local dnssec)", dns_over_tls.server_address, dns_over_tls.port, dns_over_tls.validate_dnssec_locally ? "with" : "without");
-                Application::request_server_client().async_set_dns_server(dns_over_tls.server_address, dns_over_tls.port, true, dns_over_tls.validate_dnssec_locally);
+                Application::request_server_client().async_set_socket_dns_server(dns_over_tls.server_address, dns_over_tls.port, true, dns_over_tls.validate_dnssec_locally);
             },
             [](DNSOverUDP const& dns_over_udp) {
                 dbgln("Setting DNS server to {}:{} ({} local dnssec)", dns_over_udp.server_address, dns_over_udp.port, dns_over_udp.validate_dnssec_locally ? "with" : "without");
-                Application::request_server_client().async_set_dns_server(dns_over_udp.server_address, dns_over_udp.port, false, dns_over_udp.validate_dnssec_locally);
+                Application::request_server_client().async_set_socket_dns_server(dns_over_udp.server_address, dns_over_udp.port, false, dns_over_udp.validate_dnssec_locally);
+            },
+            [](WebView::DNSOverHTTPS const& dns_over_https) {
+                dbgln("Setting DNS over HTTPS server to {} ({} local dnssec)", dns_over_https.resolver_url, dns_over_https.validate_dnssec_locally ? "with" : "without");
+                Application::request_server_client().async_set_https_dns_server(dns_over_https.resolver_url, dns_over_https.validate_dnssec_locally);
             });
     }
 };

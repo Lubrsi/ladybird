@@ -16,6 +16,8 @@ struct curl_slist;
 
 namespace RequestServer {
 
+constexpr inline uintptr_t websocket_private_tag = 0x1;
+
 class WebSocketImplCurl final : public WebSocket::WebSocketImpl {
 public:
     virtual ~WebSocketImplCurl() override;

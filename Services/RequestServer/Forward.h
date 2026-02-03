@@ -9,7 +9,9 @@
 namespace RequestServer {
 
 class ConnectionFromClient;
+class CURLMultiHandleSession;
 class Request;
+class RequestFromClient;
 class RequestPipe;
 
 struct DNSInfo;
