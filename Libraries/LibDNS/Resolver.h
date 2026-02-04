@@ -152,7 +152,7 @@ public:
 
     bool has_record_of_type(Messages::ResourceType type, bool later = false) const
     {
-        if (later && m_desired_types.contains(type))
+        if (later && !m_request_done && m_desired_types.contains(type))
             return true;
 
         for (auto const& re : m_cached_records) {
@@ -380,6 +380,8 @@ public:
     struct LookupOptions {
         bool validate_dnssec_locally { false };
         PendingLookup* repeating_lookup { nullptr };
+        size_t cname_depth { 0 };
+        static constexpr size_t max_cname_depth = 8;
 
         static LookupOptions default_() { return {}; }
     };
@@ -564,6 +566,40 @@ public:
         }
 
         auto domain_name = Messages::DomainName::from_string(name);
+
+        // No A/AAAA in cache, but check for cached CNAME to follow (handles TTL expiration mismatch)
+        // if (auto cname_result = lookup_in_cache(name, class_, Array { Messages::ResourceType::CNAME })) {
+        //     if (!options.validate_dnssec_locally || cname_result->is_dnssec_validated()) {
+        //         for (auto const& record : cname_result->records(Messages::ResourceType::CNAME)) {
+        //             if (record.name != domain_name)
+        //                 continue;
+        //
+        //             auto const& cname = record.record.get<Messages::Records::CNAME>();
+        //             auto target_name = cname.names.to_string().to_byte_string();
+        //
+        //             if (target_name != name) {
+        //                 dbgln_if(DNS_DEBUG, "DNS: Following cached CNAME {} -> {}", name, target_name);
+        //
+        //                 auto original_result = make_ref_counted<LookupResult>(domain_name);
+        //                 original_result->add_record(record);
+        //
+        //                 auto follow_promise = follow_cname_chain(cname.names, class_, desired_types, original_result, options);
+        //                 follow_promise->when_resolved([lookup_promise](auto const& result) {
+        //                     lookup_promise->resolve(result);
+        //                 }).when_rejected([lookup_promise](Error const& error) {
+        //                     lookup_promise->reject(Error::copy(error));
+        //                 });
+        //
+        //                 lookup_promise->add_child(move(follow_promise));
+        //                 return lookup_promise;
+        //             }
+        //         }
+        //
+        //         dbgln_if(DNS_DEBUG, "DNS: Cached CNAME chain is broken, re-resolving");
+        //     } else {
+        //         dbgln_if(DNS_DEBUG, "DNS: CNAME cache entry for {} is not DNSSEC validated (and we expect that), re-resolving", name);
+        //     }
+        // }
 
         auto has_established_connection = [=, this] {
             auto already_in_cache = false;
@@ -808,6 +844,42 @@ public:
     }
 
 private:
+    NonnullRefPtr<Core::Promise<NonnullRefPtr<LookupResult const>>> follow_cname_chain(
+        Messages::DomainName target,
+        Messages::Class class_,
+        Vector<Messages::ResourceType> desired_types,
+        NonnullRefPtr<LookupResult> original_result,
+        LookupOptions options)
+    {
+        auto result_promise = Core::Promise<NonnullRefPtr<LookupResult const>>::construct();
+
+        if (options.cname_depth >= LookupOptions::max_cname_depth) {
+            result_promise->reject(Error::from_string_literal("CNAME chain too deep"));
+            return result_promise;
+        }
+
+        auto target_options = options;
+        target_options.cname_depth++;
+
+        auto target_promise = lookup(target.to_string().to_byte_string(), class_, desired_types, target_options);
+
+        target_promise->when_resolved([result_promise, original_result](auto const& target_result) {
+            // Merge target's A/AAAA records into original result
+            for (auto& record : target_result->records()) {
+                if (record.type == Messages::ResourceType::A || record.type == Messages::ResourceType::AAAA)
+                    original_result->add_record(record);
+            }
+
+            original_result->finished_request();
+            result_promise->resolve(original_result);
+        }).when_rejected([result_promise](Error const& error) {
+            result_promise->reject(Error::copy(error));
+        });
+
+        result_promise->add_child(move(target_promise));
+        return result_promise;
+    }
+
     void process_incoming_message(Messages::Message message)
     {
         auto result = m_pending_lookups.with_write_locked([&](auto& lookups) -> ErrorOr<void> {
@@ -841,6 +913,58 @@ private:
                     break;
                 }
             }
+
+            // We asked for recursion but server didn't do it - follow CNAME ourselves
+            // if (message.header.options.recursion_desired()
+            //     && !message.header.options.recursion_available()) {
+            //
+            //     // Follow the CNAME chain in the response to find the final target
+            //     Optional<Messages::DomainName> cname_target;
+            //     auto current_name = lookup->parsed_name;
+            //
+            //     for (;;) {
+            //         bool found_cname = false;
+            //         for (auto const& record : message.answers) {
+            //             if (record.type == Messages::ResourceType::CNAME && record.name == current_name) {
+            //                 cname_target = record.record.get<Messages::Records::CNAME>().names;
+            //                 current_name = *cname_target;
+            //                 found_cname = true;
+            //                 break;
+            //             }
+            //         }
+            //         if (!found_cname)
+            //             break;
+            //     }
+            //
+            //     if (cname_target.has_value()) {
+            //         dbgln_if(DNS_DEBUG, "DNS: Following CNAME from authoritative server: {} -> {}",
+            //             lookup->name, cname_target->to_string());
+            //
+            //         // Add all records to result, then follow the final target
+            //         for (auto& record : message.answers)
+            //             result->add_record(move(record));
+            //
+            //         // Extract desired types from the questions
+            //         Vector<Messages::ResourceType> desired_types;
+            //         for (auto const& question : message.questions)
+            //             desired_types.append(question.type);
+            //
+            //         auto class_ = message.questions.is_empty() ? Messages::Class::IN : message.questions.first().class_;
+            //         auto pending_lookup = *lookup;
+            //         lookups->remove(message.header.id);
+            //
+            //         // Defer the CNAME follow since we're inside the locked section
+            //         Core::deferred_invoke([this, cname_target = cname_target.release_value(), class_, desired_types = move(desired_types), result = result.release_nonnull(), pending_lookup]() mutable {
+            //             auto follow_promise = follow_cname_chain(move(cname_target), class_, move(desired_types), move(result), {});
+            //             follow_promise->when_resolved([pending_lookup](auto const& followed_result) {
+            //                 pending_lookup.promise->resolve(followed_result);
+            //             }).when_rejected([pending_lookup](Error const& error) {
+            //                 pending_lookup.promise->reject(Error::copy(error));
+            //             });
+            //         });
+            //         return {};
+            //     }
+            // }
 
             for (auto& record : message.answers)
                 result->add_record(move(record));

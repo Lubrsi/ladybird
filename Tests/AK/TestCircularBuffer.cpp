@@ -441,3 +441,172 @@ BENCHMARK_CASE(looping_copy_from_seekback)
         EXPECT_EQ(copied_bytes, 15 * MiB);
     }
 }
+
+TEST_CASE(try_resize_grow)
+{
+    auto buffer = create_circular_buffer(4);
+
+    u8 const source[] = { 1, 2, 3 };
+    EXPECT_EQ(buffer.write({ source, 3 }), 3ul);
+    EXPECT_EQ(buffer.used_space(), 3ul);
+
+    TRY_OR_FAIL(buffer.try_resize(8));
+
+    EXPECT_EQ(buffer.capacity(), 8ul);
+    EXPECT_EQ(buffer.used_space(), 3ul);
+    EXPECT_EQ(buffer.empty_space(), 5ul);
+
+    // Verify we can write to the new space
+    u8 const more[] = { 4, 5, 6, 7, 8 };
+    EXPECT_EQ(buffer.write({ more, 5 }), 5ul);
+    EXPECT_EQ(buffer.used_space(), 8ul);
+
+    // Verify all data is preserved in correct order
+    safe_read(buffer, 1);
+    safe_read(buffer, 2);
+    safe_read(buffer, 3);
+    safe_read(buffer, 4);
+    safe_read(buffer, 5);
+    safe_read(buffer, 6);
+    safe_read(buffer, 7);
+    safe_read(buffer, 8);
+}
+
+TEST_CASE(try_resize_linearize_wrapping)
+{
+    // Create a buffer where data wraps around
+    auto buffer = create_circular_buffer(4);
+
+    // Fill the buffer
+    u8 const source[] = { 1, 2, 3, 4 };
+    EXPECT_EQ(buffer.write({ source, 4 }), 4ul);
+
+    // Read 2 bytes to move reading_head
+    safe_read(buffer, 1);
+    safe_read(buffer, 2);
+
+    // Write 2 more bytes, causing wrap-around
+    u8 const more[] = { 5, 6 };
+    EXPECT_EQ(buffer.write({ more, 2 }), 2ul);
+
+    EXPECT_EQ(buffer.used_space(), 4ul);
+
+    // Resize to larger - this should linearize the wrapped data
+    TRY_OR_FAIL(buffer.try_resize(8));
+
+    EXPECT_EQ(buffer.capacity(), 8ul);
+    EXPECT_EQ(buffer.used_space(), 4ul);
+    EXPECT_EQ(buffer.empty_space(), 4ul);
+
+    // Verify we can write all 4 bytes contiguously (would fail before linearization)
+    u8 const new_data[] = { 7, 8, 9, 10 };
+    EXPECT_EQ(buffer.write({ new_data, 4 }), 4ul);
+    EXPECT_EQ(buffer.used_space(), 8ul);
+
+    // Verify all data is preserved in correct order
+    safe_read(buffer, 3);
+    safe_read(buffer, 4);
+    safe_read(buffer, 5);
+    safe_read(buffer, 6);
+    safe_read(buffer, 7);
+    safe_read(buffer, 8);
+    safe_read(buffer, 9);
+    safe_read(buffer, 10);
+}
+
+TEST_CASE(try_resize_linearize_non_wrapping)
+{
+    // Create a buffer where data is contiguous but not at start
+    // This is the case that caused the UDP DNS bug - there's enough total
+    // empty space, but the contiguous write span is small because reading_head
+    // is not at 0.
+    auto buffer = create_circular_buffer(8);
+
+    // Write and read to move reading_head to position 6
+    u8 const initial[] = { 1, 2, 3, 4, 5, 6 };
+    EXPECT_EQ(buffer.write({ initial, 6 }), 6ul);
+    safe_read(buffer, 1);
+    safe_read(buffer, 2);
+    safe_read(buffer, 3);
+    safe_read(buffer, 4);
+    safe_read(buffer, 5);
+    safe_read(buffer, 6);
+
+    // Now write new data (reading_head is at 6, data at positions 6-7)
+    u8 const source[] = { 10, 11 };
+    EXPECT_EQ(buffer.write({ source, 2 }), 2ul);
+
+    EXPECT_EQ(buffer.used_space(), 2ul);
+    EXPECT_EQ(buffer.empty_space(), 6ul);
+
+    // Before linearization, contiguous write span would only be 0 bytes
+    // (positions 6+2=8, which equals capacity, so no room at end)
+    // But total empty_space is 6 bytes.
+
+    // Resize to same capacity - should linearize (move data to start)
+    TRY_OR_FAIL(buffer.try_resize(8));
+
+    EXPECT_EQ(buffer.capacity(), 8ul);
+    EXPECT_EQ(buffer.used_space(), 2ul);
+    EXPECT_EQ(buffer.empty_space(), 6ul);
+
+    // After linearization, we should be able to write all 6 bytes contiguously
+    u8 const new_data[] = { 20, 21, 22, 23, 24, 25 };
+    EXPECT_EQ(buffer.write({ new_data, 6 }), 6);
+    EXPECT_EQ(buffer.used_space(), 8ul);
+
+    // Verify all data is preserved in correct order
+    safe_read(buffer, 10);
+    safe_read(buffer, 11);
+    safe_read(buffer, 20);
+    safe_read(buffer, 21);
+    safe_read(buffer, 22);
+    safe_read(buffer, 23);
+    safe_read(buffer, 24);
+    safe_read(buffer, 25);
+}
+
+TEST_CASE(try_resize_already_linearized)
+{
+    auto buffer = create_circular_buffer(4);
+
+    u8 const source[] = { 1, 2 };
+    EXPECT_EQ(buffer.write({ source, 2 }), 2ul);
+
+    // Resize to same capacity when already at start - should be no-op
+    TRY_OR_FAIL(buffer.try_resize(4));
+
+    EXPECT_EQ(buffer.capacity(), 4ul);
+    EXPECT_EQ(buffer.used_space(), 2ul);
+
+    safe_read(buffer, 1);
+    safe_read(buffer, 2);
+}
+
+TEST_CASE(try_resize_too_small)
+{
+    auto buffer = create_circular_buffer(4);
+
+    u8 const source[] = { 1, 2, 3 };
+    EXPECT_EQ(buffer.write({ source, 3 }), 3ul);
+
+    // Trying to resize smaller than used_space should fail
+    auto result = buffer.try_resize(2);
+    EXPECT(result.is_error());
+    EXPECT_EQ(result.error().code(), ENOSPC);
+
+    // Buffer should be unchanged
+    EXPECT_EQ(buffer.capacity(), 4ul);
+    EXPECT_EQ(buffer.used_space(), 3ul);
+}
+
+TEST_CASE(try_resize_empty_buffer)
+{
+    auto buffer = create_circular_buffer(4);
+
+    TRY_OR_FAIL(buffer.try_resize(8));
+
+    EXPECT_EQ(buffer.capacity(), 8ul);
+    EXPECT_EQ(buffer.used_space(), 0ul);
+    EXPECT_EQ(buffer.empty_space(), 8ul);
+}

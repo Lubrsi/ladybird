@@ -519,7 +519,7 @@ void Request::handle_connect_state()
     set_option(CURLOPT_PORT, m_url.port_or_default());
     set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
     set_option(CURLOPT_CONNECT_ONLY, 1L);
-    if constexpr (1) {
+    if constexpr (CURL_DEBUG) {
         set_option(CURLOPT_VERBOSE, 1);
     }
 

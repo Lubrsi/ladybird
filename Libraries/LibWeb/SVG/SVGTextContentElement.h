@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibWeb/Geometry/DOMPoint.h>
+#include <LibWeb/Geometry/DOMRect.h>
 #include <LibWeb/SVG/AttributeParser.h>
 #include <LibWeb/SVG/SVGGraphicsElement.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -19,7 +20,10 @@ class SVGTextContentElement : public SVGGraphicsElement {
     WEB_PLATFORM_OBJECT(SVGTextContentElement, SVGGraphicsElement);
 
 public:
-    WebIDL::ExceptionOr<WebIDL::Long> get_number_of_chars() const;
+    WebIDL::Long get_number_of_chars() const;
+    WebIDL::ExceptionOr<float> get_sub_string_length(WebIDL::UnsignedLong charnum, WebIDL::UnsignedLong nchars) const;
+    float get_computed_text_length() const;
+    WebIDL::ExceptionOr<GC::Ref<Geometry::DOMRect>> get_extent_of_char(WebIDL::UnsignedLong charnum) const;
 
     Optional<TextAnchor> text_anchor() const;
 

@@ -132,6 +132,7 @@ enum class InvalidateLayoutTreeReason {
     X(ResolvedCSSStyleDeclarationProperty)    \
     X(SVGDecodedImageDataRender)              \
     X(SVGGraphicsElementGetBBox)              \
+    X(SVGTextContentElementGetComputedTextLength) \
     X(SourceSetNormalizeSourceDensities)      \
     X(WindowScroll)
 

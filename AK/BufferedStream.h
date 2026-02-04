@@ -287,6 +287,18 @@ private:
                     continue;
                 if (result.error().code() == EAGAIN)
                     break;
+                if (result.error().code() == EMSGSIZE) {
+                    // For datagram-based streams (like UDP), the pending message may be
+                    // larger than the contiguous write span in the circular buffer.
+                    // Resize/linearize the buffer to ensure enough contiguous space.
+                    if constexpr (requires { stream().pending_bytes(); }) {
+                        auto pending = TRY(stream().pending_bytes());
+                        auto needed_capacity = m_buffer.used_space() + pending;
+                        TRY(m_buffer.try_resize(max(m_buffer.capacity(), needed_capacity)));
+                        continue;
+                    }
+                    return result.release_error();
+                }
                 return result.release_error();
             }
 
