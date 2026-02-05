@@ -253,50 +253,52 @@ void ConnectionFromClient::websocket_connect(u64 websocket_id, URL::URL url, Byt
 {
     auto host = url.serialized_host().to_byte_string();
 
-    m_resolver->dns.lookup(host, DNS::Messages::Class::IN, { DNS::Messages::ResourceType::A, DNS::Messages::ResourceType::AAAA })
-        ->when_rejected([this, websocket_id](auto const& error) {
-            dbgln("WebSocketConnect: DNS lookup failed: {}", error);
+    auto lookup_promise = m_resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::A }, Vector { DNS::Messages::ResourceType::AAAA } });
+    lookup_promise->when_rejected([this, websocket_id](auto const& error) {
+        dbgln("WebSocketConnect: DNS lookup failed: {}", error);
+        async_websocket_errored(websocket_id, static_cast<i32>(Requests::WebSocket::Error::CouldNotEstablishConnection));
+    })
+    .when_resolved([this, websocket_id, host = move(host), url = move(url), origin = move(origin), protocols = move(protocols), extensions = move(extensions), additional_request_headers = move(additional_request_headers)](auto const& dns_result) mutable {
+        if (dns_result->is_empty() || !dns_result->has_cached_addresses()) {
+            dbgln("WebSocketConnect: DNS lookup failed for '{}'", host);
             async_websocket_errored(websocket_id, static_cast<i32>(Requests::WebSocket::Error::CouldNotEstablishConnection));
-        })
-        .when_resolved([this, websocket_id, host = move(host), url = move(url), origin = move(origin), protocols = move(protocols), extensions = move(extensions), additional_request_headers = move(additional_request_headers)](auto const& dns_result) mutable {
-            if (dns_result->is_empty() || !dns_result->has_cached_addresses()) {
-                dbgln("WebSocketConnect: DNS lookup failed for '{}'", host);
-                async_websocket_errored(websocket_id, static_cast<i32>(Requests::WebSocket::Error::CouldNotEstablishConnection));
-                return;
-            }
+            return;
+        }
 
-            WebSocket::ConnectionInfo connection_info(move(url));
-            connection_info.set_origin(move(origin));
-            connection_info.set_protocols(move(protocols));
-            connection_info.set_extensions(move(extensions));
-            connection_info.set_headers(HTTP::HeaderList::create(move(additional_request_headers)));
-            connection_info.set_dns_result(move(dns_result));
+        WebSocket::ConnectionInfo connection_info(move(url));
+        connection_info.set_origin(move(origin));
+        connection_info.set_protocols(move(protocols));
+        connection_info.set_extensions(move(extensions));
+        connection_info.set_headers(HTTP::HeaderList::create(move(additional_request_headers)));
+        connection_info.set_dns_result(move(dns_result));
 
-            if (auto const& path = default_certificate_path(); !path.is_empty())
-                connection_info.set_root_certificates_path(path);
+        if (auto const& path = default_certificate_path(); !path.is_empty())
+            connection_info.set_root_certificates_path(path);
 
-            auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session->curl_multi_handle());
-            auto connection = WebSocket::WebSocket::create(move(connection_info), move(impl));
+        auto impl = WebSocketImplCurl::create(m_curl_multi_handle_session->curl_multi_handle());
+        auto connection = WebSocket::WebSocket::create(move(connection_info), move(impl));
 
-            connection->on_open = [this, websocket_id]() {
-                async_websocket_connected(websocket_id);
-            };
-            connection->on_message = [this, websocket_id](auto message) {
-                async_websocket_received(websocket_id, message.is_text(), message.data());
-            };
-            connection->on_error = [this, websocket_id](auto message) {
-                async_websocket_errored(websocket_id, (i32)message);
-            };
-            connection->on_close = [this, websocket_id](u16 code, ByteString reason, bool was_clean) {
-                async_websocket_closed(websocket_id, code, move(reason), was_clean);
-            };
-            connection->on_ready_state_change = [this, websocket_id](auto state) {
-                async_websocket_ready_state_changed(websocket_id, (u32)state);
-            };
+        connection->on_open = [this, websocket_id]() {
+            async_websocket_connected(websocket_id);
+        };
+        connection->on_message = [this, websocket_id](auto message) {
+            async_websocket_received(websocket_id, message.is_text(), message.data());
+        };
+        connection->on_error = [this, websocket_id](auto message) {
+            async_websocket_errored(websocket_id, (i32)message);
+        };
+        connection->on_close = [this, websocket_id](u16 code, ByteString reason, bool was_clean) {
+            async_websocket_closed(websocket_id, code, move(reason), was_clean);
+        };
+        connection->on_ready_state_change = [this, websocket_id](auto state) {
+            async_websocket_ready_state_changed(websocket_id, (u32)state);
+        };
 
-            connection->start();
-            m_websockets.set(websocket_id, move(connection));
-        });
+        connection->start();
+        m_websockets.set(websocket_id, move(connection));
+    });
+
+    m_pending_websocket_dns_lookups.set(websocket_id, lookup_promise);
 }
 
 void ConnectionFromClient::websocket_send(u64 websocket_id, bool is_text, ByteBuffer data)

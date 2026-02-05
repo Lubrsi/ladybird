@@ -185,12 +185,12 @@ Request::~Request()
     if (!m_response_buffer.is_eof())
         dbgln("Warning: Request destroyed with buffered data (it's likely that the client disappeared or the request was cancelled)");
 
-    // if (m_curl_easy_handle) {
-    //     auto result = curl_multi_remove_handle(m_curl_multi_handle, m_curl_easy_handle);
-    //     VERIFY(result == CURLM_OK);
-    //
-    //     curl_easy_cleanup(m_curl_easy_handle);
-    // }
+    if (m_curl_easy_handle) {
+        auto result = curl_multi_remove_handle(m_curl_multi_handle, m_curl_easy_handle);
+        VERIFY(result == CURLM_OK);
+
+        curl_easy_cleanup(m_curl_easy_handle);
+    }
 
     for (auto* string_list : m_curl_string_lists)
         curl_slist_free_all(string_list);
@@ -475,7 +475,7 @@ void Request::handle_dns_lookup_state()
 
     auto resolver = m_dns.get<NonnullRefPtr<Resolver>>();
 
-    m_pending_dns_request = resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::A }, Vector { DNS::Messages::ResourceType::AAAA } }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
+    m_pending_dns_request = resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::AAAA }, Vector { DNS::Messages::ResourceType::A } }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
         ->when_rejected([this, host](auto const& error) {
             dbgln("Request::handle_dns_lookup_state: DNS lookup failed for '{}': {}", host, error);
             m_network_error = Requests::NetworkError::UnableToResolveHost;
@@ -577,7 +577,7 @@ void Request::handle_fetch_state()
 
     set_option(CURLOPT_CUSTOMREQUEST, m_method.characters());
     set_option(CURLOPT_FOLLOWLOCATION, 0);
-    if constexpr (1) {
+    if constexpr (CURL_DEBUG) {
         set_option(CURLOPT_VERBOSE, 1);
     }
 

@@ -40,6 +40,10 @@ bool Request::stop()
     m_internal_stream_data = nullptr;
     m_mode = Mode::Unknown;
 
+    // The client is gone, so there is no request to stop.
+    if (!m_client)
+        return true;
+
     return m_client->stop_request({}, *this);
 }
 
@@ -117,6 +121,11 @@ void Request::did_receive_headers(Badge<RequestClient>, NonnullRefPtr<HTTP::Head
 
 void Request::did_request_certificates(Badge<RequestClient>)
 {
+    if (!m_client) {
+        dbgln("Request: set_certificate failed because client is unavailable");
+        return;
+    }
+
     if (on_certificate_requested) {
         auto result = on_certificate_requested();
         if (!m_client->set_certificate({}, *this, result.certificate, result.key)) {

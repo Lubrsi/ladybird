@@ -6,6 +6,9 @@
 
 #pragma once
 
+#undef DNS_DEBUG
+#define DNS_DEBUG 1
+
 #include <AK/AtomicRefCounted.h>
 #include <AK/CountingStream.h>
 #include <AK/HashTable.h>
@@ -92,16 +95,27 @@ public:
         for (size_t i = 0; i < m_cached_records.size();) {
             auto& record = m_cached_records[i];
             if (record.expiration.has_value() && record.expiration.value() < now) {
-                dbgln_if(DNS_DEBUG, "DNS: Removing expired record for {}", m_name.to_string());
+                dbgln_if(DNS_DEBUG, "DNS: Removing expired record for {} type {}", m_name.to_string(), Messages::to_string(record.record.type));
                 m_cached_records.remove(i);
             } else {
-                dbgln_if(DNS_DEBUG, "DNS: Keeping record for {} (expires in {})", m_name.to_string(),
+                dbgln_if(DNS_DEBUG, "DNS: Keeping record for {} type {} (expires in {})", m_name.to_string(), Messages::to_string(record.record.type),
                     record.expiration.has_value() ? record.expiration.value().to_string() : "never"_string);
                 ++i;
             }
         }
 
-        if (m_cached_records.is_empty() && m_request_done)
+        for (size_t i = 0; i < m_negative_cache.size();) {
+            auto& negative_cache = m_negative_cache[i];
+            if (negative_cache.expiration < now) {
+                dbgln_if(DNS_DEBUG, "DNS: Removing expired negative cache for {} type {}", m_name.to_string(), Messages::to_string(negative_cache.type));
+                m_negative_cache.remove(i);
+            } else {
+                dbgln_if(DNS_DEBUG, "DNS: Keeping negative cache for {} type {} (expires in {})", m_name.to_string(), Messages::to_string(negative_cache.type), negative_cache.expiration.to_string());
+                ++i;
+            }
+        }
+
+        if (m_cached_records.is_empty() && m_negative_cache.is_empty() && m_request_done)
             m_valid = false;
     }
 
@@ -184,6 +198,54 @@ public:
             m_used_dnskeys.append(move(key));
     }
 
+    static NonnullRefPtr<LookupResult> merge(Vector<NonnullRefPtr<LookupResult const>> const& results)
+    {
+        if (results.is_empty())
+            return make_ref_counted<LookupResult>(Messages::DomainName {});
+
+        auto merged = make_ref_counted<LookupResult>(results[0]->name());
+        for (auto const& result : results) {
+            for (auto const& record : result->records())
+                merged->add_record(record);
+        }
+        merged->finished_request();
+        return merged;
+    }
+
+    void add_negative_cache_entry(Messages::ResourceType type, u32 ttl)
+    {
+        // 3 hours per RFC 2308 recommendation
+        static constexpr u32 max_negative_cache_ttl = 3 * 60 * 60;
+        ttl = min(ttl, max_negative_cache_ttl);
+        auto expiration = AK::UnixDateTime::now() + AK::Duration::from_seconds(ttl);
+        m_negative_cache.append({ type, expiration });
+        m_valid = true;
+        dbgln_if(DNS_DEBUG, "DNS: Added negative cache entry for {} type {} (TTL {}s)",
+            m_name.to_string(), Messages::to_string(type), ttl);
+    }
+
+    bool is_type_negatively_cached(Messages::ResourceType type) const
+    {
+        if (!m_request_done)
+            return false;
+
+        auto now = AK::UnixDateTime::now();
+        for (auto const& entry : m_negative_cache) {
+            if (entry.type == type && entry.expiration > now)
+                return true;
+        }
+        return false;
+    }
+
+    bool is_type_resolved(Messages::ResourceType type, bool later) const
+    {
+        if (has_record_of_type(type, later))
+            return true;
+        if (is_type_negatively_cached(type))
+            return true;
+        return false;
+    }
+
 private:
     bool m_valid { false };
     bool m_request_done { false };
@@ -196,7 +258,13 @@ private:
         Optional<AK::UnixDateTime> expiration;
     };
 
+    struct NegativeCacheEntry {
+        Messages::ResourceType type;
+        AK::UnixDateTime expiration;
+    };
+
     Vector<RecordWithExpiration> m_cached_records;
+    Vector<NegativeCacheEntry> m_negative_cache;
     HashTable<Messages::ResourceType> m_desired_types;
     Vector<Messages::Records::DNSKEY> m_used_dnskeys {};
     HashTable<u16> m_seen_key_tags;
@@ -484,31 +552,23 @@ public:
     NonnullRefPtr<Core::Promise<NonnullRefPtr<LookupResult const>>> lookup(ByteString name, Messages::Class class_, Vector<Vector<Messages::ResourceType>> desired_types, LookupOptions options = LookupOptions::default_())
     {
         using ResultPromise = Core::Promise<NonnullRefPtr<LookupResult const>>;
+
         Vector<NonnullRefPtr<ResultPromise>> promises;
         promises.ensure_capacity(desired_types.size());
 
         for (auto& types : desired_types)
             promises.unchecked_append(lookup(name, class_, types, options));
 
-        auto result_promise = Core::Promise<NonnullRefPtr<LookupResult const>>::construct();
-        result_promise->add_child(Core::Promise<Empty>::after(promises)
-                ->when_resolved([promises, result_promise = result_promise->make_weak_ptr<ResultPromise>()](auto&&) {
-                    if (!result_promise.ptr())
-                        return;
-                    VERIFY(promises.first()->is_resolved());
-                    result_promise->resolve(MUST(promises.first()->await()));
-                })
-                .when_rejected([promises, result_promise = result_promise->make_weak_ptr<ResultPromise>()](auto&& error) {
-                    if (!result_promise.ptr())
-                        return;
-                    for (auto& promise : promises) {
-                        if (promise->is_resolved()) {
-                            result_promise->resolve(MUST(promise->await()));
-                            return;
-                        }
-                    }
-                    result_promise->reject(move(error));
-                }));
+        auto result_promise = ResultPromise::construct();
+        auto all_promise = ResultPromise::all(move(promises));
+        result_promise->add_child(all_promise
+            ->when_resolved([result_promise](Vector<NonnullRefPtr<LookupResult const>>& results) {
+                result_promise->resolve(LookupResult::merge(results));
+            })
+            .when_rejected([result_promise](Error const& error) {
+                result_promise->reject(Error::copy(error));
+            }));
+
         return result_promise;
     }
 
@@ -567,39 +627,41 @@ public:
 
         auto domain_name = Messages::DomainName::from_string(name);
 
-        // No A/AAAA in cache, but check for cached CNAME to follow (handles TTL expiration mismatch)
-        // if (auto cname_result = lookup_in_cache(name, class_, Array { Messages::ResourceType::CNAME })) {
-        //     if (!options.validate_dnssec_locally || cname_result->is_dnssec_validated()) {
-        //         for (auto const& record : cname_result->records(Messages::ResourceType::CNAME)) {
-        //             if (record.name != domain_name)
-        //                 continue;
-        //
-        //             auto const& cname = record.record.get<Messages::Records::CNAME>();
-        //             auto target_name = cname.names.to_string().to_byte_string();
-        //
-        //             if (target_name != name) {
-        //                 dbgln_if(DNS_DEBUG, "DNS: Following cached CNAME {} -> {}", name, target_name);
-        //
-        //                 auto original_result = make_ref_counted<LookupResult>(domain_name);
-        //                 original_result->add_record(record);
-        //
-        //                 auto follow_promise = follow_cname_chain(cname.names, class_, desired_types, original_result, options);
-        //                 follow_promise->when_resolved([lookup_promise](auto const& result) {
-        //                     lookup_promise->resolve(result);
-        //                 }).when_rejected([lookup_promise](Error const& error) {
-        //                     lookup_promise->reject(Error::copy(error));
-        //                 });
-        //
-        //                 lookup_promise->add_child(move(follow_promise));
-        //                 return lookup_promise;
-        //             }
-        //         }
-        //
-        //         dbgln_if(DNS_DEBUG, "DNS: Cached CNAME chain is broken, re-resolving");
-        //     } else {
-        //         dbgln_if(DNS_DEBUG, "DNS: CNAME cache entry for {} is not DNSSEC validated (and we expect that), re-resolving", name);
-        //     }
-        // }
+        // No A/AAAA in cache, but check for cached CNAME to follow
+        // This handles: 1) TTL expiration mismatch (A/AAAA expires before CNAME)
+        //               2) RFC 2308 negative caching (NODATA cached against CNAME target)
+        if (auto cname_result = lookup_in_cache(name, class_, Array { Messages::ResourceType::CNAME })) {
+            if (!options.validate_dnssec_locally || cname_result->is_dnssec_validated()) {
+                for (auto const& record : cname_result->records(Messages::ResourceType::CNAME)) {
+                    if (record.name != domain_name)
+                        continue;
+
+                    auto const& cname = record.record.get<Messages::Records::CNAME>();
+                    auto target_name = cname.names.to_string().to_byte_string();
+
+                    if (target_name != name) {
+                        dbgln_if(DNS_DEBUG, "DNS: Following cached CNAME {} -> {}", name, target_name);
+
+                        auto original_result = make_ref_counted<LookupResult>(domain_name);
+                        original_result->add_record(record);
+
+                        auto follow_promise = follow_cname_chain(cname.names, class_, move(desired_types), move(original_result), move(options));
+                        follow_promise->when_resolved([lookup_promise](auto const& result) {
+                            lookup_promise->resolve(result);
+                        }).when_rejected([lookup_promise](Error const& error) {
+                            lookup_promise->reject(Error::copy(error));
+                        });
+
+                        lookup_promise->add_child(move(follow_promise));
+                        return lookup_promise;
+                    }
+                }
+
+                dbgln_if(DNS_DEBUG, "DNS: Cached CNAME chain is broken, re-resolving");
+            } else {
+                dbgln_if(DNS_DEBUG, "DNS: CNAME cache entry for {} is not DNSSEC validated (and we expect that), re-resolving", name);
+            }
+        }
 
         auto has_established_connection = [=, this] {
             auto already_in_cache = false;
@@ -612,7 +674,7 @@ public:
 
                         already_in_cache = (!options.validate_dnssec_locally && !ptr->is_being_dnssec_validated()) || ptr->is_dnssec_validated();
                         for (auto const& type : desired_types) {
-                            if (!ptr->has_record_of_type(type, !options.validate_dnssec_locally && !ptr->is_being_dnssec_validated())) {
+                            if (!ptr->is_type_resolved(type, !options.validate_dnssec_locally && !ptr->is_being_dnssec_validated())) {
                                 already_in_cache = false;
                                 break;
                             }
@@ -779,6 +841,7 @@ public:
                 return lookups->find(query.header.id);
             });
 
+            dbgln("dispatching query");
             auto write_result = m_tunnel.with_write_locked([query = move(query)](auto& tunnel) {
                 return (*tunnel)->dispatch_query(move(query));
             });
@@ -845,7 +908,7 @@ public:
 
 private:
     NonnullRefPtr<Core::Promise<NonnullRefPtr<LookupResult const>>> follow_cname_chain(
-        Messages::DomainName target,
+        Messages::DomainName const& target,
         Messages::Class class_,
         Vector<Messages::ResourceType> desired_types,
         NonnullRefPtr<LookupResult> original_result,
@@ -858,10 +921,9 @@ private:
             return result_promise;
         }
 
-        auto target_options = options;
-        target_options.cname_depth++;
+        options.cname_depth++;
 
-        auto target_promise = lookup(target.to_string().to_byte_string(), class_, desired_types, target_options);
+        auto target_promise = lookup(target.to_string().to_byte_string(), class_, move(desired_types), move(options));
 
         target_promise->when_resolved([result_promise, original_result](auto const& target_result) {
             // Merge target's A/AAAA records into original result
@@ -968,6 +1030,56 @@ private:
 
             for (auto& record : message.answers)
                 result->add_record(move(record));
+
+            // RFC 2308: Negative caching for NODATA responses
+            // NODATA is cached against QNAME - the final CNAME target, not the original query name
+            if (message.header.options.response_code() == Messages::Options::ResponseCode::NoError) {
+                // Find QNAME by following CNAME chain in answers
+                auto qname = lookup->parsed_name;
+                for (;;) {
+                    bool found_cname = false;
+                    for (auto const& record : result->records()) {
+                        if (record.type == Messages::ResourceType::CNAME && record.name == qname) {
+                            qname = record.record.template get<Messages::Records::CNAME>().names;
+                            found_cname = true;
+                            break;
+                        }
+                    }
+                    if (!found_cname)
+                        break;
+                }
+
+                for (auto const& question : message.questions) {
+                    if (!result->has_record_of_type(question.type)) {
+                        for (auto const& authority : message.authorities) {
+                            if (authority.type == Messages::ResourceType::SOA) {
+                                auto const& soa = authority.record.get<Messages::Records::SOA>();
+                                u32 negative_ttl = min(soa.minimum, authority.ttl);
+
+                                // Cache NODATA against QNAME (RFC 2308)
+                                if (qname != lookup->parsed_name) {
+                                    // QNAME differs - cache against the CNAME target
+                                    auto qname_str = qname.to_string().to_byte_string();
+                                    m_cache.with_write_locked([&](auto& cache) {
+                                        RefPtr<LookupResult> qname_result;
+                                        if (auto existing = cache.get(qname_str); existing.has_value())
+                                            qname_result = *existing;
+                                        else {
+                                            qname_result = make_ref_counted<LookupResult>(qname);
+                                            cache.set(qname_str, *qname_result);
+                                        }
+                                        qname_result->add_negative_cache_entry(question.type, negative_ttl);
+                                        qname_result->finished_request();
+                                    });
+                                } else {
+                                    result->add_negative_cache_entry(question.type, negative_ttl);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
             result->finished_request();
             lookup->promise->resolve(*result);

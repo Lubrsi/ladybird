@@ -60,6 +60,7 @@ private:
     HashMap<u64, NonnullOwnPtr<Request>> m_active_requests;
     HashMap<u64, NonnullOwnPtr<Request>> m_active_revalidation_requests;
     HashMap<u64, RefPtr<WebSocket::WebSocket>> m_websockets;
+    HashMap<u64, NonnullRefPtr<Core::Promise<NonnullRefPtr<DNS::LookupResult const>>>> m_pending_websocket_dns_lookups;
 
     NonnullOwnPtr<CURLMultiHandleSession> m_curl_multi_handle_session;
 

@@ -552,7 +552,7 @@ TEST_CASE(try_resize_linearize_non_wrapping)
 
     // After linearization, we should be able to write all 6 bytes contiguously
     u8 const new_data[] = { 20, 21, 22, 23, 24, 25 };
-    EXPECT_EQ(buffer.write({ new_data, 6 }), 6);
+    EXPECT_EQ(buffer.write({ new_data, 6 }), 6ul);
     EXPECT_EQ(buffer.used_space(), 8ul);
 
     // Verify all data is preserved in correct order

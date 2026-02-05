@@ -78,6 +78,60 @@ public:
         return promise;
     }
 
+    template<typename U>
+    static NonnullRefPtr<Promise<Vector<U>>> all(Vector<NonnullRefPtr<Promise<U>>> promises)
+    {
+        auto promise = Promise<Vector<U>>::construct();
+        struct State : RefCounted<State> {
+            explicit State(size_t n)
+                : needed(n)
+            {
+                results.resize(n);
+            }
+
+            Vector<Optional<U>> results;
+            size_t count { 0 };
+            size_t needed { 0 };
+            bool rejected { false };
+
+            Vector<U> collect_results()
+            {
+                Vector<U> collected;
+                collected.ensure_capacity(results.size());
+                for (auto& result : results)
+                    collected.unchecked_append(result.release_value());
+                return collected;
+            }
+        };
+
+        auto state = make_ref_counted<State>(promises.size());
+        auto weak_promise = promise->template make_weak_ptr<Promise<Vector<U>>>();
+        for (size_t i = 0; i < promises.size(); ++i) {
+            auto& p = promises[i];
+            p->when_resolved([weak_promise, state, i](U& result) -> ErrorOr<void> {
+                if (!weak_promise || state->rejected)
+                    return {};
+
+                state->results[i] = result;
+                if (++state->count == state->needed)
+                    weak_promise->resolve(state->collect_results());
+                return {};
+            });
+
+            p->when_rejected([weak_promise, state](auto&& error) {
+                if (!weak_promise || state->rejected)
+                    return;
+
+                state->rejected = true;
+                weak_promise->reject(Error::copy(error));
+            });
+
+            promise->add_child(*p);
+        }
+
+        return promise;
+    }
+
     template<typename R = Result>
     void resolve(R&& result)
     {
