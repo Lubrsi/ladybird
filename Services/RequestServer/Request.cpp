@@ -475,7 +475,7 @@ void Request::handle_dns_lookup_state()
 
     auto resolver = m_dns.get<NonnullRefPtr<Resolver>>();
 
-    m_pending_dns_request = resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::AAAA }, Vector { DNS::Messages::ResourceType::A } }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
+    m_pending_dns_request = resolver->dns.lookup(host, DNS::Messages::Class::IN, { Vector { DNS::Messages::ResourceType::A }, Vector { DNS::Messages::ResourceType::AAAA } }, { .validate_dnssec_locally = dns_info.validate_dnssec_locally })
         ->when_rejected([this, host](auto const& error) {
             dbgln("Request::handle_dns_lookup_state: DNS lookup failed for '{}': {}", host, error);
             m_network_error = Requests::NetworkError::UnableToResolveHost;
@@ -519,7 +519,7 @@ void Request::handle_connect_state()
     set_option(CURLOPT_PORT, m_url.port_or_default());
     set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
     set_option(CURLOPT_CONNECT_ONLY, 1L);
-    if constexpr (CURL_DEBUG) {
+    if constexpr (1) {
         set_option(CURLOPT_VERBOSE, 1);
     }
 
@@ -577,7 +577,7 @@ void Request::handle_fetch_state()
 
     set_option(CURLOPT_CUSTOMREQUEST, m_method.characters());
     set_option(CURLOPT_FOLLOWLOCATION, 0);
-    if constexpr (CURL_DEBUG) {
+    if constexpr (1) {
         set_option(CURLOPT_VERBOSE, 1);
     }
 

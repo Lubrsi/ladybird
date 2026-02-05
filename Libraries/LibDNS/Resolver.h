@@ -166,7 +166,8 @@ public:
 
     bool has_record_of_type(Messages::ResourceType type, bool later = false) const
     {
-        if (later && !m_request_done && m_desired_types.contains(type))
+        // Check if there's a pending lookup for this type (m_pending_ids is cleared when response arrives)
+        if (later && m_pending_ids.contains(type))
             return true;
 
         for (auto const& re : m_cached_records) {
@@ -179,8 +180,22 @@ public:
     void will_add_record_of_type(Messages::ResourceType type) { m_desired_types.set(type); }
     void finished_request() { m_request_done = true; }
 
-    void set_id(u16 id) { m_id = id; }
-    u16 id() { return m_id; }
+    void set_id_for_types(Span<Messages::ResourceType const> types, u16 id)
+    {
+        for (auto type : types)
+            m_pending_ids.set(type, id);
+    }
+
+    Optional<u16> id_for_type(Messages::ResourceType type) const
+    {
+        return m_pending_ids.get(type);
+    }
+
+    void clear_id_for_types(Span<Messages::ResourceType const> types)
+    {
+        for (auto type : types)
+            m_pending_ids.remove(type);
+    }
 
     bool can_be_removed() const { return !m_valid && m_request_done; }
     bool is_done() const { return m_request_done; }
@@ -226,9 +241,6 @@ public:
 
     bool is_type_negatively_cached(Messages::ResourceType type) const
     {
-        if (!m_request_done)
-            return false;
-
         auto now = AK::UnixDateTime::now();
         for (auto const& entry : m_negative_cache) {
             if (entry.type == type && entry.expiration > now)
@@ -268,7 +280,7 @@ private:
     HashTable<Messages::ResourceType> m_desired_types;
     Vector<Messages::Records::DNSKEY> m_used_dnskeys {};
     HashTable<u16> m_seen_key_tags;
-    u16 m_id { 0 };
+    HashMap<Messages::ResourceType, u16> m_pending_ids;
 };
 
 class ResolverTunnel {
@@ -532,10 +544,16 @@ public:
         return lookup_in_cache(name, class_, Array { Messages::ResourceType::A, Messages::ResourceType::AAAA });
     }
 
+    static ByteString canonicalize_cache_key(StringView name)
+    {
+        return Messages::DomainName::from_string(name).to_canonical_string().to_byte_string();
+    }
+
     RefPtr<LookupResult const> lookup_in_cache(StringView name, Messages::Class, Span<Messages::ResourceType const> desired_types)
     {
+        auto canonical_name = canonicalize_cache_key(name);
         return m_cache.with_read_locked([&](auto& cache) -> RefPtr<LookupResult const> {
-            auto it = cache.find(name);
+            auto it = cache.find(canonical_name);
             if (it == cache.end())
                 return {};
 
@@ -663,14 +681,15 @@ public:
             }
         }
 
+        auto canonical_name = canonicalize_cache_key(name);
         auto has_established_connection = [=, this] {
             auto already_in_cache = false;
             auto result = m_cache.with_write_locked([&](auto& cache) -> NonnullRefPtr<LookupResult> {
                 dbgln_if(DNS_DEBUG, "DNS: Resolving {}...", name);
                 auto existing = [&] -> RefPtr<LookupResult> {
-                    if (cache.contains(name)) {
+                    if (cache.contains(canonical_name)) {
                         dbgln_if(DNS_DEBUG, "DNS: Resolving {} from cache...", name);
-                        auto ptr = *cache.get(name);
+                        auto ptr = *cache.get(canonical_name);
 
                         already_in_cache = (!options.validate_dnssec_locally && !ptr->is_being_dnssec_validated()) || ptr->is_dnssec_validated();
                         for (auto const& type : desired_types) {
@@ -691,6 +710,11 @@ public:
 
                 if (existing) {
                     dbgln_if(DNS_DEBUG, "DNS: Resolved {} from cache", name);
+                    // Mark our types as pending so subsequent lookups for the same types can coalesce
+                    if (!already_in_cache) {
+                        for (auto const& type : desired_types)
+                            existing->will_add_record_of_type(type);
+                    }
                     return *existing;
                 }
 
@@ -700,18 +724,25 @@ public:
                     ptr->set_dnssec_validated(options.validate_dnssec_locally);
                 for (auto const& type : desired_types)
                     ptr->will_add_record_of_type(type);
-                cache.set(name, ptr);
+                cache.set(canonical_name, ptr);
                 return ptr;
             });
 
             Optional<u16> cached_result_id;
             if (already_in_cache) {
-                auto id = result->id();
-                cached_result_id = id;
+                // Find the pending lookup ID for any of our desired types
+                for (auto type : desired_types) {
+                    if (auto id = result->id_for_type(type); id.has_value()) {
+                        cached_result_id = id.value();
+                        break;
+                    }
+                }
                 auto existing_promise = m_pending_lookups.with_write_locked(
                     [&](auto& lookups) -> RefPtr<Core::Promise<NonnullRefPtr<LookupResult const>>> {
-                        if (auto* lookup = lookups->find(id))
-                            return lookup->promise;
+                        if (cached_result_id.has_value()) {
+                            if (auto* lookup = lookups->find(cached_result_id.value()))
+                                return lookup->promise;
+                        }
                         return nullptr;
                     });
                 if (existing_promise) {
@@ -796,7 +827,7 @@ public:
                 });
             }
 
-            result->set_id(query.header.id);
+            result->set_id_for_types(desired_types.span(), query.header.id);
 
             auto cached_entry = options.repeating_lookup
                 ? nullptr
@@ -942,6 +973,78 @@ private:
         return result_promise;
     }
 
+    void populate_cache(Messages::Message const& message, Messages::DomainName const& original_query_name)
+    {
+        if (message.header.options.response_code() != Messages::Options::ResponseCode::NoError)
+            return;
+
+        m_cache.with_write_locked([&](auto& cache) {
+            for (auto const& record : message.answers) {
+                auto record_name_str = record.name.to_canonical_string().to_byte_string();
+                RefPtr<LookupResult> record_result;
+                if (auto existing = cache.get(record_name_str); existing.has_value()) {
+                    record_result = *existing;
+                } else {
+                    record_result = make_ref_counted<LookupResult>(record.name);
+                    cache.set(record_name_str, *record_result);
+                }
+                record_result->add_record(record);
+                record_result->finished_request();
+            }
+        });
+
+        // Find QNAME by following CNAME chain in answers (order not guaranteed)
+        auto qname = original_query_name;
+        for (;;) {
+            bool found_cname = false;
+            for (auto const& record : message.answers) {
+                if (record.type == Messages::ResourceType::CNAME && record.name == qname) {
+                    qname = record.record.get<Messages::Records::CNAME>().names;
+                    found_cname = true;
+                    break;
+                }
+            }
+            if (!found_cname)
+                break;
+        }
+
+        // RFC 2308: Negative caching for NODATA responses against QNAME
+        for (auto const& question : message.questions) {
+            // Check if we have a record of this type for the QNAME
+            bool has_record = false;
+            for (auto const& record : message.answers) {
+                if (record.name == qname && record.type == question.type) {
+                    has_record = true;
+                    break;
+                }
+            }
+
+            if (!has_record) {
+                for (auto const& authority : message.authorities) {
+                    if (authority.type == Messages::ResourceType::SOA) {
+                        auto const& soa = authority.record.get<Messages::Records::SOA>();
+                        u32 negative_ttl = min(soa.minimum, authority.ttl);
+
+                        // Cache NODATA against QNAME
+                        auto qname_str = qname.to_canonical_string().to_byte_string();
+                        m_cache.with_write_locked([&](auto& cache) {
+                            RefPtr<LookupResult> qname_result;
+                            if (auto existing = cache.get(qname_str); existing.has_value())
+                                qname_result = *existing;
+                            else {
+                                qname_result = make_ref_counted<LookupResult>(qname);
+                                cache.set(qname_str, *qname_result);
+                            }
+                            qname_result->add_negative_cache_entry(question.type, negative_ttl);
+                            qname_result->finished_request();
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     void process_incoming_message(Messages::Message message)
     {
         auto result = m_pending_lookups.with_write_locked([&](auto& lookups) -> ErrorOr<void> {
@@ -1028,61 +1131,27 @@ private:
             //     }
             // }
 
-            for (auto& record : message.answers)
-                result->add_record(move(record));
+            // Cache all records against their respective names
+            populate_cache(message, lookup->parsed_name);
 
-            // RFC 2308: Negative caching for NODATA responses
-            // NODATA is cached against QNAME - the final CNAME target, not the original query name
-            if (message.header.options.response_code() == Messages::Options::ResponseCode::NoError) {
-                // Find QNAME by following CNAME chain in answers
-                auto qname = lookup->parsed_name;
-                for (;;) {
-                    bool found_cname = false;
-                    for (auto const& record : result->records()) {
-                        if (record.type == Messages::ResourceType::CNAME && record.name == qname) {
-                            qname = record.record.template get<Messages::Records::CNAME>().names;
-                            found_cname = true;
-                            break;
-                        }
-                    }
-                    if (!found_cname)
-                        break;
-                }
+            // Clear pending IDs for the types we just resolved so coalescing logic knows they're done
+            Vector<Messages::ResourceType> resolved_types;
+            for (auto const& question : message.questions)
+                resolved_types.append(question.type);
+            result->clear_id_for_types(resolved_types.span());
 
+            // Create a non-cached result for the promise with only requested types
+            auto promise_result = make_ref_counted<LookupResult>(lookup->parsed_name);
+            for (auto const& record : message.answers) {
                 for (auto const& question : message.questions) {
-                    if (!result->has_record_of_type(question.type)) {
-                        for (auto const& authority : message.authorities) {
-                            if (authority.type == Messages::ResourceType::SOA) {
-                                auto const& soa = authority.record.get<Messages::Records::SOA>();
-                                u32 negative_ttl = min(soa.minimum, authority.ttl);
-
-                                // Cache NODATA against QNAME (RFC 2308)
-                                if (qname != lookup->parsed_name) {
-                                    // QNAME differs - cache against the CNAME target
-                                    auto qname_str = qname.to_string().to_byte_string();
-                                    m_cache.with_write_locked([&](auto& cache) {
-                                        RefPtr<LookupResult> qname_result;
-                                        if (auto existing = cache.get(qname_str); existing.has_value())
-                                            qname_result = *existing;
-                                        else {
-                                            qname_result = make_ref_counted<LookupResult>(qname);
-                                            cache.set(qname_str, *qname_result);
-                                        }
-                                        qname_result->add_negative_cache_entry(question.type, negative_ttl);
-                                        qname_result->finished_request();
-                                    });
-                                } else {
-                                    result->add_negative_cache_entry(question.type, negative_ttl);
-                                }
-                                break;
-                            }
-                        }
+                    if (record.type == question.type) {
+                        promise_result->add_record(record);
+                        break;
                     }
                 }
             }
-
-            result->finished_request();
-            lookup->promise->resolve(*result);
+            promise_result->finished_request();
+            lookup->promise->resolve(*promise_result);
             lookups->remove(message.header.id);
             return {};
         });
