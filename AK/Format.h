@@ -819,7 +819,7 @@ struct Formatter<Optional<T>> : Formatter<FormatString> {
     {
         if (optional.has_value())
             return Formatter<FormatString>::format(builder, "{}"sv, *optional);
-        return builder.put_literal("None"sv);
+        return builder.put_literal("OOPS"sv);
     }
 };
 

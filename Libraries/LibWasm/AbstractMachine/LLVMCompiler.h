@@ -9,7 +9,9 @@
 #include <LibWasm/AbstractMachine/AbstractMachine.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -29,6 +31,8 @@ struct ControlFrame {
     WasmBasicBlock branch_target;        // Where `br` jumps to (loop header for loops, end block for blocks)
     WasmBasicBlock end_block;            // Where to go after the construct ends
     Optional<WasmBasicBlock> else_block; // For `if` instructions
+    llvm::AllocaInst* result_alloca { nullptr }; // Alloca for block result value (if block has a result type)
+    bool is_loop { false };
 };
 
 struct FunctionDeclaration {
@@ -65,6 +69,9 @@ public:
     // Local variable access
     [[nodiscard]] llvm::AllocaInst* local(size_t index) { return m_locals[index]; }
     void append_local(llvm::AllocaInst* alloca) { m_locals.append(alloca); }
+
+    // Create an alloca in the entry block (dominates all uses)
+    [[nodiscard]] llvm::AllocaInst* create_entry_block_alloca(llvm::Type* type);
 
     [[nodiscard]] FunctionDeclaration const& function_declaration(size_t index);
     [[nodiscard]] llvm::GlobalVariable* global(size_t index);
@@ -122,11 +129,13 @@ private:
     // Type conversion
     llvm::Type* wasm_type_to_llvm(ValueType);
     llvm::FunctionType* wasm_func_type_to_llvm(FunctionType const&);
+    llvm::DIType* wasm_type_to_di_type(ValueType);
 
     // Constant expression evaluation (for globals, data offsets, element offsets)
     u64 evaluate_constant_expression(Expression const&);
 
     // Compilation phases
+    void parse_name_section(Module const&);
     void compile_function_declarations(llvm::Module&, Module const&);
     void compile_global_section(llvm::Module&, Module const&);
     void compile_data_section(Module const&);
@@ -134,7 +143,11 @@ private:
     void compile_element_section(Module const&);
     void compile_function_bodies(llvm::Module&, Module const&);
 
+    // Function name for debug info display (from name section, exports, or imports)
+    ByteString function_display_name(size_t index) const;
+
     Vector<FunctionDeclaration> m_function_declarations;
+    HashMap<u32, ByteString> m_function_names;
     Vector<NonnullOwnPtr<llvm::GlobalVariable>> m_globals;
 
     // Memory - must outlive JIT code execution
@@ -152,6 +165,12 @@ private:
 
     std::unique_ptr<llvm::orc::LLJIT> m_jit;
     std::unique_ptr<llvm::LLVMContext> m_context;
+
+    // Debug info
+    llvm::DIBuilder* m_di_builder { nullptr };
+    llvm::DICompileUnit* m_di_compile_unit { nullptr };
+    llvm::DIFile* m_di_file { nullptr };
+
 };
 
 }

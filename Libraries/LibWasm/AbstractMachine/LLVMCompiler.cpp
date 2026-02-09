@@ -9,10 +9,16 @@
 #include <AK/Enumerate.h>
 #include <LibCore/ElapsedTimer.h>
 #include <LibWasm/Printer/Printer.h>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include <llvm/ExecutionEngine/Orc/ObjectTransformLayer.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
+#pragma GCC diagnostic pop
 
 namespace Wasm {
 
@@ -34,10 +40,49 @@ ErrorOr<NonnullOwnPtr<LLVMCompiler>> LLVMCompiler::create()
 
     auto jit = llvm::orc::LLJITBuilder()
         .setJITTargetMachineBuilder(
-            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::None))
+            llvm::orc::JITTargetMachineBuilder(llvm::Triple(llvm::sys::getProcessTriple())).setCodeGenOptLevel(llvm::CodeGenOptLevel::Default))
         .create();
     if (!jit)
         return Error::from_string_literal("Failed to create LLJIT");
+
+    // Run LLVM IR optimization passes (inlining, constant propagation, etc.)
+    (*jit)->getIRTransformLayer().setTransform(
+        [](llvm::orc::ThreadSafeModule tsm, llvm::orc::MaterializationResponsibility const&) -> llvm::Expected<llvm::orc::ThreadSafeModule> {
+            tsm.withModuleDo([](llvm::Module& m) {
+                llvm::LoopAnalysisManager lam;
+                llvm::FunctionAnalysisManager fam;
+                llvm::CGSCCAnalysisManager cgam;
+                llvm::ModuleAnalysisManager mam;
+
+                llvm::PassBuilder pb;
+                pb.registerModuleAnalyses(mam);
+                pb.registerCGSCCAnalyses(cgam);
+                pb.registerFunctionAnalyses(fam);
+                pb.registerLoopAnalyses(lam);
+                pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+                auto mpm = pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+                mpm.run(m, mam);
+            });
+            return std::move(tsm);
+        });
+
+    // Dump JIT'd objects to /tmp and link into a dylib for LLDB symbol + unwind loading
+    (*jit)->getObjTransformLayer().setTransform(
+        [](std::unique_ptr<llvm::MemoryBuffer> obj) -> llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>> {
+            std::error_code ec;
+            llvm::raw_fd_ostream os("/tmp/jit_dump.o", ec);
+            if (!ec)
+                os.write(obj->getBufferStart(), obj->getBufferSize());
+            os.close();
+            // Link into a dylib so compact_unwind relocations are resolved.
+            // The dylib gives LLDB both symbol names and valid unwind info.
+            system("ld -dylib -arch arm64 "
+                   "-syslibroot $(xcrun --show-sdk-path) "
+                   "-o /tmp/jit_dump.dylib /tmp/jit_dump.o "
+                   "-undefined dynamic_lookup -lSystem 2>/dev/null");
+            return std::move(obj);
+        });
 
     return adopt_nonnull_own_or_enomem(new LLVMCompiler(std::move(*jit)));
 }
@@ -91,6 +136,27 @@ llvm::FunctionType* LLVMCompiler::wasm_func_type_to_llvm(FunctionType const& typ
     return llvm::FunctionType::get(return_type, { param_types.data(), param_types.size() }, false);
 }
 
+llvm::DIType* LLVMCompiler::wasm_type_to_di_type(ValueType type)
+{
+    switch (type.kind()) {
+    case ValueType::I32:
+        return m_di_builder->createBasicType("i32", 32, llvm::dwarf::DW_ATE_signed);
+    case ValueType::I64:
+        return m_di_builder->createBasicType("i64", 64, llvm::dwarf::DW_ATE_signed);
+    case ValueType::F32:
+        return m_di_builder->createBasicType("f32", 32, llvm::dwarf::DW_ATE_float);
+    case ValueType::F64:
+        return m_di_builder->createBasicType("f64", 64, llvm::dwarf::DW_ATE_float);
+    case ValueType::V128:
+        return m_di_builder->createBasicType("v128", 128, llvm::dwarf::DW_ATE_unsigned);
+    case ValueType::FunctionReference:
+    case ValueType::ExternReference:
+        return m_di_builder->createBasicType("ref", 64, llvm::dwarf::DW_ATE_unsigned);
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
 u64 LLVMCompiler::evaluate_constant_expression(Expression const& expression)
 {
     u64 result = 0;
@@ -134,7 +200,17 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
         m_memories.append(memory_address.release_value());
     }
 
+    parse_name_section(module);
+
     std::unique_ptr<llvm::Module> llvm_module(new llvm::Module("wasm_module", *m_context));
+
+    // Set up debug info
+    m_di_builder = new llvm::DIBuilder(*llvm_module);
+    m_di_file = m_di_builder->createFile("wasm_module", ".");
+    m_di_compile_unit = m_di_builder->createCompileUnit(
+        llvm::dwarf::DW_LANG_C, m_di_file, "ladybird-wasm", false, "", 0);
+    llvm_module->addModuleFlag(llvm::Module::Warning, "Debug Info Version", llvm::DEBUG_METADATA_VERSION);
+    llvm_module->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 4);
 
     compile_function_declarations(*llvm_module, module);
     compile_global_section(*llvm_module, module);
@@ -143,25 +219,51 @@ ErrorOr<void*> LLVMCompiler::compile_module(Module const& module)
     compile_data_section(module);
     compile_function_bodies(*llvm_module, module);
 
+    m_di_builder->finalize();
+
     if (llvm::verifyModule(*llvm_module, &llvm::errs()))
         VERIFY_NOT_REACHED();
 
-    // JIT compile
+    // JIT compile (object transform callback captures the compiled object)
     auto tsm = llvm::orc::ThreadSafeModule(move(llvm_module), move(m_context));
     if (auto err = m_jit->addIRModule(move(tsm)))
         return Error::from_string_literal("Failed to add module to JIT");
 
-    for (size_t index = 0; index < m_function_declarations.size(); ++index) {
+    // NOTE: After addIRModule, the llvm::Module is moved and all llvm::Function& references
+    // in m_function_declarations are dangling. Use the predictable wasm_func_N names for lookups.
+
+    // Find the first non-imported function for LLDB symbol loading and execution
+    size_t first_defined_index = 0;
+    for (; first_defined_index < m_function_declarations.size(); ++first_defined_index) {
+        if (m_function_declarations[first_defined_index].wasm_code)
+            break;
+    }
+
+    auto lookup_function = [&](size_t index) -> llvm::Expected<llvm::orc::ExecutorAddr> {
         auto name = MUST(String::formatted("wasm_func_{}", index));
         auto sv = name.bytes_as_string_view();
-        auto symbol = m_jit->lookup(llvm::StringRef(sv.characters_without_null_termination(), sv.length()));
+        return m_jit->lookup(llvm::StringRef(sv.characters_without_null_termination(), sv.length()));
+    };
+
+    // Look up the first defined function to get the JIT code base address for LLDB symbol loading
+    {
+        auto first_symbol = lookup_function(first_defined_index);
+        if (first_symbol)
+            dbgln("LLDB: target modules add /tmp/jit_dump.dylib\nLLDB: target modules load -f jit_dump.dylib __text {:#x}", first_symbol->getValue());
+    }
+
+    for (size_t index = 0; index < m_function_declarations.size(); ++index) {
+        if (!m_function_declarations[index].wasm_code)
+            continue;
+        auto symbol = lookup_function(index);
         if (!symbol)
             return Error::from_string_literal("Failed to find compiled function");
 
-        dbgln("{}: {:p}", index, symbol->getValue());
+        dbgln("{} ({}): {:p}", index, function_display_name(index), symbol->getValue());
     }
 
-    auto symbol = m_jit->lookup("wasm_func_1");
+    // Execute the first defined function
+    auto symbol = lookup_function(1);
     if (!symbol)
         VERIFY_NOT_REACHED();
 
@@ -302,6 +404,95 @@ void LLVMCompiler::compile_element_section(Module const& module)
     }
 }
 
+void LLVMCompiler::parse_name_section(Module const& module)
+{
+    // Parse the wasm "name" custom section (subsection ID 1 = function names)
+    for (auto const& custom : module.custom_sections()) {
+        if (custom.name() != "name")
+            continue;
+        auto data = custom.contents().bytes();
+        size_t offset = 0;
+        while (offset < data.size()) {
+            u8 subsection_id = data[offset++];
+            // Parse LEB128 subsection size
+            u32 subsection_size = 0;
+            u32 shift = 0;
+            while (offset < data.size()) {
+                u8 byte = data[offset++];
+                subsection_size |= static_cast<u32>(byte & 0x7f) << shift;
+                shift += 7;
+                if ((byte & 0x80) == 0)
+                    break;
+            }
+            size_t subsection_end = offset + subsection_size;
+            if (subsection_id == 1) {
+                // Function names: vector of (index, name)
+                u32 count = 0;
+                shift = 0;
+                while (offset < data.size()) {
+                    u8 byte = data[offset++];
+                    count |= static_cast<u32>(byte & 0x7f) << shift;
+                    shift += 7;
+                    if ((byte & 0x80) == 0)
+                        break;
+                }
+                for (u32 i = 0; i < count && offset < subsection_end; ++i) {
+                    u32 func_idx = 0;
+                    shift = 0;
+                    while (offset < data.size()) {
+                        u8 byte = data[offset++];
+                        func_idx |= static_cast<u32>(byte & 0x7f) << shift;
+                        shift += 7;
+                        if ((byte & 0x80) == 0)
+                            break;
+                    }
+                    u32 name_len = 0;
+                    shift = 0;
+                    while (offset < data.size()) {
+                        u8 byte = data[offset++];
+                        name_len |= static_cast<u32>(byte & 0x7f) << shift;
+                        shift += 7;
+                        if ((byte & 0x80) == 0)
+                            break;
+                    }
+                    if (offset + name_len <= data.size() && name_len > 0) {
+                        m_function_names.set(func_idx, ByteString(reinterpret_cast<char const*>(data.offset(offset)), name_len));
+                        offset += name_len;
+                    }
+                }
+            }
+            offset = subsection_end;
+        }
+        break;
+    }
+
+    // Fall back to export names for functions not in the name section
+    for (auto const& export_ : module.export_section().entries()) {
+        auto const* func_index = export_.description().get_pointer<FunctionIndex>();
+        if (!func_index)
+            continue;
+        if (!m_function_names.contains(func_index->value()))
+            m_function_names.set(func_index->value(), export_.name());
+    }
+
+    // Fall back to import names
+    size_t func_import_index = 0;
+    for (auto const& import_ : module.import_section().imports()) {
+        if (!import_.description().has<TypeIndex>())
+            continue;
+        if (!m_function_names.contains(func_import_index))
+            m_function_names.set(func_import_index, ByteString::formatted("{}.{}", import_.module(), import_.name()));
+        ++func_import_index;
+    }
+}
+
+ByteString LLVMCompiler::function_display_name(size_t index) const
+{
+    if (auto it = m_function_names.find(index); it != m_function_names.end())
+        return ByteString::formatted("wasm[{}]:{}", index, it->value);
+    return ByteString::formatted("wasm_func_{}", index);
+}
+
 void LLVMCompiler::compile_function_declarations(llvm::Module& llvm_module, Module const& module)
 {
     auto const& code_section = module.code_section();
@@ -313,6 +504,8 @@ void LLVMCompiler::compile_function_declarations(llvm::Module& llvm_module, Modu
         auto const& function_type = type_section.types()[function_type_index.value()];
         auto* llvm_function_type = wasm_func_type_to_llvm(function_type);
 
+        // Use simple wasm_func_N names for LLVM symbols (safe, unique).
+        // Human-readable names from the name section go into DWARF debug info.
         auto function_name = MUST(String::formatted("wasm_func_{}", function_number));
         auto function_name_view = function_name.bytes_as_string_view();
 
@@ -366,31 +559,69 @@ void LLVMCompiler::compile_function_declarations(llvm::Module& llvm_module, Modu
 
 void LLVMCompiler::compile_function_bodies(llvm::Module& llvm_module, Module const& module)
 {
-    for (auto const& function_declaration : m_function_declarations) {
+    for (auto [func_index, function_declaration] : enumerate(m_function_declarations)) {
         if (!function_declaration.wasm_code) {
             dbgln("FIXME: Imported function");
             continue;
         }
 
+        // Ensure frame pointers and unwind tables are emitted so LLDB can unwind through JIT frames.
+        function_declaration.llvm_function.addFnAttr("frame-pointer", "all");
+        function_declaration.llvm_function.setUWTableKind(llvm::UWTableKind::Async);
+
         LLVMFunctionGenerator generator(*this, llvm_module, function_declaration.llvm_function, module);
+
+        // Attach debug info with the human-readable name from the name section
+        auto display_name = function_display_name(func_index);
+        auto* di_func_type = m_di_builder->createSubroutineType(m_di_builder->getOrCreateTypeArray({}));
+        auto* di_subprogram = m_di_builder->createFunction(
+            m_di_file,
+            llvm::StringRef(display_name.characters(), display_name.length()),
+            function_declaration.llvm_function.getName(),
+            m_di_file,
+            /*LineNo=*/0,
+            di_func_type,
+            /*ScopeLine=*/0,
+            llvm::DINode::FlagZero,
+            llvm::DISubprogram::SPFlagDefinition);
+        function_declaration.llvm_function.setSubprogram(di_subprogram);
+        generator.builder().SetCurrentDebugLocation(llvm::DILocation::get(context(), 0, 0, di_subprogram));
 
         // Entry block
         auto entry = generator.make_block("entry"sv);
         generator.switch_to_basic_block(entry);
 
-        // Allocate locals (parameters + local variables)
+        // Allocate locals (parameters + local variables) with debug info
         size_t param_idx = 0;
+        size_t local_idx = 0;
         for (auto const& param_type : function_declaration.wasm_function_type.parameters()) {
             auto* alloca = generator.builder().CreateAlloca(generator.wasm_type_to_llvm(param_type));
-            generator.builder().CreateStore(function_declaration.llvm_function.getArg(param_idx++), alloca);
+            generator.builder().CreateStore(function_declaration.llvm_function.getArg(param_idx), alloca);
             generator.append_local(alloca);
+
+            auto* di_var = m_di_builder->createParameterVariable(
+                di_subprogram, llvm::StringRef(ByteString::formatted("param{}", param_idx).characters()), param_idx + 1,
+                m_di_file, 0, wasm_type_to_di_type(param_type));
+            m_di_builder->insertDeclare(alloca, di_var, m_di_builder->createExpression(),
+                llvm::DILocation::get(context(), 0, 0, di_subprogram), generator.builder().GetInsertBlock());
+
+            ++param_idx;
+            ++local_idx;
         }
         for (auto const& local : function_declaration.wasm_code->func().locals()) {
-            for (size_t local_index = 0; local_index < local.n(); local_index++) {
+            for (size_t i = 0; i < local.n(); i++) {
                 auto* llvm_type = generator.wasm_type_to_llvm(local.type());
                 auto* alloca = generator.builder().CreateAlloca(llvm_type);
                 generator.builder().CreateStore(llvm::Constant::getNullValue(llvm_type), alloca);
                 generator.append_local(alloca);
+
+                auto* di_var = m_di_builder->createAutoVariable(
+                    di_subprogram, llvm::StringRef(ByteString::formatted("local{}", local_idx).characters()),
+                    m_di_file, 0, wasm_type_to_di_type(local.type()));
+                m_di_builder->insertDeclare(alloca, di_var, m_di_builder->createExpression(),
+                    llvm::DILocation::get(context(), 0, 0, di_subprogram), generator.builder().GetInsertBlock());
+
+                ++local_idx;
             }
         }
 
@@ -449,6 +680,12 @@ void LLVMFunctionGenerator::switch_to_unreachable_block()
 bool LLVMFunctionGenerator::is_current_block_terminated() const
 {
     return m_current_block.llvm_basic_block->getTerminator() != nullptr;
+}
+
+llvm::AllocaInst* LLVMFunctionGenerator::create_entry_block_alloca(llvm::Type* type)
+{
+    llvm::IRBuilder<> entry_builder(&m_function.getEntryBlock(), m_function.getEntryBlock().begin());
+    return entry_builder.CreateAlloca(type);
 }
 
 void LLVMFunctionGenerator::push_control_frame(WasmBasicBlock branch_target, WasmBasicBlock end_block, Optional<WasmBasicBlock> else_block)
@@ -689,6 +926,12 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         push(b.CreateIntrinsic(llvm::Intrinsic::fshl, { b.getInt32Ty() }, { lhs, lhs, rhs }));
         break;
     }
+    case Instructions::i64_rotl.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateIntrinsic(llvm::Intrinsic::fshl, { b.getInt64Ty() }, { lhs, lhs, rhs }));
+        break;
+    }
     case Instructions::i32_rotr.value(): {
         auto* rhs = pop();
         auto* lhs = pop();
@@ -700,9 +943,19 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         push(b.CreateIntrinsic(llvm::Intrinsic::ctlz, { b.getInt32Ty() }, { value, /* is_zero_poison= */ b.getFalse() }));
         break;
     }
+    case Instructions::i64_clz.value(): {
+        auto* value = pop();
+        push(b.CreateIntrinsic(llvm::Intrinsic::ctlz, { b.getInt64Ty() }, { value, /* is_zero_poison= */ b.getFalse() }));
+        break;
+    }
     case Instructions::i32_ctz.value(): {
         auto* value = pop();
         push(b.CreateIntrinsic(llvm::Intrinsic::cttz, { b.getInt32Ty() }, { value, /* is_zero_poison= */ b.getFalse() }));
+        break;
+    }
+    case Instructions::i64_ctz.value(): {
+        auto* value = pop();
+        push(b.CreateIntrinsic(llvm::Intrinsic::cttz, { b.getInt64Ty() }, { value, /* is_zero_poison= */ b.getFalse() }));
         break;
     }
     case Instructions::i64_shru.value(): {
@@ -721,6 +974,11 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
     case Instructions::i64_extend_ui32.value(): {
         auto* i32_value = pop();
         push(b.CreateZExt(i32_value, b.getInt64Ty()));
+        break;
+    }
+    case Instructions::i32_extend8_s.value(): {
+        auto* i8_value = pop();
+        push(b.CreateSExt(i8_value, b.getInt32Ty()));
         break;
     }
 
@@ -768,14 +1026,16 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         push(b.CreateZExt(result, b.getInt32Ty()));
         break;
     }
-    case Instructions::i32_gts.value(): {
+    case Instructions::i32_gts.value():
+    case Instructions::i64_gts.value(): {
         auto* rhs = pop();
         auto* lhs = pop();
         auto* result = b.CreateICmpSGT(lhs, rhs);
         push(b.CreateZExt(result, b.getInt32Ty()));
         break;
     }
-    case Instructions::i32_gtu.value(): {
+    case Instructions::i32_gtu.value():
+    case Instructions::i64_gtu.value(): {
         auto* rhs = pop();
         auto* lhs = pop();
         auto* result = b.CreateICmpUGT(lhs, rhs);
@@ -789,7 +1049,8 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         push(b.CreateZExt(result, b.getInt32Ty()));
         break;
     }
-    case Instructions::i32_leu.value(): {
+    case Instructions::i32_leu.value():
+    case Instructions::i64_leu.value(): {
         auto* rhs = pop();
         auto* lhs = pop();
         auto* result = b.CreateICmpULE(lhs, rhs);
@@ -803,7 +1064,8 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         push(b.CreateZExt(result, b.getInt32Ty()));
         break;
     }
-    case Instructions::i32_geu.value(): {
+    case Instructions::i32_geu.value():
+    case Instructions::i64_geu.value(): {
         auto* rhs = pop();
         auto* lhs = pop();
         auto* result = b.CreateICmpUGE(lhs, rhs);
@@ -925,6 +1187,48 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         break;
     }
 
+    // Floating-point (f32 and f64)
+    case Instructions::i32_trunc_uf64.value(): {
+        auto* double_value = pop();
+        push(b.CreateFPToUI(double_value, b.getInt32Ty()));
+        break;
+    }
+    case Instructions::f64_lt.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateFCmpULT(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
+    }
+    case Instructions::f64_ge.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        auto* result = b.CreateFCmpUGE(lhs, rhs);
+        push(b.CreateZExt(result, b.getInt32Ty()));
+        break;
+    }
+    case Instructions::f64_div.value(): {
+        auto* rhs = pop();
+        auto* lhs = pop();
+        push(b.CreateFDiv(lhs, rhs));
+        break;
+    }
+    case Instructions::f64_convert_ui32.value(): {
+        auto* u32_value = pop();
+        push(b.CreateUIToFP(u32_value, b.getDoubleTy()));
+        break;
+    }
+    case Instructions::f64_convert_ui64.value(): {
+        auto* u64_value = pop();
+        push(b.CreateUIToFP(u64_value, b.getDoubleTy()));
+        break;
+    }
+    case Instructions::f32_demote_f64.value(): {
+        auto* double_value = pop();
+        push(b.CreateFPTrunc(double_value, b.getFloatTy()));
+        break;
+    }
+
     case Instructions::memory_copy.value(): {
         auto& args = insn.arguments().get<Instruction::MemoryCopyArgs>();
 
@@ -989,9 +1293,27 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
     }
 
     // === Control Flow ===
+
+    // Helper: get the LLVM result type for a block type (nullptr if void)
+#define BLOCK_RESULT_TYPE(block_type) [&]() -> llvm::Type* { \
+        if ((block_type).kind() == BlockType::Type) \
+            return wasm_type_to_llvm((block_type).value_type()); \
+        if ((block_type).kind() == BlockType::Index) { \
+            auto const& results = wasm_module().type_section().types()[(block_type).type_index().value()].results(); \
+            if (results.size() == 1) return wasm_type_to_llvm(results[0]); \
+        } \
+        return nullptr; \
+    }()
+
     case Instructions::block.value(): {
+        auto& block_args = insn.arguments().get<Instruction::StructuredInstructionArgs>();
         auto end_block = make_block("block_end"sv);
         push_control_frame(end_block, end_block);
+
+        // Create alloca in entry block for block result (must dominate all uses)
+        auto* result_type = BLOCK_RESULT_TYPE(block_args.block_type);
+        if (result_type)
+            control_frame_at_depth(0).result_alloca = create_entry_block_alloca(result_type);
         break;
     }
     case Instructions::loop.value(): {
@@ -1002,9 +1324,11 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         switch_to_basic_block(loop_header);
 
         push_control_frame(move(loop_header), move(loop_end));
+        control_frame_at_depth(0).is_loop = true;
         break;
     }
     case Instructions::if_.value(): {
+        auto& block_args = insn.arguments().get<Instruction::StructuredInstructionArgs>();
         auto* condition = pop();
         auto* cond_bool = b.CreateICmpNE(condition, b.getInt32(0));
 
@@ -1016,10 +1340,18 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         switch_to_basic_block(then_block);
 
         push_control_frame(end_block, end_block, move(else_block));
+
+        auto* result_type = BLOCK_RESULT_TYPE(block_args.block_type);
+        if (result_type)
+            control_frame_at_depth(0).result_alloca = create_entry_block_alloca(result_type);
         break;
     }
     case Instructions::structured_else.value(): {
         auto& frame = control_frame_at_depth(0);
+
+        // Store result from then-branch before branching to end
+        if (!is_current_block_terminated() && frame.result_alloca && !stack_is_empty())
+            b.CreateStore(pop(), frame.result_alloca);
 
         // Branch from end of then-block to end (unless already terminated)
         if (!is_current_block_terminated())
@@ -1042,24 +1374,37 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         } else {
             auto frame = pop_control_frame();
 
+            // Store result value before branching to end block
+            if (!is_current_block_terminated() && frame.result_alloca && !stack_is_empty())
+                b.CreateStore(pop(), frame.result_alloca);
+
             // If there's an else block that was never used, fill it
             if (frame.else_block.has_value() && frame.else_block->llvm_basic_block->empty()) {
-                auto* current = &current_block();
+                auto saved = current_block();
                 switch_to_basic_block(*frame.else_block);
                 b.CreateBr(frame.end_block.llvm_basic_block);
-                switch_to_basic_block(*current);
+                switch_to_basic_block(saved);
             }
 
             // Branch to end block (unless already terminated by br/return/unreachable)
             if (!is_current_block_terminated())
                 b.CreateBr(frame.end_block.llvm_basic_block);
             switch_to_basic_block(frame.end_block);
+
+            // Load block result and push onto the end block's stack
+            if (frame.result_alloca)
+                push(b.CreateLoad(frame.result_alloca->getAllocatedType(), frame.result_alloca));
         }
         break;
     }
     case Instructions::br.value(): {
         auto depth = insn.arguments().get<Instruction::BranchArgs>().label;
         auto& frame = control_frame_at_depth(depth.value());
+
+        // Store result for non-loop targets
+        if (!frame.is_loop && frame.result_alloca && !stack_is_empty())
+            b.CreateStore(pop(), frame.result_alloca);
+
         b.CreateBr(frame.branch_target.llvm_basic_block);
         switch_to_unreachable_block();
         break;
@@ -1071,6 +1416,10 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         auto* condition = pop();
         auto* cond_bool = b.CreateICmpNE(condition, b.getInt32(0));
 
+        // Store result for non-loop targets (unconditional store is fine — overwritten on fall-through)
+        if (!frame.is_loop && frame.result_alloca && !stack_is_empty())
+            b.CreateStore(peek(), frame.result_alloca);
+
         auto continue_block = make_block("br_if_continue"sv);
         b.CreateCondBr(cond_bool, frame.branch_target.llvm_basic_block, continue_block.llvm_basic_block);
         switch_to_basic_block(move(continue_block));
@@ -1078,10 +1427,20 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
     }
     case Instructions::br_table.value(): {
         auto& args = insn.arguments().get<Instruction::TableBranchArgs>();
+
+        // Store result for all targets before the switch
+        auto& default_frame = control_frame_at_depth(args.default_.value());
+        if (!default_frame.is_loop && default_frame.result_alloca && !stack_is_empty())
+            b.CreateStore(peek(), default_frame.result_alloca);
+        for (size_t i = 0; i < args.labels.size(); ++i) {
+            auto& frame = control_frame_at_depth(args.labels[i].value());
+            if (!frame.is_loop && frame.result_alloca && !stack_is_empty())
+                b.CreateStore(peek(), frame.result_alloca);
+        }
+
         auto* value = pop();
 
-        auto& default_block = control_frame_at_depth(args.default_.value());
-        auto switch_ = b.CreateSwitch(value, default_block.branch_target.llvm_basic_block, args.labels.size());
+        auto switch_ = b.CreateSwitch(value, default_frame.branch_target.llvm_basic_block, args.labels.size());
 
         for (size_t i = 0; i < args.labels.size(); ++i) {
             auto& frame = control_frame_at_depth(args.labels[i].value());
@@ -1137,6 +1496,7 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         Vector<llvm::Value*> arguments;
         for (size_t parameter_index = 0; parameter_index < function_to_call.wasm_function_type.parameters().size(); ++parameter_index)
             arguments.append(pop());
+        arguments.reverse();
 
         llvm::FunctionCallee function_callee(function_to_call.llvm_function.getFunctionType(), &function_to_call.llvm_function);
         llvm::ArrayRef arguments_as_llvm_array { arguments.data(), arguments.size() };
@@ -1191,6 +1551,7 @@ void LLVMFunctionGenerator::compile_instruction(Instruction const& insn)
         Vector<llvm::Value*> call_arguments;
         for (size_t i = 0; i < function_type.parameters().size(); ++i)
             call_arguments.append(pop());
+        call_arguments.reverse();
 
         // Call through the function pointer
         llvm::FunctionCallee callee(llvm_function_type, func_ptr);
@@ -1262,8 +1623,7 @@ llvm::Value* LLVMFunctionGenerator::get_memory_pointer(MemoryIndex memory_index,
     VERIFY(memory_base_ptr);
 
     // FIXME: trap if address is out of bounds (this is done by the MMU when using VM backing)
-    auto* effective_addr = b.getInt64(reinterpret_cast<FlatPtr>(pointer));
-    auto* addr_i64 = b.CreateZExt(effective_addr, b.getInt64Ty());
+    auto* addr_i64 = b.CreateZExt(pointer, b.getInt64Ty());
     return b.CreateGEP(b.getInt8Ty(), memory_base_ptr, addr_i64);
 }
 
