@@ -42,33 +42,31 @@ static u64 s_next_dns_request_id = 1;
 class DNSRequest final : public Request {
 public:
     static NonnullOwnPtr<DNSRequest> fetch(
-        NetworkOrdered<u16> original_query_id,
         void* curl_multi,
         DNS::LookupResult const& dns_result,
         URL::URL url,
         ByteString method,
         NonnullRefPtr<HTTP::HeaderList> request_headers,
         ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Function<void(DNS::Messages::Message)> on_complete)
+        ByteString alt_svc_cache_path)
     {
-        auto request = adopt_own(*new DNSRequest { original_query_id, curl_multi, dns_result, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), move(on_complete) });
+        auto request = adopt_own(*new DNSRequest { curl_multi, dns_result, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path) });
         request->process();
 
         return request;
     }
 
+    Function<void(DNS::Messages::Message)> on_complete;
+
 private:
     DNSRequest(
-        NetworkOrdered<u16> original_query_id,
         void* curl_multi,
         DNS::LookupResult const& dns_result,
         URL::URL url,
         ByteString method,
         NonnullRefPtr<HTTP::HeaderList> request_headers,
         ByteBuffer request_body,
-        ByteString alt_svc_cache_path,
-        Function<void(DNS::Messages::Message)> on_complete)
+        ByteString alt_svc_cache_path)
             : Request(
                 s_next_dns_request_id++,
                 Type::Fetch,
@@ -82,8 +80,6 @@ private:
                 move(request_body),
                 move(alt_svc_cache_path),
                 {})
-            , m_original_query_id(original_query_id)
-            , m_on_complete(move(on_complete))
     {
     }
 
@@ -105,16 +101,17 @@ private:
             return;
         }
 
-        m_on_complete(result.release_value());
+        if (on_complete)
+            on_complete(result.release_value());
     }
 
-    NetworkOrdered<u16> m_original_query_id;
     OwnPtr<Requests::ReadStream> m_read_stream;
-    Function<void(DNS::Messages::Message)> m_on_complete;
 };
 
 // https://datatracker.ietf.org/doc/html/rfc8484
-class HTTPSResolverTunnel final : public DNS::ResolverTunnel {
+class HTTPSResolverTunnel final
+    : public DNS::ResolverTunnel
+    , public Weakable<HTTPSResolverTunnel> {
 public:
     static ErrorOr<NonnullOwnPtr<HTTPSResolverTunnel>> create(NonnullRefPtr<Resolver> resolver, URL::URL url)
     {
@@ -167,24 +164,34 @@ public:
         auto copy_url = m_url;
         copy_url.set_query(TRY(String::formatted("dns={}", encoded_query)));
 
-        auto on_complete = [this, original_query_id](DNS::Messages::Message result) {
-            result.header.id = original_query_id;
-            if (on_message_received)
-                on_message_received(move(result));
-        };
-
         auto dns_request = DNSRequest::fetch(
-            original_query_id,
             m_curl_multi_handle_session.curl_multi_handle(),
             m_resolved_host_result,
             move(copy_url),
             "GET"sv,
             m_request_headers,
             ByteBuffer {},
-            m_curl_multi_handle_session.alt_svc_cache_path(),
-            move(on_complete));
+            m_curl_multi_handle_session.alt_svc_cache_path());
 
-        m_active_requests.append(move(dns_request));
+        auto request_id = dns_request->request_id();
+
+        dns_request->on_complete = [weak_this = make_weak_ptr<HTTPSResolverTunnel>(), original_query_id, request_id](DNS::Messages::Message result) {
+            if (weak_this.is_null())
+                return;
+
+            result.header.id = original_query_id;
+            if (weak_this->on_message_received)
+                weak_this->on_message_received(move(result));
+
+            Core::deferred_invoke([weak_this, request_id] {
+                if (weak_this.is_null())
+                    return;
+
+                weak_this->m_active_requests.remove(request_id);
+            });
+        };
+
+        m_active_requests.set(request_id, move(dns_request));
 
         return {};
     }
@@ -212,7 +219,7 @@ private:
     URL::URL m_url;
     NonnullRefPtr<HTTP::HeaderList> m_request_headers;
     NonnullRefPtr<DNS::LookupResult const> m_resolved_host_result;
-    Vector<NonnullOwnPtr<Request>> m_active_requests;
+    HashMap<u64, NonnullOwnPtr<Request>> m_active_requests;
 };
 
 NonnullRefPtr<Resolver> Resolver::default_resolver()

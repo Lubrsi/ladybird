@@ -379,6 +379,7 @@ struct A {
     static ErrorOr<A> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<String> to_string() const { return address.to_string(); }
+    bool operator==(A const& other) const = default;
 };
 struct AAAA {
     IPv6Address address;
@@ -387,6 +388,7 @@ struct AAAA {
     static ErrorOr<AAAA> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<String> to_string() const { return address.to_string(); }
+    bool operator==(AAAA const& other) const = default;
 };
 struct TXT {
     ByteString content;
@@ -395,6 +397,7 @@ struct TXT {
     static ErrorOr<TXT> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<String> to_string() const { return String::formatted("Text: '{}'", StringView { content }); }
+    bool operator==(TXT const& other) const = default;
 };
 struct CNAME {
     DomainName names;
@@ -403,6 +406,7 @@ struct CNAME {
     static ErrorOr<CNAME> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<String> to_string() const { return names.to_string(); }
+    bool operator==(CNAME const& other) const = default;
 };
 struct NS {
     DomainName name;
@@ -411,6 +415,7 @@ struct NS {
     static ErrorOr<NS> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: NS::to_raw"); }
     ErrorOr<String> to_string() const { return name.to_string(); }
+    bool operator==(NS const& other) const = default;
 };
 struct SOA {
     DomainName mname;
@@ -428,6 +433,7 @@ struct SOA {
     {
         return String::formatted("SOA MName: '{}', RName: '{}', Serial: {}, Refresh: {}, Retry: {}, Expire: {}, Minimum: {}", mname.to_string(), rname.to_string(), serial, refresh, retry, expire, minimum);
     }
+    bool operator==(SOA const& other) const = default;
 };
 struct MX {
     u16 preference;
@@ -437,6 +443,7 @@ struct MX {
     static ErrorOr<MX> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: MX::to_raw"); }
     ErrorOr<String> to_string() const { return String::formatted("MX Preference: {}, Exchange: '{}'", preference, exchange.to_string()); }
+    bool operator==(MX const& other) const = default;
 };
 struct PTR {
     DomainName name;
@@ -445,6 +452,7 @@ struct PTR {
     static ErrorOr<PTR> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: PTR::to_raw"); }
     ErrorOr<String> to_string() const { return name.to_string(); }
+    bool operator==(PTR const& other) const = default;
 };
 struct SRV {
     u16 priority;
@@ -456,6 +464,7 @@ struct SRV {
     static ErrorOr<SRV> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: SRV::to_raw"); }
     ErrorOr<String> to_string() const { return String::formatted("SRV Priority: {}, Weight: {}, Port: {}, Target: '{}'", priority, weight, port, target.to_string()); }
+    bool operator==(SRV const& other) const = default;
 };
 struct DNSKEY {
     u16 flags;
@@ -499,6 +508,7 @@ struct DNSKEY {
             TRY(encode_base64(public_key)),
             calculated_key_tag);
     }
+    bool operator==(DNSKEY const& other) const = default;
 };
 struct CDNSKEY : public DNSKEY {
     template<typename... Ts>
@@ -509,6 +519,7 @@ struct CDNSKEY : public DNSKEY {
 
     static constexpr ResourceType type = ResourceType::CDNSKEY;
     static ErrorOr<CDNSKEY> from_raw(ParseContext& raw) { return DNSKEY::from_raw(raw); }
+    bool operator==(CDNSKEY const& other) const = default;
 };
 struct DS {
     u16 key_tag;
@@ -527,6 +538,7 @@ struct DS {
             DNSSEC::to_string(digest_type),
             TRY(encode_base64(digest)));
     }
+    bool operator==(DS const& other) const = default;
 };
 struct CDS : public DS {
     template<typename... Ts>
@@ -536,6 +548,7 @@ struct CDS : public DS {
     }
     static constexpr ResourceType type = ResourceType::CDS;
     static ErrorOr<CDS> from_raw(ParseContext& raw) { return DS::from_raw(raw); }
+    bool operator==(CDS const& other) const = default;
 };
 struct DNS_API SIG {
     ResourceType type_covered;
@@ -553,6 +566,7 @@ struct DNS_API SIG {
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<void> to_raw_excluding_signature(ByteBuffer&) const;
     ErrorOr<String> to_string() const;
+    bool operator==(SIG const& other) const = default;
 };
 struct RRSIG : public SIG {
     template<typename... Ts>
@@ -564,6 +578,7 @@ struct RRSIG : public SIG {
     static constexpr ResourceType type = ResourceType::RRSIG;
     static ErrorOr<RRSIG> from_raw(ParseContext& raw) { return SIG::from_raw(raw); }
     ErrorOr<void> to_raw_excluding_signature(ByteBuffer& buffer) const { return SIG::to_raw_excluding_signature(buffer); }
+    bool operator==(RRSIG const& other) const = default;
 };
 struct NSEC {
     DomainName next_domain_name;
@@ -573,6 +588,7 @@ struct NSEC {
     static ErrorOr<NSEC> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: NSC::to_raw"); }
     ErrorOr<String> to_string() const { return "NSEC"_string; }
+    bool operator==(NSEC const& other) const = default;
 };
 struct NSEC3 {
     DNSSEC::NSEC3HashAlgorithm hash_algorithm;
@@ -586,6 +602,7 @@ struct NSEC3 {
     static ErrorOr<NSEC3> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: NSEC3::to_raw"); }
     ErrorOr<String> to_string() const { return "NSEC3"_string; }
+    bool operator==(NSEC3 const& other) const = default;
 };
 struct NSEC3PARAM {
     DNSSEC::NSEC3HashAlgorithm hash_algorithm;
@@ -601,6 +618,7 @@ struct NSEC3PARAM {
     static ErrorOr<NSEC3PARAM> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: NSEC3PARAM::to_raw"); }
     ErrorOr<String> to_string() const { return "NSEC3PARAM"_string; }
+    bool operator==(NSEC3PARAM const& other) const = default;
 };
 struct TLSA {
     Messages::TLSA::CertUsage cert_usage;
@@ -611,6 +629,7 @@ struct TLSA {
     static ErrorOr<TLSA> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const { return Error::from_string_literal("Not implemented: TLSA::to_raw"); }
     ErrorOr<String> to_string() const { return "TLSA"_string; }
+    bool operator==(TLSA const& other) const = default;
 };
 struct HINFO {
     ByteString cpu;
@@ -620,11 +639,14 @@ struct HINFO {
     static ErrorOr<HINFO> from_raw(ParseContext&);
     ErrorOr<void> to_raw(ByteBuffer&) const;
     ErrorOr<String> to_string() const { return String::formatted("HINFO CPU: '{}', OS: '{}'", StringView { cpu }, StringView { os }); }
+    bool operator==(HINFO const& other) const = default;
 };
 struct OPT {
     struct Option {
         u16 code;
         ByteBuffer data;
+
+        bool operator==(Option const& other) const = default;
     };
 
     //                                   1  1  1  1  1  1
@@ -666,6 +688,7 @@ struct OPT {
 
         return builder.to_string();
     }
+    bool operator==(OPT const& other) const = default;
 };
 
 }

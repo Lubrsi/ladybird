@@ -123,6 +123,19 @@ public:
     {
         m_valid = true;
         auto expiration = record.ttl > 0 ? Optional<AK::UnixDateTime>(AK::UnixDateTime::now() + AK::Duration::from_seconds(record.ttl)) : OptionalNone();
+
+        for (auto& existing : m_cached_records) {
+            if (existing.record.type == record.type && existing.record.record == record.record) {
+                dbgln_if(DNS_DEBUG, "DNS: Updated record entry for {} type {} (now expires in {})",
+                    m_name.to_string(), Messages::to_string(record.type), expiration.has_value() ? expiration.value().to_string() : "never"_string);
+
+                existing.expiration = move(expiration); // refresh TTL
+                return;
+            }
+        }
+
+        dbgln_if(DNS_DEBUG, "DNS: Added record for {} type {} (expires in {})",
+            m_name.to_string(), Messages::to_string(record.type), expiration.has_value() ? expiration.value().to_string() : "never"_string);
         m_cached_records.append({ move(record), move(expiration) });
     }
 
@@ -229,14 +242,25 @@ public:
 
     void add_negative_cache_entry(Messages::ResourceType type, u32 ttl)
     {
+        m_valid = true;
+
         // 3 hours per RFC 2308 recommendation
         static constexpr u32 max_negative_cache_ttl = 3 * 60 * 60;
         ttl = min(ttl, max_negative_cache_ttl);
         auto expiration = AK::UnixDateTime::now() + AK::Duration::from_seconds(ttl);
+
+        for (auto& existing : m_negative_cache) {
+            if (existing.type == type) {
+                existing.expiration = expiration;
+                dbgln_if(DNS_DEBUG, "DNS: Updated negative cache entry for {} type {} (now expires in {})",
+                    m_name.to_string(), Messages::to_string(type), expiration.to_string());
+                return;
+            }
+        }
+
         m_negative_cache.append({ type, expiration });
-        m_valid = true;
-        dbgln_if(DNS_DEBUG, "DNS: Added negative cache entry for {} type {} (TTL {}s)",
-            m_name.to_string(), Messages::to_string(type), ttl);
+        dbgln_if(DNS_DEBUG, "DNS: Added negative cache entry for {} type {} (expires in {})",
+            m_name.to_string(), Messages::to_string(type), expiration.to_string());
     }
 
     bool is_type_negatively_cached(Messages::ResourceType type) const
