@@ -697,6 +697,9 @@ public:
     DocumentUnloadTimingInfo const& previous_document_unload_timing() const { return m_previous_document_unload_timing; }
     void set_previous_document_unload_timing(DocumentUnloadTimingInfo const& previous_document_unload_timing) { m_previous_document_unload_timing = previous_document_unload_timing; }
 
+    GC::Ptr<NavigationTiming::PerformanceNavigationTiming> navigation_timing_entry() const { return m_navigation_timing_entry; }
+    void set_navigation_timing_entry(GC::Ptr<NavigationTiming::PerformanceNavigationTiming> entry) { m_navigation_timing_entry = entry; }
+
     // https://w3c.github.io/editing/docs/execCommand/
     WebIDL::ExceptionOr<bool> exec_command(FlyString const& command, bool show_ui, Utf16String const& value);
     WebIDL::ExceptionOr<bool> query_command_enabled(FlyString const& command);
@@ -1233,6 +1236,9 @@ private:
 
     // https://html.spec.whatwg.org/multipage/dom.html#previous-document-unload-timing
     DocumentUnloadTimingInfo m_previous_document_unload_timing;
+
+    // https://w3c.github.io/navigation-timing/#dfn-create-the-navigation-timing-entry
+    GC::Ptr<NavigationTiming::PerformanceNavigationTiming> m_navigation_timing_entry;
 
     // https://w3c.github.io/selection-api/#dfn-selection
     GC::Ptr<Selection::Selection> m_selection;

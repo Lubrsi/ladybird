@@ -1,0 +1,27 @@
+Harness status: OK
+
+Found 22 tests
+
+22 Pass
+Pass	window.performance is defined
+Pass	window.performance.timing is defined
+Pass	window.performance.timing.connectEnd is defined.
+Pass	window.performance.timing.connectStart is defined.
+Pass	window.performance.timing.domComplete is defined.
+Pass	window.performance.timing.domContentLoadedEventEnd is defined.
+Pass	window.performance.timing.domContentLoadedEventStart is defined.
+Pass	window.performance.timing.domInteractive is defined.
+Pass	window.performance.timing.domLoading is defined.
+Pass	window.performance.timing.domainLookupEnd is defined.
+Pass	window.performance.timing.domainLookupStart is defined.
+Pass	window.performance.timing.fetchStart is defined.
+Pass	window.performance.timing.loadEventEnd is defined.
+Pass	window.performance.timing.loadEventStart is defined.
+Pass	window.performance.timing.navigationStart is defined.
+Pass	window.performance.timing.redirectEnd is defined.
+Pass	window.performance.timing.redirectStart is defined.
+Pass	window.performance.timing.requestStart is defined.
+Pass	window.performance.timing.responseEnd is defined.
+Pass	window.performance.timing.responseStart is defined.
+Pass	window.performance.timing.unloadEventEnd is defined.
+Pass	window.performance.timing.unloadEventStart is defined.

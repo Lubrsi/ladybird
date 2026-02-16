@@ -98,6 +98,8 @@
 #include <LibWeb/DOM/Utils.h>
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Dump.h>
+#include <LibWeb/Fetch/Infrastructure/FetchController.h>
+#include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/FileAPI/BlobURLStore.h>
 #include <LibWeb/HTML/AttributeNames.h>
@@ -173,6 +175,7 @@
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/NavigationTiming/PerformanceNavigationTiming.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/AccumulatedVisualContext.h>
 #include <LibWeb/Painting/DisplayList.h>
@@ -444,10 +447,37 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         }
     }
 
-    // FIXME: 13: If navigationParams's fetch controller is not null, then:
+    // 13. If navigationParams's fetch controller is not null, then:
+    GC::Ptr<Fetch::Infrastructure::FetchTimingInfo> full_timing_info;
+    u16 redirect_count = 0;
+    if (navigation_params.fetch_controller) {
+        // 1. Let fullTimingInfo be the result of extracting the full timing info from navigationParams's fetch controller.
+        full_timing_info = navigation_params.fetch_controller->extract_full_timing_info();
 
-    // FIXME: 14. Create the navigation timing entry for document, with navigationParams's response's timing info, redirectCount, navigationParams's navigation timing type, and
-    //            navigationParams's response's service worker timing info.
+        // 2. Let redirectCount be 0 if navigationParams's response's has cross-origin redirects is true;
+        //    otherwise navigationParams's request's redirect count.
+        // FIXME: Check has cross-origin redirects on the response once implemented.
+        if (navigation_params.request)
+            redirect_count = navigation_params.request->redirect_count();
+
+        // 3. Create the navigation timing entry for document, given fullTimingInfo, redirectCount,
+        //    navigationTimingType, navigationParams's response's service worker timing info, and
+        //    navigationParams's response's body info.
+        NavigationTiming::PerformanceNavigationTiming::create_the_navigation_timing_entry(
+            *document, *full_timing_info, redirect_count, navigation_params.navigation_timing_type,
+            navigation_params.response->body_info(), navigation_params.response->cache_state());
+    }
+
+    // 14. Create the navigation timing entry for document, with navigationParams's response's timing info, redirectCount,
+    //     navigationParams's navigation timing type, and navigationParams's response's service worker timing info.
+    // NOTE: Step 14 is for the case where fetch controller is null (step 13 handles the non-null case).
+    if (!navigation_params.fetch_controller) {
+        auto& vm = document->realm().vm();
+        auto timing_info = Fetch::Infrastructure::FetchTimingInfo::create(vm);
+        NavigationTiming::PerformanceNavigationTiming::create_the_navigation_timing_entry(
+            *document, timing_info, redirect_count, navigation_params.navigation_timing_type,
+            navigation_params.response->body_info(), navigation_params.response->cache_state());
+    }
 
     // 15. If navigationParams's response has a `Refresh` header, then:
     if (auto maybe_refresh = navigation_params.response->header_list()->get("Refresh"sv); maybe_refresh.has_value()) {
@@ -647,6 +677,7 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_adopted_style_sheets);
     visitor.visit(m_script_blocking_style_sheet_set);
 
+    visitor.visit(m_navigation_timing_entry);
     visitor.visit(m_active_view_transition);
     visitor.visit(m_dynamic_view_transition_style_sheet);
 

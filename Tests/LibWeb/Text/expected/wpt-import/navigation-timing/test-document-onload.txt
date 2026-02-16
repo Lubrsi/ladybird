@@ -1,0 +1,7 @@
+Harness status: OK
+
+Found 2 tests
+
+2 Fail
+Fail	Test that the attributes have a proper value during DOMContentLoaded
+Fail	Test that the attributes have a proper value during onload

@@ -19,6 +19,10 @@
 #include <LibWeb/HTML/SandboxingFlagSet.h>
 #include <LibWeb/HTML/UserNavigationInvolvement.h>
 
+namespace Web::Bindings {
+enum class NavigationTimingType : u8;
+}
+
 namespace Web::HTML {
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigation-params
@@ -62,7 +66,8 @@ struct NavigationParams : GC::Cell {
     // an opener policy to use for the new Document
     OpenerPolicy opener_policy;
 
-    // FIXME: a NavigationTimingType used for creating the navigation timing entry for the new Document
+    // a NavigationTimingType used for creating the navigation timing entry for the new Document
+    Bindings::NavigationTimingType navigation_timing_type {};
 
     // a URL or null used to populate the new Document's about base URL
     Optional<URL::URL> about_base_url;
@@ -86,6 +91,7 @@ protected:
         GC::Ptr<PolicyContainer> policy_container,
         SandboxingFlagSet final_sandboxing_flag_set,
         OpenerPolicy opener_policy,
+        Bindings::NavigationTimingType navigation_timing_type,
         Optional<URL::URL> about_base_url,
         UserNavigationInvolvement user_involvement)
         : id(move(id))
@@ -100,6 +106,7 @@ protected:
         , policy_container(policy_container)
         , final_sandboxing_flag_set(final_sandboxing_flag_set)
         , opener_policy(opener_policy)
+        , navigation_timing_type(navigation_timing_type)
         , about_base_url(move(about_base_url))
         , user_involvement(user_involvement)
     {
@@ -129,7 +136,8 @@ struct NonFetchSchemeNavigationParams : JS::Cell {
     // an origin possibly for use in a user-facing prompt to confirm the invocation of an external software package
     URL::Origin initiator_origin;
 
-    // FIXME: a NavigationTimingType used for creating the navigation timing entry for the new Document
+    // a NavigationTimingType used for creating the navigation timing entry for the new Document (if one is created)
+    Bindings::NavigationTimingType navigation_timing_type {};
 
     // a user navigation involvement used when obtaining a browsing context for the new Document (if one is created)
     UserNavigationInvolvement user_involvement;
@@ -142,6 +150,7 @@ protected:
         SandboxingFlagSet target_snapshot_sandboxing_flags,
         bool source_snapshot_has_transient_activation,
         URL::Origin initiator_origin,
+        Bindings::NavigationTimingType navigation_timing_type,
         UserNavigationInvolvement user_involvement)
         : id(move(id))
         , navigable(navigable)
@@ -149,6 +158,7 @@ protected:
         , target_snapshot_sandboxing_flags(target_snapshot_sandboxing_flags)
         , source_snapshot_has_transient_activation(source_snapshot_has_transient_activation)
         , initiator_origin(move(initiator_origin))
+        , navigation_timing_type(navigation_timing_type)
         , user_involvement(user_involvement)
     {
     }

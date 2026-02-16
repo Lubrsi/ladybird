@@ -10,6 +10,7 @@
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/SkiaBackendContext.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/Bindings/PerformanceNavigationTimingPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Geolocation/GeolocationCoordinates.h>
 #include <LibWeb/HTML/BrowsingContext.h>
@@ -632,7 +633,10 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
 
             // 8. If targetEntry's document is null, or targetEntry's document state's reload pending is true, then:
             if (!target_entry->document() || target_entry->document_state()->reload_pending()) {
-                // FIXME: 1. Let navTimingType be "back_forward" if targetEntry's document is null; otherwise "reload".
+                // 1. Let navTimingType be "back_forward" if targetEntry's document is null; otherwise "reload".
+                auto nav_timing_type = !target_entry->document()
+                    ? Bindings::NavigationTimingType::BackForward
+                    : Bindings::NavigationTimingType::Reload;
 
                 // 2. Let targetSnapshotParams be the result of snapshotting target snapshot params given navigable.
                 auto target_snapshot_params = navigable->snapshot_target_snapshot_params();
@@ -663,7 +667,7 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
                 //    targetSnapshotParams, userInvolvement, with allowPOST set to allowPOST and completionSteps set to
                 //    queue a global task on the navigation and traversal task source given navigable's active window to
                 //    run afterDocumentPopulated.
-                Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(this->heap(), [populated_target_entry, potentially_target_specific_source_snapshot_params, target_snapshot_params, this, allow_POST, navigable, after_document_populated = GC::create_function(this->heap(), move(after_document_populated)), user_involvement] {
+                Platform::EventLoopPlugin::the().deferred_invoke(GC::create_function(this->heap(), [populated_target_entry, potentially_target_specific_source_snapshot_params, target_snapshot_params, this, allow_POST, navigable, after_document_populated = GC::create_function(this->heap(), move(after_document_populated)), user_involvement, nav_timing_type] {
                     auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
                     navigable->populate_session_history_entry_document(
                         populated_target_entry,
@@ -680,7 +684,8 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
                             queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(this->heap(), [after_document_populated, populated_target_entry]() mutable {
                                 after_document_populated->function()(true, populated_target_entry);
                             }));
-                        }));
+                        }),
+                        nav_timing_type);
                 }));
             }
             // Otherwise, run afterDocumentPopulated immediately.

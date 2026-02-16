@@ -205,7 +205,14 @@ GC::Ref<Infrastructure::FetchController> fetch(JS::Realm& realm, Infrastructure:
     fetch_params->set_task_destination(task_destination);
     fetch_params->set_cross_origin_isolated_capability(cross_origin_isolated_capability);
 
-    // 9. If request’s body is a byte sequence, then set request’s body to request’s body as a body.
+    // AD-HOC: For navigation fetches, set the controller's full timing info early so that it is available
+    //         when "create and initialize a Document" calls "extract full timing info". The spec sets
+    //         this during processResponseEndOfBody, but that runs after the body is fully consumed,
+    //         which is after document creation. The timing info object is the same one either way.
+    if (request.is_navigation_request())
+        fetch_params->controller()->set_full_timing_info(timing_info);
+
+    // 9. If request's body is a byte sequence, then set request's body to request's body as a body.
     if (auto const* buffer = request.body().get_pointer<ByteBuffer>())
         request.set_body(Infrastructure::byte_sequence_as_body(realm, buffer->bytes()));
 

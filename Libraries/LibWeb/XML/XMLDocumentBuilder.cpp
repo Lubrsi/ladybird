@@ -14,7 +14,9 @@
 #include <LibWeb/HTML/Parser/Entities.h>
 #include <LibWeb/HTML/Parser/NamedCharacterReferences.h>
 #include <LibWeb/HTML/Window.h>
+#include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
+#include <LibWeb/NavigationTiming/PerformanceNavigationTiming.h>
 #include <LibWeb/SVG/SVGScriptElement.h>
 #include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/XML/XMLDocumentBuilder.h>
@@ -397,7 +399,11 @@ void XMLDocumentBuilder::document_end()
         // Completely finish loading the Document.
         document->completely_finish_loading();
 
-        // FIXME: Queue the navigation timing entry for the Document.
+        // Queue the navigation timing entry for the Document.
+        if (auto navigation_timing_entry = document->navigation_timing_entry()) {
+            auto& window_or_worker = as<HTML::WindowOrWorkerGlobalScopeMixin>(HTML::relevant_global_object(*document));
+            window_or_worker.queue_performance_entry(*navigation_timing_entry);
+        }
     }));
 
     // FIXME: If the Document's print when loaded flag is set, then run the printing steps.

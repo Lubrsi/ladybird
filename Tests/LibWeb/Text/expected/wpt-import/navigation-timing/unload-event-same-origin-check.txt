@@ -1,0 +1,19 @@
+Harness status: Error
+
+Found 12 tests
+
+4 Fail
+1 Timeout
+7 Not Run
+Fail	Redirect chain with a partial TAO opt-in
+Fail	Redirect chain with full TAO opt-in
+Fail	Same-cross-same redirect chain with no TAO opt-in
+Fail	cross-cross-same Redirect chain with no TAO opt-in
+Timeout	Previous document cross origin
+Not Run	Previous document same origin
+Not Run	No previous document
+Not Run	Same origin previous document with same origin redirect
+Not Run	No previous document with same origin redirect
+Not Run	No previous document with cross origin redirect
+Not Run	No previous document with cross origin redirect with partial TAO
+Not Run	No previous document with cross origin redirect with TAO

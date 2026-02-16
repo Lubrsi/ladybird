@@ -1,0 +1,7 @@
+Harness status: OK
+
+Found 2 tests
+
+2 Pass
+Pass	supportedEntryTypes contains 'navigation'.
+Pass	'navigation' entries should be observable.

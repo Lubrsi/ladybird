@@ -1,0 +1,12 @@
+Harness status: OK
+
+Found 7 tests
+
+7 Pass
+Pass	window.performance is defined
+Pass	window.performance.navigation is defined
+Pass	window.performance.timing is defined
+Pass	timing.navigation.type is TYPE_NAVIGATE
+Pass	navigation.redirectCount == 0 on an client redirected navigation
+Pass	timing.redirectStart == 0 on an client redirected navigation
+Pass	timing.redirectEnd == 0 on an client redirected navigation

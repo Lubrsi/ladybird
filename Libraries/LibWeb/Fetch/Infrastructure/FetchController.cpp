@@ -72,7 +72,7 @@ void FetchController::process_next_manual_redirect() const
 // https://fetch.spec.whatwg.org/#extract-full-timing-info
 GC::Ref<FetchTimingInfo> FetchController::extract_full_timing_info() const
 {
-    // 1. Assert: this’s full timing info is not null.
+    // 1. Assert: this's full timing info is not null.
     VERIFY(m_full_timing_info);
 
     // 2. Return this’s full timing info.

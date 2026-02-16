@@ -43,11 +43,13 @@
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/SimilarOriginWindowAgent.h>
 #include <LibWeb/HTML/Window.h>
+#include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/MathML/TagNames.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/NavigationTiming/PerformanceNavigationTiming.h>
 #include <LibWeb/SVG/SVGScriptElement.h>
 #include <LibWeb/SVG/TagNames.h>
 
@@ -443,7 +445,11 @@ void HTMLParser::the_end(GC::Ref<DOM::Document> document, GC::Ptr<HTMLParser> pa
         // 12. Completely finish loading the Document.
         document->completely_finish_loading();
 
-        // FIXME: 13. Queue the navigation timing entry for the Document.
+        // 13. Queue the navigation timing entry for the Document.
+        if (auto navigation_timing_entry = document->navigation_timing_entry()) {
+            auto& window_or_worker = as<HTML::WindowOrWorkerGlobalScopeMixin>(HTML::relevant_global_object(*document));
+            window_or_worker.queue_performance_entry(*navigation_timing_entry);
+        }
     }));
 
     // FIXME: 10. If the Document's print when loaded flag is set, then run the printing steps.

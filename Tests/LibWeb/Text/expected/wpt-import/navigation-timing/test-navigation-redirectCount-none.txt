@@ -1,0 +1,10 @@
+Harness status: OK
+
+Found 5 tests
+
+5 Pass
+Pass	window.performance is defined
+Pass	window.performance.navigation is defined
+Pass	timing.redirectStart on an non-redirected navigation
+Pass	timing.redirectEnd on an non-redirected navigation
+Pass	navigation.redirectCount on an non-redirected navigation

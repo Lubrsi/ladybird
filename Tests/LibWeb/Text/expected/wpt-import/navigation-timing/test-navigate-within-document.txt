@@ -1,0 +1,27 @@
+Harness status: OK
+
+Found 22 tests
+
+22 Pass
+Pass	window.performance is defined
+Pass	window.performance.timing is defined
+Pass	connectEnd is the same after in document navigation.
+Pass	connectStart is the same after in document navigation.
+Pass	domComplete is the same after in document navigation.
+Pass	domContentLoadedEventEnd is the same after in document navigation.
+Pass	domContentLoadedEventStart is the same after in document navigation.
+Pass	domInteractive is the same after in document navigation.
+Pass	domLoading is the same after in document navigation.
+Pass	domainLookupEnd is the same after in document navigation.
+Pass	domainLookupStart is the same after in document navigation.
+Pass	fetchStart is the same after in document navigation.
+Pass	loadEventEnd is the same after in document navigation.
+Pass	loadEventStart is the same after in document navigation.
+Pass	navigationStart is the same after in document navigation.
+Pass	redirectEnd is the same after in document navigation.
+Pass	redirectStart is the same after in document navigation.
+Pass	requestStart is the same after in document navigation.
+Pass	responseEnd is the same after in document navigation.
+Pass	responseStart is the same after in document navigation.
+Pass	unloadEventEnd is the same after in document navigation.
+Pass	unloadEventStart is the same after in document navigation.

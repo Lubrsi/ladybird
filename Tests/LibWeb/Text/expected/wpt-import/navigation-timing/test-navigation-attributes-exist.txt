@@ -1,0 +1,9 @@
+Harness status: OK
+
+Found 4 tests
+
+4 Pass
+Pass	window.performance is defined
+Pass	window.performance.navigation is defined
+Pass	window.performance.navigation.type is defined.
+Pass	window.performance.navigation.redirectCount is defined.

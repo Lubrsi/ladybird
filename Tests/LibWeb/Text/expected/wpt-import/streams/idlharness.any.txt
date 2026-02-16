@@ -2,9 +2,10 @@ Harness status: OK
 
 Found 229 tests
 
-229 Pass
+228 Pass
+1 Fail
 Pass	idl_test setup
-Pass	idl_test validation
+Fail	idl_test validation
 Pass	ReadableStreamDefaultReader includes ReadableStreamGenericReader: member names are unique
 Pass	ReadableStreamBYOBReader includes ReadableStreamGenericReader: member names are unique
 Pass	ReadableStream interface: existence and properties of interface object

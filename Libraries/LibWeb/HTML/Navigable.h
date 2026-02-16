@@ -131,7 +131,8 @@ public:
         NavigationParamsVariant navigation_params = Navigable::NullOrError {},
         ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type = ContentSecurityPolicy::Directives::Directive::NavigationType::Other,
         bool allow_POST = false,
-        GC::Ptr<GC::Function<void()>> completion_steps = {});
+        GC::Ptr<GC::Function<void()>> completion_steps = {},
+        Bindings::NavigationTimingType nav_timing_type = {});
 
     struct NavigateParams {
         URL::URL url;

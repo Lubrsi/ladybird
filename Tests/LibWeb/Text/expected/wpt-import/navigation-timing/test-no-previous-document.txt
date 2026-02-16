@@ -1,0 +1,7 @@
+Harness status: Error
+
+Found 2 tests
+
+2 Pass
+Pass	window.performance is defined
+Pass	window.performance.navigation is defined

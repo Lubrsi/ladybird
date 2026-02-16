@@ -1,0 +1,7 @@
+Harness status: OK
+
+Found 2 tests
+
+2 Fail
+Fail	iframe navigation times are persistent after the iframe is removed. Part 1.
+Fail	iframe navigation times are persistent after the iframe is removed Part 2.

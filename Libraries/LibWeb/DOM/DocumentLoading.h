@@ -71,6 +71,7 @@ GC::Ref<DOM::Document> create_document_for_inline_content(GC::Ptr<HTML::Navigabl
         vm.heap().allocate<HTML::PolicyContainer>(vm.heap()),
         HTML::SandboxingFlagSet {},
         move(coop),
+        Bindings::NavigationTimingType {},
         OptionalNone {},
         user_involvement);
 

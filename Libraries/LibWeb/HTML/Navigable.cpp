@@ -49,6 +49,7 @@
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/Viewport.h>
+#include <LibWeb/Bindings/PerformanceNavigationTimingPrototype.h>
 #include <LibWeb/Loader/GeneratedPagesLoader.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/DisplayListPlayerSkia.h>
@@ -91,6 +92,7 @@ struct NavigationParamsFetchStateHolder : public JS::Cell {
     ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type;
     TargetSnapshotParams target_snapshot_params;
     Optional<String> navigation_id;
+    Bindings::NavigationTimingType nav_timing_type {};
 
     enum class ContinuationReason {
         GotResponse,
@@ -792,7 +794,7 @@ static GC::Ptr<DOM::Document> attempt_to_create_a_non_fetch_scheme_document(NonF
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-from-a-srcdoc-resource
-static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, TargetSnapshotParams const& target_snapshot_params, UserNavigationInvolvement user_involvement, Optional<String> navigation_id)
+static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, TargetSnapshotParams const& target_snapshot_params, UserNavigationInvolvement user_involvement, Optional<String> navigation_id, Bindings::NavigationTimingType nav_timing_type)
 {
     auto& vm = navigable->vm();
     VERIFY(navigable->active_window());
@@ -855,7 +857,7 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
     //    policy container: policyContainer
     //    final sandboxing flag set: targetSnapshotParams's sandboxing flags
     //    opener policy: coop
-    //    FIXME: navigation timing type: navTimingType
+    //    navigation timing type: navTimingType
     //    about base URL: entry's document state's about base URL
     //    user involvement: userInvolvement
     return vm.heap().allocate<NavigationParams>(
@@ -871,6 +873,7 @@ static GC::Ref<NavigationParams> create_navigation_params_from_a_srcdoc_resource
         *policy_container,
         target_snapshot_params.sandboxing_flags,
         move(coop),
+        nav_timing_type,
         entry->document_state()->about_base_url(),
         user_involvement);
 }
@@ -1081,7 +1084,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-by-fetching
-static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, SourceSnapshotParams const& source_snapshot_params, TargetSnapshotParams const& target_snapshot_params, ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type, UserNavigationInvolvement user_involvement, Optional<String> navigation_id, GC::Ref<GC::Function<void(Navigable::NavigationParamsVariant)>> completion_steps)
+static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> entry, GC::Ptr<Navigable> navigable, SourceSnapshotParams const& source_snapshot_params, TargetSnapshotParams const& target_snapshot_params, ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type, UserNavigationInvolvement user_involvement, Optional<String> navigation_id, GC::Ref<GC::Function<void(Navigable::NavigationParamsVariant)>> completion_steps, Bindings::NavigationTimingType nav_timing_type)
 {
     auto& vm = navigable->vm();
     VERIFY(navigable->active_window());
@@ -1240,6 +1243,7 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
     state_holder->csp_navigation_type = csp_navigation_type;
     state_holder->target_snapshot_params = target_snapshot_params;
     state_holder->navigation_id = move(navigation_id);
+    state_holder->nav_timing_type = nav_timing_type;
 
     perform_navigation_params_fetch(realm, state_holder, completion_steps, GC::create_function(realm.heap(), [&realm, state_holder, &source_snapshot_params, user_involvement, completion_steps] {
         // 22. If locationURL is a URL whose scheme is not a fetch scheme, then return a new non-fetch scheme navigation params, with
@@ -1250,7 +1254,7 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
             // - target snapshot sandboxing flags: targetSnapshotParams's sandboxing flags
             // - source snapshot has transient activation: sourceSnapshotParams's has transient activation
             // - initiator origin: responseOrigin
-            // FIXME: - navigation timing type: navTimingType
+            // - navigation timing type: navTimingType
             // - user involvement: userInvolvement
             completion_steps->function()(realm.heap().allocate<NonFetchSchemeNavigationParams>(
                 state_holder->navigation_id,
@@ -1259,6 +1263,7 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
                 state_holder->target_snapshot_params.sandboxing_flags,
                 source_snapshot_params.has_transient_activation,
                 *state_holder->response_origin,
+                state_holder->nav_timing_type,
                 user_involvement));
             return;
         }
@@ -1310,7 +1315,7 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
         //     policy container: resultPolicyContainer
         //     final sandboxing flag set: finalSandboxFlags
         //     COOP enforcement result: coopEnforcementResult
-        //     FIXME: navigation timing type: navTimingType
+        //     navigation timing type: navTimingType
         //     about base URL: entry's document state's about base URL
         //     user involvement: userInvolvement
         completion_steps->function()(realm.heap().allocate<NavigationParams>(
@@ -1326,6 +1331,7 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
             result_policy_container,
             state_holder->final_sandbox_flags,
             state_holder->response_coop,
+            state_holder->nav_timing_type,
             state_holder->entry->document_state()->about_base_url(),
             user_involvement));
     }));
@@ -1388,7 +1394,8 @@ void Navigable::populate_session_history_entry_document(
     NavigationParamsVariant navigation_params,
     ContentSecurityPolicy::Directives::Directive::NavigationType csp_navigation_type,
     bool allow_POST,
-    GC::Ptr<GC::Function<void()>> completion_steps)
+    GC::Ptr<GC::Function<void()>> completion_steps,
+    Bindings::NavigationTimingType nav_timing_type)
 {
     // AD-HOC: Not in the spec but subsequent steps will fail if the navigable doesn't have an active window.
     if (!active_window())
@@ -1537,7 +1544,7 @@ void Navigable::populate_session_history_entry_document(
         //    from a srcdoc resource given entry, navigable, targetSnapshotParams, userInvolvement, navigationId, and
         //    navTimingType.
         if (document_resource.has<String>()) {
-            received_navigation_params->function()(create_navigation_params_from_a_srcdoc_resource(entry, this, target_snapshot_params, user_involvement, navigation_id));
+            received_navigation_params->function()(create_navigation_params_from_a_srcdoc_resource(entry, this, target_snapshot_params, user_involvement, navigation_id, nav_timing_type));
         }
         // 2. Otherwise, if all of the following are true:
         //    - entry's URL's scheme is a fetch scheme; and
@@ -1547,7 +1554,7 @@ void Navigable::populate_session_history_entry_document(
         //    sourceSnapshotParams, targetSnapshotParams, cspNavigationType, userInvolvement, navigationId, and
         //    navTimingType.
         else if (Fetch::Infrastructure::is_fetch_scheme(entry->url().scheme()) && (document_resource.has<Empty>() || allow_POST)) {
-            create_navigation_params_by_fetching(entry, this, source_snapshot_params, target_snapshot_params, csp_navigation_type, user_involvement, navigation_id, received_navigation_params);
+            create_navigation_params_by_fetching(entry, this, source_snapshot_params, target_snapshot_params, csp_navigation_type, user_involvement, navigation_id, received_navigation_params, nav_timing_type);
         }
         // 3. Otherwise, if entry's URL's scheme is not a fetch scheme, then set navigationParams to a new non-fetch
         //    scheme navigation params, with:
@@ -1558,7 +1565,7 @@ void Navigable::populate_session_history_entry_document(
             // - target snapshot sandboxing flags: targetSnapshotParams's sandboxing flags
             // - source snapshot has transient activation: sourceSnapshotParams's has transient activation
             // - initiator origin: entry's document state's initiator origin
-            // FIXME: - navigation timing type: navTimingType
+            // - navigation timing type: navTimingType
             // - user involvement: userInvolvement
             received_navigation_params->function()(vm().heap().allocate<NonFetchSchemeNavigationParams>(
                 navigation_id,
@@ -1567,6 +1574,7 @@ void Navigable::populate_session_history_entry_document(
                 target_snapshot_params.sandboxing_flags,
                 source_snapshot_params.has_transient_activation,
                 *entry->document_state()->initiator_origin(),
+                nav_timing_type,
                 user_involvement));
         }
     } else {
@@ -2127,7 +2135,7 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
     //     policy container: policyContainer
     //     final sandboxing flag set: finalSandboxFlags
     //     opener policy: coop
-    //     FIXME: navigation timing type: "navigate"
+    //     navigation timing type: "navigate"
     //     about base URL: targetNavigable's active document's about base URL
     //     user involvement: userInvolvement
     auto navigation_params = vm.heap().allocate<NavigationParams>(
@@ -2143,6 +2151,7 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
         policy_container,
         final_sandbox_flags,
         coop,
+        Bindings::NavigationTimingType::Navigate,
         active_document()->about_base_url(),
         user_involvement);
 

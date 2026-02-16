@@ -1,0 +1,6 @@
+Harness status: Timeout
+
+Found 1 tests
+
+1 Timeout
+Timeout	PerformanceObserver with buffered flag sees previous navigation entry.

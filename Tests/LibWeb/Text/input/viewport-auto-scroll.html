@@ -17,7 +17,8 @@ asyncTest(async (done) => {
 
     await scrolled;
 
-    println(`scrollTop: ${document.documentElement.scrollTop}`);
+    let scrollTop = document.documentElement.scrollTop;
+    println(`scrolled: ${scrollTop > 0 && scrollTop <= 200}`);
 
     internals.mouseUp(100, 610);
     done();
