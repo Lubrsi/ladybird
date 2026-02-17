@@ -146,6 +146,8 @@ private:
 
     [[nodiscard]] bool can_go_forward() const;
 
+    void push_session_history_to_ui();
+
     // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-current-session-history-step
     int m_current_session_history_step { 0 };
 

@@ -33,6 +33,7 @@
 #include <LibWebView/DOMNodeProperties.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/PageInfo.h>
+#include <LibWebView/SessionHistoryEntryData.h>
 #include <LibWebView/Settings.h>
 #include <LibWebView/WebContentClient.h>
 
@@ -152,6 +153,10 @@ public:
     Web::HTML::AudioPlayState audio_play_state() const { return m_audio_play_state; }
 
     void did_update_navigation_buttons_state(Badge<WebContentClient>, bool back_enabled, bool forward_enabled) const;
+    void did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries);
+
+    i32 session_history_current_step() const { return m_session_history_current_step; }
+    Vector<SerializedSessionHistoryEntry> const& session_history_entries() const { return m_session_history_entries; }
 
     void did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::ShareableBitmap const&, i32 back_bitmap_id, Gfx::ShareableBitmap const&);
 #ifdef AK_OS_MACOS
@@ -392,6 +397,9 @@ protected:
     u64 m_next_navigation_listener_id { 1 };
 
     bool m_devtools_connected { false };
+
+    i32 m_session_history_current_step { 0 };
+    Vector<SerializedSessionHistoryEntry> m_session_history_entries;
 };
 
 }

@@ -686,6 +686,11 @@ void PageClient::page_did_update_navigation_buttons_state(bool back_enabled, boo
     client().async_did_update_navigation_buttons_state(m_id, back_enabled, forward_enabled);
 }
 
+void PageClient::page_did_update_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
+{
+    client().async_did_update_session_history(m_id, current_step, move(entries));
+}
+
 void PageClient::request_file(Web::FileRequest file_request)
 {
     client().request_file(m_id, move(file_request));

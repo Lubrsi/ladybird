@@ -47,6 +47,7 @@
 #include <LibWeb/PixelUnits.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWeb/UIEvents/KeyCode.h>
+#include <LibWebView/SessionHistoryEntryData.h>
 #include <LibWebView/StorageSetResult.h>
 
 namespace Web {
@@ -411,6 +412,7 @@ public:
     virtual void page_did_request_activate_tab() { }
     virtual void page_did_close_top_level_traversable() { }
     virtual void page_did_update_navigation_buttons_state([[maybe_unused]] bool back_enabled, [[maybe_unused]] bool forward_enabled) { }
+    virtual void page_did_update_session_history([[maybe_unused]] i32 current_step, [[maybe_unused]] Vector<WebView::SerializedSessionHistoryEntry> entries) { }
     virtual void page_did_allocate_backing_stores([[maybe_unused]] i32 front_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap front_bitmap, [[maybe_unused]] i32 back_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap back_bitmap) { }
 
     virtual void request_file(FileRequest) = 0;

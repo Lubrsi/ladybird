@@ -29,6 +29,7 @@
 #include <LibWebView/Mutation.h>
 #include <LibWebView/PageInfo.h>
 #include <LibWebView/ProcessHandle.h>
+#include <LibWebView/SessionHistoryEntryData.h>
 
 endpoint WebContentClient
 {
@@ -114,6 +115,7 @@ endpoint WebContentClient
     did_request_clipboard_entries(u64 page_id, u64 request_id) =|
 
     did_update_navigation_buttons_state(u64 page_id, bool back_enabled, bool forward_enabled) =|
+    did_update_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) =|
     did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap back_bitmap) =|
 
     did_change_audio_play_state(u64 page_id, Web::HTML::AudioPlayState play_state) =|

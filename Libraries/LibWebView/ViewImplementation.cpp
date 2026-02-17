@@ -556,6 +556,12 @@ void ViewImplementation::did_update_navigation_buttons_state(Badge<WebContentCli
     m_navigate_forward_action->set_enabled(forward_enabled);
 }
 
+void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries)
+{
+    m_session_history_current_step = current_step;
+    m_session_history_entries = move(entries);
+}
+
 void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::ShareableBitmap const& front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap const& back_bitmap)
 {
     if (m_client_state.has_usable_bitmap) {

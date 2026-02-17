@@ -13,7 +13,7 @@
 namespace IPC {
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource::Directive const& directive)
+WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource::Directive const& directive)
 {
     TRY(encoder.encode(directive.type));
     TRY(encoder.encode(directive.value));
@@ -21,7 +21,7 @@ ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource::Directive const&
 }
 
 template<>
-ErrorOr<Web::HTML::POSTResource::Directive> decode(Decoder& decoder)
+WEBVIEW_API ErrorOr<Web::HTML::POSTResource::Directive> decode(Decoder& decoder)
 {
     auto type = TRY(decoder.decode<String>());
     auto value = TRY(decoder.decode<String>());
@@ -29,7 +29,7 @@ ErrorOr<Web::HTML::POSTResource::Directive> decode(Decoder& decoder)
 }
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource const& resource)
+WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource const& resource)
 {
     TRY(encoder.encode(resource.request_body));
     TRY(encoder.encode(resource.request_content_type));
@@ -38,7 +38,7 @@ ErrorOr<void> encode(Encoder& encoder, Web::HTML::POSTResource const& resource)
 }
 
 template<>
-ErrorOr<Web::HTML::POSTResource> decode(Decoder& decoder)
+WEBVIEW_API ErrorOr<Web::HTML::POSTResource> decode(Decoder& decoder)
 {
     auto request_body = TRY(decoder.decode<Optional<ByteBuffer>>());
     auto request_content_type = TRY(decoder.decode<Web::HTML::POSTResource::RequestContentType>());
@@ -47,7 +47,7 @@ ErrorOr<Web::HTML::POSTResource> decode(Decoder& decoder)
 }
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState::SerializedNestedHistory const& nested_history)
+WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState::SerializedNestedHistory const& nested_history)
 {
     TRY(encoder.encode(nested_history.id));
     TRY(encoder.encode(nested_history.entries));
@@ -55,7 +55,7 @@ ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState::Seriali
 }
 
 template<>
-ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> decode(Decoder& decoder)
+WEBVIEW_API ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> decode(Decoder& decoder)
 {
     auto id = TRY(decoder.decode<String>());
     auto entries = TRY(decoder.decode<Vector<WebView::SerializedSessionHistoryEntry>>());
@@ -63,7 +63,7 @@ ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> decode(Decode
 }
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState const& state)
+WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState const& state)
 {
     TRY(encoder.encode(state.origin));
     TRY(encoder.encode(state.initiator_origin));
@@ -80,7 +80,7 @@ ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState const& s
 }
 
 template<>
-ErrorOr<WebView::SerializedDocumentState> decode(Decoder& decoder)
+WEBVIEW_API ErrorOr<WebView::SerializedDocumentState> decode(Decoder& decoder)
 {
     WebView::SerializedDocumentState state {};
     state.origin = TRY(decoder.decode<Optional<URL::Origin>>());
@@ -98,7 +98,7 @@ ErrorOr<WebView::SerializedDocumentState> decode(Decoder& decoder)
 }
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, WebView::SerializedSessionHistoryEntry const& entry)
+WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, WebView::SerializedSessionHistoryEntry const& entry)
 {
     TRY(encoder.encode(entry.step));
     TRY(encoder.encode(entry.url));
@@ -114,7 +114,7 @@ ErrorOr<void> encode(Encoder& encoder, WebView::SerializedSessionHistoryEntry co
 }
 
 template<>
-ErrorOr<WebView::SerializedSessionHistoryEntry> decode(Decoder& decoder)
+WEBVIEW_API ErrorOr<WebView::SerializedSessionHistoryEntry> decode(Decoder& decoder)
 {
     WebView::SerializedSessionHistoryEntry entry {};
     entry.step = TRY(decoder.decode<i32>());

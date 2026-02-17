@@ -28,6 +28,7 @@
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
+#include <LibWebView/SessionHistoryEntryData.h>
 
 namespace Web::HTML {
 
@@ -50,6 +51,15 @@ void TraversableNavigable::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_session_history_entries);
     visitor.visit(m_session_history_traversal_queue);
     visitor.visit(m_storage_shed);
+}
+
+void TraversableNavigable::push_session_history_to_ui()
+{
+    Vector<WebView::SerializedSessionHistoryEntry> serialized_entries;
+    serialized_entries.ensure_capacity(m_session_history_entries.size());
+    for (auto const& entry : m_session_history_entries)
+        serialized_entries.unchecked_append(entry->serialize());
+    page().client().page_did_update_session_history(m_current_session_history_step, move(serialized_entries));
 }
 
 static OrderedHashTable<TraversableNavigable*>& user_agent_top_level_traversable_set()
@@ -120,6 +130,8 @@ WebIDL::ExceptionOr<GC::Ref<TraversableNavigable>> TraversableNavigable::create_
     // 9. Append initialHistoryEntry to traversable's session history entries.
     traversable->m_session_history_entries.append(*initial_history_entry);
     traversable->set_has_session_history_entry_and_ready_for_navigation();
+
+    traversable->push_session_history_to_ui();
 
     // FIXME: 10. If opener is non-null, then legacy-clone a traversable storage shed given opener's top-level traversable and traversable. [STORAGE]
 
@@ -890,6 +902,8 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
     VERIFY(m_session_history_entries.size() > 0);
     auto forward_enabled = can_go_forward();
     page().client().page_did_update_navigation_buttons_state(back_enabled, forward_enabled);
+
+    push_session_history_to_ui();
 
     page().client().page_did_change_url(current_session_history_entry()->url());
 

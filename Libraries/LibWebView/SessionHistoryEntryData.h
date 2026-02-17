@@ -19,6 +19,7 @@
 #include <LibWeb/HTML/POSTResource.h>
 #include <LibWeb/HTML/SerializedPolicyContainer.h>
 #include <LibWeb/ReferrerPolicy/ReferrerPolicy.h>
+#include <LibWebView/Export.h>
 
 namespace WebView {
 
@@ -88,33 +89,33 @@ struct SerializedSessionHistoryEntry {
 namespace IPC {
 
 template<>
-ErrorOr<void> encode(Encoder&, Web::HTML::POSTResource::Directive const&);
+WEBVIEW_API ErrorOr<void> encode(Encoder&, Web::HTML::POSTResource::Directive const&);
 
 template<>
-ErrorOr<Web::HTML::POSTResource::Directive> decode(Decoder&);
+WEBVIEW_API ErrorOr<Web::HTML::POSTResource::Directive> decode(Decoder&);
 
 template<>
-ErrorOr<void> encode(Encoder&, Web::HTML::POSTResource const&);
+WEBVIEW_API ErrorOr<void> encode(Encoder&, Web::HTML::POSTResource const&);
 
 template<>
-ErrorOr<Web::HTML::POSTResource> decode(Decoder&);
+WEBVIEW_API ErrorOr<Web::HTML::POSTResource> decode(Decoder&);
 
 template<>
-ErrorOr<void> encode(Encoder&, WebView::SerializedDocumentState::SerializedNestedHistory const&);
+WEBVIEW_API ErrorOr<void> encode(Encoder&, WebView::SerializedDocumentState::SerializedNestedHistory const&);
 
 template<>
-ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> decode(Decoder&);
+WEBVIEW_API ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> decode(Decoder&);
 
 template<>
-ErrorOr<void> encode(Encoder&, WebView::SerializedDocumentState const&);
+WEBVIEW_API ErrorOr<void> encode(Encoder&, WebView::SerializedDocumentState const&);
 
 template<>
-ErrorOr<WebView::SerializedDocumentState> decode(Decoder&);
+WEBVIEW_API ErrorOr<WebView::SerializedDocumentState> decode(Decoder&);
 
 template<>
-ErrorOr<void> encode(Encoder&, WebView::SerializedSessionHistoryEntry const&);
+WEBVIEW_API ErrorOr<void> encode(Encoder&, WebView::SerializedSessionHistoryEntry const&);
 
 template<>
-ErrorOr<WebView::SerializedSessionHistoryEntry> decode(Decoder&);
+WEBVIEW_API ErrorOr<WebView::SerializedSessionHistoryEntry> decode(Decoder&);
 
 }
