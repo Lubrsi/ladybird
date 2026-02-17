@@ -31,7 +31,7 @@ struct POSTResource {
     RequestContentType request_content_type {};
 
     struct Directive {
-        StringView type;
+        String type;
         String value;
     };
     Vector<Directive> request_content_type_directives {};

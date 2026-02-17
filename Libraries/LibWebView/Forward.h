@@ -37,6 +37,8 @@ struct DOMNodeProperties;
 struct Mutation;
 struct ProcessHandle;
 struct SearchEngine;
+struct SerializedDocumentState;
+struct SerializedSessionHistoryEntry;
 struct WebContentOptions;
 
 }

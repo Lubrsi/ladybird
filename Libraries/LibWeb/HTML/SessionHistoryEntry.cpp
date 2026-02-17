@@ -9,6 +9,7 @@
 #include <LibWeb/HTML/DocumentState.h>
 #include <LibWeb/HTML/SessionHistoryEntry.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
+#include <LibWebView/SessionHistoryEntryData.h>
 
 namespace Web::HTML {
 
@@ -54,6 +55,74 @@ GC::Ptr<DOM::Document> SessionHistoryEntry::document() const
     if (!m_document_state)
         return {};
     return m_document_state->document();
+}
+
+WebView::SerializedSessionHistoryEntry SessionHistoryEntry::serialize() const
+{
+    WebView::SerializedSessionHistoryEntry serialized;
+
+    serialized.step = m_step.visit(
+        [](int step) -> i32 { return step; },
+        [](Pending) -> i32 { return -1; });
+
+    serialized.url = m_url;
+
+    if (m_document_state)
+        serialized.document_state = m_document_state->serialize();
+
+    serialized.classic_history_api_state = m_classic_history_api_state;
+    serialized.navigation_api_state = m_navigation_api_state;
+    serialized.navigation_api_key = m_navigation_api_key;
+    serialized.navigation_api_id = m_navigation_api_id;
+
+    switch (m_scroll_restoration_mode) {
+    case ScrollRestorationMode::Auto:
+        serialized.scroll_restoration_mode = WebView::SerializedScrollRestorationMode::Auto;
+        break;
+    case ScrollRestorationMode::Manual:
+        serialized.scroll_restoration_mode = WebView::SerializedScrollRestorationMode::Manual;
+        break;
+    }
+
+    if (m_policy_container)
+        serialized.policy_container = m_policy_container->serialize();
+
+    serialized.browsing_context_name = m_browsing_context_name;
+
+    return serialized;
+}
+
+GC::Ref<SessionHistoryEntry> SessionHistoryEntry::create_from_serialized(GC::Heap& heap, WebView::SerializedSessionHistoryEntry const& serialized)
+{
+    GC::Ref<SessionHistoryEntry> entry = *heap.allocate<SessionHistoryEntry>();
+
+    if (serialized.step < 0)
+        entry->m_step = Pending::Tag;
+    else
+        entry->m_step = static_cast<int>(serialized.step);
+
+    entry->m_url = serialized.url;
+    entry->m_document_state = DocumentState::create_from_serialized(heap, serialized.document_state);
+    entry->m_classic_history_api_state = serialized.classic_history_api_state;
+    entry->m_navigation_api_state = serialized.navigation_api_state;
+    entry->m_navigation_api_key = serialized.navigation_api_key;
+    entry->m_navigation_api_id = serialized.navigation_api_id;
+
+    switch (serialized.scroll_restoration_mode) {
+    case WebView::SerializedScrollRestorationMode::Auto:
+        entry->m_scroll_restoration_mode = ScrollRestorationMode::Auto;
+        break;
+    case WebView::SerializedScrollRestorationMode::Manual:
+        entry->m_scroll_restoration_mode = ScrollRestorationMode::Manual;
+        break;
+    }
+
+    if (serialized.policy_container.has_value())
+        entry->m_policy_container = create_a_policy_container_from_serialized_policy_container(heap, serialized.policy_container.value());
+
+    entry->m_browsing_context_name = serialized.browsing_context_name;
+
+    return entry;
 }
 
 }

@@ -15,6 +15,7 @@
 #include <LibWeb/HTML/POSTResource.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/ReferrerPolicy/ReferrerPolicy.h>
+#include <LibWebView/Forward.h>
 
 namespace Web::HTML {
 
@@ -72,6 +73,9 @@ public:
 
     [[nodiscard]] String navigable_target_name() const { return m_navigable_target_name; }
     void set_navigable_target_name(String navigable_target_name) { m_navigable_target_name = navigable_target_name; }
+
+    [[nodiscard]] WebView::SerializedDocumentState serialize() const;
+    static GC::Ref<DocumentState> create_from_serialized(GC::Heap&, WebView::SerializedDocumentState const&);
 
 private:
     DocumentState();

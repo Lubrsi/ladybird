@@ -11,7 +11,7 @@
 namespace IPC {
 
 template<>
-ErrorOr<void> encode(Encoder& encoder, Web::HTML::SerializedPolicyContainer const& serialized_policy_container)
+WEB_API ErrorOr<void> encode(Encoder& encoder, Web::HTML::SerializedPolicyContainer const& serialized_policy_container)
 {
     TRY(encoder.encode(serialized_policy_container.csp_list));
     TRY(encoder.encode(serialized_policy_container.embedder_policy));
@@ -21,7 +21,7 @@ ErrorOr<void> encode(Encoder& encoder, Web::HTML::SerializedPolicyContainer cons
 }
 
 template<>
-ErrorOr<Web::HTML::SerializedPolicyContainer> decode(Decoder& decoder)
+WEB_API ErrorOr<Web::HTML::SerializedPolicyContainer> decode(Decoder& decoder)
 {
     Web::HTML::SerializedPolicyContainer serialized_policy_container {};
 

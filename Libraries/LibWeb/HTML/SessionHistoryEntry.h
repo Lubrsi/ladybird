@@ -13,6 +13,7 @@
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/StructuredSerializeTypes.h>
+#include <LibWebView/Forward.h>
 
 namespace Web::HTML {
 
@@ -77,6 +78,9 @@ public:
 
     [[nodiscard]] GC::Ptr<BrowsingContext> original_source_browsing_context() const { return m_original_source_browsing_context; }
     void set_original_source_browsing_context(GC::Ptr<BrowsingContext> original_source_browsing_context) { m_original_source_browsing_context = original_source_browsing_context; }
+
+    [[nodiscard]] WebView::SerializedSessionHistoryEntry serialize() const;
+    static GC::Ref<SessionHistoryEntry> create_from_serialized(GC::Heap&, WebView::SerializedSessionHistoryEntry const&);
 
 private:
     // https://html.spec.whatwg.org/multipage/browsing-the-web.html#she-step
