@@ -196,6 +196,12 @@ void ConnectionFromClient::traverse_the_history_by_delta(u64 page_id, i32 delta)
         page->page().traverse_the_history_by_delta(delta);
 }
 
+void ConnectionFromClient::restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->page().top_level_traversable()->restore_session_history(current_step, move(entries));
+}
+
 void ConnectionFromClient::set_viewport(u64 page_id, Web::DevicePixelSize size, double device_pixel_ratio)
 {
     if (auto page = this->page(page_id); page.has_value())

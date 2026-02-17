@@ -113,6 +113,12 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
     m_backup_bitmap = nullptr;
     handle_resize();
 
+    // Restore session history from the UI-side mirror into the new WebContent process.
+    // This preserves back/forward history across cross-site process switches.
+    // IPC ordering guarantees restore is processed before the subsequent load_url.
+    if (!m_session_history_entries.is_empty())
+        client().async_restore_session_history(page_id(), m_session_history_current_step, m_session_history_entries);
+
     load(url);
 }
 

@@ -46,6 +46,8 @@ public:
     Vector<GC::Ref<SessionHistoryEntry>> const& session_history_entries() const { return m_session_history_entries; }
     bool running_nested_apply_history_step() const { return m_running_nested_apply_history_step; }
 
+    void restore_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries);
+
     VisibilityState system_visibility_state() const { return m_system_visibility_state; }
     void set_system_visibility_state(VisibilityState);
 

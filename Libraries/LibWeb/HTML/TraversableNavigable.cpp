@@ -62,6 +62,40 @@ void TraversableNavigable::push_session_history_to_ui()
     page().client().page_did_update_session_history(m_current_session_history_step, move(serialized_entries));
 }
 
+void TraversableNavigable::restore_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
+{
+    m_session_history_entries.clear();
+    m_session_history_entries.ensure_capacity(entries.size());
+    for (auto const& serialized_entry : entries)
+        m_session_history_entries.unchecked_append(SessionHistoryEntry::create_from_serialized(heap(), serialized_entry));
+    m_current_session_history_step = current_step;
+
+    // The navigable's active/current session history entry was set during create_a_new_top_level_traversable
+    // and points to the initial about:blank entry. After restoring, the entries vector contains new deserialized
+    // objects, so the navigable's entry pointers are stale. Update the navigable to point at the restored entry
+    // at the current step, transferring the about:blank document so active_document() remains valid.
+    if (auto active = active_session_history_entry()) {
+        for (auto& entry : m_session_history_entries) {
+            if (entry->step().has<int>() && entry->step().get<int>() == current_step) {
+                // Transfer the about:blank document to the restored entry so active_document() works.
+                // The upcoming navigation will replace this entry's document anyway.
+                if (active->document() && !entry->document())
+                    entry->document_state()->set_document(active->document());
+
+                // The initial about:blank document would force the next navigation to use "replace"
+                // history handling (via navigation_must_be_a_replace), eating the previous entry.
+                // Clear this flag so navigations push new entries onto the restored history.
+                if (entry->document() && entry->document()->is_initial_about_blank())
+                    entry->document()->set_is_initial_about_blank(false);
+
+                set_active_session_history_entry(entry);
+                set_current_session_history_entry(entry);
+                break;
+            }
+        }
+    }
+}
+
 static OrderedHashTable<TraversableNavigable*>& user_agent_top_level_traversable_set()
 {
     static OrderedHashTable<TraversableNavigable*> set;
