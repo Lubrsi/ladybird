@@ -6,9 +6,66 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/HashTable.h>
+#include <AK/QuickSort.h>
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Encoder.h>
 #include <LibWebView/SessionHistoryEntryData.h>
+
+namespace WebView {
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-all-used-history-steps
+// This is the same algorithm as TraversableNavigable::get_all_used_history_steps(), but operates on serialized data.
+Vector<int> get_all_used_history_steps(Vector<SerializedSessionHistoryEntry> const& entries)
+{
+    // 2. Let steps be an empty ordered set of non-negative integers.
+    OrderedHashTable<int> steps;
+
+    // 3. Let entryLists be the ordered set « traversable's session history entries ».
+    Vector<Vector<SerializedSessionHistoryEntry> const*> entry_lists;
+    entry_lists.append(&entries);
+
+    // 4. For each entryList of entryLists:
+    while (!entry_lists.is_empty()) {
+        auto const* entry_list = entry_lists.take_first();
+
+        // 1. For each entry of entryList:
+        for (auto const& entry : *entry_list) {
+            // 1. Append entry's step to steps.
+            // NOTE: -1 is the sentinel for "pending", skip it.
+            if (entry.step >= 0)
+                steps.set(entry.step);
+
+            // 2. For each nestedHistory of entry's document state's nested histories, append nestedHistory's entries list to entryLists.
+            for (auto const& nested_history : entry.document_state.nested_histories)
+                entry_lists.append(&nested_history.entries);
+        }
+    }
+
+    // 5. Return steps, sorted.
+    auto sorted_steps = steps.values();
+    quick_sort(sorted_steps);
+    return sorted_steps;
+}
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-used-step
+int get_the_used_step(Vector<SerializedSessionHistoryEntry> const& entries, int step)
+{
+    // 1. Let steps be the result of getting all used history steps within traversable.
+    auto steps = get_all_used_history_steps(entries);
+
+    // 2. Return the greatest item in steps that is less than or equal to step.
+    VERIFY(!steps.is_empty());
+    Optional<int> result;
+    for (auto s : steps) {
+        if (s <= step) {
+            if (!result.has_value() || *result < s)
+                result = s;
+        }
+    }
+    return result.value();
+}
+}
 
 namespace IPC {
 

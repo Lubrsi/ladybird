@@ -84,6 +84,11 @@ struct SerializedSessionHistoryEntry {
     Optional<ByteString> browsing_context_name;
 };
 
+WEBVIEW_API Vector<int> get_all_used_history_steps(Vector<SerializedSessionHistoryEntry> const& entries);
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-used-step
+// Same algorithm as TraversableNavigable::get_the_used_step(), but operates on serialized data.
+WEBVIEW_API int get_the_used_step(Vector<SerializedSessionHistoryEntry> const& entries, int step);
 }
 
 namespace IPC {
