@@ -773,12 +773,6 @@ void WebContentClient::did_change_audio_play_state(u64 page_id, Web::HTML::Audio
         view->did_change_audio_play_state({}, play_state);
 }
 
-void WebContentClient::did_update_navigation_buttons_state(u64 page_id, bool back_enabled, bool forward_enabled)
-{
-    if (auto view = view_for_page_id(page_id); view.has_value())
-        view->did_update_navigation_buttons_state({}, back_enabled, forward_enabled);
-}
-
 void WebContentClient::did_update_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())

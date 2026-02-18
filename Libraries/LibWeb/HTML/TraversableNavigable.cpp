@@ -931,12 +931,6 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
     // 20. Set traversable's current session history step to targetStep.
     m_current_session_history_step = target_step;
 
-    // Not in the spec:
-    auto back_enabled = m_current_session_history_step > 0;
-    VERIFY(m_session_history_entries.size() > 0);
-    auto forward_enabled = can_go_forward();
-    page().client().page_did_update_navigation_buttons_state(back_enabled, forward_enabled);
-
     push_session_history_to_ui();
 
     page().client().page_did_change_url(current_session_history_entry()->url());
@@ -1176,28 +1170,6 @@ void TraversableNavigable::clear_the_forward_session_history()
             }
         }
     }
-}
-
-bool TraversableNavigable::can_go_forward() const
-{
-    auto step = current_session_history_step();
-
-    Vector<Vector<GC::Ref<SessionHistoryEntry>> const&> entry_lists;
-    entry_lists.append(session_history_entries());
-
-    while (!entry_lists.is_empty()) {
-        auto const& entry_list = entry_lists.take_first();
-
-        for (auto const& entry : entry_list) {
-            if (entry->step().template get<int>() > step)
-                return true;
-
-            for (auto& nested_history : entry->document_state()->nested_histories())
-                entry_lists.append(nested_history.entries);
-        }
-    }
-
-    return false;
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#traverse-the-history-by-a-delta

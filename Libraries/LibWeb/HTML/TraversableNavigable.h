@@ -146,8 +146,6 @@ private:
 
     Vector<GC::Ref<SessionHistoryEntry>> get_session_history_entries_for_the_navigation_api(GC::Ref<Navigable>, int);
 
-    [[nodiscard]] bool can_go_forward() const;
-
     void push_session_history_to_ui();
 
     // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-current-session-history-step

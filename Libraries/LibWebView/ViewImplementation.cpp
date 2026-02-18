@@ -556,16 +556,17 @@ void ViewImplementation::did_change_audio_play_state(Badge<WebContentClient>, We
         on_audio_play_state_changed(m_audio_play_state);
 }
 
-void ViewImplementation::did_update_navigation_buttons_state(Badge<WebContentClient>, bool back_enabled, bool forward_enabled) const
-{
-    m_navigate_back_action->set_enabled(back_enabled);
-    m_navigate_forward_action->set_enabled(forward_enabled);
-}
-
 void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries)
 {
     m_session_history_current_step = current_step;
     m_session_history_entries = move(entries);
+
+    auto all_steps = get_all_used_history_steps(m_session_history_entries);
+    auto current_index = all_steps.find_first_index(m_session_history_current_step);
+    bool back_enabled = current_index.has_value() && *current_index > 0;
+    bool forward_enabled = current_index.has_value() && *current_index + 1 < all_steps.size();
+    m_navigate_back_action->set_enabled(back_enabled);
+    m_navigate_forward_action->set_enabled(forward_enabled);
 }
 
 void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::ShareableBitmap const& front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap const& back_bitmap)
