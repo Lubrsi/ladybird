@@ -175,7 +175,14 @@ void ViewImplementation::reload()
 
 void ViewImplementation::traverse_the_history_by_delta(int delta)
 {
-    client().async_traverse_the_history_by_delta(page_id(), delta);
+    auto all_steps = get_all_used_history_steps(m_session_history_entries);
+    auto current_index = all_steps.find_first_index(m_session_history_current_step);
+    if (!current_index.has_value())
+        return;
+    auto target_index = static_cast<int>(*current_index) + delta;
+    if (target_index < 0 || target_index >= static_cast<int>(all_steps.size()))
+        return;
+    client().async_apply_the_traverse_history_step(page_id(), all_steps[target_index]);
 }
 
 void ViewImplementation::zoom_in()
