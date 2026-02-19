@@ -779,6 +779,30 @@ void WebContentClient::did_update_session_history(u64 page_id, i32 current_step,
         view->did_update_session_history({}, current_step, move(entries));
 }
 
+void WebContentClient::did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_traversal_unloading_check({}, result);
+}
+
+void WebContentClient::did_finish_traversal_document_population(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_traversal_document_population({});
+}
+
+void WebContentClient::did_finish_traversal_entry_activation(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_traversal_entry_activation({});
+}
+
+void WebContentClient::did_finish_traversal_non_changing_update(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_traversal_non_changing_update({});
+}
+
 void WebContentClient::did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap back_bitmap)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())

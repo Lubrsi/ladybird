@@ -209,6 +209,41 @@ void ConnectionFromClient::restore_session_history(u64 page_id, i32 current_step
         page->page().top_level_traversable()->restore_session_history(current_step, move(entries));
 }
 
+void ConnectionFromClient::traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    // FIXME: Implement Phase B of the traversal protocol.
+    (void)page_id;
+    (void)target_step;
+    (void)source_snapshot_and_initiator_id;
+    (void)user_involvement;
+}
+
+void ConnectionFromClient::traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type)
+{
+    // FIXME: Implement Phase C of the traversal protocol.
+    (void)page_id;
+    (void)target_step;
+    (void)source_snapshot_and_initiator_id;
+    (void)user_involvement;
+    (void)navigation_type;
+}
+
+void ConnectionFromClient::traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    // FIXME: Implement Phase D of the traversal protocol.
+    (void)page_id;
+    (void)target_step;
+    (void)navigation_type;
+    (void)user_involvement;
+}
+
+void ConnectionFromClient::traversal_update_non_changing_navigables(u64 page_id, i32 target_step)
+{
+    // FIXME: Implement Phase E of the traversal protocol.
+    (void)page_id;
+    (void)target_step;
+}
+
 void ConnectionFromClient::set_viewport(u64 page_id, Web::DevicePixelSize size, double device_pixel_ratio)
 {
     if (auto page = this->page(page_id); page.has_value())

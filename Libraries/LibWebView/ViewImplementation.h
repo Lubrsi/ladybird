@@ -154,6 +154,10 @@ public:
     Web::HTML::AudioPlayState audio_play_state() const { return m_audio_play_state; }
 
     void did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries);
+    void did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult);
+    void did_finish_traversal_document_population(Badge<WebContentClient>);
+    void did_finish_traversal_entry_activation(Badge<WebContentClient>);
+    void did_finish_traversal_non_changing_update(Badge<WebContentClient>);
 
     i32 session_history_current_step() const { return m_session_history_current_step; }
     Vector<SerializedSessionHistoryEntry> const& session_history_entries() const { return m_session_history_entries; }

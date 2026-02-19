@@ -18,6 +18,8 @@
 #include <LibWebView/Attribute.h>
 #include <LibWebView/DOMNodeProperties.h>
 #include <LibWebView/PageInfo.h>
+#include <LibWeb/HTML/UserNavigationInvolvement.h>
+#include <LibWeb/HTML/NavigationType.h>
 #include <LibWebView/SessionHistoryEntryData.h>
 
 endpoint WebContentServer
@@ -41,6 +43,16 @@ endpoint WebContentServer
     reload(u64 page_id) =|
     apply_the_traverse_history_step(u64 page_id, i32 step) =|
     restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) =|
+
+    // Session history traversal phase protocol (UI-orchestrated):
+    // Phase B: Check if unloading is canceled (spec steps 4-5 of "apply the history step")
+    traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    // Phase C: Populate documents for changing navigables (spec steps 6-12)
+    traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) =|
+    // Phase D: Activate entries for changing navigables (spec steps 13-14)
+    traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    // Phase E: Update non-changing navigables (spec steps 15-19)
+    traversal_update_non_changing_navigables(u64 page_id, i32 target_step) =|
 
     ready_to_paint(u64 page_id) =|
 

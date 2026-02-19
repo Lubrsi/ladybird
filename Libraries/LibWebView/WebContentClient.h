@@ -23,6 +23,7 @@
 #include <LibWeb/Page/EventResult.h>
 #include <LibWeb/StorageAPI/StorageEndpoint.h>
 #include <LibWebView/Forward.h>
+#include <LibWebView/SessionHistoryTraversalQueue.h>
 #include <WebContent/WebContentClientEndpoint.h>
 #include <WebContent/WebContentServerEndpoint.h>
 
@@ -148,6 +149,10 @@ private:
     virtual void did_request_clipboard_entries(u64 page_id, u64 request_id) override;
     virtual void did_change_audio_play_state(u64 page_id, Web::HTML::AudioPlayState) override;
     virtual void did_update_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
+    virtual void did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) override;
+    virtual void did_finish_traversal_document_population(u64 page_id) override;
+    virtual void did_finish_traversal_entry_activation(u64 page_id) override;
+    virtual void did_finish_traversal_non_changing_update(u64 page_id) override;
     virtual void did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap, i32 back_bitmap_id, Gfx::ShareableBitmap) override;
     virtual Messages::WebContentClient::RequestWorkerAgentResponse request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type) override;
 

@@ -18,6 +18,8 @@
 #include <LibWeb/CSS/PreferredContrast.h>
 #include <LibWeb/CSS/PreferredMotion.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/HTML/NavigationType.h>
+#include <LibWeb/HTML/UserNavigationInvolvement.h>
 #include <LibWeb/Loader/FileRequest.h>
 #include <LibWeb/Page/EventResult.h>
 #include <LibWeb/Page/InputEvent.h>
@@ -72,6 +74,10 @@ private:
     virtual void reload(u64 page_id) override;
     virtual void apply_the_traverse_history_step(u64 page_id, i32 step) override;
     virtual void restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
+    virtual void traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) override;
+    virtual void traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void traversal_update_non_changing_navigables(u64 page_id, i32 target_step) override;
     virtual void set_viewport(u64 page_id, Web::DevicePixelSize, double device_pixel_ratio) override;
     virtual void key_event(u64 page_id, Web::KeyEvent) override;
     virtual void mouse_event(u64 page_id, Web::MouseEvent) override;

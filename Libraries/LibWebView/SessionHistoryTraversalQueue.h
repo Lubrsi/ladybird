@@ -17,6 +17,14 @@
 
 namespace WebView {
 
+// Result of the "check if unloading is canceled" phase of the traversal protocol.
+// Maps to the spec's return values from "checking if unloading is canceled".
+enum class TraversalUnloadingCheckResult : u8 {
+    Continue = 0,
+    CanceledByBeforeUnload = 1,
+    CanceledByNavigate = 2,
+};
+
 // A traversal command that the UI process orchestrates via the multi-phase IPC protocol.
 // Corresponds to "apply the traverse history step" in the spec.
 struct TraversalCommand {

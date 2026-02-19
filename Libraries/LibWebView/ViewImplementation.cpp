@@ -576,6 +576,27 @@ void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32
     m_navigate_forward_action->set_enabled(forward_enabled);
 }
 
+void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult result)
+{
+    // FIXME: Implement Phase B response handling for UI-orchestrated traversals.
+    (void)result;
+}
+
+void ViewImplementation::did_finish_traversal_document_population(Badge<WebContentClient>)
+{
+    // FIXME: Implement Phase C response handling for UI-orchestrated traversals.
+}
+
+void ViewImplementation::did_finish_traversal_entry_activation(Badge<WebContentClient>)
+{
+    // FIXME: Implement Phase D response handling for UI-orchestrated traversals.
+}
+
+void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebContentClient>)
+{
+    // FIXME: Implement Phase E response handling for UI-orchestrated traversals.
+}
+
 void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::ShareableBitmap const& front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap const& back_bitmap)
 {
     if (m_client_state.has_usable_bitmap) {
