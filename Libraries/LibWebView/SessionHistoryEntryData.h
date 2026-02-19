@@ -36,6 +36,11 @@ enum class SerializedScrollRestorationMode : u8 {
 };
 
 struct SerializedDocumentState {
+    // Unique identifier for the document this state belongs to. Entries sharing the same document
+    // (e.g. from pushState/replaceState/fragment navigations) have the same document_id.
+    // Assigned during serialization based on DocumentState* identity.
+    Optional<u64> document_id;
+
     Optional<URL::Origin> origin;
     Optional<URL::Origin> initiator_origin;
     Optional<URL::URL> about_base_url;
@@ -89,6 +94,25 @@ WEBVIEW_API Vector<int> get_all_used_history_steps(Vector<SerializedSessionHisto
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-used-step
 // Same algorithm as TraversableNavigable::get_the_used_step(), but operates on serialized data.
 WEBVIEW_API int get_the_used_step(Vector<SerializedSessionHistoryEntry> const& entries, int step);
+
+struct ScriptHistoryLengthAndIndex {
+    size_t script_history_length { 0 };
+    size_t script_history_index { 0 };
+};
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#get-all-navigables-whose-current-session-history-entry-will-change-or-reload
+// Same algorithm as TraversableNavigable::get_all_navigables_whose_current_session_history_entry_will_change_or_reload(),
+// but operates on serialized data. Returns navigable IDs from nested histories; the traversable itself is not included.
+WEBVIEW_API Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step);
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-all-navigables-that-only-need-history-object-length/index-update
+// Same algorithm as TraversableNavigable::get_all_navigables_that_only_need_history_object_length_index_update(),
+// but operates on serialized data. Returns navigable IDs from nested histories; the traversable itself is not included.
+WEBVIEW_API Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step);
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-history-object-length-and-index
+// Same algorithm as TraversableNavigable::get_the_history_object_length_and_index(), but operates on serialized data.
+WEBVIEW_API ScriptHistoryLengthAndIndex compute_script_history_length_and_index(Vector<SerializedSessionHistoryEntry> const& entries, int target_step);
 }
 
 namespace IPC {

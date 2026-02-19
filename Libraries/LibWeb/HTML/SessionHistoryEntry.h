@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/HashMap.h>
 #include <AK/WeakPtr.h>
 #include <LibGC/Ptr.h>
 #include <LibJS/Heap/Cell.h>
@@ -79,7 +80,7 @@ public:
     [[nodiscard]] GC::Ptr<BrowsingContext> original_source_browsing_context() const { return m_original_source_browsing_context; }
     void set_original_source_browsing_context(GC::Ptr<BrowsingContext> original_source_browsing_context) { m_original_source_browsing_context = original_source_browsing_context; }
 
-    [[nodiscard]] WebView::SerializedSessionHistoryEntry serialize() const;
+    [[nodiscard]] WebView::SerializedSessionHistoryEntry serialize(HashMap<DocumentState const*, u64>& document_id_map) const;
     static GC::Ref<SessionHistoryEntry> create_from_serialized(GC::Heap&, WebView::SerializedSessionHistoryEntry const&);
 
 private:

@@ -65,6 +65,135 @@ int get_the_used_step(Vector<SerializedSessionHistoryEntry> const& entries, int 
     }
     return result.value();
 }
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-target-history-entry
+// Same algorithm as Navigable::get_the_target_history_entry(), but operates on serialized data.
+static SerializedSessionHistoryEntry const* get_target_entry(Vector<SerializedSessionHistoryEntry> const& entries, int step)
+{
+    // Return the item in entries that has the greatest step less than or equal to step.
+    SerializedSessionHistoryEntry const* result = nullptr;
+    for (auto const& entry : entries) {
+        if (entry.step >= 0 && entry.step <= step) {
+            if (!result || result->step < entry.step)
+                result = &entry;
+        }
+    }
+    return result;
+}
+
+static bool entries_share_document(SerializedSessionHistoryEntry const& a, SerializedSessionHistoryEntry const& b)
+{
+    return a.document_state.document_id.has_value()
+        && a.document_state.document_id == b.document_state.document_id;
+}
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#get-all-navigables-whose-current-session-history-entry-will-change-or-reload
+Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step)
+{
+    // 1. Let results be an empty list.
+    Vector<String> results;
+
+    struct NavigableToCheck {
+        Vector<SerializedSessionHistoryEntry> const* entries;
+        Optional<String> navigable_id;
+    };
+
+    // 2. Let navigablesToCheck be « traversable ».
+    Vector<NavigableToCheck> navigables_to_check;
+    navigables_to_check.append({ &entries, {} });
+
+    // 3. For each navigable of navigablesToCheck:
+    while (!navigables_to_check.is_empty()) {
+        auto navigable = navigables_to_check.take_first();
+
+        // 1. Let targetEntry be the result of getting the target history entry given navigable and targetStep.
+        auto const* target_entry = get_target_entry(*navigable.entries, target_step);
+        if (!target_entry)
+            continue;
+
+        // 2. If targetEntry is not navigable's current session history entry or targetEntry's document state's reload
+        //    pending is true, then append navigable to results.
+        auto const* current_entry = get_target_entry(*navigable.entries, current_step);
+        bool is_changing = !current_entry || current_entry->step != target_entry->step || target_entry->document_state.reload_pending;
+
+        if (is_changing && navigable.navigable_id.has_value())
+            results.append(navigable.navigable_id.value());
+
+        // 3. If targetEntry's document is navigable's document, and targetEntry's document state's reload pending is
+        //    false, then extend navigablesToCheck with the child navigables of navigable.
+        if (current_entry && !target_entry->document_state.reload_pending && entries_share_document(*current_entry, *target_entry)) {
+            for (auto const& nested : target_entry->document_state.nested_histories)
+                navigables_to_check.append({ &nested.entries, nested.id });
+        }
+    }
+
+    // 4. Return results.
+    return results;
+}
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-all-navigables-that-only-need-history-object-length/index-update
+Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step)
+{
+    // 1. Let results be an empty list.
+    Vector<String> results;
+
+    struct NavigableToCheck {
+        Vector<SerializedSessionHistoryEntry> const* entries;
+        Optional<String> navigable_id;
+    };
+
+    // 2. Let navigablesToCheck be « traversable ».
+    Vector<NavigableToCheck> navigables_to_check;
+    navigables_to_check.append({ &entries, {} });
+
+    // 3. For each navigable of navigablesToCheck:
+    while (!navigables_to_check.is_empty()) {
+        auto navigable = navigables_to_check.take_first();
+
+        // 1. Let targetEntry be the result of getting the target history entry given navigable and targetStep.
+        auto const* target_entry = get_target_entry(*navigable.entries, target_step);
+        if (!target_entry)
+            continue;
+
+        auto const* current_entry = get_target_entry(*navigable.entries, current_step);
+
+        // 2. If targetEntry is navigable's current session history entry and targetEntry's document state's reload pending is false, then:
+        if (current_entry && current_entry->step == target_entry->step && !target_entry->document_state.reload_pending) {
+            // 1. Append navigable to results.
+            if (navigable.navigable_id.has_value())
+                results.append(navigable.navigable_id.value());
+
+            // 2. Extend navigablesToCheck with navigable's child navigables.
+            for (auto const& nested : target_entry->document_state.nested_histories)
+                navigables_to_check.append({ &nested.entries, nested.id });
+        }
+    }
+
+    // 4. Return results.
+    return results;
+}
+
+// https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-history-object-length-and-index
+ScriptHistoryLengthAndIndex compute_script_history_length_and_index(Vector<SerializedSessionHistoryEntry> const& entries, int target_step)
+{
+    // 1. Let steps be the result of getting all used history steps within traversable.
+    auto steps = get_all_used_history_steps(entries);
+
+    // 2. Let scriptHistoryLength be the size of steps.
+    auto script_history_length = steps.size();
+
+    // 3. Assert: steps contains step.
+    VERIFY(steps.contains_slow(target_step));
+
+    // 4. Let scriptHistoryIndex be the index of step in steps.
+    auto script_history_index = *steps.find_first_index(target_step);
+
+    // 5. Return (scriptHistoryLength, scriptHistoryIndex).
+    return ScriptHistoryLengthAndIndex {
+        .script_history_length = script_history_length,
+        .script_history_index = script_history_index,
+    };
+}
 }
 
 namespace IPC {
@@ -122,6 +251,7 @@ WEBVIEW_API ErrorOr<WebView::SerializedDocumentState::SerializedNestedHistory> d
 template<>
 WEBVIEW_API ErrorOr<void> encode(Encoder& encoder, WebView::SerializedDocumentState const& state)
 {
+    TRY(encoder.encode(state.document_id));
     TRY(encoder.encode(state.origin));
     TRY(encoder.encode(state.initiator_origin));
     TRY(encoder.encode(state.about_base_url));
@@ -140,6 +270,7 @@ template<>
 WEBVIEW_API ErrorOr<WebView::SerializedDocumentState> decode(Decoder& decoder)
 {
     WebView::SerializedDocumentState state {};
+    state.document_id = TRY(decoder.decode<Optional<u64>>());
     state.origin = TRY(decoder.decode<Optional<URL::Origin>>());
     state.initiator_origin = TRY(decoder.decode<Optional<URL::Origin>>());
     state.about_base_url = TRY(decoder.decode<Optional<URL::URL>>());

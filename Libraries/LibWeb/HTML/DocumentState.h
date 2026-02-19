@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <AK/HashMap.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibURL/Origin.h>
 #include <LibURL/URL.h>
@@ -74,7 +75,7 @@ public:
     [[nodiscard]] String navigable_target_name() const { return m_navigable_target_name; }
     void set_navigable_target_name(String navigable_target_name) { m_navigable_target_name = navigable_target_name; }
 
-    [[nodiscard]] WebView::SerializedDocumentState serialize() const;
+    [[nodiscard]] WebView::SerializedDocumentState serialize(HashMap<DocumentState const*, u64>& document_id_map) const;
     static GC::Ref<DocumentState> create_from_serialized(GC::Heap&, WebView::SerializedDocumentState const&);
 
 private:

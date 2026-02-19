@@ -36,9 +36,20 @@ GC::Ref<DocumentState> DocumentState::clone() const
     return cloned;
 }
 
-WebView::SerializedDocumentState DocumentState::serialize() const
+WebView::SerializedDocumentState DocumentState::serialize(HashMap<DocumentState const*, u64>& document_id_map) const
 {
     WebView::SerializedDocumentState serialized;
+
+    // Assign a document_id based on DocumentState* identity. Same-document entries share the same
+    // DocumentState object, so they get the same ID.
+    auto result = document_id_map.get(this);
+    if (result.has_value()) {
+        serialized.document_id = result.value();
+    } else {
+        auto new_id = static_cast<u64>(document_id_map.size() + 1);
+        document_id_map.set(this, new_id);
+        serialized.document_id = new_id;
+    }
 
     serialized.origin = m_origin;
     serialized.initiator_origin = m_initiator_origin;
@@ -77,7 +88,7 @@ WebView::SerializedDocumentState DocumentState::serialize() const
         WebView::SerializedDocumentState::SerializedNestedHistory serialized_nested;
         serialized_nested.id = nested_history.id;
         for (auto const& entry : nested_history.entries)
-            serialized_nested.entries.append(entry->serialize());
+            serialized_nested.entries.append(entry->serialize(document_id_map));
         serialized.nested_histories.append(move(serialized_nested));
     }
 

@@ -55,10 +55,11 @@ void TraversableNavigable::visit_edges(Cell::Visitor& visitor)
 
 void TraversableNavigable::push_session_history_to_ui()
 {
+    HashMap<DocumentState const*, u64> document_id_map;
     Vector<WebView::SerializedSessionHistoryEntry> serialized_entries;
     serialized_entries.ensure_capacity(m_session_history_entries.size());
     for (auto const& entry : m_session_history_entries)
-        serialized_entries.unchecked_append(entry->serialize());
+        serialized_entries.unchecked_append(entry->serialize(document_id_map));
     page().client().page_did_update_session_history(m_current_session_history_step, move(serialized_entries));
 }
 

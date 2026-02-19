@@ -57,7 +57,7 @@ GC::Ptr<DOM::Document> SessionHistoryEntry::document() const
     return m_document_state->document();
 }
 
-WebView::SerializedSessionHistoryEntry SessionHistoryEntry::serialize() const
+WebView::SerializedSessionHistoryEntry SessionHistoryEntry::serialize(HashMap<DocumentState const*, u64>& document_id_map) const
 {
     WebView::SerializedSessionHistoryEntry serialized;
 
@@ -68,7 +68,7 @@ WebView::SerializedSessionHistoryEntry SessionHistoryEntry::serialize() const
     serialized.url = m_url;
 
     if (m_document_state)
-        serialized.document_state = m_document_state->serialize();
+        serialized.document_state = m_document_state->serialize(document_id_map);
 
     serialized.classic_history_api_state = m_classic_history_api_state;
     serialized.navigation_api_state = m_navigation_api_state;
