@@ -19,6 +19,7 @@ set(SOURCES
     ProcessManager.cpp
     SearchEngine.cpp
     SessionHistoryEntryData.cpp
+    SessionHistoryTraversalQueue.cpp
     Settings.cpp
     SiteIsolation.cpp
     SourceHighlighter.cpp

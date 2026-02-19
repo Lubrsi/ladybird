@@ -37,9 +37,14 @@ struct DOMNodeProperties;
 struct Mutation;
 struct ProcessHandle;
 struct SearchEngine;
+struct AsyncOperationCommand;
 struct SerializedDocumentState;
 struct SerializedSessionHistoryEntry;
+struct SynchronousNavigationCommand;
+struct TraversalCommand;
 struct WebContentOptions;
+
+class SessionHistoryTraversalQueue;
 
 }
 

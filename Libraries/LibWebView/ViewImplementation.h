@@ -34,6 +34,7 @@
 #include <LibWebView/Forward.h>
 #include <LibWebView/PageInfo.h>
 #include <LibWebView/SessionHistoryEntryData.h>
+#include <LibWebView/SessionHistoryTraversalQueue.h>
 #include <LibWebView/Settings.h>
 #include <LibWebView/WebContentClient.h>
 
@@ -399,6 +400,7 @@ protected:
 
     i32 m_session_history_current_step { 0 };
     Vector<SerializedSessionHistoryEntry> m_session_history_entries;
+    SessionHistoryTraversalQueue m_session_history_traversal_queue;
 };
 
 }
