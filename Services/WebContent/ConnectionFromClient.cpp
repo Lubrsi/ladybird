@@ -209,6 +209,41 @@ void ConnectionFromClient::restore_session_history(u64 page_id, i32 current_step
         page->page().top_level_traversable()->restore_session_history(current_step, move(entries));
 }
 
+void ConnectionFromClient::execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+
+        GC::Ptr<Web::HTML::SourceSnapshotParams> source_snapshot_params;
+        GC::Ptr<Web::HTML::Navigable> initiator_to_check;
+        if (source_snapshot_and_initiator_id.has_value()) {
+            if (auto pair = traversable->take_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value()) {
+                source_snapshot_params = pair->source_snapshot_params;
+                initiator_to_check = pair->initiator;
+            }
+        }
+
+        traversable->apply_the_traverse_history_step(target_step, source_snapshot_params, initiator_to_check, user_involvement);
+        async_did_finish_session_history_traversal(page_id);
+    }
+}
+
+void ConnectionFromClient::execute_session_history_operation(u64 page_id, u64 operation_id)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+        auto closure = traversable->take_session_history_operation(operation_id);
+        if (closure) {
+            // NOTE: The closure returns a Core::Promise that was previously used to serialize
+            //       the old WebContent-side queue. Now that serialization is handled by the
+            //       UI-side queue (which waits for did_finish before processing the next command),
+            //       we can ignore the returned promise and send did_finish immediately.
+            (void)closure->function()();
+        }
+        async_did_finish_session_history_operation(page_id);
+    }
+}
+
 void ConnectionFromClient::traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
 {
     // FIXME: Implement Phase B of the traversal protocol.

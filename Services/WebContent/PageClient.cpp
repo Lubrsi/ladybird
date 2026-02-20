@@ -686,6 +686,21 @@ void PageClient::page_did_update_session_history(i32 current_step, Vector<WebVie
     client().async_did_update_session_history(m_id, current_step, move(entries));
 }
 
+void PageClient::page_did_request_traversal_by_delta(i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    client().async_did_request_traversal_by_delta(m_id, delta, source_snapshot_and_initiator_id, user_involvement);
+}
+
+void PageClient::page_did_request_session_history_operation(u64 operation_id)
+{
+    client().async_did_request_session_history_operation(m_id, operation_id);
+}
+
+void PageClient::page_did_request_session_history_sync_navigation(u64 operation_id, String target_navigable_id)
+{
+    client().async_did_request_session_history_sync_navigation(m_id, operation_id, move(target_navigable_id));
+}
+
 void PageClient::request_file(Web::FileRequest file_request)
 {
     client().request_file(m_id, move(file_request));

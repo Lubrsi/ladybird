@@ -779,6 +779,36 @@ void WebContentClient::did_update_session_history(u64 page_id, i32 current_step,
         view->did_update_session_history({}, current_step, move(entries));
 }
 
+void WebContentClient::did_request_traversal_by_delta(u64 page_id, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_request_traversal_by_delta({}, delta, source_snapshot_and_initiator_id, user_involvement);
+}
+
+void WebContentClient::did_request_session_history_operation(u64 page_id, u64 operation_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_request_session_history_operation({}, operation_id);
+}
+
+void WebContentClient::did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_request_session_history_sync_navigation({}, operation_id, move(target_navigable_id));
+}
+
+void WebContentClient::did_finish_session_history_traversal(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_session_history_traversal({});
+}
+
+void WebContentClient::did_finish_session_history_operation(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_session_history_operation({});
+}
+
 void WebContentClient::did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())

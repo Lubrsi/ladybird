@@ -117,6 +117,14 @@ endpoint WebContentClient
 
     did_update_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) =|
 
+    // Session history traversal queue: WebContent requests the UI to enqueue commands.
+    did_request_traversal_by_delta(u64 page_id, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    did_request_session_history_operation(u64 page_id, u64 operation_id) =|
+    did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) =|
+    // Completion signals for transitional execute-and-respond protocol.
+    did_finish_session_history_traversal(u64 page_id) =|
+    did_finish_session_history_operation(u64 page_id) =|
+
     // Session history traversal phase protocol responses:
     did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) =|
     // Phase C complete

@@ -54,6 +54,11 @@ endpoint WebContentServer
     // Phase E: Update non-changing navigables (spec steps 15-19)
     traversal_update_non_changing_navigables(u64 page_id, i32 target_step) =|
 
+    // Session history traversal queue: transitional execute-and-respond protocol.
+    // The UI sends these to WebContent to execute queued commands.
+    execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    execute_session_history_operation(u64 page_id, u64 operation_id) =|
+
     ready_to_paint(u64 page_id) =|
 
     set_viewport(u64 page_id, Web::DevicePixelSize size, double device_pixel_ratio) =|

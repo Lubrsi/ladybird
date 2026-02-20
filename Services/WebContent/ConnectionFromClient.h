@@ -74,6 +74,8 @@ private:
     virtual void reload(u64 page_id) override;
     virtual void apply_the_traverse_history_step(u64 page_id, i32 step) override;
     virtual void restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
+    virtual void execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void execute_session_history_operation(u64 page_id, u64 operation_id) override;
     virtual void traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
     virtual void traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) override;
     virtual void traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) override;

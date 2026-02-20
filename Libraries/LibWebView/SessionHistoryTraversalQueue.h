@@ -29,6 +29,12 @@ enum class TraversalUnloadingCheckResult : u8 {
 // Corresponds to "apply the traverse history step" in the spec.
 struct TraversalCommand {
     i32 target_step { 0 };
+
+    // If set, target_step is resolved from current_step + delta at dequeue time.
+    // Used for script-initiated delta traversals (history.back/forward) where the target
+    // must be computed relative to the step that is current when this command actually runs.
+    Optional<i32> delta;
+
     bool check_for_cancelation { true };
     Optional<Web::Bindings::NavigationType> navigation_type;
     Web::HTML::UserNavigationInvolvement user_involvement { Web::HTML::UserNavigationInvolvement::BrowserUI };

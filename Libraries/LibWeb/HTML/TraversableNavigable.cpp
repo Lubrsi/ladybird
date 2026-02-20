@@ -51,6 +51,12 @@ void TraversableNavigable::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_session_history_entries);
     visitor.visit(m_session_history_traversal_queue);
     visitor.visit(m_storage_shed);
+    for (auto& [_, entry] : m_source_snapshot_map) {
+        visitor.visit(entry.source_snapshot_params);
+        visitor.visit(entry.initiator);
+    }
+    for (auto& [_, closure] : m_operation_map)
+        visitor.visit(closure);
 }
 
 void TraversableNavigable::push_session_history_to_ui()
@@ -61,6 +67,33 @@ void TraversableNavigable::push_session_history_to_ui()
     for (auto const& entry : m_session_history_entries)
         serialized_entries.unchecked_append(entry->serialize(document_id_map));
     page().client().page_did_update_session_history(m_current_session_history_step, move(serialized_entries));
+}
+
+u64 TraversableNavigable::store_source_snapshot_and_initiator(GC::Ptr<SourceSnapshotParams> source_snapshot_params, GC::Ptr<Navigable> initiator)
+{
+    auto id = m_next_source_snapshot_id++;
+    m_source_snapshot_map.set(id, { source_snapshot_params, initiator });
+    return id;
+}
+
+Optional<TraversableNavigable::SourceSnapshotAndInitiator> TraversableNavigable::take_source_snapshot_and_initiator(u64 id)
+{
+    return m_source_snapshot_map.take(id);
+}
+
+u64 TraversableNavigable::store_session_history_operation(GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> closure)
+{
+    auto id = m_next_operation_id++;
+    m_operation_map.set(id, closure);
+    return id;
+}
+
+GC::Ptr<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> TraversableNavigable::take_session_history_operation(u64 id)
+{
+    auto closure = m_operation_map.take(id);
+    if (closure.has_value())
+        return closure.value();
+    return {};
 }
 
 void TraversableNavigable::restore_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
@@ -1196,30 +1229,14 @@ void TraversableNavigable::traverse_the_history_by_delta(int delta, GC::Ptr<DOM:
     }
 
     // 4. Append the following session history traversal steps to traversable:
-    append_session_history_traversal_steps(GC::create_function(heap(), [this, delta, source_snapshot_params, initiator_to_check, user_involvement] {
-        // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
-        auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
-        // 1. Let allSteps be the result of getting all used history steps for traversable.
-        auto all_steps = get_all_used_history_steps();
+    // AD-HOC: Instead of enqueuing a closure on the WebContent-side queue, we store the GC objects
+    // that can't cross IPC and send a request to the UI process to enqueue a TraversalCommand.
+    // The UI resolves the delta to an absolute target step at dequeue time and orchestrates execution.
+    Optional<u64> source_snapshot_and_initiator_id;
+    if (source_snapshot_params || initiator_to_check)
+        source_snapshot_and_initiator_id = store_source_snapshot_and_initiator(source_snapshot_params, initiator_to_check);
 
-        // 2. Let currentStepIndex be the index of traversable's current session history step within allSteps.
-        auto current_step_index = *all_steps.find_first_index(current_session_history_step());
-
-        // 3. Let targetStepIndex be currentStepIndex plus delta
-        auto target_step_index = current_step_index + delta;
-
-        // 4. If allSteps[targetStepIndex] does not exist, then abort these steps.
-        if (target_step_index >= all_steps.size()) {
-            signal_to_continue_session_history_processing->resolve({});
-            return signal_to_continue_session_history_processing;
-        }
-
-        // 5. Apply the traverse history step allSteps[targetStepIndex] to traversable, given sourceSnapshotParams,
-        //    initiatorToCheck, and userInvolvement.
-        apply_the_traverse_history_step(all_steps[target_step_index], source_snapshot_params, initiator_to_check, user_involvement);
-        signal_to_continue_session_history_processing->resolve({});
-        return signal_to_continue_session_history_processing;
-    }));
+    page().client().page_did_request_traversal_by_delta(delta, source_snapshot_and_initiator_id, user_involvement);
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#update-for-navigable-creation/destruction
@@ -1280,9 +1297,8 @@ void TraversableNavigable::definitely_close_top_level_traversable()
         return;
 
     // 3. Append the following session history traversal steps to traversable:
-    append_session_history_traversal_steps(GC::create_function(heap(), [this] {
-        // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
-        auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
+    auto operation_id = store_session_history_operation(GC::create_function(heap(), [this] {
+        auto signal = Core::Promise<Empty>::construct();
         // 1. Let afterAllUnloads be an algorithm step which destroys traversable.
         auto after_all_unloads = GC::create_function(heap(), [this] {
             destroy_top_level_traversable();
@@ -1290,9 +1306,10 @@ void TraversableNavigable::definitely_close_top_level_traversable()
 
         // 2. Unload a document and its descendants given traversable's active document, null, and afterAllUnloads.
         active_document()->unload_a_document_and_its_descendants({}, after_all_unloads);
-        signal_to_continue_session_history_processing->resolve({});
-        return signal_to_continue_session_history_processing;
+        signal->resolve({});
+        return signal;
     }));
+    page().client().page_did_request_session_history_operation(operation_id);
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#destroy-a-top-level-traversable

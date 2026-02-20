@@ -173,6 +173,9 @@ private:
     virtual void page_did_request_activate_tab() override;
     virtual void page_did_close_top_level_traversable() override;
     virtual void page_did_update_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
+    virtual void page_did_request_traversal_by_delta(i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void page_did_request_session_history_operation(u64 operation_id) override;
+    virtual void page_did_request_session_history_sync_navigation(u64 operation_id, String target_navigable_id) override;
     virtual void request_file(Web::FileRequest) override;
     virtual void page_did_request_color_picker(Color current_color) override;
     virtual void page_did_request_file_picker(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles) override;

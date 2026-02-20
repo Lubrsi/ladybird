@@ -182,7 +182,13 @@ void ViewImplementation::traverse_the_history_by_delta(int delta)
     auto target_index = static_cast<int>(*current_index) + delta;
     if (target_index < 0 || target_index >= static_cast<int>(all_steps.size()))
         return;
-    client().async_apply_the_traverse_history_step(page_id(), all_steps[target_index]);
+
+    TraversalCommand cmd;
+    cmd.target_step = all_steps[target_index];
+    cmd.check_for_cancelation = true;
+    cmd.user_involvement = Web::HTML::UserNavigationInvolvement::BrowserUI;
+    m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
+    process_next_session_history_command();
 }
 
 void ViewImplementation::zoom_in()
@@ -576,9 +582,49 @@ void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32
     m_navigate_forward_action->set_enabled(forward_enabled);
 }
 
+void ViewImplementation::did_request_traversal_by_delta(Badge<WebContentClient>, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
+{
+    TraversalCommand cmd;
+    cmd.delta = delta;
+    cmd.check_for_cancelation = true;
+    cmd.user_involvement = user_involvement;
+    cmd.source_snapshot_and_initiator_id = source_snapshot_and_initiator_id;
+    m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
+    process_next_session_history_command();
+}
+
+void ViewImplementation::did_request_session_history_operation(Badge<WebContentClient>, u64 operation_id)
+{
+    AsyncOperationCommand cmd;
+    cmd.operation_id = operation_id;
+    m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
+    process_next_session_history_command();
+}
+
+void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id)
+{
+    SynchronousNavigationCommand cmd;
+    cmd.operation_id = operation_id;
+    cmd.target_navigable_id = move(target_navigable_id);
+    m_session_history_traversal_queue.append(SessionHistoryCommand { move(cmd) });
+    process_next_session_history_command();
+}
+
+void ViewImplementation::did_finish_session_history_traversal(Badge<WebContentClient>)
+{
+    m_active_traversal = {};
+    process_next_session_history_command();
+}
+
+void ViewImplementation::did_finish_session_history_operation(Badge<WebContentClient>)
+{
+    m_active_operation = false;
+    process_next_session_history_command();
+}
+
 void ViewImplementation::process_next_session_history_command()
 {
-    if (m_active_traversal.has_value())
+    if (m_active_traversal.has_value() || m_active_operation)
         return;
 
     auto command = m_session_history_traversal_queue.dequeue();
@@ -587,24 +633,36 @@ void ViewImplementation::process_next_session_history_command()
 
     command->visit(
         [&](TraversalCommand& traversal) {
-            m_active_traversal = traversal;
-            auto& cmd = m_active_traversal.value();
-
-            if (cmd.check_for_cancelation) {
-                // Phase B: Check if unloading is canceled.
-                client().async_traversal_check_if_unloading_is_canceled(
-                    page_id(), cmd.target_step, cmd.source_snapshot_and_initiator_id, cmd.user_involvement);
-            } else {
-                // Skip Phase B, go directly to Phase C: Populate documents.
-                client().async_traversal_populate_documents(
-                    page_id(), cmd.target_step, cmd.source_snapshot_and_initiator_id, cmd.user_involvement, cmd.navigation_type);
+            // Resolve delta to absolute target_step if needed.
+            if (traversal.delta.has_value()) {
+                auto all_steps = get_all_used_history_steps(m_session_history_entries);
+                auto current_index = all_steps.find_first_index(m_session_history_current_step);
+                if (!current_index.has_value()) {
+                    process_next_session_history_command();
+                    return;
+                }
+                auto target_index = static_cast<int>(*current_index) + *traversal.delta;
+                if (target_index < 0 || target_index >= static_cast<int>(all_steps.size())) {
+                    process_next_session_history_command();
+                    return;
+                }
+                traversal.target_step = all_steps[target_index];
             }
+
+            m_active_traversal = traversal;
+
+            // Transitional: execute via the old monolithic apply_the_traverse_history_step path.
+            // This will be replaced by the phase protocol in a later commit.
+            client().async_execute_session_history_traversal(
+                page_id(), traversal.target_step, traversal.source_snapshot_and_initiator_id, traversal.user_involvement);
         },
-        [&](SynchronousNavigationCommand&) {
-            // FIXME: Forward to WebContent for execution (commit 5e/5f).
+        [&](SynchronousNavigationCommand& cmd) {
+            m_active_operation = true;
+            client().async_execute_session_history_operation(page_id(), cmd.operation_id);
         },
-        [&](AsyncOperationCommand&) {
-            // FIXME: Forward to WebContent for execution (commit 5e/5f).
+        [&](AsyncOperationCommand& cmd) {
+            m_active_operation = true;
+            client().async_execute_session_history_operation(page_id(), cmd.operation_id);
         });
 }
 

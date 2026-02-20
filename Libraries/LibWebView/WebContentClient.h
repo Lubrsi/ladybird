@@ -149,6 +149,11 @@ private:
     virtual void did_request_clipboard_entries(u64 page_id, u64 request_id) override;
     virtual void did_change_audio_play_state(u64 page_id, Web::HTML::AudioPlayState) override;
     virtual void did_update_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
+    virtual void did_request_traversal_by_delta(u64 page_id, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void did_request_session_history_operation(u64 page_id, u64 operation_id) override;
+    virtual void did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) override;
+    virtual void did_finish_session_history_traversal(u64 page_id) override;
+    virtual void did_finish_session_history_operation(u64 page_id) override;
     virtual void did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) override;
     virtual void did_finish_traversal_document_population(u64 page_id) override;
     virtual void did_finish_traversal_entry_activation(u64 page_id) override;

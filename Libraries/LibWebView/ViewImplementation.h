@@ -154,6 +154,11 @@ public:
     Web::HTML::AudioPlayState audio_play_state() const { return m_audio_play_state; }
 
     void did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries);
+    void did_request_traversal_by_delta(Badge<WebContentClient>, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement);
+    void did_request_session_history_operation(Badge<WebContentClient>, u64 operation_id);
+    void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id);
+    void did_finish_session_history_traversal(Badge<WebContentClient>);
+    void did_finish_session_history_operation(Badge<WebContentClient>);
     void did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult);
     void did_finish_traversal_document_population(Badge<WebContentClient>);
     void did_finish_traversal_entry_activation(Badge<WebContentClient>);
@@ -408,6 +413,7 @@ protected:
     Vector<SerializedSessionHistoryEntry> m_session_history_entries;
     SessionHistoryTraversalQueue m_session_history_traversal_queue;
     Optional<TraversalCommand> m_active_traversal;
+    bool m_active_operation { false };
 };
 
 }

@@ -412,6 +412,9 @@ public:
     virtual void page_did_request_activate_tab() { }
     virtual void page_did_close_top_level_traversable() { }
     virtual void page_did_update_session_history([[maybe_unused]] i32 current_step, [[maybe_unused]] Vector<WebView::SerializedSessionHistoryEntry> entries) { }
+    virtual void page_did_request_traversal_by_delta([[maybe_unused]] i32 delta, [[maybe_unused]] Optional<u64> source_snapshot_and_initiator_id, [[maybe_unused]] HTML::UserNavigationInvolvement user_involvement) { }
+    virtual void page_did_request_session_history_operation([[maybe_unused]] u64 operation_id) { }
+    virtual void page_did_request_session_history_sync_navigation([[maybe_unused]] u64 operation_id, [[maybe_unused]] String target_navigable_id) { }
     virtual void page_did_allocate_backing_stores([[maybe_unused]] i32 front_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap front_bitmap, [[maybe_unused]] i32 back_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap back_bitmap) { }
 
     virtual void request_file(FileRequest) = 0;

@@ -99,6 +99,20 @@ public:
         m_session_history_traversal_queue->append_sync(steps, target_navigable);
     }
 
+    // Store a (SourceSnapshotParams, Navigable) pair for later retrieval during traversal execution.
+    // Returns an opaque ID that the UI sends back when executing the traversal.
+    u64 store_source_snapshot_and_initiator(GC::Ptr<SourceSnapshotParams>, GC::Ptr<Navigable>);
+    struct SourceSnapshotAndInitiator {
+        GC::Ptr<SourceSnapshotParams> source_snapshot_params;
+        GC::Ptr<Navigable> initiator;
+    };
+    Optional<SourceSnapshotAndInitiator> take_source_snapshot_and_initiator(u64 id);
+
+    // Store an operation closure for later execution via IPC round-trip.
+    // Returns an operation ID that the UI sends back when it's time to execute.
+    u64 store_session_history_operation(GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> closure);
+    GC::Ptr<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> take_session_history_operation(u64 id);
+
     String window_handle() const { return m_window_handle; }
     void set_window_handle(String window_handle) { m_window_handle = move(window_handle); }
 
@@ -170,6 +184,16 @@ private:
     GC::Ref<StorageAPI::StorageShed> m_storage_shed;
 
     GC::Ref<SessionHistoryTraversalQueue> m_session_history_traversal_queue;
+
+    // Storage for source snapshot + initiator pairs, keyed by opaque IDs.
+    // Used for script-initiated traversals where GC objects can't cross IPC.
+    u64 m_next_source_snapshot_id { 1 };
+    HashMap<u64, SourceSnapshotAndInitiator> m_source_snapshot_map;
+
+    // Storage for operation closures, keyed by opaque IDs.
+    // WebContent stores closures here, sends the ID to UI, and UI sends it back to execute.
+    u64 m_next_operation_id { 1 };
+    HashMap<u64, GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>>> m_operation_map;
 
     String m_window_handle;
 
