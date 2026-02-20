@@ -109,6 +109,11 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
     if (on_web_content_process_change_for_cross_site_navigation)
         on_web_content_process_change_for_cross_site_navigation();
 
+    // The old WebContent process is gone — clear any in-flight traversal/operation state.
+    m_active_traversal = {};
+    m_active_operation = false;
+    m_session_history_traversal_queue.clear();
+
     // Don't keep a stale backup bitmap around.
     m_backup_bitmap = nullptr;
     handle_resize();
@@ -186,6 +191,7 @@ void ViewImplementation::traverse_the_history_by_delta(int delta)
     TraversalCommand cmd;
     cmd.target_step = all_steps[target_index];
     cmd.check_for_cancelation = true;
+    cmd.navigation_type = Web::Bindings::NavigationType::Traverse;
     cmd.user_involvement = Web::HTML::UserNavigationInvolvement::BrowserUI;
     m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
     process_next_session_history_command();
@@ -569,8 +575,9 @@ void ViewImplementation::did_change_audio_play_state(Badge<WebContentClient>, We
         on_audio_play_state_changed(m_audio_play_state);
 }
 
-void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32 current_step, Vector<SerializedSessionHistoryEntry> entries)
+void ViewImplementation::did_update_session_history(Badge<WebContentClient>, String traversable_navigable_id, i32 current_step, Vector<SerializedSessionHistoryEntry> entries)
 {
+    m_traversable_navigable_id = move(traversable_navigable_id);
     m_session_history_current_step = current_step;
     m_session_history_entries = move(entries);
 
@@ -584,9 +591,18 @@ void ViewImplementation::did_update_session_history(Badge<WebContentClient>, i32
 
 void ViewImplementation::did_request_traversal_by_delta(Badge<WebContentClient>, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
 {
+    auto all_steps = get_all_used_history_steps(m_session_history_entries);
+    auto current_index = all_steps.find_first_index(m_session_history_current_step);
+    if (!current_index.has_value())
+        return;
+    auto target_index = static_cast<int>(*current_index) + delta;
+    if (target_index < 0 || target_index >= static_cast<int>(all_steps.size()))
+        return;
+
     TraversalCommand cmd;
-    cmd.delta = delta;
+    cmd.target_step = all_steps[target_index];
     cmd.check_for_cancelation = true;
+    cmd.navigation_type = Web::Bindings::NavigationType::Traverse;
     cmd.user_involvement = user_involvement;
     cmd.source_snapshot_and_initiator_id = source_snapshot_and_initiator_id;
     m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
@@ -610,12 +626,6 @@ void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebCo
     process_next_session_history_command();
 }
 
-void ViewImplementation::did_finish_session_history_traversal(Badge<WebContentClient>)
-{
-    m_active_traversal = {};
-    process_next_session_history_command();
-}
-
 void ViewImplementation::did_finish_session_history_operation(Badge<WebContentClient>)
 {
     m_active_operation = false;
@@ -633,28 +643,30 @@ void ViewImplementation::process_next_session_history_command()
 
     command->visit(
         [&](TraversalCommand& traversal) {
-            // Resolve delta to absolute target_step if needed.
-            if (traversal.delta.has_value()) {
-                auto all_steps = get_all_used_history_steps(m_session_history_entries);
-                auto current_index = all_steps.find_first_index(m_session_history_current_step);
-                if (!current_index.has_value()) {
-                    process_next_session_history_command();
-                    return;
-                }
-                auto target_index = static_cast<int>(*current_index) + *traversal.delta;
-                if (target_index < 0 || target_index >= static_cast<int>(all_steps.size())) {
-                    process_next_session_history_command();
-                    return;
-                }
-                traversal.target_step = all_steps[target_index];
-            }
+            // https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-used-step
+            traversal.target_step = get_the_used_step(m_session_history_entries, traversal.target_step);
+
+            // Pre-compute navigable classifications and history length/index.
+            traversal.changing_navigable_ids = get_changing_navigable_ids(
+                m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, traversal.target_step);
+            traversal.non_changing_navigable_ids = get_non_changing_navigable_ids(
+                m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, traversal.target_step);
+            auto length_and_index = compute_script_history_length_and_index(
+                m_session_history_entries, traversal.target_step);
+            traversal.script_history_length = length_and_index.script_history_length;
+            traversal.script_history_index = length_and_index.script_history_index;
 
             m_active_traversal = traversal;
 
-            // Transitional: execute via the old monolithic apply_the_traverse_history_step path.
-            // This will be replaced by the phase protocol in a later commit.
-            client().async_execute_session_history_traversal(
-                page_id(), traversal.target_step, traversal.source_snapshot_and_initiator_id, traversal.user_involvement);
+            // Phase B or C: If unloading check is needed, start with Phase B; otherwise skip to Phase C.
+            if (traversal.check_for_cancelation) {
+                client().async_traversal_check_if_unloading_is_canceled(
+                    page_id(), traversal.target_step, traversal.source_snapshot_and_initiator_id, traversal.user_involvement);
+            } else {
+                client().async_traversal_populate_documents(
+                    page_id(), traversal.target_step, traversal.changing_navigable_ids,
+                    traversal.source_snapshot_and_initiator_id, traversal.user_involvement, traversal.navigation_type);
+            }
         },
         [&](SynchronousNavigationCommand& cmd) {
             m_active_operation = true;
@@ -681,7 +693,8 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
     // Phase C: Populate documents for changing navigables.
     auto& cmd = m_active_traversal.value();
     client().async_traversal_populate_documents(
-        page_id(), cmd.target_step, cmd.source_snapshot_and_initiator_id, cmd.user_involvement, cmd.navigation_type);
+        page_id(), cmd.target_step, cmd.changing_navigable_ids,
+        cmd.source_snapshot_and_initiator_id, cmd.user_involvement, cmd.navigation_type);
 }
 
 void ViewImplementation::did_finish_traversal_document_population(Badge<WebContentClient>)
@@ -692,7 +705,8 @@ void ViewImplementation::did_finish_traversal_document_population(Badge<WebConte
     // Phase D: Activate entries for changing navigables.
     auto& cmd = m_active_traversal.value();
     client().async_traversal_activate_entries(
-        page_id(), cmd.target_step, cmd.navigation_type, cmd.user_involvement);
+        page_id(), cmd.target_step, cmd.script_history_length, cmd.script_history_index,
+        cmd.navigation_type, cmd.user_involvement);
 }
 
 void ViewImplementation::did_finish_traversal_entry_activation(Badge<WebContentClient>)
@@ -702,7 +716,9 @@ void ViewImplementation::did_finish_traversal_entry_activation(Badge<WebContentC
 
     // Phase E: Update non-changing navigables (history object length/index).
     auto& cmd = m_active_traversal.value();
-    client().async_traversal_update_non_changing_navigables(page_id(), cmd.target_step);
+    client().async_traversal_update_non_changing_navigables(
+        page_id(), cmd.non_changing_navigable_ids,
+        cmd.script_history_length, cmd.script_history_index);
 }
 
 void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebContentClient>)
@@ -711,7 +727,18 @@ void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebConte
         return;
 
     // Phase F (finalization): Update UI-side state.
-    m_session_history_current_step = m_active_traversal->target_step;
+    auto target_step = m_active_traversal->target_step;
+    m_session_history_current_step = target_step;
+
+    // Update the URL bar from the traversable's top-level entry at the target step.
+    for (auto const& entry : m_session_history_entries) {
+        if (entry.step == target_step) {
+            m_url = entry.url;
+            if (on_url_change)
+                on_url_change(entry.url);
+            break;
+        }
+    }
 
     auto all_steps = get_all_used_history_steps(m_session_history_entries);
     auto current_index = all_steps.find_first_index(m_session_history_current_step);
@@ -852,6 +879,13 @@ void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_err
 
     initialize_client();
     VERIFY(m_client_state.client);
+
+    // Clear session history traversal state — the old WebContent process is gone, so any
+    // in-flight traversal or operation will never complete. Without this, the queue guard
+    // (m_active_traversal / m_active_operation) permanently blocks all future navigation.
+    m_active_traversal = {};
+    m_active_operation = false;
+    m_session_history_traversal_queue.clear();
 
     // Don't keep a stale backup bitmap around.
     m_backup_bitmap = nullptr;

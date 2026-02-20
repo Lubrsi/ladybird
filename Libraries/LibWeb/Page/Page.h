@@ -411,7 +411,7 @@ public:
     virtual NewWebViewResult page_did_request_new_web_view(HTML::ActivateTab, HTML::WebViewHints, HTML::TokenizedFeature::NoOpener) { return {}; }
     virtual void page_did_request_activate_tab() { }
     virtual void page_did_close_top_level_traversable() { }
-    virtual void page_did_update_session_history([[maybe_unused]] i32 current_step, [[maybe_unused]] Vector<WebView::SerializedSessionHistoryEntry> entries) { }
+    virtual void page_did_update_session_history([[maybe_unused]] String traversable_navigable_id, [[maybe_unused]] i32 current_step, [[maybe_unused]] Vector<WebView::SerializedSessionHistoryEntry> entries) { }
     virtual void page_did_request_traversal_by_delta([[maybe_unused]] i32 delta, [[maybe_unused]] Optional<u64> source_snapshot_and_initiator_id, [[maybe_unused]] HTML::UserNavigationInvolvement user_involvement) { }
     virtual void page_did_request_session_history_operation([[maybe_unused]] u64 operation_id) { }
     virtual void page_did_request_session_history_sync_navigation([[maybe_unused]] u64 operation_id, [[maybe_unused]] String target_navigable_id) { }

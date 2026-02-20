@@ -30,11 +30,6 @@ enum class TraversalUnloadingCheckResult : u8 {
 struct TraversalCommand {
     i32 target_step { 0 };
 
-    // If set, target_step is resolved from current_step + delta at dequeue time.
-    // Used for script-initiated delta traversals (history.back/forward) where the target
-    // must be computed relative to the step that is current when this command actually runs.
-    Optional<i32> delta;
-
     bool check_for_cancelation { true };
     Optional<Web::Bindings::NavigationType> navigation_type;
     Web::HTML::UserNavigationInvolvement user_involvement { Web::HTML::UserNavigationInvolvement::BrowserUI };
@@ -44,6 +39,12 @@ struct TraversalCommand {
     // WebContent stores them locally and the UI sends this ID back when executing the traversal.
     // Empty for browser-UI initiated traversals.
     Optional<u64> source_snapshot_and_initiator_id;
+
+    // Pre-computed by UI at dequeue time using serialized session history functions:
+    Vector<String> changing_navigable_ids;
+    Vector<String> non_changing_navigable_ids;
+    size_t script_history_length { 0 };
+    size_t script_history_index { 0 };
 };
 
 // A synchronous navigation step that can jump the queue during traversal processing.
@@ -70,6 +71,7 @@ using SessionHistoryCommand = Variant<TraversalCommand, SynchronousNavigationCom
 class WEBVIEW_API SessionHistoryTraversalQueue {
 public:
     void append(SessionHistoryCommand);
+    void clear() { m_queue.clear(); }
     bool is_empty() const { return m_queue.is_empty(); }
     size_t size() const { return m_queue.size(); }
 

@@ -681,9 +681,9 @@ void PageClient::page_did_close_top_level_traversable()
     m_owner.remove_page({}, m_id);
 }
 
-void PageClient::page_did_update_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
+void PageClient::page_did_update_session_history(String traversable_navigable_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
 {
-    client().async_did_update_session_history(m_id, current_step, move(entries));
+    client().async_did_update_session_history(m_id, move(traversable_navigable_id), current_step, move(entries));
 }
 
 void PageClient::page_did_request_traversal_by_delta(i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)

@@ -88,19 +88,19 @@ static bool entries_share_document(SerializedSessionHistoryEntry const& a, Seria
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#get-all-navigables-whose-current-session-history-entry-will-change-or-reload
-Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step)
+Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, String const& traversable_navigable_id, int current_step, int target_step)
 {
     // 1. Let results be an empty list.
     Vector<String> results;
 
     struct NavigableToCheck {
         Vector<SerializedSessionHistoryEntry> const* entries;
-        Optional<String> navigable_id;
+        String navigable_id;
     };
 
     // 2. Let navigablesToCheck be « traversable ».
     Vector<NavigableToCheck> navigables_to_check;
-    navigables_to_check.append({ &entries, {} });
+    navigables_to_check.append({ &entries, traversable_navigable_id });
 
     // 3. For each navigable of navigablesToCheck:
     while (!navigables_to_check.is_empty()) {
@@ -116,8 +116,8 @@ Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> 
         auto const* current_entry = get_target_entry(*navigable.entries, current_step);
         bool is_changing = !current_entry || current_entry->step != target_entry->step || target_entry->document_state.reload_pending;
 
-        if (is_changing && navigable.navigable_id.has_value())
-            results.append(navigable.navigable_id.value());
+        if (is_changing)
+            results.append(navigable.navigable_id);
 
         // 3. If targetEntry's document is navigable's document, and targetEntry's document state's reload pending is
         //    false, then extend navigablesToCheck with the child navigables of navigable.
@@ -132,19 +132,19 @@ Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> 
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-all-navigables-that-only-need-history-object-length/index-update
-Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step)
+Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, String const& traversable_navigable_id, int current_step, int target_step)
 {
     // 1. Let results be an empty list.
     Vector<String> results;
 
     struct NavigableToCheck {
         Vector<SerializedSessionHistoryEntry> const* entries;
-        Optional<String> navigable_id;
+        String navigable_id;
     };
 
     // 2. Let navigablesToCheck be « traversable ».
     Vector<NavigableToCheck> navigables_to_check;
-    navigables_to_check.append({ &entries, {} });
+    navigables_to_check.append({ &entries, traversable_navigable_id });
 
     // 3. For each navigable of navigablesToCheck:
     while (!navigables_to_check.is_empty()) {
@@ -160,8 +160,7 @@ Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEnt
         // 2. If targetEntry is navigable's current session history entry and targetEntry's document state's reload pending is false, then:
         if (current_entry && current_entry->step == target_entry->step && !target_entry->document_state.reload_pending) {
             // 1. Append navigable to results.
-            if (navigable.navigable_id.has_value())
-                results.append(navigable.navigable_id.value());
+            results.append(navigable.navigable_id);
 
             // 2. Extend navigablesToCheck with navigable's child navigables.
             for (auto const& nested : target_entry->document_state.nested_histories)

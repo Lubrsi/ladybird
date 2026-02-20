@@ -28,6 +28,9 @@
 
 namespace Web::HTML {
 
+struct ChangingNavigableContinuationState;
+struct TraversalPhaseState;
+
 // https://html.spec.whatwg.org/multipage/document-sequences.html#traversable-navigable
 class WEB_API TraversableNavigable final : public Navigable {
     GC_CELL(TraversableNavigable, Navigable);
@@ -107,6 +110,7 @@ public:
         GC::Ptr<Navigable> initiator;
     };
     Optional<SourceSnapshotAndInitiator> take_source_snapshot_and_initiator(u64 id);
+    Optional<SourceSnapshotAndInitiator> get_source_snapshot_and_initiator(u64 id) const;
 
     // Store an operation closure for later execution via IPC round-trip.
     // Returns an operation ID that the UI sends back when it's time to execute.
@@ -118,12 +122,24 @@ public:
 
     [[nodiscard]] GC::Ptr<DOM::Node> currently_focused_area();
 
+    // Resolve a set of navigable IDs (from UI-side pre-computation) to live Navigable objects.
+    Vector<GC::Ref<Navigable>> resolve_navigable_ids(Vector<String> const& ids);
+
     enum class CheckIfUnloadingIsCanceledResult {
         CanceledByBeforeUnload,
         CanceledByNavigate,
         Continue,
     };
     CheckIfUnloadingIsCanceledResult check_if_unloading_is_canceled(Vector<GC::Root<Navigable>> navigables_that_need_before_unload);
+
+    // Phase B: Check if unloading is canceled (spec steps 2-5 of "apply the history step").
+    void traversal_check_if_unloading_is_canceled(int step, GC::Ptr<SourceSnapshotParams>, GC::Ptr<Navigable> initiator, UserNavigationInvolvement, GC::Ref<GC::Function<void(CheckIfUnloadingIsCanceledResult)>> on_complete);
+    // Phase C: Populate documents for changing navigables (spec steps 6-12).
+    void traversal_populate_documents(int step, Vector<String> changing_navigable_ids, GC::Ptr<SourceSnapshotParams>, UserNavigationInvolvement, Optional<Bindings::NavigationType>, GC::Ref<GC::Function<void()>> on_complete);
+    // Phase D: Activate entries for changing navigables (spec steps 13-14).
+    void traversal_activate_entries(int step, size_t script_history_length, size_t script_history_index, Optional<Bindings::NavigationType>, UserNavigationInvolvement, GC::Ref<GC::Function<void()>> on_complete);
+    // Phase E: Update non-changing navigables (spec steps 15-19).
+    void traversal_update_non_changing_navigables(Vector<String> non_changing_navigable_ids, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
 
     StorageAPI::StorageShed& storage_shed() { return m_storage_shed; }
     StorageAPI::StorageShed const& storage_shed() const { return m_storage_shed; }
@@ -196,6 +212,9 @@ private:
     HashMap<u64, GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>>> m_operation_map;
 
     String m_window_handle;
+
+    // State carried between Phase C, Phase D, and Phase E of the traversal protocol.
+    GC::Ptr<TraversalPhaseState> m_traversal_phase_state;
 
     // https://w3c.github.io/geolocation/#dfn-emulated-position-data
     Geolocation::EmulatedPositionData m_emulated_position_data;

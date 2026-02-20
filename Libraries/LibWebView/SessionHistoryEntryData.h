@@ -102,13 +102,13 @@ struct ScriptHistoryLengthAndIndex {
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#get-all-navigables-whose-current-session-history-entry-will-change-or-reload
 // Same algorithm as TraversableNavigable::get_all_navigables_whose_current_session_history_entry_will_change_or_reload(),
-// but operates on serialized data. Returns navigable IDs from nested histories; the traversable itself is not included.
-WEBVIEW_API Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step);
+// but operates on serialized data. Returns navigable IDs including the traversable's own ID when applicable.
+WEBVIEW_API Vector<String> get_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, String const& traversable_navigable_id, int current_step, int target_step);
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-all-navigables-that-only-need-history-object-length/index-update
 // Same algorithm as TraversableNavigable::get_all_navigables_that_only_need_history_object_length_index_update(),
-// but operates on serialized data. Returns navigable IDs from nested histories; the traversable itself is not included.
-WEBVIEW_API Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, int current_step, int target_step);
+// but operates on serialized data. Returns navigable IDs including the traversable's own ID when applicable.
+WEBVIEW_API Vector<String> get_non_changing_navigable_ids(Vector<SerializedSessionHistoryEntry> const& entries, String const& traversable_navigable_id, int current_step, int target_step);
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#getting-the-history-object-length-and-index
 // Same algorithm as TraversableNavigable::get_the_history_object_length_and_index(), but operates on serialized data.

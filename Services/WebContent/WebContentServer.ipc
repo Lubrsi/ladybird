@@ -48,15 +48,12 @@ endpoint WebContentServer
     // Phase B: Check if unloading is canceled (spec steps 4-5 of "apply the history step")
     traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
     // Phase C: Populate documents for changing navigables (spec steps 6-12)
-    traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) =|
+    traversal_populate_documents(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) =|
     // Phase D: Activate entries for changing navigables (spec steps 13-14)
-    traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    traversal_activate_entries(u64 page_id, i32 target_step, u64 script_history_length, u64 script_history_index, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) =|
     // Phase E: Update non-changing navigables (spec steps 15-19)
-    traversal_update_non_changing_navigables(u64 page_id, i32 target_step) =|
+    traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) =|
 
-    // Session history traversal queue: transitional execute-and-respond protocol.
-    // The UI sends these to WebContent to execute queued commands.
-    execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
     execute_session_history_operation(u64 page_id, u64 operation_id) =|
 
     ready_to_paint(u64 page_id) =|

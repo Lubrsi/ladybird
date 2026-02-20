@@ -74,12 +74,11 @@ private:
     virtual void reload(u64 page_id) override;
     virtual void apply_the_traverse_history_step(u64 page_id, i32 step) override;
     virtual void restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) override;
-    virtual void execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
     virtual void execute_session_history_operation(u64 page_id, u64 operation_id) override;
     virtual void traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
-    virtual void traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) override;
-    virtual void traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) override;
-    virtual void traversal_update_non_changing_navigables(u64 page_id, i32 target_step) override;
+    virtual void traversal_populate_documents(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) override;
+    virtual void traversal_activate_entries(u64 page_id, i32 target_step, u64 script_history_length, u64 script_history_index, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) override;
+    virtual void traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) override;
     virtual void set_viewport(u64 page_id, Web::DevicePixelSize, double device_pixel_ratio) override;
     virtual void key_event(u64 page_id, Web::KeyEvent) override;
     virtual void mouse_event(u64 page_id, Web::MouseEvent) override;

@@ -209,25 +209,6 @@ void ConnectionFromClient::restore_session_history(u64 page_id, i32 current_step
         page->page().top_level_traversable()->restore_session_history(current_step, move(entries));
 }
 
-void ConnectionFromClient::execute_session_history_traversal(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
-{
-    if (auto page = this->page(page_id); page.has_value()) {
-        auto traversable = page->page().top_level_traversable();
-
-        GC::Ptr<Web::HTML::SourceSnapshotParams> source_snapshot_params;
-        GC::Ptr<Web::HTML::Navigable> initiator_to_check;
-        if (source_snapshot_and_initiator_id.has_value()) {
-            if (auto pair = traversable->take_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value()) {
-                source_snapshot_params = pair->source_snapshot_params;
-                initiator_to_check = pair->initiator;
-            }
-        }
-
-        traversable->apply_the_traverse_history_step(target_step, source_snapshot_params, initiator_to_check, user_involvement);
-        async_did_finish_session_history_traversal(page_id);
-    }
-}
-
 void ConnectionFromClient::execute_session_history_operation(u64 page_id, u64 operation_id)
 {
     if (auto page = this->page(page_id); page.has_value()) {
@@ -246,37 +227,79 @@ void ConnectionFromClient::execute_session_history_operation(u64 page_id, u64 op
 
 void ConnectionFromClient::traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
 {
-    // FIXME: Implement Phase B of the traversal protocol.
-    (void)page_id;
-    (void)target_step;
-    (void)source_snapshot_and_initiator_id;
-    (void)user_involvement;
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+
+        GC::Ptr<Web::HTML::SourceSnapshotParams> source_snapshot_params;
+        GC::Ptr<Web::HTML::Navigable> initiator_to_check;
+        if (source_snapshot_and_initiator_id.has_value()) {
+            // Non-destructive lookup — Phase C is the last consumer.
+            if (auto pair = traversable->get_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value()) {
+                source_snapshot_params = pair->source_snapshot_params;
+                initiator_to_check = pair->initiator;
+            }
+        }
+
+        traversable->traversal_check_if_unloading_is_canceled(target_step, source_snapshot_params, initiator_to_check, user_involvement,
+            GC::create_function(traversable->heap(), [this, page_id](Web::HTML::TraversableNavigable::CheckIfUnloadingIsCanceledResult result) {
+                WebView::TraversalUnloadingCheckResult ipc_result;
+                switch (result) {
+                case Web::HTML::TraversableNavigable::CheckIfUnloadingIsCanceledResult::Continue:
+                    ipc_result = WebView::TraversalUnloadingCheckResult::Continue;
+                    break;
+                case Web::HTML::TraversableNavigable::CheckIfUnloadingIsCanceledResult::CanceledByBeforeUnload:
+                    ipc_result = WebView::TraversalUnloadingCheckResult::CanceledByBeforeUnload;
+                    break;
+                case Web::HTML::TraversableNavigable::CheckIfUnloadingIsCanceledResult::CanceledByNavigate:
+                    ipc_result = WebView::TraversalUnloadingCheckResult::CanceledByNavigate;
+                    break;
+                }
+                async_did_finish_traversal_unloading_check(page_id, ipc_result);
+            }));
+    }
 }
 
-void ConnectionFromClient::traversal_populate_documents(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type)
+void ConnectionFromClient::traversal_populate_documents(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type)
 {
-    // FIXME: Implement Phase C of the traversal protocol.
-    (void)page_id;
-    (void)target_step;
-    (void)source_snapshot_and_initiator_id;
-    (void)user_involvement;
-    (void)navigation_type;
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+
+        GC::Ptr<Web::HTML::SourceSnapshotParams> source_snapshot_params;
+        if (source_snapshot_and_initiator_id.has_value()) {
+            // Destructive — last consumer of the source snapshot.
+            if (auto pair = traversable->take_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value())
+                source_snapshot_params = pair->source_snapshot_params;
+        }
+
+        traversable->traversal_populate_documents(target_step, move(changing_navigable_ids), source_snapshot_params, user_involvement, navigation_type,
+            GC::create_function(traversable->heap(), [this, page_id]() {
+                async_did_finish_traversal_document_population(page_id);
+            }));
+    }
 }
 
-void ConnectionFromClient::traversal_activate_entries(u64 page_id, i32 target_step, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement)
+void ConnectionFromClient::traversal_activate_entries(u64 page_id, i32 target_step, u64 script_history_length, u64 script_history_index, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement)
 {
-    // FIXME: Implement Phase D of the traversal protocol.
-    (void)page_id;
-    (void)target_step;
-    (void)navigation_type;
-    (void)user_involvement;
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+
+        traversable->traversal_activate_entries(target_step, script_history_length, script_history_index, navigation_type, user_involvement,
+            GC::create_function(traversable->heap(), [this, page_id]() {
+                async_did_finish_traversal_entry_activation(page_id);
+            }));
+    }
 }
 
-void ConnectionFromClient::traversal_update_non_changing_navigables(u64 page_id, i32 target_step)
+void ConnectionFromClient::traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index)
 {
-    // FIXME: Implement Phase E of the traversal protocol.
-    (void)page_id;
-    (void)target_step;
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+
+        traversable->traversal_update_non_changing_navigables(move(non_changing_navigable_ids), script_history_length, script_history_index,
+            GC::create_function(traversable->heap(), [this, page_id]() {
+                async_did_finish_traversal_non_changing_update(page_id);
+            }));
+    }
 }
 
 void ConnectionFromClient::set_viewport(u64 page_id, Web::DevicePixelSize size, double device_pixel_ratio)
