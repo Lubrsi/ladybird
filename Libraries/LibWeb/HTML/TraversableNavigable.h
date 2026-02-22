@@ -13,7 +13,6 @@
 #include <LibWeb/Geolocation/Geolocation.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/NavigationType.h>
-#include <LibWeb/HTML/SessionHistoryTraversalQueue.h>
 #include <LibWeb/HTML/VisibilityState.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/StorageAPI/StorageShed.h>
@@ -29,7 +28,6 @@
 namespace Web::HTML {
 
 struct ChangingNavigableContinuationState;
-struct TraversalPhaseState;
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#traversable-navigable
 class WEB_API TraversableNavigable final : public Navigable {
@@ -47,8 +45,6 @@ public:
     int current_session_history_step() const { return m_current_session_history_step; }
     Vector<GC::Ref<SessionHistoryEntry>>& session_history_entries() { return m_session_history_entries; }
     Vector<GC::Ref<SessionHistoryEntry>> const& session_history_entries() const { return m_session_history_entries; }
-    bool running_nested_apply_history_step() const { return m_running_nested_apply_history_step; }
-
     void restore_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries);
 
     VisibilityState system_visibility_state() const { return m_system_visibility_state; }
@@ -92,16 +88,6 @@ public:
     void definitely_close_top_level_traversable();
     void destroy_top_level_traversable();
 
-    void append_session_history_traversal_steps(GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> steps)
-    {
-        m_session_history_traversal_queue->append(steps);
-    }
-
-    void append_session_history_synchronous_navigation_steps(GC::Ref<Navigable> target_navigable, GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> steps)
-    {
-        m_session_history_traversal_queue->append_sync(steps, target_navigable);
-    }
-
     // Store a (SourceSnapshotParams, Navigable) pair for later retrieval during traversal execution.
     // Returns an opaque ID that the UI sends back when executing the traversal.
     u64 store_source_snapshot_and_initiator(GC::Ptr<SourceSnapshotParams>, GC::Ptr<Navigable>);
@@ -134,10 +120,10 @@ public:
 
     // Phase B: Check if unloading is canceled (spec steps 2-5 of "apply the history step").
     void traversal_check_if_unloading_is_canceled(int step, GC::Ptr<SourceSnapshotParams>, GC::Ptr<Navigable> initiator, UserNavigationInvolvement, GC::Ref<GC::Function<void(CheckIfUnloadingIsCanceledResult)>> on_complete);
-    // Phase C: Populate documents for changing navigables (spec steps 6-12).
-    void traversal_populate_documents(int step, Vector<String> changing_navigable_ids, GC::Ptr<SourceSnapshotParams>, UserNavigationInvolvement, Optional<Bindings::NavigationType>, GC::Ref<GC::Function<void()>> on_complete);
-    // Phase D: Activate entries for changing navigables (spec steps 13-14).
-    void traversal_activate_entries(int step, size_t script_history_length, size_t script_history_index, Optional<Bindings::NavigationType>, UserNavigationInvolvement, GC::Ref<GC::Function<void()>> on_complete);
+    // Phase CD setup: Set current session history entry and ongoing navigation for all changing navigables (spec step 8).
+    void traversal_setup_changing_navigables(int step, Vector<String> changing_navigable_ids);
+    // Phase CD per-navigable: Populate document and activate entry for one navigable (spec steps 12+14 per-navigable).
+    void traversal_process_navigable(String navigable_id, int step, GC::Ptr<SourceSnapshotParams>, UserNavigationInvolvement, Optional<Bindings::NavigationType>, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
     // Phase E: Update non-changing navigables (spec steps 15-19).
     void traversal_update_non_changing_navigables(Vector<String> non_changing_navigable_ids, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
 
@@ -184,11 +170,6 @@ private:
     // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-session-history-entries
     Vector<GC::Ref<SessionHistoryEntry>> m_session_history_entries;
 
-    // FIXME: https://html.spec.whatwg.org/multipage/document-sequences.html#tn-session-history-traversal-queue
-
-    // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-running-nested-apply-history-step
-    bool m_running_nested_apply_history_step { false };
-
     // https://html.spec.whatwg.org/multipage/document-sequences.html#system-visibility-state
     VisibilityState m_system_visibility_state { VisibilityState::Hidden };
 
@@ -198,8 +179,6 @@ private:
     // https://storage.spec.whatwg.org/#traversable-navigable-storage-shed
     // A traversable navigable holds a storage shed, which is a storage shed. A traversable navigable’s storage shed holds all session storage data.
     GC::Ref<StorageAPI::StorageShed> m_storage_shed;
-
-    GC::Ref<SessionHistoryTraversalQueue> m_session_history_traversal_queue;
 
     // Storage for source snapshot + initiator pairs, keyed by opaque IDs.
     // Used for script-initiated traversals where GC objects can't cross IPC.
@@ -212,9 +191,6 @@ private:
     HashMap<u64, GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>>> m_operation_map;
 
     String m_window_handle;
-
-    // State carried between Phase C, Phase D, and Phase E of the traversal protocol.
-    GC::Ptr<TraversalPhaseState> m_traversal_phase_state;
 
     // https://w3c.github.io/geolocation/#dfn-emulated-position-data
     Geolocation::EmulatedPositionData m_emulated_position_data;

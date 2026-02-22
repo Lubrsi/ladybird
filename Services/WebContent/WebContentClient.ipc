@@ -125,10 +125,8 @@ endpoint WebContentClient
 
     // Session history traversal phase protocol responses:
     did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) =|
-    // Phase C complete
-    did_finish_traversal_document_population(u64 page_id) =|
-    // Phase D complete
-    did_finish_traversal_entry_activation(u64 page_id) =|
+    // Phase CD per-navigable complete
+    did_finish_traversal_navigable(u64 page_id, String navigable_id) =|
     // Phase E complete
     did_finish_traversal_non_changing_update(u64 page_id) =|
     did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap back_bitmap) =|

@@ -809,16 +809,10 @@ void WebContentClient::did_finish_traversal_unloading_check(u64 page_id, WebView
         view->did_finish_traversal_unloading_check({}, result);
 }
 
-void WebContentClient::did_finish_traversal_document_population(u64 page_id)
+void WebContentClient::did_finish_traversal_navigable(u64 page_id, String navigable_id)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())
-        view->did_finish_traversal_document_population({});
-}
-
-void WebContentClient::did_finish_traversal_entry_activation(u64 page_id)
-{
-    if (auto view = view_for_page_id(page_id); view.has_value())
-        view->did_finish_traversal_entry_activation({});
+        view->did_finish_traversal_navigable({}, move(navigable_id));
 }
 
 void WebContentClient::did_finish_traversal_non_changing_update(u64 page_id)

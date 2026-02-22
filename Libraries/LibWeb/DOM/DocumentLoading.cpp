@@ -418,7 +418,7 @@ GC::Ptr<DOM::Document> load_document(HTML::NavigationParams const& navigation_pa
     // To load a document given navigation params navigationParams, source snapshot params sourceSnapshotParams,
     // and origin initiatorOrigin, perform the following steps. They return a Document or null.
 
-    // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
+    // NB: The Core::Promise is used to signal completion of session history processing.
 
     // 1. Let type be the computed type of navigationParams's response.
     auto supplied_type = Fetch::Infrastructure::extract_mime_type(navigation_params.response->header_list());

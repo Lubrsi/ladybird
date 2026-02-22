@@ -661,7 +661,6 @@ set(SOURCES
     HTML/SelectItem.cpp
     HTML/SerializedPolicyContainer.cpp
     HTML/SessionHistoryEntry.cpp
-    HTML/SessionHistoryTraversalQueue.cpp
     HTML/ShadowRealmGlobalScope.cpp
     HTML/SharedResourceRequest.cpp
     HTML/AnimatedDecodedImageData.cpp

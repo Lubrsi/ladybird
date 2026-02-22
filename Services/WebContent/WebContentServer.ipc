@@ -41,16 +41,15 @@ endpoint WebContentServer
     load_url(u64 page_id, URL::URL url) =|
     load_html(u64 page_id, ByteString html) =|
     reload(u64 page_id) =|
-    apply_the_traverse_history_step(u64 page_id, i32 step) =|
     restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries) =|
 
     // Session history traversal phase protocol (UI-orchestrated):
     // Phase B: Check if unloading is canceled (spec steps 4-5 of "apply the history step")
     traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
-    // Phase C: Populate documents for changing navigables (spec steps 6-12)
-    traversal_populate_documents(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type) =|
-    // Phase D: Activate entries for changing navigables (spec steps 13-14)
-    traversal_activate_entries(u64 page_id, i32 target_step, u64 script_history_length, u64 script_history_index, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement) =|
+    // Phase CD setup: Set current session history entry and ongoing navigation for all changing navigables (spec step 8)
+    traversal_setup_changing_navigables(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids) =|
+    // Phase CD per-navigable: Populate document and activate entry for one navigable (spec steps 12+14 per-navigable)
+    traversal_process_navigable(u64 page_id, String navigable_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type, u64 script_history_length, u64 script_history_index) =|
     // Phase E: Update non-changing navigables (spec steps 15-19)
     traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) =|
 

@@ -154,8 +154,7 @@ private:
     virtual void did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) override;
     virtual void did_finish_session_history_operation(u64 page_id) override;
     virtual void did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) override;
-    virtual void did_finish_traversal_document_population(u64 page_id) override;
-    virtual void did_finish_traversal_entry_activation(u64 page_id) override;
+    virtual void did_finish_traversal_navigable(u64 page_id, String navigable_id) override;
     virtual void did_finish_traversal_non_changing_update(u64 page_id) override;
     virtual void did_allocate_backing_stores(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap, i32 back_bitmap_id, Gfx::ShareableBitmap) override;
     virtual Messages::WebContentClient::RequestWorkerAgentResponse request_worker_agent(u64 page_id, Web::Bindings::AgentType worker_type) override;

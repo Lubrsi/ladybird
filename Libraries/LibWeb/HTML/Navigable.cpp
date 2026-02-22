@@ -1430,7 +1430,7 @@ void Navigable::populate_session_history_entry_document(
             // 1. If navigable's ongoing navigation no longer equals navigationId, then run completionSteps and abort these steps.
             if (navigation_id.has_value() && ongoing_navigation() != navigation_id) {
                 if (completion_steps) {
-                    // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
+                    // NB: Resolve the promise to signal that session history processing can continue.
                     signal_to_continue_session_history_processing->resolve({});
                     completion_steps->function()();
                 }
@@ -1949,7 +1949,7 @@ void Navigable::begin_navigation(NavigateParams params)
         //    sourceSnapshotParams, targetSnapshotParams, userInvolvement, navigationId, navigationParams,
         //    cspNavigationType, with allowPOST set to true and completionSteps set to the following step:
 
-        // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
+        // NB: The Core::Promise is used to signal completion of session history processing.
         auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
         populate_session_history_entry_document(history_entry, source_snapshot_params, target_snapshot_params, user_involvement, signal_to_continue_session_history_processing, navigation_id, navigation_params, csp_navigation_type, true, GC::create_function(heap(), [this, signal_to_continue_session_history_processing, history_entry, history_handling, navigation_id, user_involvement] {
             // 1. Append session history traversal steps to navigable's traversable to finalize a cross-document navigation given navigable, historyHandling, userInvolvement, and historyEntry.

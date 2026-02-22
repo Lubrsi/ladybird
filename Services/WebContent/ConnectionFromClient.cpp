@@ -190,19 +190,6 @@ void ConnectionFromClient::reload(u64 page_id)
         page->page().reload();
 }
 
-void ConnectionFromClient::apply_the_traverse_history_step(u64 page_id, i32 step)
-{
-    if (auto page = this->page(page_id); page.has_value()) {
-        auto traversable = page->page().top_level_traversable();
-        traversable->append_session_history_traversal_steps(GC::create_function(traversable->heap(), [traversable, step] {
-            auto signal = Core::Promise<Empty>::construct();
-            traversable->apply_the_traverse_history_step(step, nullptr, nullptr, Web::HTML::UserNavigationInvolvement::BrowserUI);
-            signal->resolve({});
-            return signal;
-        }));
-    }
-}
-
 void ConnectionFromClient::restore_session_history(u64 page_id, i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
 {
     if (auto page = this->page(page_id); page.has_value())
@@ -259,33 +246,30 @@ void ConnectionFromClient::traversal_check_if_unloading_is_canceled(u64 page_id,
     }
 }
 
-void ConnectionFromClient::traversal_populate_documents(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type)
+void ConnectionFromClient::traversal_setup_changing_navigables(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+        traversable->traversal_setup_changing_navigables(target_step, move(changing_navigable_ids));
+    }
+}
+
+void ConnectionFromClient::traversal_process_navigable(u64 page_id, String navigable_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type, u64 script_history_length, u64 script_history_index)
 {
     if (auto page = this->page(page_id); page.has_value()) {
         auto traversable = page->page().top_level_traversable();
 
         GC::Ptr<Web::HTML::SourceSnapshotParams> source_snapshot_params;
         if (source_snapshot_and_initiator_id.has_value()) {
-            // Destructive — last consumer of the source snapshot.
-            if (auto pair = traversable->take_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value())
+            // Non-destructive lookup — each per-navigable call may need the source snapshot.
+            if (auto pair = traversable->get_source_snapshot_and_initiator(*source_snapshot_and_initiator_id); pair.has_value())
                 source_snapshot_params = pair->source_snapshot_params;
         }
 
-        traversable->traversal_populate_documents(target_step, move(changing_navigable_ids), source_snapshot_params, user_involvement, navigation_type,
-            GC::create_function(traversable->heap(), [this, page_id]() {
-                async_did_finish_traversal_document_population(page_id);
-            }));
-    }
-}
-
-void ConnectionFromClient::traversal_activate_entries(u64 page_id, i32 target_step, u64 script_history_length, u64 script_history_index, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement)
-{
-    if (auto page = this->page(page_id); page.has_value()) {
-        auto traversable = page->page().top_level_traversable();
-
-        traversable->traversal_activate_entries(target_step, script_history_length, script_history_index, navigation_type, user_involvement,
-            GC::create_function(traversable->heap(), [this, page_id]() {
-                async_did_finish_traversal_entry_activation(page_id);
+        auto navigable_id_for_callback = navigable_id;
+        traversable->traversal_process_navigable(move(navigable_id), target_step, source_snapshot_params, user_involvement, navigation_type, script_history_length, script_history_index,
+            GC::create_function(traversable->heap(), [this, page_id, navigable_id_for_callback = move(navigable_id_for_callback)]() {
+                async_did_finish_traversal_navigable(page_id, navigable_id_for_callback);
             }));
     }
 }

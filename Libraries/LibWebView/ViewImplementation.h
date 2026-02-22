@@ -159,8 +159,7 @@ public:
     void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id);
     void did_finish_session_history_operation(Badge<WebContentClient>);
     void did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult);
-    void did_finish_traversal_document_population(Badge<WebContentClient>);
-    void did_finish_traversal_entry_activation(Badge<WebContentClient>);
+    void did_finish_traversal_navigable(Badge<WebContentClient>, String navigable_id);
     void did_finish_traversal_non_changing_update(Badge<WebContentClient>);
 
     void process_next_session_history_command();
@@ -414,6 +413,15 @@ protected:
     SessionHistoryTraversalQueue m_session_history_traversal_queue;
     Optional<TraversalCommand> m_active_traversal;
     bool m_active_operation { false };
+
+    // Phase CD iterative state for per-navigable processing.
+    size_t m_traversal_navigable_index { 0 };
+    HashTable<String> m_traversal_exclusion_set;
+    bool m_running_nested_queue_jump { false };
+    bool m_processing_navigable { false };
+
+    void start_traversal_processing();
+    void process_next_traversal_step();
 };
 
 }
