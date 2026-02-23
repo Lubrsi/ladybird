@@ -1954,30 +1954,21 @@ void Navigable::begin_navigation(NavigateParams params)
         populate_session_history_entry_document(history_entry, source_snapshot_params, target_snapshot_params, user_involvement, signal_to_continue_session_history_processing, navigation_id, navigation_params, csp_navigation_type, true, GC::create_function(heap(), [this, signal_to_continue_session_history_processing, history_entry, history_handling, navigation_id, user_involvement] {
             // 1. Append session history traversal steps to navigable's traversable to finalize a cross-document navigation given navigable, historyHandling, userInvolvement, and historyEntry.
             auto traversable = traversable_navigable();
-            auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [this, history_entry, history_handling, navigation_id, user_involvement] {
-                auto signal = Core::Promise<Empty>::construct();
+            traversable->store_session_history_prep(GC::create_function(heap(), [this, history_entry, history_handling, navigation_id, user_involvement] {
                 if (this->has_been_destroyed()) {
                     // AD-HOC: This check is not in the spec but we should not continue navigation if navigable has been destroyed.
                     set_delaying_load_events(false);
-                    signal->resolve({});
-                    return signal;
+                    traversable_navigable()->page().client().page_did_finish_prep_no_history_step();
+                    return;
                 }
                 if (this->ongoing_navigation() != navigation_id) {
                     // AD-HOC: This check is not in the spec but we should not continue navigation if ongoing navigation id has changed.
                     set_delaying_load_events(false);
-                    signal->resolve({});
-                    return signal;
+                    traversable_navigable()->page().client().page_did_finish_prep_no_history_step();
+                    return;
                 }
                 finalize_a_cross_document_navigation(*this, to_history_handling_behavior(history_handling), user_involvement, history_entry);
-
-                // AD-HOC: If the document isn't active or is still loading session history traversal queue will wait
-                //         for it to load else resolve the signal.
-                if (history_entry->document() && (!history_entry->document()->is_active() || history_entry->document()->ready_state() != "loading")) {
-                    signal->resolve({});
-                }
-                return signal;
             }));
-            traversable->page().client().page_did_request_session_history_operation(op_id);
         }));
     }));
 }
@@ -2263,13 +2254,9 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
 
     // 14. Append session history traversal steps to targetNavigable's traversable to finalize a cross-document navigation with targetNavigable, historyHandling, userInvolvement, and historyEntry.
     auto traversable = traversable_navigable();
-    auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [this, history_entry, history_handling, user_involvement] {
-        auto signal = Core::Promise<Empty>::construct();
+    traversable->store_session_history_prep(GC::create_function(heap(), [this, history_entry, history_handling, user_involvement] {
         finalize_a_cross_document_navigation(*this, history_handling, user_involvement, history_entry);
-        signal->resolve({});
-        return signal;
     }));
-    traversable->page().client().page_did_request_session_history_operation(op_id);
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#reload
@@ -2312,14 +2299,18 @@ void Navigable::reload(Optional<SerializationRecord> navigation_api_state, UserN
     auto traversable = traversable_navigable();
 
     // 4. Append the following session history traversal steps to traversable:
-    auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [traversable, user_involvement] {
-        auto signal = Core::Promise<Empty>::construct();
-        // 1. Apply the reload history step to traversable given userInvolvement.
-        traversable->apply_the_reload_history_step(user_involvement);
-        signal->resolve({});
-        return signal;
+    traversable->store_session_history_prep(GC::create_function(heap(), [traversable, user_involvement] {
+        // "apply the reload history step":
+        // 1. Let step be traversable's current session history step.
+        auto step = traversable->current_session_history_step();
+
+        // 2. Return the result of applying the history step step to traversable given true, null,
+        //    null, userInvolvement, and "reload".
+        // AD-HOC: Instead of calling apply_the_history_step, push session history (with reload_pending
+        //         visible) and send parameters for the UI to drive the phase protocol.
+        traversable->push_session_history_to_ui();
+        traversable->page().client().page_did_finish_prep_for_history_step(step, true, Bindings::NavigationType::Reload, user_involvement, {}, {});
     }));
-    traversable->page().client().page_did_request_session_history_operation(op_id);
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#the-navigation-must-be-a-replace
@@ -2404,8 +2395,10 @@ TargetSnapshotParams Navigable::snapshot_target_snapshot_params()
 void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryHandlingBehavior history_handling, UserNavigationInvolvement user_involvement, GC::Ref<SessionHistoryEntry> history_entry)
 {
     // NOTE: This is not in the spec but we should not navigate destroyed navigable.
-    if (navigable->has_been_destroyed())
+    if (navigable->has_been_destroyed()) {
+        navigable->traversable_navigable()->page().client().page_did_finish_prep_no_history_step();
         return;
+    }
 
     // 1. FIXME: Assert: this is running on navigable's traversable navigable's session history traversal queue.
 
@@ -2413,8 +2406,10 @@ void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryH
     navigable->set_delaying_load_events(false);
 
     // 3. If historyEntry's document is null, then return.
-    if (!history_entry->document())
+    if (!history_entry->document()) {
+        navigable->traversable_navigable()->page().client().page_did_finish_prep_no_history_step();
         return;
+    }
 
     // 4. If all of the following are true:
     //    - navigable's parent is null;
@@ -2477,7 +2472,13 @@ void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryH
     }
 
     // 10. Apply the push/replace history step targetStep to traversable given historyHandling and userInvolvement.
-    traversable->apply_the_push_or_replace_history_step(target_step, history_handling, user_involvement, TraversableNavigable::SynchronousNavigation::No);
+    // AD-HOC: Instead of calling apply_the_push_or_replace_history_step directly, push session history
+    //         to the UI and send the parameters via IPC so the UI can drive the phase protocol.
+    auto navigation_type = history_handling == HistoryHandlingBehavior::Push
+        ? Bindings::NavigationType::Push
+        : Bindings::NavigationType::Replace;
+    traversable->push_session_history_to_ui();
+    traversable->page().client().page_did_finish_prep_for_history_step(target_step, false, navigation_type, user_involvement, {}, {});
 
     // AD-HOC: If we're inside a navigable container, let's trigger a relayout in the container document.
     //         This allows size negotiation between the containing document and SVG documents to happen.
