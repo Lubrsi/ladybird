@@ -121,7 +121,7 @@ endpoint WebContentClient
     did_request_traversal_by_delta(u64 page_id, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) =|
     did_request_session_history_operation(u64 page_id, u64 operation_id) =|
     did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) =|
-    did_finish_session_history_operation(u64 page_id) =|
+    did_finish_session_history_operation(u64 page_id, u64 operation_id) =|
 
     // Prep-and-apply protocol: WC requests UI to enqueue a PrepAndApplyCommand.
     did_request_session_history_prep(u64 page_id, u64 prep_id) =|

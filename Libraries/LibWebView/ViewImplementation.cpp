@@ -112,7 +112,7 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
     // The old WebContent process is gone — clear any in-flight traversal/operation state.
     m_active_traversal = {};
     m_queue_jump_traversal = {};
-    m_active_operation = false;
+    m_active_operation.clear();
     m_session_history_traversal_queue.clear();
     m_traversal_exclusion_set.clear();
     m_running_nested_queue_jump = false;
@@ -646,15 +646,16 @@ void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebCo
     process_next_session_history_command();
 }
 
-void ViewImplementation::did_finish_session_history_operation(Badge<WebContentClient>)
+void ViewImplementation::did_finish_session_history_operation(Badge<WebContentClient>, u64 operation_id)
 {
-    m_active_operation = false;
+    VERIFY(m_active_operation == operation_id);
+    m_active_operation.clear();
     process_next_session_history_command();
 }
 
 void ViewImplementation::process_next_session_history_command()
 {
-    if (m_active_traversal.has_value() || m_active_operation)
+    if (m_active_traversal.has_value() || m_active_operation.has_value())
         return;
 
     auto command = m_session_history_traversal_queue.dequeue();
@@ -688,23 +689,23 @@ void ViewImplementation::process_next_session_history_command()
         },
         [&](SynchronousNavigationCommand& cmd) {
             // Same-document navigations use the prep-and-apply protocol, just like PrepAndApplyCommand.
-            m_active_operation = true;
+            m_active_operation = cmd.prep_operation_id;
             client().async_execute_session_history_prep(page_id(), cmd.prep_operation_id);
         },
         [&](AsyncOperationCommand& cmd) {
-            m_active_operation = true;
+            m_active_operation = cmd.operation_id;
             client().async_execute_session_history_operation(page_id(), cmd.operation_id);
         },
         [&](PrepAndApplyCommand& cmd) {
             // Send the prep closure ID to WC for execution. WC will run the prep closure,
             // which does operation-specific work and then sends back either
             // did_finish_prep_for_history_step or did_finish_prep_no_history_step.
-            m_active_operation = true;
+            m_active_operation = cmd.prep_operation_id;
             client().async_execute_session_history_prep(page_id(), cmd.prep_operation_id);
         });
 }
 
-void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
+void ViewImplemation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
 {
     // The prep closure has finished. Now we have the parameters to drive the phase protocol,
     // just like a TraversalCommand. Build a TraversalCommand and start execution.
@@ -748,7 +749,7 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
 
     // Normal mode: this is a new outer traversal from a PrepAndApplyCommand or SynchronousNavigationCommand.
     // The prep phase is done; clear the operation flag before starting the traversal.
-    m_active_operation = false;
+    m_active_operation.clear();
     m_active_traversal = ActiveTraversalState { .command = cmd };
 
     // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
@@ -779,11 +780,11 @@ void ViewImplementation::did_finish_prep_no_history_step(Badge<WebContentClient>
         // No more queue-jumps. Resume outer traversal.
         if (!m_active_traversal->processing_navigable)
             process_next_traversal_step();
-        return;
+        return;ent
     }
 
     // Normal mode: clear the active operation flag and process the next command.
-    m_active_operation = false;
+    m_active_operation.clear();
     process_next_session_history_command();
 }
 
@@ -808,10 +809,8 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
     start_traversal_processing();
 }
 
-void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>, String navigable_id)
+void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>, String)
 {
-    (void)navigable_id;
-
     if (!current_traversal_state().has_value())
         return;
 
@@ -1086,7 +1085,7 @@ void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_err
     // (m_active_traversal / m_active_operation) permanently blocks all future navigation.
     m_active_traversal = {};
     m_queue_jump_traversal = {};
-    m_active_operation = false;
+    m_active_operation.clear();
     m_session_history_traversal_queue.clear();
     m_traversal_exclusion_set.clear();
     m_running_nested_queue_jump = false;

@@ -1,0 +1,42 @@
+VERIFICATION FAILED: target_entry->step() == displayed_entry->step() at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:652
+Stack trace (most recent call first):
+#0  (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:652:21
+#1  0x00007e968e6c13e0 in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#2  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#3  0x00007e968e53a257 in execute at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/EventLoop/Task.cpp:47:5
+#4  0x00007e968e536011 in process at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/EventLoop/EventLoop.cpp:190:22
+#5  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#6  (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibWeb/Platform/TimerSerenity.cpp:26:13
+#7  0x00007e968e84ff60 in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#8  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#9  0x00007e968d9ae77b in timer_event at /home/luke/repositories/ladybird/Libraries/LibCore/Timer.cpp:94:9
+#10 0x00007e968d9ad5b7 in process at /home/luke/repositories/ladybird/Libraries/LibCore/ThreadEventQueue.cpp:0:0
+#11 (inlined)          in pump at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoop.cpp:112:20
+#12 0x00007e968d9a4c6f in spin_until at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoop.cpp:107:9
+#13 0x00007e968e84f52d in spin_until at /home/luke/repositories/ladybird/Libraries/LibWeb/Platform/EventLoopPluginSerenity.cpp:19:32
+#14 0x00007e968e5359dc in spin_until at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/EventLoop/EventLoop.cpp:102:38
+#15 0x00007e968e6bc1ef in apply_the_history_step at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:782:34
+#16 0x00007e968e6bf51a in Web::HTML::TraversableNavigable::apply_the_push_or_replace_history_step(int, Web::HTML::HistoryHandlingBehavior, Web::HTML::UserNavigationInvolvement, Web::HTML::TraversableNavigable::SynchronousNavigation) at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:1269:12
+#17 0x00007e968e611064 in finalize_a_cross_document_navigation at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/Navigable.cpp:2454:18
+#18 (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/Navigable.cpp:1950:17
+#19 0x00007e968e619b02 in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#20 (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#21 0x00005f92c3d9bd04 in execute_session_history_operation at /home/luke/repositories/ladybird/Services/WebContent/ConnectionFromClient.cpp:240:19
+#22 0x00005f92c3daa91a in handle at /home/luke/repositories/ladybird/Build/release/Lagom/Services/WebContent/WebContentServerEndpoint.h:6504:13
+#23 0x00007e968d9eae7c in handle_messages at /home/luke/repositories/ladybird/Libraries/LibIPC/Connection.cpp:75:44
+#24 (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibIPC/Connection.cpp:25:9
+#25 0x00007e968d9eb6a7 in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#26 (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#27 (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibIPC/TransportSocket.cpp:173:13
+#28 0x00007e968d9f645a in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#29 (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#30 0x00007e968d9a8215 in event at /home/luke/repositories/ladybird/Libraries/LibCore/Notifier.cpp:62:13
+#31 0x00007e968d9ad5b7 in process at /home/luke/repositories/ladybird/Libraries/LibCore/ThreadEventQueue.cpp:0:0
+#32 (inlined)          in pump at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoopImplementationUnix.cpp:308:40
+#33 0x00007e968d9b311b in exec at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoopImplementationUnix.cpp:300:9
+#34 0x00007e968d9a4b06 in exec at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoop.cpp:100:20
+#35 0x00005f92c3d97a4b in ladybird_main at /home/luke/repositories/ladybird/Services/WebContent/main.cpp:228:23
+#36 0x00005f92c3e7458d in main at /home/luke/repositories/ladybird/Libraries/LibMain/Main.cpp:46:19
+#37 0x00007e968be2a1c9 at /lib/x86_64-linux-gnu/libc.so.6
+#38 0x00007e968be2a28a in __libc_start_main at /lib/x86_64-linux-gnu/libc.so.6
+#39 0x00005f92c3d963e4 in _start at /home/luke/repositories/ladybird/Build/release/libexec/WebContent

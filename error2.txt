@@ -1,0 +1,21 @@
+VERIFICATION FAILED: !target_entry->document_state()->ever_populated() at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:837
+Stack trace (most recent call first):
+#0  (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/TraversableNavigable.cpp:837:17
+#1  0x000078bd62ee746e in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#2  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#3  0x000078bd62d5f117 in execute at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/EventLoop/Task.cpp:47:5
+#4  0x000078bd62d5ae91 in process at /home/luke/repositories/ladybird/Libraries/LibWeb/HTML/EventLoop/EventLoop.cpp:190:22
+#5  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#6  (inlined)          in operator() at /home/luke/repositories/ladybird/Libraries/LibWeb/Platform/TimerSerenity.cpp:26:13
+#7  0x000078bd630784d0 in call at /home/luke/repositories/ladybird/AK/Function.h:224:20
+#8  (inlined)          in operator() at /home/luke/repositories/ladybird/AK/Function.h:147:25
+#9  0x000078bd61aa3afb in timer_event at /home/luke/repositories/ladybird/Libraries/LibCore/Timer.cpp:94:9
+#10 0x000078bd61aa2937 in process at /home/luke/repositories/ladybird/Libraries/LibCore/ThreadEventQueue.cpp:0:0
+#11 (inlined)          in pump at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoopImplementationUnix.cpp:308:40
+#12 0x000078bd61aa88fb in exec at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoopImplementationUnix.cpp:300:9
+#13 0x000078bd61a99a06 in exec at /home/luke/repositories/ladybird/Libraries/LibCore/EventLoop.cpp:100:20
+#14 0x00005909bdb1feab in ladybird_main at /home/luke/repositories/ladybird/Services/WebContent/main.cpp:233:23
+#15 0x00005909bdc00d2d in main at /home/luke/repositories/ladybird/Libraries/LibMain/Main.cpp:46:19
+#16 0x000078bd6062a1c9 in __libc_start_call_main at ./csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+#17 0x000078bd6062a28a in __libc_start_main_impl at ./csu/../csu/libc-start.c:360:3
+#18 0x00005909bdb1e7b4 in _start at /home/luke/repositories/ladybird/Build/release/libexec/WebContent

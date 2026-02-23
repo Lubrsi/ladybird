@@ -157,7 +157,7 @@ public:
     void did_request_traversal_by_delta(Badge<WebContentClient>, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement);
     void did_request_session_history_operation(Badge<WebContentClient>, u64 operation_id);
     void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 prep_id, String target_navigable_id);
-    void did_finish_session_history_operation(Badge<WebContentClient>);
+    void did_finish_session_history_operation(Badge<WebContentClient>, u64 operation_id);
     void did_request_session_history_prep(Badge<WebContentClient>, u64 prep_id);
     void did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType>, Web::HTML::UserNavigationInvolvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id);
     void did_finish_prep_no_history_step(Badge<WebContentClient>);
@@ -423,7 +423,7 @@ protected:
     };
 
     Optional<ActiveTraversalState> m_active_traversal;      // outer traversal
-    bool m_active_operation { false };
+    Optional<u64> m_active_operation;
 
     HashTable<String> m_traversal_exclusion_set;             // outer's exclusion set (for queue-jump detection)
     bool m_running_nested_queue_jump { false };

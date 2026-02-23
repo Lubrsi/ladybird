@@ -797,10 +797,10 @@ void WebContentClient::did_request_session_history_sync_navigation(u64 page_id, 
         view->did_request_session_history_sync_navigation({}, operation_id, move(target_navigable_id));
 }
 
-void WebContentClient::did_finish_session_history_operation(u64 page_id)
+void WebContentClient::did_finish_session_history_operation(u64 page_id, u64 operation_id)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())
-        view->did_finish_session_history_operation({});
+        view->did_finish_session_history_operation({}, operation_id);
 }
 
 void WebContentClient::did_request_session_history_prep(u64 page_id, u64 prep_id)
