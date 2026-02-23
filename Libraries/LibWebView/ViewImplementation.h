@@ -156,7 +156,7 @@ public:
     void did_update_session_history(Badge<WebContentClient>, String traversable_navigable_id, i32 current_step, Vector<SerializedSessionHistoryEntry> entries);
     void did_request_traversal_by_delta(Badge<WebContentClient>, i32 delta, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement);
     void did_request_session_history_operation(Badge<WebContentClient>, u64 operation_id);
-    void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id);
+    void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 prep_id, String target_navigable_id);
     void did_finish_session_history_operation(Badge<WebContentClient>);
     void did_request_session_history_prep(Badge<WebContentClient>, u64 prep_id);
     void did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType>, Web::HTML::UserNavigationInvolvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id);
@@ -422,11 +422,16 @@ protected:
         bool processing_navigable { false };
     };
 
-    Optional<ActiveTraversalState> m_active_traversal;
+    Optional<ActiveTraversalState> m_active_traversal;      // outer traversal
     bool m_active_operation { false };
 
-    HashTable<String> m_traversal_exclusion_set;
+    HashTable<String> m_traversal_exclusion_set;             // outer's exclusion set (for queue-jump detection)
     bool m_running_nested_queue_jump { false };
+
+    Optional<ActiveTraversalState> m_queue_jump_traversal;   // inner traversal (at most one level of nesting)
+
+    // Returns the inner (queue-jump) traversal state if active, otherwise the outer.
+    Optional<ActiveTraversalState>& current_traversal_state();
 
     void start_traversal_processing();
     void process_next_traversal_step();

@@ -696,9 +696,9 @@ void PageClient::page_did_request_session_history_operation(u64 operation_id)
     client().async_did_request_session_history_operation(m_id, operation_id);
 }
 
-void PageClient::page_did_request_session_history_sync_navigation(u64 operation_id, String target_navigable_id)
+void PageClient::page_did_request_session_history_sync_navigation(u64 prep_id, String target_navigable_id)
 {
-    client().async_did_request_session_history_sync_navigation(m_id, operation_id, move(target_navigable_id));
+    client().async_did_request_session_history_sync_navigation(m_id, prep_id, move(target_navigable_id));
 }
 
 void PageClient::page_did_request_session_history_prep(u64 prep_id)

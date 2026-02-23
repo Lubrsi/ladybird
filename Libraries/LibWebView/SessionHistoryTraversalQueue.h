@@ -54,9 +54,9 @@ struct TraversalCommand {
 
 // A synchronous navigation step that can jump the queue during traversal processing.
 // These correspond to "append session history synchronous navigation steps" in the spec.
-// WebContent holds the actual operation closure, referenced by operation_id.
+// WebContent holds the prep closure, referenced by prep_operation_id.
 struct SynchronousNavigationCommand {
-    u64 operation_id { 0 };
+    u64 prep_operation_id { 0 };
     String target_navigable_id;
 };
 

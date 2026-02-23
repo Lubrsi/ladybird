@@ -111,6 +111,7 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
 
     // The old WebContent process is gone — clear any in-flight traversal/operation state.
     m_active_traversal = {};
+    m_queue_jump_traversal = {};
     m_active_operation = false;
     m_session_history_traversal_queue.clear();
     m_traversal_exclusion_set.clear();
@@ -627,19 +628,19 @@ void ViewImplementation::did_request_session_history_prep(Badge<WebContentClient
     process_next_session_history_command();
 }
 
-void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id)
+void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 prep_id, String target_navigable_id)
 {
     // Queue-jumping during traversal: if an active traversal is in progress and the target navigable
     // is not in the exclusion set (i.e., not yet processed), execute the sync nav immediately as a
     // queue-jump (spec step 14.1 of "apply the history step").
     if (m_active_traversal.has_value() && !m_running_nested_queue_jump && !m_traversal_exclusion_set.contains(target_navigable_id)) {
         m_running_nested_queue_jump = true;
-        client().async_execute_session_history_operation(page_id(), operation_id);
+        client().async_execute_session_history_prep(page_id(), prep_id);
         return;
     }
 
     SynchronousNavigationCommand cmd;
-    cmd.operation_id = operation_id;
+    cmd.prep_operation_id = prep_id;
     cmd.target_navigable_id = move(target_navigable_id);
     m_session_history_traversal_queue.append(SessionHistoryCommand { move(cmd) });
     process_next_session_history_command();
@@ -647,27 +648,6 @@ void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebCo
 
 void ViewImplementation::did_finish_session_history_operation(Badge<WebContentClient>)
 {
-    // If this was a queue-jump during traversal processing, handle it specially.
-    if (m_running_nested_queue_jump) {
-        m_running_nested_queue_jump = false;
-
-        // Check for more queue-jumps (spec step 14.1 — check on every iteration).
-        auto next_jump = m_session_history_traversal_queue.take_first_synchronous_navigation_not_targeting(m_traversal_exclusion_set);
-        if (next_jump.has_value()) {
-            m_running_nested_queue_jump = true;
-            client().async_execute_session_history_operation(page_id(), next_jump->operation_id);
-            return;
-        }
-
-        // No more queue-jumps. If we're still waiting for a navigable to finish processing,
-        // just wait — did_finish_traversal_navigable will call process_next_traversal_step.
-        // If we're NOT waiting for a navigable (shouldn't happen in normal flow, but be safe),
-        // advance to the next step.
-        if (!m_active_traversal->processing_navigable)
-            process_next_traversal_step();
-        return;
-    }
-
     m_active_operation = false;
     process_next_session_history_command();
 }
@@ -707,8 +687,9 @@ void ViewImplementation::process_next_session_history_command()
             }
         },
         [&](SynchronousNavigationCommand& cmd) {
+            // Same-document navigations use the prep-and-apply protocol, just like PrepAndApplyCommand.
             m_active_operation = true;
-            client().async_execute_session_history_operation(page_id(), cmd.operation_id);
+            client().async_execute_session_history_prep(page_id(), cmd.prep_operation_id);
         },
         [&](AsyncOperationCommand& cmd) {
             m_active_operation = true;
@@ -746,6 +727,18 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
     cmd.script_history_length = length_and_index.script_history_length;
     cmd.script_history_index = length_and_index.script_history_index;
 
+    // Queue-jump mode: this prep came from a SynchronousNavigationCommand during an active traversal.
+    // Store as the inner (queue-jump) traversal and drive phases for it.
+    if (m_running_nested_queue_jump) {
+        m_queue_jump_traversal = ActiveTraversalState { .command = cmd };
+
+        // Same-doc navigations never need cancelation checks, so go straight to Phase CD.
+        VERIFY(!cmd.check_for_cancelation);
+        start_traversal_processing();
+        return;
+    }
+
+    // Normal mode: this is a new outer traversal from a PrepAndApplyCommand or SynchronousNavigationCommand.
     m_active_traversal = ActiveTraversalState { .command = cmd };
 
     // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
@@ -760,7 +753,26 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
 void ViewImplementation::did_finish_prep_no_history_step(Badge<WebContentClient>)
 {
     // The prep closure determined no history step is needed (e.g., document was null).
-    // Clear the active operation flag and process the next command.
+
+    // Queue-jump mode: the same-doc nav was a no-op (e.g., navigable was destroyed).
+    // Check for more queue-jumps or resume the outer traversal.
+    if (m_running_nested_queue_jump) {
+        m_running_nested_queue_jump = false;
+
+        auto next_jump = m_session_history_traversal_queue.take_first_synchronous_navigation_not_targeting(m_traversal_exclusion_set);
+        if (next_jump.has_value()) {
+            m_running_nested_queue_jump = true;
+            client().async_execute_session_history_prep(page_id(), next_jump->prep_operation_id);
+            return;
+        }
+
+        // No more queue-jumps. Resume outer traversal.
+        if (!m_active_traversal->processing_navigable)
+            process_next_traversal_step();
+        return;
+    }
+
+    // Normal mode: clear the active operation flag and process the next command.
     m_active_operation = false;
     process_next_session_history_command();
 }
@@ -789,10 +801,10 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
 void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>, String navigable_id)
 {
     (void)navigable_id;
-    if (!m_active_traversal.has_value())
+    if (!current_traversal_state().has_value())
         return;
 
-    m_active_traversal->processing_navigable = false;
+    current_traversal_state()->processing_navigable = false;
 
     // If a nested queue-jump is still running, wait for it to finish before advancing.
     if (m_running_nested_queue_jump)
@@ -801,17 +813,29 @@ void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>,
     process_next_traversal_step();
 }
 
+Optional<ViewImplementation::ActiveTraversalState>& ViewImplementation::current_traversal_state()
+{
+    if (m_queue_jump_traversal.has_value())
+        return m_queue_jump_traversal;
+    return m_active_traversal;
+}
+
 void ViewImplementation::start_traversal_processing()
 {
-    VERIFY(m_active_traversal.has_value());
+    VERIFY(current_traversal_state().has_value());
+
+    auto& state = current_traversal_state().value();
 
     // Reset iterative state for Phase CD.
-    m_active_traversal->navigable_index = 0;
-    m_traversal_exclusion_set.clear();
-    m_running_nested_queue_jump = false;
-    m_active_traversal->processing_navigable = false;
+    state.navigable_index = 0;
+    // Only clear the exclusion set for the outer traversal, not for queue-jumps.
+    if (!m_queue_jump_traversal.has_value()) {
+        m_traversal_exclusion_set.clear();
+        m_running_nested_queue_jump = false;
+    }
+    state.processing_navigable = false;
 
-    auto& cmd = m_active_traversal->command;
+    auto& cmd = state.command;
 
     // Send setup message for spec step 8 (set current session history entry + ongoing navigation
     // for all changing navigables). IPC ordering guarantees this is processed before the first
@@ -824,31 +848,34 @@ void ViewImplementation::start_traversal_processing()
 
 void ViewImplementation::process_next_traversal_step()
 {
-    if (!m_active_traversal.has_value())
+    if (!current_traversal_state().has_value())
         return;
 
-    auto& cmd = m_active_traversal->command;
+    auto& state = current_traversal_state().value();
+    auto& cmd = state.command;
 
     // Step 14.1: Check for synchronous navigation queue-jumps.
-    // Look for a SynchronousNavigationCommand targeting a navigable NOT in the exclusion set.
-    auto queue_jump = m_session_history_traversal_queue.take_first_synchronous_navigation_not_targeting(m_traversal_exclusion_set);
-    if (queue_jump.has_value()) {
-        m_running_nested_queue_jump = true;
-        client().async_execute_session_history_operation(page_id(), queue_jump->operation_id);
-        return;
+    // Only check for queue-jumps from the outer traversal (not during an inner queue-jump traversal).
+    if (!m_queue_jump_traversal.has_value()) {
+        auto queue_jump = m_session_history_traversal_queue.take_first_synchronous_navigation_not_targeting(m_traversal_exclusion_set);
+        if (queue_jump.has_value()) {
+            m_running_nested_queue_jump = true;
+            client().async_execute_session_history_prep(page_id(), queue_jump->prep_operation_id);
+            return;
+        }
     }
 
     // Process the next navigable.
-    if (m_active_traversal->navigable_index < cmd.changing_navigable_ids.size()) {
-        auto const& navigable_id = cmd.changing_navigable_ids[m_active_traversal->navigable_index];
-        m_active_traversal->navigable_index++;
+    if (state.navigable_index < cmd.changing_navigable_ids.size()) {
+        auto const& navigable_id = cmd.changing_navigable_ids[state.navigable_index];
+        state.navigable_index++;
 
         // Step 14.8: Add to the exclusion set.
         m_traversal_exclusion_set.set(navigable_id);
 
         // Recompute script history length/index (they don't change between navigables in current
         // implementation, but this is where the spec says to compute them).
-        m_active_traversal->processing_navigable = true;
+        state.processing_navigable = true;
         client().async_traversal_process_navigable(
             page_id(), navigable_id, cmd.target_step,
             cmd.source_snapshot_and_initiator_id, cmd.user_involvement, cmd.navigation_type,
@@ -864,11 +891,11 @@ void ViewImplementation::process_next_traversal_step()
 
 void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebContentClient>)
 {
-    if (!m_active_traversal.has_value())
+    if (!current_traversal_state().has_value())
         return;
 
     // Phase F (finalization): Update UI-side state.
-    auto target_step = m_active_traversal->command.target_step;
+    auto target_step = current_traversal_state()->command.target_step;
     m_session_history_current_step = target_step;
 
     // Update the URL bar from the traversable's top-level entry at the target step.
@@ -888,6 +915,26 @@ void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebConte
     m_navigate_back_action->set_enabled(back_enabled);
     m_navigate_forward_action->set_enabled(forward_enabled);
 
+    // Queue-jump mode: finalize the inner traversal, check for more queue-jumps, resume outer.
+    if (m_queue_jump_traversal.has_value()) {
+        m_queue_jump_traversal = {};
+        m_running_nested_queue_jump = false;
+
+        // Check for more queue-jumps (spec step 14.1 — check on every iteration).
+        auto next_jump = m_session_history_traversal_queue.take_first_synchronous_navigation_not_targeting(m_traversal_exclusion_set);
+        if (next_jump.has_value()) {
+            m_running_nested_queue_jump = true;
+            client().async_execute_session_history_prep(page_id(), next_jump->prep_operation_id);
+            return;
+        }
+
+        // No more queue-jumps. Resume the outer traversal.
+        if (!m_active_traversal->processing_navigable)
+            process_next_traversal_step();
+        return;
+    }
+
+    // Normal mode: outer traversal complete.
     m_active_traversal = {};
     process_next_session_history_command();
 }
@@ -1025,6 +1072,7 @@ void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_err
     // in-flight traversal or operation will never complete. Without this, the queue guard
     // (m_active_traversal / m_active_operation) permanently blocks all future navigation.
     m_active_traversal = {};
+    m_queue_jump_traversal = {};
     m_active_operation = false;
     m_session_history_traversal_queue.clear();
     m_traversal_exclusion_set.clear();
