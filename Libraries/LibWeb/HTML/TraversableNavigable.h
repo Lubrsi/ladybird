@@ -61,7 +61,6 @@ public:
         InitiatorDisallowed,
         CanceledByBeforeUnload,
         CanceledByNavigate,
-        Applied,
     };
 
     // AD-HOC: Dedicated function for same-document navigations (pushState, replaceState, fragment).
