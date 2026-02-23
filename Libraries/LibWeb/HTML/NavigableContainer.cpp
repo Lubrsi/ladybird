@@ -153,7 +153,7 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(GC::Ptr
         //    null, "none", and null.
         // AD-HOC: Push session history and send parameters for the UI to drive the phase protocol.
         traversable->push_session_history_to_ui();
-        traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {});
+        traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {}, {});
     }));
 
     return {};
@@ -341,7 +341,7 @@ void NavigableContainer::destroy_the_child_navigable()
             //    null, "none", and null.
             // AD-HOC: Push session history and send parameters for the UI to drive the phase protocol.
             traversable->push_session_history_to_ui();
-            traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {});
+            traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {}, {});
         }));
     }));
 }

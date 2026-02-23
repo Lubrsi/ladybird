@@ -704,7 +704,7 @@ void ViewImplementation::process_next_session_history_command()
         });
 }
 
-void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id)
+void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
 {
     // The prep closure has finished. Now we have the parameters to drive the phase protocol,
     // just like a TraversalCommand. Build a TraversalCommand and start execution.
@@ -722,6 +722,14 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
         m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, cmd.target_step);
     cmd.non_changing_navigable_ids = get_non_changing_navigable_ids(
         m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, cmd.target_step);
+
+    // AD-HOC: For Replace navigations, the entry at the target step was replaced in-place. The serialized
+    // step-based comparison in get_changing_navigable_ids can't detect this (same step = "same entry"),
+    // so the WC explicitly tells us which navigable was the target of the navigation.
+    if (target_navigable_id.has_value() && !cmd.changing_navigable_ids.contains_slow(*target_navigable_id)) {
+        cmd.changing_navigable_ids.append(*target_navigable_id);
+        cmd.non_changing_navigable_ids.remove_all_matching([&](auto const& id) { return id == *target_navigable_id; });
+    }
     auto length_and_index = compute_script_history_length_and_index(
         m_session_history_entries, cmd.target_step);
     cmd.script_history_length = length_and_index.script_history_length;
@@ -739,6 +747,8 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
     }
 
     // Normal mode: this is a new outer traversal from a PrepAndApplyCommand or SynchronousNavigationCommand.
+    // The prep phase is done; clear the operation flag before starting the traversal.
+    m_active_operation = false;
     m_active_traversal = ActiveTraversalState { .command = cmd };
 
     // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
@@ -801,13 +811,17 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
 void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>, String navigable_id)
 {
     (void)navigable_id;
+
     if (!current_traversal_state().has_value())
         return;
 
     current_traversal_state()->processing_navigable = false;
 
-    // If a nested queue-jump is still running, wait for it to finish before advancing.
-    if (m_running_nested_queue_jump)
+    // If a nested queue-jump prep is pending (sent to WC but no response yet), this completion
+    // is for the outer traversal's navigable. Wait for the queue-jump to finish before advancing.
+    // But if the inner traversal is already active (m_queue_jump_traversal set), this completion
+    // is for the inner traversal's navigable and we should proceed.
+    if (m_running_nested_queue_jump && !m_queue_jump_traversal.has_value())
         return;
 
     process_next_traversal_step();
@@ -825,7 +839,6 @@ void ViewImplementation::start_traversal_processing()
     VERIFY(current_traversal_state().has_value());
 
     auto& state = current_traversal_state().value();
-
     // Reset iterative state for Phase CD.
     state.navigable_index = 0;
     // Only clear the exclusion set for the outer traversal, not for queue-jumps.
@@ -885,7 +898,7 @@ void ViewImplementation::process_next_traversal_step()
 
     // All changing navigables processed. Phase E: Update non-changing navigables.
     client().async_traversal_update_non_changing_navigables(
-        page_id(), cmd.non_changing_navigable_ids,
+        page_id(), cmd.target_step, cmd.non_changing_navigable_ids,
         cmd.script_history_length, cmd.script_history_index);
 }
 

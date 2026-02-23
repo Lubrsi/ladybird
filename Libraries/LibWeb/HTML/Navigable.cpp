@@ -2064,7 +2064,7 @@ void Navigable::navigate_to_a_fragment(URL::URL const& url, HistoryHandlingBehav
 
         // AD-HOC: Push updated session history to the UI process, then signal the phase protocol.
         traversable->push_session_history_to_ui();
-        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, finalize_navigation_type, user_involvement, {}, {});
+        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, finalize_navigation_type, user_involvement, {}, {}, this->id());
     }));
     traversable->page().client().page_did_request_session_history_sync_navigation(prep_id, this->id());
 }
@@ -2316,7 +2316,7 @@ void Navigable::reload(Optional<SerializationRecord> navigation_api_state, UserN
         // AD-HOC: Instead of calling apply_the_history_step, push session history (with reload_pending
         //         visible) and send parameters for the UI to drive the phase protocol.
         traversable->push_session_history_to_ui();
-        traversable->page().client().page_did_finish_prep_for_history_step(step, true, Bindings::NavigationType::Reload, user_involvement, {}, {});
+        traversable->page().client().page_did_finish_prep_for_history_step(step, true, Bindings::NavigationType::Reload, user_involvement, {}, {}, {});
     }));
 }
 
@@ -2485,7 +2485,7 @@ void finalize_a_cross_document_navigation(GC::Ref<Navigable> navigable, HistoryH
         ? Bindings::NavigationType::Push
         : Bindings::NavigationType::Replace;
     traversable->push_session_history_to_ui();
-    traversable->page().client().page_did_finish_prep_for_history_step(target_step, false, navigation_type, user_involvement, {}, {});
+    traversable->page().client().page_did_finish_prep_for_history_step(target_step, false, navigation_type, user_involvement, {}, {}, navigable->id());
 
     // AD-HOC: If we're inside a navigable container, let's trigger a relayout in the container document.
     //         This allows size negotiation between the containing document and SVG documents to happen.
@@ -2566,7 +2566,7 @@ void perform_url_and_history_update_steps(DOM::Document& document, URL::URL new_
 
         // AD-HOC: Push updated session history to the UI process, then signal the phase protocol.
         traversable->push_session_history_to_ui();
-        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, navigation_type, UserNavigationInvolvement::None, {}, {});
+        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, navigation_type, UserNavigationInvolvement::None, {}, {}, navigable->id());
     }));
     traversable->page().client().page_did_request_session_history_sync_navigation(prep_id, navigable->id());
 }

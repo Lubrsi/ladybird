@@ -306,12 +306,12 @@ void ConnectionFromClient::traversal_process_navigable(u64 page_id, String navig
     }
 }
 
-void ConnectionFromClient::traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index)
+void ConnectionFromClient::traversal_update_non_changing_navigables(u64 page_id, i32 target_step, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index)
 {
     if (auto page = this->page(page_id); page.has_value()) {
         auto traversable = page->page().top_level_traversable();
 
-        traversable->traversal_update_non_changing_navigables(move(non_changing_navigable_ids), script_history_length, script_history_index,
+        traversable->traversal_update_non_changing_navigables(target_step, move(non_changing_navigable_ids), script_history_length, script_history_index,
             GC::create_function(traversable->heap(), [this, page_id]() {
                 async_did_finish_traversal_non_changing_update(page_id);
             }));

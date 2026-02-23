@@ -417,7 +417,7 @@ public:
     virtual void page_did_request_session_history_operation([[maybe_unused]] u64 operation_id) { }
     virtual void page_did_request_session_history_sync_navigation([[maybe_unused]] u64 prep_id, [[maybe_unused]] String target_navigable_id) { }
     virtual void page_did_request_session_history_prep([[maybe_unused]] u64 prep_id) { }
-    virtual void page_did_finish_prep_for_history_step([[maybe_unused]] i32 target_step, [[maybe_unused]] bool check_for_cancelation, [[maybe_unused]] Optional<Bindings::NavigationType> navigation_type, [[maybe_unused]] HTML::UserNavigationInvolvement user_involvement, [[maybe_unused]] Optional<u64> source_snapshot_and_initiator_id, [[maybe_unused]] Optional<u64> cancel_callback_id) { }
+    virtual void page_did_finish_prep_for_history_step([[maybe_unused]] i32 target_step, [[maybe_unused]] bool check_for_cancelation, [[maybe_unused]] Optional<Bindings::NavigationType> navigation_type, [[maybe_unused]] HTML::UserNavigationInvolvement user_involvement, [[maybe_unused]] Optional<u64> source_snapshot_and_initiator_id, [[maybe_unused]] Optional<u64> cancel_callback_id, [[maybe_unused]] Optional<String> target_navigable_id) { }
     virtual void page_did_finish_prep_no_history_step() { }
     virtual void page_did_allocate_backing_stores([[maybe_unused]] i32 front_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap front_bitmap, [[maybe_unused]] i32 back_bitmap_id, [[maybe_unused]] Gfx::ShareableBitmap back_bitmap) { }
 

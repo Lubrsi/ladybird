@@ -730,7 +730,7 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
         traversable->push_session_history_to_ui();
         traversable->page().client().page_did_finish_prep_for_history_step(
             target_she->step().get<int>(), true, Bindings::NavigationType::Traverse,
-            UserNavigationInvolvement::None, source_id, cancel_callback_id);
+            UserNavigationInvolvement::None, source_id, cancel_callback_id, {});
     }));
 
     // 13. Return a navigation API method tracker-derived result for apiMethodTracker.

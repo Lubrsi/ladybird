@@ -52,7 +52,7 @@ endpoint WebContentServer
     // Phase CD per-navigable: Populate document and activate entry for one navigable (spec steps 12+14 per-navigable)
     traversal_process_navigable(u64 page_id, String navigable_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type, u64 script_history_length, u64 script_history_index) =|
     // Phase E: Update non-changing navigables (spec steps 15-19)
-    traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) =|
+    traversal_update_non_changing_navigables(u64 page_id, i32 target_step, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) =|
 
     execute_session_history_operation(u64 page_id, u64 operation_id) =|
 

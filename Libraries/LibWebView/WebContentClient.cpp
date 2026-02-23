@@ -809,10 +809,10 @@ void WebContentClient::did_request_session_history_prep(u64 page_id, u64 prep_id
         view->did_request_session_history_prep({}, prep_id);
 }
 
-void WebContentClient::did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id)
+void WebContentClient::did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())
-        view->did_finish_prep_for_history_step({}, target_step, check_for_cancelation, navigation_type, user_involvement, source_snapshot_and_initiator_id, cancel_callback_id);
+        view->did_finish_prep_for_history_step({}, target_step, check_for_cancelation, navigation_type, user_involvement, source_snapshot_and_initiator_id, cancel_callback_id, move(target_navigable_id));
 }
 
 void WebContentClient::did_finish_prep_no_history_step(u64 page_id)

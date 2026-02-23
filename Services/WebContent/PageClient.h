@@ -177,7 +177,7 @@ private:
     virtual void page_did_request_session_history_operation(u64 operation_id) override;
     virtual void page_did_request_session_history_sync_navigation(u64 prep_id, String target_navigable_id) override;
     virtual void page_did_request_session_history_prep(u64 prep_id) override;
-    virtual void page_did_finish_prep_for_history_step(i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id) override;
+    virtual void page_did_finish_prep_for_history_step(i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id) override;
     virtual void page_did_finish_prep_no_history_step() override;
     virtual void request_file(Web::FileRequest) override;
     virtual void page_did_request_color_picker(Color current_color) override;

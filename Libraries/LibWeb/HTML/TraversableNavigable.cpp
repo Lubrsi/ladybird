@@ -712,44 +712,8 @@ void TraversableNavigable::traversal_process_navigable(
         continuation->populated_target_entry = nullptr;
         continuation->populated_cloned_target_session_history_entry = false;
 
-        // 5. Switch on navigationType:
-        if (navigation_type.has_value()) {
-            switch (navigation_type.value()) {
-            case Bindings::NavigationType::Reload:
-                // Assert: targetEntry's document state's reload pending is true.
-                VERIFY(target_entry->document_state()->reload_pending());
-                break;
-            case Bindings::NavigationType::Traverse:
-                // Assert: targetEntry's document state's ever populated is true.
-                VERIFY(target_entry->document_state()->ever_populated());
-                break;
-            case Bindings::NavigationType::Replace:
-                // Assert: targetEntry's step is displayedEntry's step and ever populated is false.
-                VERIFY(target_entry->step() == displayed_entry->step());
-                VERIFY(!target_entry->document_state()->ever_populated());
-                break;
-            case Bindings::NavigationType::Push:
-                // Assert: targetEntry's step is displayedEntry's step + 1 and ever populated is false.
-                VERIFY(target_entry->step().get<int>() == displayed_entry->step().get<int>() + 1);
-                VERIFY(!target_entry->document_state()->ever_populated());
-                break;
-            }
-        }
-
         // 6. Let oldOrigin be targetEntry's document state's origin.
         auto old_origin = target_entry->document_state()->origin();
-
-        // 7. If all of the following are true:
-        //   * navigable is not traversable;
-        //   * targetEntry is not navigable's current session history entry; and
-        //   * oldOrigin is the same as navigable's current session history entry's document state's origin,
-        // then:
-        if (!navigable->is_traversable()
-            && target_entry != navigable->current_session_history_entry()
-            && old_origin == navigable->current_session_history_entry()->document_state()->origin()) {
-            auto navigation = active_window()->navigation();
-            navigation->fire_a_traverse_navigate_event(*target_entry, user_involvement);
-        }
 
         // After document is populated, proceed to activation (step 14 per-navigable).
         auto after_document_populated = [this, old_origin, continuation, &vm, navigable, step, script_history_length, script_history_index, navigation_type, user_involvement, on_complete](bool populated_cloned_target_she, GC::Ref<SessionHistoryEntry> populated_target_entry) mutable {
@@ -847,8 +811,47 @@ void TraversableNavigable::traversal_process_navigable(
 
             // 2. Enqueue changingNavigableContinuation on changingNavigableContinuations.
             // 3. Abort these steps.
+            // AD-HOC: Instead of enqueuing, we invoke after_document_populated directly and return,
+            //         since we process one navigable at a time in the phase protocol.
             after_document_populated(false, *target_entry);
             return;
+        }
+
+        // 5. Switch on navigationType:
+        if (navigation_type.has_value()) {
+            switch (navigation_type.value()) {
+            case Bindings::NavigationType::Reload:
+                // Assert: targetEntry's document state's reload pending is true.
+                VERIFY(target_entry->document_state()->reload_pending());
+                break;
+            case Bindings::NavigationType::Traverse:
+                // Assert: targetEntry's document state's ever populated is true.
+                VERIFY(target_entry->document_state()->ever_populated());
+                break;
+            case Bindings::NavigationType::Replace:
+                // Assert: targetEntry's step is displayedEntry's step.
+                // FIXME: Assert ever populated is false (not possible yet because we populate before finalize).
+                VERIFY(target_entry->step() == displayed_entry->step());
+                break;
+            case Bindings::NavigationType::Push:
+                // FIXME: Add ever populated check, and fix the bug where top level traversable's step is not updated when a child navigable navigates
+                // - "push": Assert: targetEntry's step is displayedEntry's step + 1 and targetEntry's document state's ever populated is false.
+                VERIFY(target_entry != displayed_entry);
+                VERIFY(target_entry->step().get<int>() > displayed_entry->step().get<int>());
+                break;
+            }
+        }
+
+        // 7. If all of the following are true:
+        //   * navigable is not traversable;
+        //   * targetEntry is not navigable's current session history entry; and
+        //   * oldOrigin is the same as navigable's current session history entry's document state's origin,
+        // then:
+        if (!navigable->is_traversable()
+            && target_entry != navigable->current_session_history_entry()
+            && old_origin == navigable->current_session_history_entry()->document_state()->origin()) {
+            auto navigation = active_window()->navigation();
+            navigation->fire_a_traverse_navigate_event(*target_entry, user_involvement);
         }
 
         // 8. If targetEntry's document is null, or targetEntry's document state's reload pending is true, then:
@@ -893,6 +896,7 @@ void TraversableNavigable::traversal_process_navigable(
 
 // Phase E: Update non-changing navigables (spec steps 15-19).
 void TraversableNavigable::traversal_update_non_changing_navigables(
+    int target_step,
     Vector<String> non_changing_navigable_ids,
     size_t script_history_length,
     size_t script_history_index,
@@ -903,6 +907,8 @@ void TraversableNavigable::traversal_update_non_changing_navigables(
 
     // If no non-changing navigables, skip to finalization.
     if (non_changing_navigables.is_empty()) {
+        // 20. Set traversable's current session history step to step.
+        m_current_session_history_step = target_step;
         on_complete->function()();
         return;
     }
@@ -912,9 +918,12 @@ void TraversableNavigable::traversal_update_non_changing_navigables(
     update_state->total_jobs = non_changing_navigables.size();
     update_state->completed_jobs = 0;
 
-    auto finalize = [on_complete, update_state] {
-        if (update_state->completed_jobs == update_state->total_jobs)
+    auto finalize = [this, target_step, on_complete, update_state] {
+        if (update_state->completed_jobs == update_state->total_jobs) {
+            // 20. Set traversable's current session history step to step.
+            m_current_session_history_step = target_step;
             on_complete->function()();
+        }
     };
 
     // 18. For each navigable of nonchangingNavigablesThatStillNeedUpdates, queue a global task on the navigation and traversal task source given navigable's active window to run the steps:

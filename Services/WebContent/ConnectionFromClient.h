@@ -79,7 +79,7 @@ private:
     virtual void traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement) override;
     virtual void traversal_setup_changing_navigables(u64 page_id, i32 target_step, Vector<String> changing_navigable_ids) override;
     virtual void traversal_process_navigable(u64 page_id, String navigable_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement, Optional<Web::Bindings::NavigationType> navigation_type, u64 script_history_length, u64 script_history_index) override;
-    virtual void traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) override;
+    virtual void traversal_update_non_changing_navigables(u64 page_id, i32 target_step, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) override;
     virtual void set_viewport(u64 page_id, Web::DevicePixelSize, double device_pixel_ratio) override;
     virtual void key_event(u64 page_id, Web::KeyEvent) override;
     virtual void mouse_event(u64 page_id, Web::MouseEvent) override;

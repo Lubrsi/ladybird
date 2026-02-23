@@ -154,7 +154,7 @@ private:
     virtual void did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) override;
     virtual void did_finish_session_history_operation(u64 page_id) override;
     virtual void did_request_session_history_prep(u64 page_id, u64 prep_id) override;
-    virtual void did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id) override;
+    virtual void did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id) override;
     virtual void did_finish_prep_no_history_step(u64 page_id) override;
     virtual void did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) override;
     virtual void did_finish_traversal_navigable(u64 page_id, String navigable_id) override;

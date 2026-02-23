@@ -126,7 +126,7 @@ public:
     // Phase CD per-navigable: Populate document and activate entry for one navigable (spec steps 12+14 per-navigable).
     void traversal_process_navigable(String navigable_id, int step, GC::Ptr<SourceSnapshotParams>, UserNavigationInvolvement, Optional<Bindings::NavigationType>, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
     // Phase E: Update non-changing navigables (spec steps 15-19).
-    void traversal_update_non_changing_navigables(Vector<String> non_changing_navigable_ids, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
+    void traversal_update_non_changing_navigables(int target_step, Vector<String> non_changing_navigable_ids, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
 
     // Push current session history state to the UI process for serialized history computation.
     void push_session_history_to_ui();
