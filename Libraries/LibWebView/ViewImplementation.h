@@ -158,6 +158,9 @@ public:
     void did_request_session_history_operation(Badge<WebContentClient>, u64 operation_id);
     void did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id);
     void did_finish_session_history_operation(Badge<WebContentClient>);
+    void did_request_session_history_prep(Badge<WebContentClient>, u64 prep_id);
+    void did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType>, Web::HTML::UserNavigationInvolvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id);
+    void did_finish_prep_no_history_step(Badge<WebContentClient>);
     void did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult);
     void did_finish_traversal_navigable(Badge<WebContentClient>, String navigable_id);
     void did_finish_traversal_non_changing_update(Badge<WebContentClient>);

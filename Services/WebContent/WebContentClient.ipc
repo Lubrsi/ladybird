@@ -123,6 +123,15 @@ endpoint WebContentClient
     did_request_session_history_sync_navigation(u64 page_id, u64 operation_id, String target_navigable_id) =|
     did_finish_session_history_operation(u64 page_id) =|
 
+    // Prep-and-apply protocol: WC requests UI to enqueue a PrepAndApplyCommand.
+    did_request_session_history_prep(u64 page_id, u64 prep_id) =|
+
+    // Prep-and-apply protocol: WC finished running the prep closure and sends parameters for
+    // the UI to drive the phase protocol (B → S → CD → E → F).
+    did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id) =|
+    // Prep closure determined no history step is needed (e.g., document was null).
+    did_finish_prep_no_history_step(u64 page_id) =|
+
     // Session history traversal phase protocol responses:
     did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result) =|
     // Phase CD per-navigable complete

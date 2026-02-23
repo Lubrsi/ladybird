@@ -103,6 +103,16 @@ public:
     u64 store_session_history_operation(GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> closure);
     GC::Ptr<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> take_session_history_operation(u64 id);
 
+    // Store a prep closure for the prep-and-apply protocol and notify the UI to enqueue a PrepAndApplyCommand.
+    // The prep closure does operation-specific setup, then sends parameters via IPC.
+    void store_session_history_prep(GC::Ref<GC::Function<void()>> closure);
+    GC::Ptr<GC::Function<void()>> take_session_history_prep(u64 id);
+
+    // Cancel callback infrastructure for Navigation::traverseTo.
+    // When Phase B cancels, the UI sends back the cancel_callback_id and reason.
+    u64 store_cancel_callback(GC::Ref<GC::Function<void(HistoryStepResult)>> callback);
+    void run_cancel_callback(u64 id, HistoryStepResult reason);
+
     String window_handle() const { return m_window_handle; }
     void set_window_handle(String window_handle) { m_window_handle = move(window_handle); }
 
@@ -126,6 +136,9 @@ public:
     void traversal_process_navigable(String navigable_id, int step, GC::Ptr<SourceSnapshotParams>, UserNavigationInvolvement, Optional<Bindings::NavigationType>, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
     // Phase E: Update non-changing navigables (spec steps 15-19).
     void traversal_update_non_changing_navigables(Vector<String> non_changing_navigable_ids, size_t script_history_length, size_t script_history_index, GC::Ref<GC::Function<void()>> on_complete);
+
+    // Push current session history state to the UI process for serialized history computation.
+    void push_session_history_to_ui();
 
     StorageAPI::StorageShed& storage_shed() { return m_storage_shed; }
     StorageAPI::StorageShed const& storage_shed() const { return m_storage_shed; }
@@ -162,8 +175,6 @@ private:
 
     Vector<GC::Ref<SessionHistoryEntry>> get_session_history_entries_for_the_navigation_api(GC::Ref<Navigable>, int);
 
-    void push_session_history_to_ui();
-
     // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-current-session-history-step
     int m_current_session_history_step { 0 };
 
@@ -189,6 +200,14 @@ private:
     // WebContent stores closures here, sends the ID to UI, and UI sends it back to execute.
     u64 m_next_operation_id { 1 };
     HashMap<u64, GC::Ref<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>>> m_operation_map;
+
+    // Storage for prep closures (prep-and-apply protocol), keyed by opaque IDs.
+    u64 m_next_prep_id { 1 };
+    HashMap<u64, GC::Ref<GC::Function<void()>>> m_prep_map;
+
+    // Cancel callbacks for Navigation::traverseTo promise rejection.
+    u64 m_next_cancel_callback_id { 1 };
+    HashMap<u64, GC::Ref<GC::Function<void(HistoryStepResult)>>> m_cancel_callback_map;
 
     String m_window_handle;
 

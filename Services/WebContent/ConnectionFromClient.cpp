@@ -212,6 +212,38 @@ void ConnectionFromClient::execute_session_history_operation(u64 page_id, u64 op
     }
 }
 
+void ConnectionFromClient::execute_session_history_prep(u64 page_id, u64 operation_id)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+        auto closure = traversable->take_session_history_prep(operation_id);
+        if (closure)
+            closure->function()();
+    }
+}
+
+void ConnectionFromClient::traversal_canceled(u64 page_id, u64 cancel_callback_id, WebView::TraversalUnloadingCheckResult reason)
+{
+    if (auto page = this->page(page_id); page.has_value()) {
+        auto traversable = page->page().top_level_traversable();
+        Web::HTML::TraversableNavigable::HistoryStepResult step_result;
+        switch (reason) {
+        case WebView::TraversalUnloadingCheckResult::CanceledByBeforeUnload:
+            step_result = Web::HTML::TraversableNavigable::HistoryStepResult::CanceledByBeforeUnload;
+            break;
+        case WebView::TraversalUnloadingCheckResult::CanceledByNavigate:
+            step_result = Web::HTML::TraversableNavigable::HistoryStepResult::CanceledByNavigate;
+            break;
+        case WebView::TraversalUnloadingCheckResult::InitiatorDisallowed:
+            step_result = Web::HTML::TraversableNavigable::HistoryStepResult::InitiatorDisallowed;
+            break;
+        default:
+            return;
+        }
+        traversable->run_cancel_callback(cancel_callback_id, step_result);
+    }
+}
+
 void ConnectionFromClient::traversal_check_if_unloading_is_canceled(u64 page_id, i32 target_step, Optional<u64> source_snapshot_and_initiator_id, Web::HTML::UserNavigationInvolvement user_involvement)
 {
     if (auto page = this->page(page_id); page.has_value()) {

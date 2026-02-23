@@ -23,6 +23,7 @@ enum class TraversalUnloadingCheckResult : u8 {
     Continue = 0,
     CanceledByBeforeUnload = 1,
     CanceledByNavigate = 2,
+    InitiatorDisallowed = 3,
 };
 
 // A traversal command that the UI process orchestrates via the multi-phase IPC protocol.
@@ -45,6 +46,10 @@ struct TraversalCommand {
     Vector<String> non_changing_navigable_ids;
     size_t script_history_length { 0 };
     size_t script_history_index { 0 };
+
+    // For Navigation::traverseTo cancel propagation: opaque ID referencing a cancel callback
+    // held in WebContent. If Phase B cancels, UI sends traversal_canceled with this ID.
+    Optional<u64> cancel_callback_id;
 };
 
 // A synchronous navigation step that can jump the queue during traversal processing.
@@ -56,13 +61,19 @@ struct SynchronousNavigationCommand {
 };
 
 // An asynchronous operation that gets forwarded to WebContent for execution.
-// Used for navigation finalizations, navigable creation/destruction, reload, close, etc.
+// Used for close and iframe readiness operations that don't go through apply_the_history_step.
 // WebContent holds the actual operation closure, referenced by operation_id.
 struct AsyncOperationCommand {
     u64 operation_id { 0 };
 };
 
-using SessionHistoryCommand = Variant<TraversalCommand, SynchronousNavigationCommand, AsyncOperationCommand>;
+// A prep-then-apply command for operations that go through apply_the_history_step.
+// After prep, WC sends typed parameters and UI drives the phase protocol (B → S → CD → E → F).
+struct PrepAndApplyCommand {
+    u64 prep_operation_id { 0 };
+};
+
+using SessionHistoryCommand = Variant<TraversalCommand, SynchronousNavigationCommand, AsyncOperationCommand, PrepAndApplyCommand>;
 
 // UI-side session history traversal queue.
 // Commands are enqueued from WebContent (via IPC) or from the UI itself, and processed sequentially.

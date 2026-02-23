@@ -701,6 +701,21 @@ void PageClient::page_did_request_session_history_sync_navigation(u64 operation_
     client().async_did_request_session_history_sync_navigation(m_id, operation_id, move(target_navigable_id));
 }
 
+void PageClient::page_did_request_session_history_prep(u64 prep_id)
+{
+    client().async_did_request_session_history_prep(m_id, prep_id);
+}
+
+void PageClient::page_did_finish_prep_for_history_step(i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id)
+{
+    client().async_did_finish_prep_for_history_step(m_id, target_step, check_for_cancelation, navigation_type, user_involvement, source_snapshot_and_initiator_id, cancel_callback_id);
+}
+
+void PageClient::page_did_finish_prep_no_history_step()
+{
+    client().async_did_finish_prep_no_history_step(m_id);
+}
+
 void PageClient::request_file(Web::FileRequest file_request)
 {
     client().request_file(m_id, move(file_request));

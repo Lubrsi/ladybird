@@ -803,6 +803,24 @@ void WebContentClient::did_finish_session_history_operation(u64 page_id)
         view->did_finish_session_history_operation({});
 }
 
+void WebContentClient::did_request_session_history_prep(u64 page_id, u64 prep_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_request_session_history_prep({}, prep_id);
+}
+
+void WebContentClient::did_finish_prep_for_history_step(u64 page_id, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_prep_for_history_step({}, target_step, check_for_cancelation, navigation_type, user_involvement, source_snapshot_and_initiator_id, cancel_callback_id);
+}
+
+void WebContentClient::did_finish_prep_no_history_step(u64 page_id)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value())
+        view->did_finish_prep_no_history_step({});
+}
+
 void WebContentClient::did_finish_traversal_unloading_check(u64 page_id, WebView::TraversalUnloadingCheckResult result)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())

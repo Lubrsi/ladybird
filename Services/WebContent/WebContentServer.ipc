@@ -21,6 +21,7 @@
 #include <LibWeb/HTML/UserNavigationInvolvement.h>
 #include <LibWeb/HTML/NavigationType.h>
 #include <LibWebView/SessionHistoryEntryData.h>
+#include <LibWebView/SessionHistoryTraversalQueue.h>
 
 endpoint WebContentServer
 {
@@ -54,6 +55,11 @@ endpoint WebContentServer
     traversal_update_non_changing_navigables(u64 page_id, Vector<String> non_changing_navigable_ids, u64 script_history_length, u64 script_history_index) =|
 
     execute_session_history_operation(u64 page_id, u64 operation_id) =|
+
+    // Prep-and-apply protocol: UI tells WC to run a prep closure.
+    execute_session_history_prep(u64 page_id, u64 operation_id) =|
+    // Cancel propagation for Navigation::traverseTo when Phase B cancels.
+    traversal_canceled(u64 page_id, u64 cancel_callback_id, WebView::TraversalUnloadingCheckResult reason) =|
 
     ready_to_paint(u64 page_id) =|
 

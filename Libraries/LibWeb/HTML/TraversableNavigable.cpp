@@ -56,6 +56,10 @@ void TraversableNavigable::visit_edges(Cell::Visitor& visitor)
     }
     for (auto& [_, closure] : m_operation_map)
         visitor.visit(closure);
+    for (auto& [_, closure] : m_prep_map)
+        visitor.visit(closure);
+    for (auto& [_, callback] : m_cancel_callback_map)
+        visitor.visit(callback);
 }
 
 void TraversableNavigable::push_session_history_to_ui()
@@ -101,6 +105,35 @@ GC::Ptr<GC::Function<NonnullRefPtr<Core::Promise<Empty>>()>> TraversableNavigabl
     if (closure.has_value())
         return closure.value();
     return {};
+}
+
+void TraversableNavigable::store_session_history_prep(GC::Ref<GC::Function<void()>> closure)
+{
+    auto id = m_next_prep_id++;
+    m_prep_map.set(id, closure);
+    page().client().page_did_request_session_history_prep(id);
+}
+
+GC::Ptr<GC::Function<void()>> TraversableNavigable::take_session_history_prep(u64 id)
+{
+    auto closure = m_prep_map.take(id);
+    if (closure.has_value())
+        return closure.value();
+    return {};
+}
+
+u64 TraversableNavigable::store_cancel_callback(GC::Ref<GC::Function<void(HistoryStepResult)>> callback)
+{
+    auto id = m_next_cancel_callback_id++;
+    m_cancel_callback_map.set(id, callback);
+    return id;
+}
+
+void TraversableNavigable::run_cancel_callback(u64 id, HistoryStepResult reason)
+{
+    auto callback = m_cancel_callback_map.take(id);
+    if (callback.has_value())
+        callback.value()->function()(reason);
 }
 
 void TraversableNavigable::restore_session_history(i32 current_step, Vector<WebView::SerializedSessionHistoryEntry> entries)
@@ -672,24 +705,26 @@ void TraversableNavigable::traversal_process_navigable(
         continuation->populated_target_entry = nullptr;
         continuation->populated_cloned_target_session_history_entry = false;
 
-        // 4. If displayedEntry is targetEntry and targetEntry's document state's reload pending is false, then:
-        // NOTE: For traversals, SynchronousNavigation is always No, so this shortcut never applies.
-
         // 5. Switch on navigationType:
         if (navigation_type.has_value()) {
             switch (navigation_type.value()) {
             case Bindings::NavigationType::Reload:
+                // Assert: targetEntry's document state's reload pending is true.
                 VERIFY(target_entry->document_state()->reload_pending());
                 break;
             case Bindings::NavigationType::Traverse:
+                // Assert: targetEntry's document state's ever populated is true.
                 VERIFY(target_entry->document_state()->ever_populated());
                 break;
             case Bindings::NavigationType::Replace:
+                // Assert: targetEntry's step is displayedEntry's step and ever populated is false.
                 VERIFY(target_entry->step() == displayed_entry->step());
+                VERIFY(!target_entry->document_state()->ever_populated());
                 break;
             case Bindings::NavigationType::Push:
-                VERIFY(target_entry != displayed_entry);
-                VERIFY(target_entry->step().get<int>() > displayed_entry->step().get<int>());
+                // Assert: targetEntry's step is displayedEntry's step + 1 and ever populated is false.
+                VERIFY(target_entry->step().get<int>() == displayed_entry->step().get<int>() + 1);
+                VERIFY(!target_entry->document_state()->ever_populated());
                 break;
             }
         }
@@ -797,6 +832,17 @@ void TraversableNavigable::traversal_process_navigable(
                 deactivate_a_document_for_cross_document_navigation(*displayed_document, user_involvement, *populated_target_entry, after_potential_unload);
             }
         };
+
+        // 4. If displayedEntry is targetEntry and targetEntry's document state's reload pending is false, then:
+        if (displayed_entry == target_entry && !target_entry->document_state()->reload_pending()) {
+            // 1. Set changingNavigableContinuation's update-only to true.
+            continuation->update_only = true;
+
+            // 2. Enqueue changingNavigableContinuation on changingNavigableContinuations.
+            // 3. Abort these steps.
+            after_document_populated(false, *target_entry);
+            return;
+        }
 
         // 8. If targetEntry's document is null, or targetEntry's document state's reload pending is true, then:
         if (!target_entry->document() || target_entry->document_state()->reload_pending()) {

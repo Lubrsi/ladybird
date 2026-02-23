@@ -621,6 +621,14 @@ void ViewImplementation::did_request_session_history_operation(Badge<WebContentC
     process_next_session_history_command();
 }
 
+void ViewImplementation::did_request_session_history_prep(Badge<WebContentClient>, u64 prep_id)
+{
+    PrepAndApplyCommand cmd;
+    cmd.prep_operation_id = prep_id;
+    m_session_history_traversal_queue.append(SessionHistoryCommand { cmd });
+    process_next_session_history_command();
+}
+
 void ViewImplementation::did_request_session_history_sync_navigation(Badge<WebContentClient>, u64 operation_id, String target_navigable_id)
 {
     // Queue-jumping during traversal: if an active traversal is in progress and the target navigable
@@ -707,7 +715,56 @@ void ViewImplementation::process_next_session_history_command()
         [&](AsyncOperationCommand& cmd) {
             m_active_operation = true;
             client().async_execute_session_history_operation(page_id(), cmd.operation_id);
+        },
+        [&](PrepAndApplyCommand& cmd) {
+            // Send the prep closure ID to WC for execution. WC will run the prep closure,
+            // which does operation-specific work and then sends back either
+            // did_finish_prep_for_history_step or did_finish_prep_no_history_step.
+            m_active_operation = true;
+            client().async_execute_session_history_prep(page_id(), cmd.prep_operation_id);
         });
+}
+
+void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id)
+{
+    // The prep closure has finished. Now we have the parameters to drive the phase protocol,
+    // just like a TraversalCommand. Build a TraversalCommand and start execution.
+    TraversalCommand cmd;
+    cmd.target_step = target_step;
+    cmd.check_for_cancelation = check_for_cancelation;
+    cmd.navigation_type = navigation_type;
+    cmd.user_involvement = user_involvement;
+    cmd.source_snapshot_and_initiator_id = source_snapshot_and_initiator_id;
+    cmd.cancel_callback_id = cancel_callback_id;
+
+    // Pre-compute navigable classifications and history length/index from serialized session history.
+    cmd.target_step = get_the_used_step(m_session_history_entries, cmd.target_step);
+    cmd.changing_navigable_ids = get_changing_navigable_ids(
+        m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, cmd.target_step);
+    cmd.non_changing_navigable_ids = get_non_changing_navigable_ids(
+        m_session_history_entries, m_traversable_navigable_id, m_session_history_current_step, cmd.target_step);
+    auto length_and_index = compute_script_history_length_and_index(
+        m_session_history_entries, cmd.target_step);
+    cmd.script_history_length = length_and_index.script_history_length;
+    cmd.script_history_index = length_and_index.script_history_index;
+
+    m_active_traversal = cmd;
+
+    // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
+    if (cmd.check_for_cancelation) {
+        client().async_traversal_check_if_unloading_is_canceled(
+            page_id(), cmd.target_step, cmd.source_snapshot_and_initiator_id, cmd.user_involvement);
+    } else {
+        start_traversal_processing();
+    }
+}
+
+void ViewImplementation::did_finish_prep_no_history_step(Badge<WebContentClient>)
+{
+    // The prep closure determined no history step is needed (e.g., document was null).
+    // Clear the active operation flag and process the next command.
+    m_active_operation = false;
+    process_next_session_history_command();
 }
 
 void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentClient>, TraversalUnloadingCheckResult result)
@@ -716,7 +773,12 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
         return;
 
     if (result != TraversalUnloadingCheckResult::Continue) {
-        // Traversal was canceled by beforeunload or navigate event.
+        // Traversal was canceled. If there's a cancel callback (from Navigation::traverseTo),
+        // notify WC so it can reject the Navigation API promise.
+        if (m_active_traversal->cancel_callback_id.has_value()) {
+            client().async_traversal_canceled(page_id(), *m_active_traversal->cancel_callback_id, result);
+        }
+
         m_active_traversal = {};
         process_next_session_history_command();
         return;
