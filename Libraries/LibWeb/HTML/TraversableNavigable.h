@@ -63,15 +63,6 @@ public:
         CanceledByNavigate,
     };
 
-    // AD-HOC: Dedicated function for same-document navigations (pushState, replaceState, fragment).
-    // Implements the relevant subset of "apply the history step" (steps 2, 6-8, 12, 14-21)
-    // directly inline with no spins. Same-document navigations always hit the fast path
-    // (displayedEntry == targetEntry → update_only = true), so no cross-process coordination
-    // or document population is needed. This avoids the full phase protocol's IPC round-trips,
-    // which would deadlock when queue-jumping (spec step 14.1) runs these steps inline during
-    // an active traversal.
-    void apply_the_history_step_for_same_document_navigation(int step, Optional<Bindings::NavigationType> navigation_type, UserNavigationInvolvement);
-
     int get_the_used_step(int step) const;
     Vector<GC::Root<Navigable>> get_all_navigables_whose_current_session_history_entry_will_change_or_reload(int) const;
     Vector<GC::Root<Navigable>> get_all_navigables_that_only_need_history_object_length_index_update(int) const;
