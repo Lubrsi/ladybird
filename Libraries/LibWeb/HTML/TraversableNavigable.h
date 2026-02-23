@@ -27,8 +27,6 @@
 
 namespace Web::HTML {
 
-struct ChangingNavigableContinuationState;
-
 // https://html.spec.whatwg.org/multipage/document-sequences.html#traversable-navigable
 class WEB_API TraversableNavigable final : public Navigable {
     GC_CELL(TraversableNavigable, Navigable);
@@ -66,14 +64,14 @@ public:
         Applied,
     };
 
-    HistoryStepResult apply_the_traverse_history_step(int, GC::Ptr<SourceSnapshotParams>, GC::Ptr<Navigable>, UserNavigationInvolvement);
-    HistoryStepResult apply_the_reload_history_step(UserNavigationInvolvement);
-    enum class SynchronousNavigation : bool {
-        Yes,
-        No,
-    };
-    HistoryStepResult apply_the_push_or_replace_history_step(int step, HistoryHandlingBehavior history_handling, UserNavigationInvolvement, SynchronousNavigation);
-    HistoryStepResult update_for_navigable_creation_or_destruction();
+    // AD-HOC: Dedicated function for same-document navigations (pushState, replaceState, fragment).
+    // Implements the relevant subset of "apply the history step" (steps 2, 6-8, 12, 14-21)
+    // directly inline with no spins. Same-document navigations always hit the fast path
+    // (displayedEntry == targetEntry → update_only = true), so no cross-process coordination
+    // or document population is needed. This avoids the full phase protocol's IPC round-trips,
+    // which would deadlock when queue-jumping (spec step 14.1) runs these steps inline during
+    // an active traversal.
+    void apply_the_history_step_for_same_document_navigation(int step, Optional<Bindings::NavigationType> navigation_type, UserNavigationInvolvement);
 
     int get_the_used_step(int step) const;
     Vector<GC::Root<Navigable>> get_all_navigables_whose_current_session_history_entry_will_change_or_reload(int) const;
@@ -160,16 +158,6 @@ private:
     virtual bool is_traversable() const override { return true; }
 
     virtual void visit_edges(Cell::Visitor&) override;
-
-    // FIXME: Fix spec typo cancelation --> cancellation
-    HistoryStepResult apply_the_history_step(
-        int step,
-        bool check_for_cancelation,
-        GC::Ptr<SourceSnapshotParams>,
-        GC::Ptr<Navigable> initiator_to_check,
-        UserNavigationInvolvement user_involvement,
-        Optional<Bindings::NavigationType> navigation_type,
-        SynchronousNavigation);
 
     CheckIfUnloadingIsCanceledResult check_if_unloading_is_canceled(Vector<GC::Root<Navigable>> navigables_that_need_before_unload, GC::Ptr<TraversableNavigable> traversable, Optional<int> target_step, Optional<UserNavigationInvolvement> user_involvement_for_navigate_events);
 

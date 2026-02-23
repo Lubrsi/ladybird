@@ -61,13 +61,13 @@ struct SynchronousNavigationCommand {
 };
 
 // An asynchronous operation that gets forwarded to WebContent for execution.
-// Used for close and iframe readiness operations that don't go through apply_the_history_step.
+// Used for close and iframe readiness operations that don't go through the phase protocol.
 // WebContent holds the actual operation closure, referenced by operation_id.
 struct AsyncOperationCommand {
     u64 operation_id { 0 };
 };
 
-// A prep-then-apply command for operations that go through apply_the_history_step.
+// A prep-then-apply command for operations that use the UI-orchestrated phase protocol.
 // After prep, WC sends typed parameters and UI drives the phase protocol (B → S → CD → E → F).
 struct PrepAndApplyCommand {
     u64 prep_operation_id { 0 };
