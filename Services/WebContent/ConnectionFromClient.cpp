@@ -208,7 +208,7 @@ void ConnectionFromClient::execute_session_history_operation(u64 page_id, u64 op
             //       we can ignore the returned promise and send did_finish immediately.
             (void)closure->function()();
         }
-        async_did_finish_session_history_operation(page_id);
+        async_did_finish_session_history_operation(page_id, operation_id);
     }
 }
 

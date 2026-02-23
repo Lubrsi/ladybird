@@ -705,7 +705,7 @@ void ViewImplementation::process_next_session_history_command()
         });
 }
 
-void ViewImplemation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
+void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient>, i32 target_step, bool check_for_cancelation, Optional<Web::Bindings::NavigationType> navigation_type, Web::HTML::UserNavigationInvolvement user_involvement, Optional<u64> source_snapshot_and_initiator_id, Optional<u64> cancel_callback_id, Optional<String> target_navigable_id)
 {
     // The prep closure has finished. Now we have the parameters to drive the phase protocol,
     // just like a TraversalCommand. Build a TraversalCommand and start execution.
@@ -780,7 +780,7 @@ void ViewImplementation::did_finish_prep_no_history_step(Badge<WebContentClient>
         // No more queue-jumps. Resume outer traversal.
         if (!m_active_traversal->processing_navigable)
             process_next_traversal_step();
-        return;ent
+        return;
     }
 
     // Normal mode: clear the active operation flag and process the next command.
