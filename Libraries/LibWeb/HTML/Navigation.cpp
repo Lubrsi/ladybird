@@ -664,8 +664,7 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
     auto source_snapshot_params = document.snapshot_source_snapshot_params();
 
     // 12. Append the following session history traversal steps to traversable:
-    auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [key, api_method_tracker, navigable, source_snapshot_params, traversable, this] {
-        auto signal = Core::Promise<Empty>::construct();
+    traversable->store_session_history_prep(GC::create_function(heap(), [key, api_method_tracker, navigable, source_snapshot_params, traversable, this] {
         // 1. Let navigableSHEs be the result of getting session history entries given navigable.
         auto navigable_shes = navigable->get_session_history_entries();
 
@@ -687,8 +686,8 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
             }));
 
             // 2. Abort these steps.
-            signal->resolve({});
-            return signal;
+            traversable->page().client().page_did_finish_prep_no_history_step();
+            return;
         }
         auto target_she = *it;
 
@@ -696,44 +695,43 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
         // NOTE: This can occur if a previously queued traversal already took us to this session history entry.
         //       In that case the previous traversal will have dealt with apiMethodTracker already.
         if (target_she == navigable->active_session_history_entry()) {
-            signal->resolve({});
-            return signal;
+            traversable->page().client().page_did_finish_prep_no_history_step();
+            return;
         }
 
         // 4. Let result be the result of applying the traverse history step given by targetSHE's step to traversable,
         //    given sourceSnapshotParams, navigable, and "none".
-        auto result = traversable->apply_the_traverse_history_step(target_she->step().get<int>(), source_snapshot_params, navigable, UserNavigationInvolvement::None);
+        // AD-HOC: Instead of calling apply_the_traverse_history_step, store the source snapshot and cancel callback,
+        //         push session history, and send parameters for the UI to drive the phase protocol.
+        auto source_id = traversable->store_source_snapshot_and_initiator(source_snapshot_params, navigable);
 
-        // NOTE: When result is "canceled-by-beforeunload" or "initiator-disallowed", the navigate event was never fired,
-        //       aborting the ongoing navigation would not be correct; it would result in a navigateerror event without a
-        //       preceding navigate event. In the "canceled-by-navigate" case, navigate is fired, but the inner navigate event
-        //       firing algorithm will take care of aborting the ongoing navigation.
+        // Steps 5-6: Store cancel callback to reject the Navigation API promise if Phase B cancels.
+        auto cancel_callback_id = traversable->store_cancel_callback(GC::create_function(heap(), [this, api_method_tracker](TraversableNavigable::HistoryStepResult result) {
+            auto& realm = relevant_realm(*this);
+            auto& global = relevant_global_object(*this);
 
-        // 5. If result is "canceled-by-beforeunload", then queue a global task on the navigation and traversal task source
-        //    given navigation's relevant global object to reject the finished promise for apiMethodTracker with a
-        //    new "AbortError" DOMException created in navigation's relevant realm.
-        auto& realm = relevant_realm(*this);
-        auto& global = relevant_global_object(*this);
-        if (result == TraversableNavigable::HistoryStepResult::CanceledByBeforeUnload) {
-            queue_global_task(Task::Source::NavigationAndTraversal, global, GC::create_function(heap(), [this, api_method_tracker, &realm] {
-                TemporaryExecutionContext execution_context { realm };
-                reject_the_finished_promise(api_method_tracker, WebIDL::AbortError::create(realm, "Navigation cancelled by beforeunload"_utf16));
-            }));
-        }
+            // 5. If result is "canceled-by-beforeunload", reject with "AbortError".
+            if (result == TraversableNavigable::HistoryStepResult::CanceledByBeforeUnload) {
+                queue_global_task(Task::Source::NavigationAndTraversal, global, GC::create_function(heap(), [this, api_method_tracker, &realm] {
+                    TemporaryExecutionContext execution_context { realm };
+                    reject_the_finished_promise(api_method_tracker, WebIDL::AbortError::create(realm, "Navigation cancelled by beforeunload"_utf16));
+                }));
+            }
 
-        // 6. If result is "initiator-disallowed", then queue a global task on the navigation and traversal task source
-        //    given navigation's relevant global object to reject the finished promise for apiMethodTracker with a
-        //    new "SecurityError" DOMException created in navigation's relevant realm.
-        if (result == TraversableNavigable::HistoryStepResult::InitiatorDisallowed) {
-            queue_global_task(Task::Source::NavigationAndTraversal, global, GC::create_function(heap(), [this, api_method_tracker, &realm] {
-                TemporaryExecutionContext execution_context { realm };
-                reject_the_finished_promise(api_method_tracker, WebIDL::SecurityError::create(realm, "Navigation disallowed from this origin"_utf16));
-            }));
-        }
-        signal->resolve({});
-        return signal;
+            // 6. If result is "initiator-disallowed", reject with "SecurityError".
+            if (result == TraversableNavigable::HistoryStepResult::InitiatorDisallowed) {
+                queue_global_task(Task::Source::NavigationAndTraversal, global, GC::create_function(heap(), [this, api_method_tracker, &realm] {
+                    TemporaryExecutionContext execution_context { realm };
+                    reject_the_finished_promise(api_method_tracker, WebIDL::SecurityError::create(realm, "Navigation disallowed from this origin"_utf16));
+                }));
+            }
+        }));
+
+        traversable->push_session_history_to_ui();
+        traversable->page().client().page_did_finish_prep_for_history_step(
+            target_she->step().get<int>(), true, Bindings::NavigationType::Traverse,
+            UserNavigationInvolvement::None, source_id, cancel_callback_id);
     }));
-    traversable->page().client().page_did_request_session_history_operation(op_id);
 
     // 13. Return a navigation API method tracker-derived result for apiMethodTracker.
     return navigation_api_method_tracker_derived_result(api_method_tracker);
