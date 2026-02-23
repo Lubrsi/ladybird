@@ -116,8 +116,7 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(GC::Ptr
     document->update_the_visibility_state(traversable->system_visibility_state());
 
     // 12. Append the following session history traversal steps to traversable:
-    auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [traversable, navigable, parent_navigable, history_entry, after_session_history_update] {
-        auto signal = Core::Promise<Empty>::construct();
+    traversable->store_session_history_prep(GC::create_function(heap(), [traversable, navigable, parent_navigable, history_entry, after_session_history_update] {
         // 1. Let parentDocState be parentNavigable's active session history entry's document state.
         auto parent_doc_state = parent_navigable->active_session_history_entry()->document_state();
 
@@ -141,16 +140,21 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(GC::Ptr
         // 6. Append nestedHistory to parentDocState's nested histories.
         parent_doc_state->nested_histories().append(move(nested_history));
 
-        // 7. Update for navigable creation/destruction given traversable
-        traversable->update_for_navigable_creation_or_destruction();
-
         if (after_session_history_update) {
             after_session_history_update->function()();
         }
-        signal->resolve({});
-        return signal;
+
+        // 7. Update for navigable creation/destruction given traversable.
+        // "update for navigable creation/destruction":
+        // 1. Let step be traversable's current session history step.
+        auto step = traversable->current_session_history_step();
+
+        // 2. Return the result of applying the history step step to traversable given false, null,
+        //    null, "none", and null.
+        // AD-HOC: Push session history and send parameters for the UI to drive the phase protocol.
+        traversable->push_session_history_to_ui();
+        traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {});
     }));
-    traversable->page().client().page_did_request_session_history_operation(op_id);
 
     return {};
 }
@@ -328,14 +332,17 @@ void NavigableContainer::destroy_the_child_navigable()
         auto traversable = this->navigable()->traversable_navigable();
 
         // 9. Append the following session history traversal steps to traversable:
-        auto op_id = traversable->store_session_history_operation(GC::create_function(heap(), [traversable] {
-            auto signal = Core::Promise<Empty>::construct();
-            // 1. Update for navigable creation/destruction given traversable.
-            traversable->update_for_navigable_creation_or_destruction();
-            signal->resolve({});
-            return signal;
+        traversable->store_session_history_prep(GC::create_function(heap(), [traversable] {
+            // "update for navigable creation/destruction":
+            // 1. Let step be traversable's current session history step.
+            auto step = traversable->current_session_history_step();
+
+            // 2. Return the result of applying the history step step to traversable given false, null,
+            //    null, "none", and null.
+            // AD-HOC: Push session history and send parameters for the UI to drive the phase protocol.
+            traversable->push_session_history_to_ui();
+            traversable->page().client().page_did_finish_prep_for_history_step(step, false, {}, UserNavigationInvolvement::None, {}, {});
         }));
-        traversable->page().client().page_did_request_session_history_operation(op_id);
     }));
 }
 
