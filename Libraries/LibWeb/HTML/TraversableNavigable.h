@@ -103,6 +103,9 @@ public:
     // Store a prep closure for the prep-and-apply protocol and notify the UI to enqueue a PrepAndApplyCommand.
     // The prep closure does operation-specific setup, then sends parameters via IPC.
     void store_session_history_prep(GC::Ref<GC::Function<void()>> closure);
+    // Store a prep closure without notifying the UI. Returns the prep ID for the caller to use
+    // in a different IPC message (e.g., page_did_request_session_history_sync_navigation).
+    u64 store_session_history_prep_without_notify(GC::Ref<GC::Function<void()>> closure);
     GC::Ptr<GC::Function<void()>> take_session_history_prep(u64 id);
 
     // Cancel callback infrastructure for Navigation::traverseTo.
@@ -213,7 +216,7 @@ struct BrowsingContextAndDocument {
 };
 
 WebIDL::ExceptionOr<BrowsingContextAndDocument> create_a_new_top_level_browsing_context_and_document(GC::Ref<Page> page);
-void finalize_a_same_document_navigation(GC::Ref<TraversableNavigable> traversable, GC::Ref<Navigable> target_navigable, GC::Ref<SessionHistoryEntry> target_entry, GC::Ptr<SessionHistoryEntry> entry_to_replace, HistoryHandlingBehavior, UserNavigationInvolvement);
+Optional<int> finalize_a_same_document_navigation(GC::Ref<TraversableNavigable> traversable, GC::Ref<Navigable> target_navigable, GC::Ref<SessionHistoryEntry> target_entry, GC::Ptr<SessionHistoryEntry> entry_to_replace);
 
 template<>
 inline bool Navigable::fast_is<TraversableNavigable>() const { return is_traversable(); }

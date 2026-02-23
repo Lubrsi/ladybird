@@ -2048,18 +2048,25 @@ void Navigable::navigate_to_a_fragment(URL::URL const& url, HistoryHandlingBehav
     auto traversable = traversable_navigable();
 
     // 17. Append the following session history synchronous navigation steps involving navigable to traversable:
-    auto operation_id = traversable->store_session_history_operation(GC::create_function(heap(), [this, traversable, history_entry, entry_to_replace, navigation_id, history_handling, user_involvement] {
-        auto signal = Core::Promise<Empty>::construct();
-        // 1. Finalize a same-document navigation given traversable, navigable, historyEntry, entryToReplace, historyHandling, and userInvolvement.
-        finalize_a_same_document_navigation(*traversable, *this, history_entry, entry_to_replace, history_handling, user_involvement);
+    auto finalize_navigation_type = history_handling == HistoryHandlingBehavior::Replace ? Bindings::NavigationType::Replace : Bindings::NavigationType::Push;
+    auto prep_id = traversable->store_session_history_prep_without_notify(GC::create_function(heap(), [this, traversable, history_entry, entry_to_replace, navigation_id, finalize_navigation_type, user_involvement] {
+        // 1. Finalize a same-document navigation given traversable, navigable, historyEntry, entryToReplace, and historyHandling.
+        auto target_step = finalize_a_same_document_navigation(*traversable, *this, history_entry, entry_to_replace);
 
-        signal->resolve({});
+        if (!target_step.has_value()) {
+            traversable->page().client().page_did_finish_prep_no_history_step();
+            return;
+        }
+
         // FIXME: 2. Invoke WebDriver BiDi fragment navigated with navigable and a new WebDriver BiDi
         //            navigation status whose id is navigationId, url is url, and status is "complete".
         (void)navigation_id;
-        return signal;
+
+        // AD-HOC: Push updated session history to the UI process, then signal the phase protocol.
+        traversable->push_session_history_to_ui();
+        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, finalize_navigation_type, user_involvement, {}, {});
     }));
-    traversable->page().client().page_did_request_session_history_sync_navigation(operation_id, this->id());
+    traversable->page().client().page_did_request_session_history_sync_navigation(prep_id, this->id());
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#evaluate-a-javascript:-url
@@ -2546,15 +2553,22 @@ void perform_url_and_history_update_steps(DOM::Document& document, URL::URL new_
     auto traversable = navigable->traversable_navigable();
 
     // 13. Append the following session history synchronous navigation steps involving navigable to traversable:
-    auto operation_id = traversable->store_session_history_operation(GC::create_function(document.realm().heap(), [traversable, navigable, new_entry, entry_to_replace, history_handling] {
-        auto signal = Core::Promise<Empty>::construct();
-        // 1. Finalize a same-document navigation given traversable, navigable, newEntry, entryToReplace, historyHandling, and "none".
-        finalize_a_same_document_navigation(*traversable, *navigable, new_entry, entry_to_replace, history_handling, UserNavigationInvolvement::None);
-        signal->resolve({});
+    auto prep_id = traversable->store_session_history_prep_without_notify(GC::create_function(document.realm().heap(), [traversable, navigable, new_entry, entry_to_replace, navigation_type] {
+        // 1. Finalize a same-document navigation given traversable, navigable, newEntry, entryToReplace, and historyHandling.
+        auto target_step = finalize_a_same_document_navigation(*traversable, *navigable, new_entry, entry_to_replace);
+
+        if (!target_step.has_value()) {
+            traversable->page().client().page_did_finish_prep_no_history_step();
+            return;
+        }
+
         // 2. FIXME: Invoke WebDriver BiDi history updated with navigable.
-        return signal;
+
+        // AD-HOC: Push updated session history to the UI process, then signal the phase protocol.
+        traversable->push_session_history_to_ui();
+        traversable->page().client().page_did_finish_prep_for_history_step(*target_step, false, navigation_type, UserNavigationInvolvement::None, {}, {});
     }));
-    traversable->page().client().page_did_request_session_history_sync_navigation(operation_id, navigable->id());
+    traversable->page().client().page_did_request_session_history_sync_navigation(prep_id, navigable->id());
 }
 
 void Navigable::scroll_offset_did_change()

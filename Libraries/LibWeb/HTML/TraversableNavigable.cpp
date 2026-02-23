@@ -114,6 +114,13 @@ void TraversableNavigable::store_session_history_prep(GC::Ref<GC::Function<void(
     page().client().page_did_request_session_history_prep(id);
 }
 
+u64 TraversableNavigable::store_session_history_prep_without_notify(GC::Ref<GC::Function<void()>> closure)
+{
+    auto id = m_next_prep_id++;
+    m_prep_map.set(id, closure);
+    return id;
+}
+
 GC::Ptr<GC::Function<void()>> TraversableNavigable::take_session_history_prep(u64 id)
 {
     auto closure = m_prep_map.take(id);
@@ -1397,17 +1404,17 @@ void TraversableNavigable::destroy_top_level_traversable()
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#finalize-a-same-document-navigation
-void finalize_a_same_document_navigation(GC::Ref<TraversableNavigable> traversable, GC::Ref<Navigable> target_navigable, GC::Ref<SessionHistoryEntry> target_entry, GC::Ptr<SessionHistoryEntry> entry_to_replace, HistoryHandlingBehavior history_handling, UserNavigationInvolvement user_involvement)
+Optional<int> finalize_a_same_document_navigation(GC::Ref<TraversableNavigable> traversable, GC::Ref<Navigable> target_navigable, GC::Ref<SessionHistoryEntry> target_entry, GC::Ptr<SessionHistoryEntry> entry_to_replace)
 {
     // NOTE: This is not in the spec but we should not navigate destroyed navigable.
     if (target_navigable->has_been_destroyed())
-        return;
+        return {};
 
     // FIXME: 1. Assert: this is running on traversable's session history traversal queue.
 
     // 2. If targetNavigable's active session history entry is not targetEntry, then return.
     if (target_navigable->active_session_history_entry() != target_entry) {
-        return;
+        return {};
     }
 
     // 3. Let targetStep be null.
@@ -1442,9 +1449,9 @@ void finalize_a_same_document_navigation(GC::Ref<TraversableNavigable> traversab
         target_step = traversable->current_session_history_step();
     }
 
-    // 6. Apply the push/replace history step targetStep to traversable given historyHandling and userInvolvement.
-    auto navigation_type = history_handling == HistoryHandlingBehavior::Replace ? Bindings::NavigationType::Replace : Bindings::NavigationType::Push;
-    traversable->apply_the_history_step_for_same_document_navigation(*target_step, navigation_type, user_involvement);
+    // 6. Apply the push/replace history step targetStep to traversable.
+    // AD-HOC: The caller drives the phase protocol via IPC instead of applying inline.
+    return target_step;
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#system-visibility-state
