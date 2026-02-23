@@ -113,10 +113,8 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
     m_active_traversal = {};
     m_active_operation = false;
     m_session_history_traversal_queue.clear();
-    m_traversal_navigable_index = 0;
     m_traversal_exclusion_set.clear();
     m_running_nested_queue_jump = false;
-    m_processing_navigable = false;
 
     // Don't keep a stale backup bitmap around.
     m_backup_bitmap = nullptr;
@@ -665,7 +663,7 @@ void ViewImplementation::did_finish_session_history_operation(Badge<WebContentCl
         // just wait — did_finish_traversal_navigable will call process_next_traversal_step.
         // If we're NOT waiting for a navigable (shouldn't happen in normal flow, but be safe),
         // advance to the next step.
-        if (!m_processing_navigable)
+        if (!m_active_traversal->processing_navigable)
             process_next_traversal_step();
         return;
     }
@@ -698,7 +696,7 @@ void ViewImplementation::process_next_session_history_command()
             traversal.script_history_length = length_and_index.script_history_length;
             traversal.script_history_index = length_and_index.script_history_index;
 
-            m_active_traversal = traversal;
+            m_active_traversal = ActiveTraversalState { .command = traversal };
 
             // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
             if (traversal.check_for_cancelation) {
@@ -748,7 +746,7 @@ void ViewImplementation::did_finish_prep_for_history_step(Badge<WebContentClient
     cmd.script_history_length = length_and_index.script_history_length;
     cmd.script_history_index = length_and_index.script_history_index;
 
-    m_active_traversal = cmd;
+    m_active_traversal = ActiveTraversalState { .command = cmd };
 
     // Phase B or CD: If unloading check is needed, start with Phase B; otherwise start Phase CD directly.
     if (cmd.check_for_cancelation) {
@@ -775,8 +773,8 @@ void ViewImplementation::did_finish_traversal_unloading_check(Badge<WebContentCl
     if (result != TraversalUnloadingCheckResult::Continue) {
         // Traversal was canceled. If there's a cancel callback (from Navigation::traverseTo),
         // notify WC so it can reject the Navigation API promise.
-        if (m_active_traversal->cancel_callback_id.has_value()) {
-            client().async_traversal_canceled(page_id(), *m_active_traversal->cancel_callback_id, result);
+        if (m_active_traversal->command.cancel_callback_id.has_value()) {
+            client().async_traversal_canceled(page_id(), *m_active_traversal->command.cancel_callback_id, result);
         }
 
         m_active_traversal = {};
@@ -794,7 +792,7 @@ void ViewImplementation::did_finish_traversal_navigable(Badge<WebContentClient>,
     if (!m_active_traversal.has_value())
         return;
 
-    m_processing_navigable = false;
+    m_active_traversal->processing_navigable = false;
 
     // If a nested queue-jump is still running, wait for it to finish before advancing.
     if (m_running_nested_queue_jump)
@@ -808,12 +806,12 @@ void ViewImplementation::start_traversal_processing()
     VERIFY(m_active_traversal.has_value());
 
     // Reset iterative state for Phase CD.
-    m_traversal_navigable_index = 0;
+    m_active_traversal->navigable_index = 0;
     m_traversal_exclusion_set.clear();
     m_running_nested_queue_jump = false;
-    m_processing_navigable = false;
+    m_active_traversal->processing_navigable = false;
 
-    auto& cmd = m_active_traversal.value();
+    auto& cmd = m_active_traversal->command;
 
     // Send setup message for spec step 8 (set current session history entry + ongoing navigation
     // for all changing navigables). IPC ordering guarantees this is processed before the first
@@ -829,7 +827,7 @@ void ViewImplementation::process_next_traversal_step()
     if (!m_active_traversal.has_value())
         return;
 
-    auto& cmd = m_active_traversal.value();
+    auto& cmd = m_active_traversal->command;
 
     // Step 14.1: Check for synchronous navigation queue-jumps.
     // Look for a SynchronousNavigationCommand targeting a navigable NOT in the exclusion set.
@@ -841,16 +839,16 @@ void ViewImplementation::process_next_traversal_step()
     }
 
     // Process the next navigable.
-    if (m_traversal_navigable_index < cmd.changing_navigable_ids.size()) {
-        auto const& navigable_id = cmd.changing_navigable_ids[m_traversal_navigable_index];
-        m_traversal_navigable_index++;
+    if (m_active_traversal->navigable_index < cmd.changing_navigable_ids.size()) {
+        auto const& navigable_id = cmd.changing_navigable_ids[m_active_traversal->navigable_index];
+        m_active_traversal->navigable_index++;
 
         // Step 14.8: Add to the exclusion set.
         m_traversal_exclusion_set.set(navigable_id);
 
         // Recompute script history length/index (they don't change between navigables in current
         // implementation, but this is where the spec says to compute them).
-        m_processing_navigable = true;
+        m_active_traversal->processing_navigable = true;
         client().async_traversal_process_navigable(
             page_id(), navigable_id, cmd.target_step,
             cmd.source_snapshot_and_initiator_id, cmd.user_involvement, cmd.navigation_type,
@@ -870,7 +868,7 @@ void ViewImplementation::did_finish_traversal_non_changing_update(Badge<WebConte
         return;
 
     // Phase F (finalization): Update UI-side state.
-    auto target_step = m_active_traversal->target_step;
+    auto target_step = m_active_traversal->command.target_step;
     m_session_history_current_step = target_step;
 
     // Update the URL bar from the traversable's top-level entry at the target step.
@@ -1029,10 +1027,8 @@ void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_err
     m_active_traversal = {};
     m_active_operation = false;
     m_session_history_traversal_queue.clear();
-    m_traversal_navigable_index = 0;
     m_traversal_exclusion_set.clear();
     m_running_nested_queue_jump = false;
-    m_processing_navigable = false;
 
     // Don't keep a stale backup bitmap around.
     m_backup_bitmap = nullptr;

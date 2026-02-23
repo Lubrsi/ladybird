@@ -414,14 +414,19 @@ protected:
     i32 m_session_history_current_step { 0 };
     Vector<SerializedSessionHistoryEntry> m_session_history_entries;
     SessionHistoryTraversalQueue m_session_history_traversal_queue;
-    Optional<TraversalCommand> m_active_traversal;
+
+    // Per-traversal state: bundles the command being executed with its iterative Phase CD state.
+    struct ActiveTraversalState {
+        TraversalCommand command;
+        size_t navigable_index { 0 };
+        bool processing_navigable { false };
+    };
+
+    Optional<ActiveTraversalState> m_active_traversal;
     bool m_active_operation { false };
 
-    // Phase CD iterative state for per-navigable processing.
-    size_t m_traversal_navigable_index { 0 };
     HashTable<String> m_traversal_exclusion_set;
     bool m_running_nested_queue_jump { false };
-    bool m_processing_navigable { false };
 
     void start_traversal_processing();
     void process_next_traversal_step();
