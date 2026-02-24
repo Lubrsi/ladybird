@@ -157,11 +157,12 @@ private:
         static_assert(IsSame<T, typename decltype(T::cell_allocator)::CellType>,
             "GC cell allocator type mismatch");
 
-        will_allocate(sizeof(T));
+        will_allocate_cell(sizeof(T));
         return T::cell_allocator.for_heap(*this).allocate_cell(*this);
     }
 
     void will_allocate(size_t);
+    void will_allocate_cell(size_t);
     void update_gc_bytes_threshold(size_t live_cell_bytes, size_t live_external_bytes);
 
     enum class IncludeIncomingCrossHeapMembers {
@@ -201,6 +202,10 @@ private:
 
     size_t m_gc_bytes_threshold { 0 };
     size_t m_allocated_bytes_since_last_gc { 0 };
+
+#if defined(TRACY_ENABLE_MEMORY)
+    size_t m_live_heap_size { 0 };
+#endif
 
     bool m_should_collect_on_every_allocation { false };
 

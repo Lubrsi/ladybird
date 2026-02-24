@@ -21,6 +21,7 @@
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
 #include <AK/Time.h>
+#include <AK/Tracy.h>
 #include <AK/Utf16StringBuilder.h>
 #include <AK/Utf16View.h>
 #include <AK/Utf8View.h>
@@ -2380,6 +2381,8 @@ void Document::update_layout(UpdateLayoutReason reason)
 
 void Document::update_layout(UpdateLayoutReason reason, ThrottledAnimationSamplingScope animation_sampling_scope)
 {
+    TRACY_ZONE_SCOPED_NAMED("Document::update_layout");
+
     auto navigable = this->navigable();
     if (!navigable || navigable->active_document().ptr() != this)
         return;

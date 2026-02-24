@@ -6,6 +6,7 @@
 
 #include <AK/Format.h>
 #include <AK/StringView.h>
+#include <AK/Tracy.h>
 #include <AK/Vector.h>
 #include <LibMain/Main.h>
 #include <string.h>
@@ -32,6 +33,17 @@ void set_return_code_for_errors(int code)
 
 int main(int argc, char** argv)
 {
+#if defined(TRACY_ENABLE)
+    if (argc > 0 && argv[0]) {
+        auto const* program_name = argv[0];
+        if (auto const* separator = strrchr(program_name, '/'))
+            program_name = separator + 1;
+        if (auto const* separator = strrchr(program_name, '\\'))
+            program_name = separator + 1;
+        TRACY_SET_PROGRAM_NAME(program_name);
+    }
+#endif
+
     tzset();
 
 #if defined(AK_OS_WINDOWS)

@@ -8,6 +8,7 @@
 #include <AK/Debug.h>
 #include <AK/NumericLimits.h>
 #include <AK/TemporaryChange.h>
+#include <AK/Tracy.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibGfx/Path.h>
 #include <LibIPC/Decoder.h>
@@ -107,6 +108,8 @@ void DisplayListPlayer::execute(
     RefPtr<Gfx::PaintingSurface> surface,
     CanvasSurfaceRegistry const* canvas_surface_registry)
 {
+    TRACY_ZONE_SCOPED_NAMED("DisplayListPlayer::execute");
+
     VERIFY(display_list.compatible_visual_context_tree_structural_epoch() == visual_context_tree.structural_epoch());
     if (m_layer_filter_cache_tree_structural_epoch != visual_context_tree.structural_epoch()) {
         m_layer_filters_by_tree_structural_epoch_and_frame.clear();

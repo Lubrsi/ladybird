@@ -22,6 +22,7 @@
 #include <AK/StackUnwinder.h>
 #include <AK/TemporaryChange.h>
 #include <AK/Time.h>
+#include <AK/Tracy.h>
 #include <LibCore/ElapsedTimer.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
@@ -337,6 +338,16 @@ void Heap::will_allocate(size_t size)
         start_idle_gc_timer();
 }
 
+void Heap::will_allocate_cell(size_t size)
+{
+    will_allocate(size);
+
+#if defined(TRACY_ENABLE_MEMORY)
+    m_live_heap_size += size;
+    TRACY_PLOT("Live GC Heap Size", static_cast<i64>(m_live_heap_size));
+#endif
+}
+
 void Heap::did_allocate_external_memory(size_t size)
 {
     will_allocate(size);
@@ -617,6 +628,7 @@ void Heap::run_post_mark_phases(bool report)
 
 void Heap::collect_garbage(CollectionType collection_type, bool print_report)
 {
+    TRACY_ZONE_SCOPED_NAMED("GC::Heap::collect_garbage");
     VERIFY(!m_collecting_garbage);
 
     finish_pending_incremental_sweep();
@@ -782,6 +794,8 @@ void Heap::register_sweep_callback(AK::Function<void()> callback)
 
 void Heap::gather_roots(HashMap<Cell*, HeapRoot>& roots, Vector<StackFrameInfo>* out_stack_frames, IncludeIncomingCrossHeapMembers include_incoming_cross_heap_members)
 {
+    TRACY_ZONE_SCOPED_NAMED("GC::Heap::gather_roots");
+
     // Cross-heap members targeting this heap act as roots for local collections (as the foreign holder is invisible to a local mark).
     if (include_incoming_cross_heap_members == IncludeIncomingCrossHeapMembers::Yes) {
         for (auto* member : m_incoming_cross_heap_members) {
@@ -1113,6 +1127,7 @@ void Heap::mark_live_cells(HashMap<Cell*, HeapRoot> const& roots)
 
 void Heap::mark_live_cells_across(ReadonlySpan<Heap* const> heaps, HashMap<Cell*, HeapRoot> const& roots)
 {
+    TRACY_ZONE_SCOPED_NAMED("GC::Heap::mark_live_cells");
     dbgln_if(HEAP_DEBUG, "mark_live_cells:");
 
     Optional<MarkingVisitor> visitor;
@@ -1168,6 +1183,7 @@ void Heap::sweep_weak_blocks()
 
 void Heap::sweep_dead_cells(bool print_report, Core::ElapsedTimer const& measurement_timer)
 {
+    TRACY_ZONE_SCOPED_NAMED("GC::Heap::sweep_dead_cells");
     dbgln_if(HEAP_DEBUG, "sweep_dead_cells:");
     Vector<HeapBlock*, 32> empty_blocks;
     Vector<HeapBlock*, 32> full_blocks_that_became_usable;
@@ -1233,6 +1249,11 @@ void Heap::sweep_dead_cells(bool print_report, Core::ElapsedTimer const& measure
         update_gc_bytes_threshold(live_cell_bytes, live_external_bytes);
     }
 
+#if defined(TRACY_ENABLE_MEMORY)
+    m_live_heap_size = live_cell_bytes;
+    TRACY_PLOT("Live GC Heap Size", static_cast<i64>(m_live_heap_size));
+#endif
+
     if (print_report) {
         g_sweep_stats = {
             .collected_cells = collected_cells,
@@ -1276,6 +1297,15 @@ void Heap::sweep_block(HeapBlock& block)
             ++live_cells;
         }
     });
+
+#if defined(TRACY_ENABLE_MEMORY)
+    if (collected_cells > 0) {
+        auto collected_cell_bytes = collected_cells * block.cell_size();
+        VERIFY(m_live_heap_size >= collected_cell_bytes);
+        m_live_heap_size -= collected_cell_bytes;
+        TRACY_PLOT("Live GC Heap Size", static_cast<i64>(m_live_heap_size));
+    }
+#endif
 
     if (!block_has_live_cells) {
         dbgln_if(HEAP_DEBUG, " - HeapBlock empty @ {}: cell_size={}", &block, block.cell_size());

@@ -225,6 +225,12 @@
     },
     "sqlite3",
     {
+      "name": "tracy",
+      "features": [
+        "on-demand"
+      ]
+    },
+    {
       "name": "tiff",
       "features": [
         "zstd"
@@ -402,6 +408,10 @@
     {
       "name": "tiff",
       "version": "4.7.2#0"
+    },
+    {
+      "name": "tracy",
+      "version": "0.13.1"
     },
     {
       "name": "vulkan",

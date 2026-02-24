@@ -9,6 +9,7 @@
 #include <AK/Checked.h>
 #include <AK/NeverDestroyed.h>
 #include <AK/Platform.h>
+#include <AK/Tracy.h>
 #include <AK/Try.h>
 #include <AK/Vector.h>
 #include <LibCore/System.h>
@@ -361,6 +362,7 @@ void* BlockAllocator::allocate_block([[maybe_unused]] char const* name)
 
     ASAN_UNPOISON_MEMORY_REGION(block, HeapBlock::BLOCK_SIZE);
     LSAN_REGISTER_ROOT_REGION(block, HeapBlock::BLOCK_SIZE);
+    TRACY_ALLOCATED_MEMORY_NAMED(block, HeapBlock::BLOCK_SIZE, "GC Blocks");
 #if defined(MADV_FREE_REUSE) && defined(MADV_FREE_REUSABLE)
     if (needs_madvise_reuse) {
         if (madvise(block, HeapBlock::BLOCK_SIZE, MADV_FREE_REUSE) < 0) {
@@ -382,6 +384,7 @@ void BlockAllocator::deallocate_block(void* block, DeferDecommit defer_decommit)
     // global decommit worker, which the GC kicks at the end of sweep.
     ASAN_POISON_MEMORY_REGION(block, HeapBlock::BLOCK_SIZE);
     LSAN_UNREGISTER_ROOT_REGION(block, HeapBlock::BLOCK_SIZE);
+    TRACY_FREED_MEMORY_NAMED(block, "GC Blocks");
 
     bool need_to_register = false;
     {

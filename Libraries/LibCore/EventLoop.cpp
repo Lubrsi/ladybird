@@ -9,6 +9,7 @@
 #include <AK/Assertions.h>
 #include <AK/Badge.h>
 #include <AK/Platform.h>
+#include <AK/Tracy.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/EventLoopImplementation.h>
 #include <LibCore/EventReceiver.h>
@@ -92,6 +93,7 @@ void EventLoop::spin_until(Function<bool()> goal_condition)
 size_t EventLoop::pump(WaitMode mode)
 {
     VERIFY(current_event_loop() == this);
+    TRACY_ZONE_SCOPED_NAMED("EventLoop::pump");
     return m_impl->pump(mode == WaitMode::WaitForEvents ? EventLoopImplementation::PumpMode::WaitForEvents : EventLoopImplementation::PumpMode::DontWaitForEvents);
 }
 

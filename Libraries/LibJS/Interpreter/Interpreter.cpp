@@ -6,6 +6,7 @@
  */
 
 #include <AK/TemporaryChange.h>
+#include <AK/Tracy.h>
 #include <LibCore/Environment.h>
 #include <LibJS/Bytecode/Debug.h>
 #include <LibJS/Bytecode/Instruction.h>
@@ -327,6 +328,18 @@ DeclarativeEnvironment& VM::global_declarative_environment()
 
 ThrowCompletionOr<Value> VM::run_executable(ExecutionContext& context, Executable& executable, u32 entry_point)
 {
+#if defined(TRACY_ENABLE)
+    TRACY_ZONE_SCOPED();
+    if (executable.name.is_ascii()) {
+        auto name_view = executable.name.view();
+        auto name_span = name_view.ascii_span();
+        TRACY_SET_ZONE_NAME(name_span.data(), name_span.size());
+    } else {
+        constexpr auto FunctionName = "JS::VM::run_executable()"sv;
+        TRACY_SET_ZONE_NAME(FunctionName.characters_without_null_termination(), FunctionName.length());
+    }
+#endif
+
     if (auto* debugger = vm().debugger())
         debugger->register_executable(executable);
 

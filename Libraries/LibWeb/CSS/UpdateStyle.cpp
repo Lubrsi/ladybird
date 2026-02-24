@@ -5,6 +5,7 @@
  */
 
 #include <AK/ScopeGuard.h>
+#include <AK/Tracy.h>
 #include <LibGC/RootVector.h>
 #include <LibWeb/CSS/ComputedValues.h>
 #include <LibWeb/CSS/Invalidation/SlotInvalidator.h>
@@ -255,6 +256,8 @@ static bool element_style_depends_on_more_than_the_inherited_groups(DOM::Element
 
 static RequiredInvalidationAfterStyleChange apply_style_engine_reactions(DOM::Document& document, Vector<StyleEngine::PublishedStyleDelta> reactions)
 {
+    TRACY_ZONE_SCOPED_NAMED("apply_style_engine_reactions");
+
     // Reactions are applied generation by generation: applying an element can derive reactions for
     // its (flat-tree) children, which must run after it so their inheritance inputs are ready.
     // Each wave of derived reactions becomes the next generation of this same pass rather than a
@@ -952,6 +955,8 @@ namespace Web::DOM {
 
 void Document::update_style()
 {
+    TRACY_ZONE_SCOPED_NAMED("Document::update_style");
+
     CSS::update_style(*this);
 }
 
