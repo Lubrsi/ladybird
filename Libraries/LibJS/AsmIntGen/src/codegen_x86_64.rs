@@ -76,6 +76,11 @@ pub fn generate(program: &Program) -> String {
         generate_handler(&mut out, handler, program);
     }
 
+    // Close the interpreter's unwind frame after the last handler so any PC
+    // within the handler blob can unwind back to the C++ caller.
+    w!(out, ".cfi_endproc");
+    w!(out);
+
     // Mark stack as non-executable (required by Linux linker)
     w!(out, "#ifndef __APPLE__");
     w!(out, ".section .note.GNU-stack,\"\",@progbits");
@@ -90,15 +95,24 @@ fn generate_entry_point(out: &mut String, program: &Program) {
     w!(out, ".globl CSYM(asm_interpreter_entry)");
     w!(out, ".p2align 4");
     w!(out, "CSYM(asm_interpreter_entry):");
+    w!(out, "    .cfi_startproc");
 
     // Save callee-saved registers
     w!(out, "    push rbp");
+    w!(out, "    .cfi_def_cfa_offset 16");
+    w!(out, "    .cfi_offset rbp, -16");
     w!(out, "    mov rbp, rsp");
+    w!(out, "    .cfi_def_cfa_register rbp");
     w!(out, "    push rbx");
+    w!(out, "    .cfi_offset rbx, -24");
     w!(out, "    push r12");
+    w!(out, "    .cfi_offset r12, -32");
     w!(out, "    push r13");
+    w!(out, "    .cfi_offset r13, -40");
     w!(out, "    push r14");
+    w!(out, "    .cfi_offset r14, -48");
     w!(out, "    push r15");
+    w!(out, "    .cfi_offset r15, -56");
     // Align stack to 16 bytes (pushed rbp + 5 regs = 48 bytes, need one more for alignment)
     w!(out, "    sub rsp, 8");
 
@@ -155,14 +169,23 @@ fn generate_fallback_handler(out: &mut String, program: &Program) {
 
     // Exit path: restore callee-saved registers and return
     w!(out, ".Lexit:");
+    w!(out, "    .cfi_remember_state");
     w!(out, "    add rsp, 8");
     w!(out, "    pop r15");
+    w!(out, "    .cfi_restore r15");
     w!(out, "    pop r14");
+    w!(out, "    .cfi_restore r14");
     w!(out, "    pop r13");
+    w!(out, "    .cfi_restore r13");
     w!(out, "    pop r12");
+    w!(out, "    .cfi_restore r12");
     w!(out, "    pop rbx");
+    w!(out, "    .cfi_restore rbx");
     w!(out, "    pop rbp");
+    w!(out, "    .cfi_restore rbp");
+    w!(out, "    .cfi_def_cfa rsp, 8");
     w!(out, "    ret");
+    w!(out, "    .cfi_restore_state");
     w!(out);
 }
 
