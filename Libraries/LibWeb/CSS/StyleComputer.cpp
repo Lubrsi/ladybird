@@ -416,9 +416,38 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
     return matching_rules;
 }
 
+// https://drafts.csswg.org/css-cascade-6/#cascade-sort
 static void sort_matching_rules(Vector<MatchingRule const*>& matching_rules)
 {
+    // https://drafts.csswg.org/css-cascade-6/#cascade-context
+    // When comparing two declarations that are sourced from different encapsulation contexts,
+    // then for normal rules the declaration from the outer context wins,
+    // and for important rules the declaration from the inner context wins.
+    // For this purpose, DOM tree contexts are considered to be nested in shadow-including tree order.
+    // FIXME: For important declarations, inner context should win. This requires reversing the
+    //        encapsulation context ordering when processing important declarations.
+    auto context_depth_of = [](DOM::ShadowRoot const* shadow_root) -> size_t {
+        size_t depth = 0;
+        for (auto const* sr = shadow_root; sr; sr = as_if<DOM::ShadowRoot>(sr->host()->root()))
+            ++depth;
+        return depth;
+    };
+
+    HashMap<DOM::ShadowRoot const*, size_t> context_depths;
+    for (auto const* rule : matching_rules) {
+        auto const* sr = rule->shadow_root.ptr();
+        if (!context_depths.contains(sr))
+            context_depths.set(sr, context_depth_of(sr));
+    }
+
     quick_sort(matching_rules, [&](MatchingRule const* a, MatchingRule const* b) {
+        // More inner rules (higher depth) sort first so that outer rules take priority
+        // with last-value-wins semantics.
+        auto a_depth = *context_depths.get(a->shadow_root.ptr());
+        auto b_depth = *context_depths.get(b->shadow_root.ptr());
+        if (a_depth != b_depth)
+            return a_depth > b_depth;
+
         auto const& a_selector = a->selector;
         auto const& b_selector = b->selector;
         auto a_specificity = a_selector.specificity();
