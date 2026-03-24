@@ -185,7 +185,8 @@ private:
         Optional<FlyString> layer_name,
         Optional<LogicalAliasMappingContext>,
         ReadonlySpan<PropertyID> properties_to_cascade,
-        HashMap<PropertyID, size_t>* important_context_depths = nullptr) const;
+        HashMap<PropertyID, size_t>* important_context_cache = nullptr,
+        HashMap<DOM::ShadowRoot const*, size_t> const* context_ordering = nullptr) const;
 
     GC::Ref<DOM::Document> m_document;
 

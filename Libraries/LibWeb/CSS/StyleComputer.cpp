@@ -418,7 +418,7 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
 
 // https://drafts.csswg.org/css-cascade-6/#cascade-context
 // DOM tree contexts are considered to be nested in shadow-including tree order.
-// Returns the nesting depth of a shadow root (0 for document-level / nullptr).
+
 static size_t encapsulation_context_depth(DOM::ShadowRoot const* shadow_root)
 {
     size_t depth = 0;
@@ -427,34 +427,68 @@ static size_t encapsulation_context_depth(DOM::ShadowRoot const* shadow_root)
     return depth;
 }
 
-static HashMap<DOM::ShadowRoot const*, size_t> collect_context_depths(Vector<MatchingRule const*> const& matching_rules)
+// Precompute a total ordering of the unique shadow roots referenced by matching rules.
+// Returns a map from shadow root pointer to an order index, where a higher value means
+// the context is more inner (later in shadow-including tree order).
+// The element's own shadow root is always assigned the highest value (innermost context).
+static HashMap<DOM::ShadowRoot const*, size_t> compute_encapsulation_context_ordering(Vector<MatchingRule const*> const& matching_rules, DOM::ShadowRoot const* element_shadow_root, DOM::ShadowRoot const* inline_style_shadow_root = nullptr)
 {
-    HashMap<DOM::ShadowRoot const*, size_t> context_depths;
+    // Collect unique shadow roots from matching rules, plus the inline style's context.
+    Vector<DOM::ShadowRoot const*> sorted_roots;
     for (auto const* rule : matching_rules) {
-        auto const* sr = rule->shadow_root.ptr();
-        if (!context_depths.contains(sr))
-            context_depths.set(sr, encapsulation_context_depth(sr));
+        if (!sorted_roots.contains_slow(rule->shadow_root.ptr()))
+            sorted_roots.append(rule->shadow_root.ptr());
     }
-    return context_depths;
+    if (!sorted_roots.contains_slow(inline_style_shadow_root))
+        sorted_roots.append(inline_style_shadow_root);
+
+    // Sort by shadow-including tree order (more outer first, more inner last).
+    // The element's own shadow root (if any) is always innermost.
+    quick_sort(sorted_roots, [&](DOM::ShadowRoot const* a, DOM::ShadowRoot const* b) {
+        if (a == b)
+            return false;
+        // Element's own shadow root is always last (most inner).
+        if (element_shadow_root) {
+            if (a == element_shadow_root)
+                return false;
+            if (b == element_shadow_root)
+                return true;
+        }
+        // Compare by nesting depth (shallower = more outer = sorts first).
+        auto a_depth = encapsulation_context_depth(a);
+        auto b_depth = encapsulation_context_depth(b);
+        if (a_depth != b_depth)
+            return a_depth < b_depth;
+        // Same depth: earlier host in tree order = more outer = sorts first.
+        if (a && b)
+            return a->host()->is_before(*b->host());
+        return false;
+    });
+
+    // Assign order indices: lower = more outer, higher = more inner.
+    HashMap<DOM::ShadowRoot const*, size_t> ordering;
+    for (size_t i = 0; i < sorted_roots.size(); ++i)
+        ordering.set(sorted_roots[i], i);
+    return ordering;
 }
 
 // https://drafts.csswg.org/css-cascade-6/#cascade-sort
-static void sort_matching_rules(Vector<MatchingRule const*>& matching_rules)
+static void sort_matching_rules(Vector<MatchingRule const*>& matching_rules, DOM::ShadowRoot const* element_shadow_root)
 {
     // https://drafts.csswg.org/css-cascade-6/#cascade-context
     // When comparing two declarations that are sourced from different encapsulation contexts,
     // then for normal rules the declaration from the outer context wins,
     // and for important rules the declaration from the inner context wins.
     // For this purpose, DOM tree contexts are considered to be nested in shadow-including tree order.
-    auto context_depths = collect_context_depths(matching_rules);
+    auto context_ordering = compute_encapsulation_context_ordering(matching_rules, element_shadow_root);
 
     quick_sort(matching_rules, [&](MatchingRule const* a, MatchingRule const* b) {
-        // More inner rules (higher depth) sort first so that outer rules take priority
+        // More inner rules (higher order index) sort first so that outer rules take priority
         // with last-value-wins semantics.
-        auto a_depth = *context_depths.get(a->shadow_root.ptr());
-        auto b_depth = *context_depths.get(b->shadow_root.ptr());
-        if (a_depth != b_depth)
-            return a_depth > b_depth;
+        auto a_order = *context_ordering.get(a->shadow_root.ptr());
+        auto b_order = *context_ordering.get(b->shadow_root.ptr());
+        if (a_order != b_order)
+            return a_order > b_order;
 
         auto const& a_selector = a->selector;
         auto const& b_selector = b->selector;
@@ -519,21 +553,19 @@ void StyleComputer::cascade_declarations(
     Optional<FlyString> layer_name,
     Optional<LogicalAliasMappingContext> logical_alias_mapping_context,
     ReadonlySpan<PropertyID> properties_to_cascade,
-    HashMap<PropertyID, size_t>* important_context_depths) const
+    HashMap<PropertyID, size_t>* important_context_cache,
+    HashMap<DOM::ShadowRoot const*, size_t> const* context_ordering) const
 {
     // https://drafts.csswg.org/css-cascade-6/#cascade-context
     // For important rules, the declaration from the inner context wins.
-    // Track context depth per important property so shallower contexts don't overwrite deeper ones.
-    // NOTE: The depth tracking map is shared across per-layer cascade_declarations calls (passed via
-    //       important_context_depths) so that inner-context !important declarations are preserved
+    // Track the encapsulation context order index that set each important property, so that a more
+    // outer context (lower index) cannot overwrite a property set by a more inner context (higher index).
+    // NOTE: The tracking map is shared across per-layer cascade_declarations calls (passed via
+    //       important_context_cache) so that inner-context !important declarations are preserved
     //       even when the inline style is re-processed in a subsequent layer's call.
-    HashMap<DOM::ShadowRoot const*, size_t> context_depths;
-    HashMap<PropertyID, size_t> local_important_property_depths;
-    auto& important_property_depths = important_context_depths ? *important_context_depths : local_important_property_depths;
-    size_t current_context_depth = 0;
-
-    if (important == Important::Yes)
-        context_depths = collect_context_depths(matching_rules);
+    HashMap<PropertyID, size_t> local_important_contexts;
+    auto& important_property_context_orders = important_context_cache ? *important_context_cache : local_important_contexts;
+    size_t current_context_order = 0;
 
     AK::FixedBitmap<to_underlying(last_property_id) + 1> seen_properties(false);
     auto cascade_style_declaration = [&](CSSStyleProperties const& declaration) {
@@ -594,13 +626,13 @@ void StyleComputer::cascade_declarations(
                     physical_property_id = longhand_id;
                 }
 
-                // For important declarations, inner context wins: don't let a shallower context
-                // overwrite a property already set by a deeper context.
+                // For important declarations, inner context wins (higher order index): don’t let a
+                // more outer context overwrite a property already set by a more inner context.
                 if (important == Important::Yes) {
-                    auto existing_depth = important_property_depths.get(physical_property_id);
-                    if (existing_depth.has_value() && current_context_depth < *existing_depth)
+                    auto existing_order = important_property_context_orders.get(physical_property_id);
+                    if (existing_order.has_value() && current_context_order < *existing_order)
                         return;
-                    important_property_depths.set(physical_property_id, current_context_depth);
+                    important_property_context_orders.set(physical_property_id, current_context_order);
                 }
 
                 if (longhand_value.is_revert()) {
@@ -615,17 +647,17 @@ void StyleComputer::cascade_declarations(
     };
 
     for (auto const& match : matching_rules) {
-        if (important == Important::Yes)
-            current_context_depth = *context_depths.get(match->shadow_root.ptr());
+        if (important == Important::Yes && context_ordering)
+            current_context_order = context_ordering->get(match->shadow_root.ptr()).value_or(0);
         cascade_style_declaration(match->declaration());
     }
 
     if (cascade_origin == CascadeOrigin::Author && !abstract_element.pseudo_element().has_value()) {
         if (auto const inline_style = abstract_element.element().inline_style()) {
-            if (important == Important::Yes) {
+            if (important == Important::Yes && context_ordering) {
                 // Inline styles belong to the element’s containing tree context.
                 auto const* containing_shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root());
-                current_context_depth = encapsulation_context_depth(containing_shadow_root);
+                current_context_order = context_ordering->get(containing_shadow_root).value_or(0);
             }
             cascade_style_declaration(*inline_style);
         }
@@ -646,20 +678,19 @@ static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vec
     custom_properties.ensure_capacity(custom_properties.size() + needed_capacity);
 
     // https://drafts.csswg.org/css-cascade-6/#cascade-context
-    // For important rules, the declaration from the inner context wins.
-    // Track context depth per important property so shallower contexts don't overwrite deeper ones.
-    // Rules are sorted inner-first (higher depth first), so for normal declarations outer wins
-    // naturally via last-value-wins. For important, we must prevent that.
-    auto context_depths = collect_context_depths(matching_rules);
+    // For important rules, the declaration from the inner context wins (higher order index).
+    // Rules are sorted inner-first, so for normal declarations outer wins naturally via last-value-wins.
+    auto const* inline_style_shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root());
+    auto context_ordering = compute_encapsulation_context_ordering(matching_rules, abstract_element.element().shadow_root(), inline_style_shadow_root);
 
     struct ImportantCustomProperty {
         StyleProperty style;
-        size_t context_depth;
+        size_t context_order;
     };
     OrderedHashMap<FlyString, ImportantCustomProperty> important_custom_properties;
 
     for (auto const& matching_rule : matching_rules) {
-        auto depth = *context_depths.get(matching_rule->shadow_root.ptr());
+        auto order = context_ordering.get(matching_rule->shadow_root.ptr()).value_or(0);
         for (auto const& it : matching_rule->declaration().custom_properties()) {
             auto style_value = it.value.value;
             if (style_value->is_revert_layer())
@@ -667,8 +698,8 @@ static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vec
 
             if (it.value.important == Important::Yes) {
                 auto existing = important_custom_properties.get(it.key);
-                if (!existing.has_value() || depth >= existing->context_depth)
-                    important_custom_properties.set(it.key, { it.value, depth });
+                if (!existing.has_value() || order >= existing->context_order)
+                    important_custom_properties.set(it.key, { it.value, order });
             }
             custom_properties.set(it.key, it.value);
         }
@@ -678,13 +709,13 @@ static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vec
         if (auto const inline_style = abstract_element.element().inline_style()) {
             // Inline styles belong to the element's containing tree context.
             auto const* containing_shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root());
-            auto inline_depth = encapsulation_context_depth(containing_shadow_root);
+            auto inline_order = context_ordering.get(containing_shadow_root).value_or(0);
 
             for (auto const& it : inline_style->custom_properties()) {
                 if (it.value.important == Important::Yes) {
                     auto existing = important_custom_properties.get(it.key);
-                    if (!existing.has_value() || inline_depth >= existing->context_depth)
-                        important_custom_properties.set(it.key, { it.value, inline_depth });
+                    if (!existing.has_value() || inline_order >= existing->context_order)
+                        important_custom_properties.set(it.key, { it.value, inline_order });
                 }
                 custom_properties.set(it.key, it.value);
             }
@@ -1308,21 +1339,22 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
 StyleComputer::MatchingRuleSet StyleComputer::build_matching_rule_set(DOM::AbstractElement abstract_element, PseudoClassBitmap& attempted_pseudo_class_matches, bool& did_match_any_pseudo_element_rules, ComputeStyleMode mode, StyleScope const& style_scope) const
 {
     // First, we collect all the CSS rules whose selectors match `element`:
+    auto element_shadow_root = abstract_element.element().shadow_root();
     MatchingRuleSet matching_rule_set;
     matching_rule_set.user_agent_rules = collect_matching_rules(abstract_element, CascadeOrigin::UserAgent, attempted_pseudo_class_matches);
-    sort_matching_rules(matching_rule_set.user_agent_rules);
+    sort_matching_rules(matching_rule_set.user_agent_rules, element_shadow_root);
     matching_rule_set.user_rules = collect_matching_rules(abstract_element, CascadeOrigin::User, attempted_pseudo_class_matches);
-    sort_matching_rules(matching_rule_set.user_rules);
+    sort_matching_rules(matching_rule_set.user_rules, element_shadow_root);
 
     // @layer-ed author rules
     for (auto const& layer_name : style_scope.m_qualified_layer_names_in_order) {
         auto layer_rules = collect_matching_rules(abstract_element, CascadeOrigin::Author, attempted_pseudo_class_matches, layer_name);
-        sort_matching_rules(layer_rules);
+        sort_matching_rules(layer_rules, element_shadow_root);
         matching_rule_set.author_rules.append({ layer_name, layer_rules });
     }
     // Un-@layer-ed author rules
     auto unlayered_author_rules = collect_matching_rules(abstract_element, CascadeOrigin::Author, attempted_pseudo_class_matches);
-    sort_matching_rules(unlayered_author_rules);
+    sort_matching_rules(unlayered_author_rules, element_shadow_root);
     matching_rule_set.author_rules.append({ {}, unlayered_author_rules });
 
     if (mode == ComputeStyleMode::CreatePseudoElementStyleIfNeeded) {
@@ -1381,9 +1413,16 @@ GC::Ref<CascadedProperties> StyleComputer::compute_cascaded_values(DOM::Abstract
     }
 
     // Important author declarations, with un-@layer-ed rules first, followed by each @layer in reverse order.
-    HashMap<PropertyID, size_t> important_context_depths;
+    // Precompute the encapsulation context ordering across all author rules for !important tracking.
+    Vector<MatchingRule const*> all_author_rules;
+    for (auto const& layer : matching_rule_set.author_rules)
+        all_author_rules.extend(layer.rules);
+    auto const* inline_style_shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root());
+    auto context_ordering = compute_encapsulation_context_ordering(all_author_rules, abstract_element.element().shadow_root(), inline_style_shadow_root);
+
+    HashMap<PropertyID, size_t> important_context_cache;
     for (auto const& layer : matching_rule_set.author_rules.in_reverse()) {
-        cascade_declarations(cascaded_properties, abstract_element, layer.rules, CascadeOrigin::Author, Important::Yes, {}, logical_alias_mapping_context, properties_to_cascade, &important_context_depths);
+        cascade_declarations(cascaded_properties, abstract_element, layer.rules, CascadeOrigin::Author, Important::Yes, {}, logical_alias_mapping_context, properties_to_cascade, &important_context_cache, &context_ordering);
     }
 
     // Important user declarations
