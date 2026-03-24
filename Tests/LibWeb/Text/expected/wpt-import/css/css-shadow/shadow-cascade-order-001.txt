@@ -2,8 +2,8 @@ Harness status: OK
 
 Found 64 tests
 
-48 Pass
-16 Fail
+60 Pass
+4 Fail
 Pass	A1. document vs ::slotted, document rule should win for open mode.
 Pass	A2. document vs :host, document rule should win for open mode.
 Pass	A3. document vs inline, inline rule should win for open mode.
@@ -22,14 +22,14 @@ Pass	C3. document with !important vs inline, document rule should win for open m
 Pass	C4. ::slotted vs :host with !important, later in tree-of-trees rule should win for open mode.
 Pass	C5. ::slotted with !important vs inline, ::slotted rule should win for open mode.
 Pass	C6. :host with !important vs inline, :host rule should win for open mode.
-Fail	D1. document vs ::slotted both with !important, ::slotted rule should win for open mode.
-Fail	D2. document vs :host both with !important, :host rule should win for open mode.
+Pass	D1. document vs ::slotted both with !important, ::slotted rule should win for open mode.
+Pass	D2. document vs :host both with !important, :host rule should win for open mode.
 Pass	D3. document vs inline both with !important, inline rule should win for open mode.
 Pass	D4. ::slotted vs :host both with !important, later in tree-of-trees rule should win for open mode.
-Fail	D5. ::slotted vs inline both with !important, ::slotted rule should win for open mode.
-Fail	D6. :host vs inline both with !important, :host rule should win for open mode.
+Pass	D5. ::slotted vs inline both with !important, ::slotted rule should win for open mode.
+Pass	D6. :host vs inline both with !important, :host rule should win for open mode.
 Pass	E1. all style applied, inline rule should win for open mode.
-Fail	E2. all styles with !important applied, rule in the last tree-of-trees should win for open mode.
+Pass	E2. all styles with !important applied, rule in the last tree-of-trees should win for open mode.
 Pass	A1. document vs ::slotted, document rule should win for closed mode.
 Pass	A2. document vs :host, document rule should win for closed mode.
 Pass	A3. document vs inline, inline rule should win for closed mode.
@@ -48,23 +48,23 @@ Pass	C3. document with !important vs inline, document rule should win for closed
 Pass	C4. ::slotted vs :host with !important, later in tree-of-trees rule should win for closed mode.
 Pass	C5. ::slotted with !important vs inline, ::slotted rule should win for closed mode.
 Pass	C6. :host with !important vs inline, :host rule should win for closed mode.
-Fail	D1. document vs ::slotted both with !important, ::slotted rule should win for closed mode.
-Fail	D2. document vs :host both with !important, :host rule should win for closed mode.
+Pass	D1. document vs ::slotted both with !important, ::slotted rule should win for closed mode.
+Pass	D2. document vs :host both with !important, :host rule should win for closed mode.
 Pass	D3. document vs inline both with !important, inline rule should win for closed mode.
 Pass	D4. ::slotted vs :host both with !important, later in tree-of-trees rule should win for closed mode.
-Fail	D5. ::slotted vs inline both with !important, ::slotted rule should win for closed mode.
-Fail	D6. :host vs inline both with !important, :host rule should win for closed mode.
+Pass	D5. ::slotted vs inline both with !important, ::slotted rule should win for closed mode.
+Pass	D6. :host vs inline both with !important, :host rule should win for closed mode.
 Pass	E1. all style applied, inline rule should win for closed mode.
-Fail	E2. all styles with !important applied, rule in the last tree-of-trees should win for closed mode.
+Pass	E2. all styles with !important applied, rule in the last tree-of-trees should win for closed mode.
 Pass	F1. document vs others, document (the first rule in tree-of-trees order) rule should win for open mode.
 Pass	F2. document with !important vs others, document rule should win for open mode.
 Pass	F3. document vs ::slotted with !important, important rule should win for open mode.
-Fail	F4. document vs ::slotted with !important, important rule should win for open mode.
+Pass	F4. document vs ::slotted with !important, important rule should win for open mode.
 Pass	F5. document vs :host with !important, important rule should win for open mode.
 Fail	F6. all rules with !important, the last rule in tree-of-trees should win for open mode.
 Pass	F1. document vs others, document (the first rule in tree-of-trees order) rule should win for closed mode.
 Pass	F2. document with !important vs others, document rule should win for closed mode.
 Pass	F3. document vs ::slotted with !important, important rule should win for closed mode.
-Fail	F4. document vs ::slotted with !important, important rule should win for closed mode.
+Pass	F4. document vs ::slotted with !important, important rule should win for closed mode.
 Pass	F5. document vs :host with !important, important rule should win for closed mode.
 Fail	F6. all rules with !important, the last rule in tree-of-trees should win for closed mode.

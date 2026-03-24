@@ -184,7 +184,8 @@ private:
         Important,
         Optional<FlyString> layer_name,
         Optional<LogicalAliasMappingContext>,
-        ReadonlySpan<PropertyID> properties_to_cascade) const;
+        ReadonlySpan<PropertyID> properties_to_cascade,
+        HashMap<PropertyID, size_t>* important_context_depths = nullptr) const;
 
     GC::Ref<DOM::Document> m_document;
 
