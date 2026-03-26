@@ -91,6 +91,10 @@ public:
 
     size_t script_nesting_level() const { return m_script_nesting_level; }
 
+    bool is_suspended() const { return m_suspended_for_pending_script; }
+    void resume_parsing_after_script_became_ready();
+    void set_on_run_completed(GC::Ref<GC::Function<void()>> callback) { m_on_run_completed = callback; }
+
 private:
     HTMLParser(DOM::Document&, StringView input, StringView encoding);
     HTMLParser(DOM::Document&);
@@ -125,6 +129,9 @@ private:
     void handle_after_after_frameset(HTMLToken&);
 
     void stop_parsing() { m_stop_parsing = true; }
+
+    bool process_pending_parsing_blocking_scripts();
+    void execute_pending_parsing_blocking_script_and_continue();
 
     void generate_implied_end_tags(FlyString const& exception = {});
     void generate_all_implied_end_tags_thoroughly();
@@ -202,6 +209,7 @@ private:
     bool m_aborted { false };
     bool m_parser_pause_flag { false };
     bool m_stop_parsing { false };
+    bool m_suspended_for_pending_script { false };
     size_t m_script_nesting_level { 0 };
 
     JS::Realm& realm();
@@ -215,6 +223,9 @@ private:
 
     GC::Ptr<DOM::Text> m_character_insertion_node;
     StringBuilder m_character_insertion_builder { StringBuilder::Mode::UTF16 };
+
+    GC::Ptr<HTMLScriptElement> m_pending_script_to_execute;
+    GC::Ptr<GC::Function<void()>> m_on_run_completed;
 };
 
 RefPtr<CSS::StyleValue const> parse_dimension_value(StringView);

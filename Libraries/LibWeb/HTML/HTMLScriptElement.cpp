@@ -688,6 +688,11 @@ void HTMLScriptElement::mark_as_ready(Result result)
 
     // 4. Set el's delaying the load event to false.
     m_document_load_event_delayer.clear();
+
+    // AD-HOC: If this script just became ready-to-be-parser-executed, notify the parser document
+    //         so that a suspended parser can resume without spinning the event loop.
+    if (m_ready_to_be_parser_executed && m_parser_document)
+        m_parser_document->notify_parser_for_pending_script_conditions_change();
 }
 
 void HTMLScriptElement::unmark_as_already_started(Badge<DOM::Range>)

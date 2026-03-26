@@ -776,7 +776,7 @@ WebIDL::ExceptionOr<void> Document::run_the_document_write_steps(Vector<TrustedT
     //     point at a time, processing resulting tokens as they are emitted, and stopping when the tokenizer reaches
     //     the insertion point or when the processing of the tokenizer is aborted by the tree construction stage (this
     //     can happen if a script end tag token is emitted by the tokenizer).
-    if (!pending_parsing_blocking_script())
+    if (!pending_parsing_blocking_script() && !m_parser->is_suspended())
         m_parser->run(HTML::HTMLTokenizer::StopAtInsertionPoint::Yes);
 
     return {};
@@ -905,8 +905,20 @@ WebIDL::ExceptionOr<void> Document::close()
     if (pending_parsing_blocking_script())
         return {};
 
+    // AD-HOC: If the parser is suspended waiting for a script to become ready, return.
+    if (m_parser->is_suspended())
+        return {};
+
     // 6. Run the tokenizer, processing resulting tokens as they are emitted, and stopping when the tokenizer reaches the explicit "EOF" character or spins the event loop.
     m_parser->run();
+
+    // AD-HOC: If the parser suspended during run(), defer the completion action.
+    if (m_parser->is_suspended()) {
+        m_parser->set_on_run_completed(GC::create_function(heap(), [this] {
+            completely_finish_loading();
+        }));
+        return {};
+    }
 
     // AD-HOC: This ensures that a load event is fired if the node navigable's container is an iframe.
     completely_finish_loading();
@@ -4735,6 +4747,12 @@ GC::Ptr<HTML::HTMLParser> Document::active_parser()
         return nullptr;
 
     return m_parser;
+}
+
+void Document::notify_parser_for_pending_script_conditions_change()
+{
+    if (auto parser = active_parser(); parser && parser->is_suspended())
+        parser->resume_parsing_after_script_became_ready();
 }
 
 void Document::set_browsing_context(GC::Ptr<HTML::BrowsingContext> browsing_context)

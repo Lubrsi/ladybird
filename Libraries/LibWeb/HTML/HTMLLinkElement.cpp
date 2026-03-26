@@ -879,6 +879,10 @@ void HTMLLinkElement::process_stylesheet_resource(bool success, Fetch::Infrastru
 
         // 2. Remove el from its node document's script-blocking style sheet set.
         document().script_blocking_style_sheet_set().remove(*this);
+
+        // AD-HOC: Notify the parser that a script-blocking style sheet was removed,
+        //         so that a suspended parser can resume without spinning the event loop.
+        document().notify_parser_for_pending_script_conditions_change();
     }
 
     // 7. Unblock rendering on el.

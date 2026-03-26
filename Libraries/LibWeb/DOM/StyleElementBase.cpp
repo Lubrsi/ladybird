@@ -144,6 +144,10 @@ void StyleElementBase::finished_loading_critical_subresources(AnyFailed any_fail
             VERIFY(element.document().script_blocking_style_sheet_set().contains(element));
             // 2. Remove element from its node document's script-blocking style sheet set.
             element.document().script_blocking_style_sheet_set().remove(element);
+
+            // AD-HOC: Notify the parser that a script-blocking style sheet was removed,
+            //         so that a suspended parser can resume without spinning the event loop.
+            element.document().notify_parser_for_pending_script_conditions_change();
         }
         // 4. Unblock rendering on element.
         element.unblock_rendering();

@@ -192,6 +192,8 @@ void HTMLParser::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_form_element);
     visitor.visit(m_context_element);
     visitor.visit(m_character_insertion_node);
+    visitor.visit(m_pending_script_to_execute);
+    visitor.visit(m_on_run_completed);
 
     m_stack_of_open_elements.visit_edges(visitor);
     m_list_of_active_formatting_elements.visit_edges(visitor);
@@ -256,6 +258,9 @@ void HTMLParser::run(HTMLTokenizer::StopAtInsertionPoint stop_at_insertion_point
             dbgln_if(HTML_PARSER_DEBUG, "Stop parsing{}! :^)", m_parsing_fragment ? " fragment" : "");
             break;
         }
+
+        if (m_suspended_for_pending_script)
+            break;
     }
 
     flush_character_insertions();
@@ -268,6 +273,12 @@ void HTMLParser::run(URL::URL const& url, HTMLTokenizer::StopAtInsertionPoint st
     m_document->set_url(url);
     m_document->set_source(m_tokenizer.source());
     run(stop_at_insertion_point);
+    if (m_suspended_for_pending_script) {
+        m_on_run_completed = GC::create_function(heap(), [this] {
+            the_end(*m_document, this);
+        });
+        return;
+    }
     the_end(*m_document, this);
 }
 
@@ -3405,55 +3416,8 @@ void HTMLParser::handle_text(HTMLToken& token)
             // Otherwise:
             else {
                 // While the pending parsing-blocking script is not null:
-                while (document().pending_parsing_blocking_script()) {
-                    // 1. Let the script be the pending parsing-blocking script.
-                    // 2. Set the pending parsing-blocking script to null.
-                    auto the_script = document().take_pending_parsing_blocking_script({});
-
-                    // FIXME: 3. Start the speculative HTML parser for this instance of the HTML parser.
-
-                    // 4. Block the tokenizer for this instance of the HTML parser, such that the event loop will not run tasks that invoke the tokenizer.
-                    m_tokenizer.set_blocked(true);
-
-                    // 5. If the parser's Document has a style sheet that is blocking scripts
-                    //    or the script's ready to be parser-executed is false:
-                    if (m_document->has_a_style_sheet_that_is_blocking_scripts() || the_script->is_ready_to_be_parser_executed() == false) {
-                        // spin the event loop until the parser's Document has no style sheet that is blocking scripts
-                        // and the script's ready to be parser-executed becomes true.
-                        main_thread_event_loop().spin_until(GC::create_function(heap(), [&] {
-                            return !m_document->has_a_style_sheet_that_is_blocking_scripts() && the_script->is_ready_to_be_parser_executed();
-                        }));
-                    }
-
-                    // 6. If this parser has been aborted in the meantime, return.
-                    if (m_aborted)
-                        return;
-
-                    // FIXME: 7. Stop the speculative HTML parser for this instance of the HTML parser.
-
-                    // 8. Unblock the tokenizer for this instance of the HTML parser, such that tasks that invoke the tokenizer can again be run.
-                    m_tokenizer.set_blocked(false);
-
-                    // 9. Let the insertion point be just before the next input character.
-                    m_tokenizer.update_insertion_point();
-
-                    // 10. Increment the parser's script nesting level by one (it should be zero before this step, so this sets it to one).
-                    VERIFY(script_nesting_level() == 0);
-                    increment_script_nesting_level();
-
-                    // 11. Execute the script element the script.
-                    the_script->execute_script();
-
-                    // 12. Decrement the parser's script nesting level by one.
-                    decrement_script_nesting_level();
-
-                    // If the parser's script nesting level is zero (which it always should be at this point), then set the parser pause flag to false.
-                    VERIFY(script_nesting_level() == 0);
-                    m_parser_pause_flag = false;
-
-                    // 13. Let the insertion point be undefined again.
-                    m_tokenizer.undefine_insertion_point();
-                }
+                if (process_pending_parsing_blocking_scripts())
+                    return;
             }
         }
 
@@ -5526,6 +5490,140 @@ void HTMLParser::abort()
     m_document->update_readiness(DocumentReadyState::Complete);
 
     m_aborted = true;
+    m_suspended_for_pending_script = false;
+    m_pending_script_to_execute = nullptr;
+    m_on_run_completed = nullptr;
+}
+
+// Returns true if the parser yielded (suspended waiting for a script to become ready).
+bool HTMLParser::process_pending_parsing_blocking_scripts()
+{
+    // While the pending parsing-blocking script is not null:
+    while (document().pending_parsing_blocking_script()) {
+        // 1. Let the script be the pending parsing-blocking script.
+        // 2. Set the pending parsing-blocking script to null.
+        auto the_script = document().take_pending_parsing_blocking_script({});
+
+        // FIXME: 3. Start the speculative HTML parser for this instance of the HTML parser.
+
+        // 4. Block the tokenizer for this instance of the HTML parser, such that the event loop will not run tasks that invoke the tokenizer.
+        m_tokenizer.set_blocked(true);
+
+        // 5. If the parser's Document has a style sheet that is blocking scripts
+        //    or the script's ready to be parser-executed is false:
+        if (m_document->has_a_style_sheet_that_is_blocking_scripts() || !the_script->is_ready_to_be_parser_executed()) {
+            // Suspend the parser and wait for a callback when the conditions are met,
+            // instead of spinning the event loop.
+            m_pending_script_to_execute = the_script;
+            m_suspended_for_pending_script = true;
+            return true;
+        }
+
+        // 6. If this parser has been aborted in the meantime, return.
+        if (m_aborted)
+            return false;
+
+        // FIXME: 7. Stop the speculative HTML parser for this instance of the HTML parser.
+
+        // 8. Unblock the tokenizer for this instance of the HTML parser, such that tasks that invoke the tokenizer can again be run.
+        m_tokenizer.set_blocked(false);
+
+        // 9. Let the insertion point be just before the next input character.
+        m_tokenizer.update_insertion_point();
+
+        // 10. Increment the parser's script nesting level by one (it should be zero before this step, so this sets it to one).
+        VERIFY(script_nesting_level() == 0);
+        increment_script_nesting_level();
+
+        // 11. Execute the script element the script.
+        the_script->execute_script();
+
+        // 12. Decrement the parser's script nesting level by one.
+        decrement_script_nesting_level();
+
+        // If the parser's script nesting level is zero (which it always should be at this point), then set the parser pause flag to false.
+        VERIFY(script_nesting_level() == 0);
+        m_parser_pause_flag = false;
+
+        // 13. Let the insertion point be undefined again.
+        m_tokenizer.undefine_insertion_point();
+    }
+
+    return false;
+}
+
+void HTMLParser::execute_pending_parsing_blocking_script_and_continue()
+{
+    VERIFY(m_pending_script_to_execute);
+    VERIFY(m_suspended_for_pending_script);
+
+    GC::Ref<HTMLScriptElement> the_script = *m_pending_script_to_execute;
+    m_pending_script_to_execute = nullptr;
+    m_suspended_for_pending_script = false;
+
+    // 6. If this parser has been aborted in the meantime, return.
+    if (m_aborted)
+        return;
+
+    // FIXME: 7. Stop the speculative HTML parser for this instance of the HTML parser.
+
+    // 8. Unblock the tokenizer for this instance of the HTML parser, such that tasks that invoke the tokenizer can again be run.
+    m_tokenizer.set_blocked(false);
+
+    // 9. Let the insertion point be just before the next input character.
+    m_tokenizer.update_insertion_point();
+
+    // 10. Increment the parser's script nesting level by one (it should be zero before this step, so this sets it to one).
+    VERIFY(script_nesting_level() == 0);
+    increment_script_nesting_level();
+
+    // 11. Execute the script element the script.
+    the_script->execute_script();
+
+    // 12. Decrement the parser's script nesting level by one.
+    decrement_script_nesting_level();
+
+    // If the parser's script nesting level is zero (which it always should be at this point), then set the parser pause flag to false.
+    VERIFY(script_nesting_level() == 0);
+    m_parser_pause_flag = false;
+
+    // 13. Let the insertion point be undefined again.
+    m_tokenizer.undefine_insertion_point();
+
+    // Continue the while loop: executing a script may have set a new pending parsing-blocking script.
+    if (process_pending_parsing_blocking_scripts())
+        return;
+
+    // Resume the tokenizer.
+    run();
+
+    // If the parser didn't suspend again, run the deferred completion action (e.g. the_end).
+    if (!m_suspended_for_pending_script && m_on_run_completed) {
+        auto callback = m_on_run_completed;
+        m_on_run_completed = nullptr;
+        callback->function()();
+    }
+}
+
+void HTMLParser::resume_parsing_after_script_became_ready()
+{
+    if (!m_suspended_for_pending_script)
+        return;
+
+    if (!m_pending_script_to_execute)
+        return;
+
+    // Both conditions must be met before we can resume.
+    if (m_document->has_a_style_sheet_that_is_blocking_scripts())
+        return;
+
+    if (!m_pending_script_to_execute->is_ready_to_be_parser_executed())
+        return;
+
+    if (m_aborted)
+        return;
+
+    execute_pending_parsing_blocking_script_and_continue();
 }
 
 // https://html.spec.whatwg.org/multipage/parsing.html#insert-an-element-at-the-adjusted-insertion-location
