@@ -115,6 +115,8 @@ DecoderErrorOr<void> PlaybackManager::prepare_playback_from_demuxer(WeakPlayback
 
         if (!self->m_audio_output_disabled && !self->m_audio_sink && !self->m_audio_tracks.is_empty()) {
             self->m_audio_sink = MUST(AudioMixingSink::try_create());
+            self->m_audio_sink->set_playback_rate(self->m_playback_rate);
+            self->m_audio_sink->set_preserves_pitch(self->m_preserves_pitch);
             self->set_time_provider(make_ref_counted<WrapperTimeProvider<AudioMixingSink>>(*self->m_audio_sink));
             self->m_audio_sink->on_audio_output_error = [self](Error&& error) {
                 if (!self)
@@ -299,6 +301,7 @@ void PlaybackManager::set_time_provider(NonnullRefPtr<MediaTimeProvider> const& 
 {
     auto time = current_time();
     provider->set_time(time);
+    provider->set_playback_rate(m_playback_rate);
     m_time_provider = provider;
     for (auto& track_data : m_video_track_datas) {
         if (!track_data.display)
@@ -446,6 +449,19 @@ void PlaybackManager::set_volume(double volume)
 {
     if (m_audio_sink)
         m_audio_sink->set_volume(volume);
+}
+
+void PlaybackManager::set_playback_rate(double rate)
+{
+    m_playback_rate = rate;
+    m_time_provider->set_playback_rate(rate);
+}
+
+void PlaybackManager::set_preserves_pitch(bool preserves_pitch)
+{
+    m_preserves_pitch = preserves_pitch;
+    if (m_audio_sink)
+        m_audio_sink->set_preserves_pitch(preserves_pitch);
 }
 
 }

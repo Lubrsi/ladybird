@@ -19,10 +19,12 @@ public:
     virtual void resume() override;
     virtual void pause() override;
     virtual void set_time(AK::Duration) override;
+    virtual void set_playback_rate(double) override;
 
 private:
     Optional<MonotonicTime> m_monotonic_time_on_resume;
     AK::Duration m_media_time;
+    double m_playback_rate { 1.0 };
 };
 
 }

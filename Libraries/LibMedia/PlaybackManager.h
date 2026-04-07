@@ -88,6 +88,8 @@ public:
     TimeRanges buffered_time_ranges() const;
 
     void set_volume(double);
+    void set_playback_rate(double);
+    void set_preserves_pitch(bool);
 
     Function<void()> on_metadata_parsed;
     Function<void(DecoderError&&)> on_unsupported_format_error;
@@ -177,6 +179,9 @@ private:
     HashTable<Track> m_tracks_still_buffering;
 
     bool m_is_in_error_state { false };
+
+    double m_playback_rate { 1.0 };
+    bool m_preserves_pitch { true };
 };
 
 template<typename T, typename... Args>

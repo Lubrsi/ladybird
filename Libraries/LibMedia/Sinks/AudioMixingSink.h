@@ -11,6 +11,7 @@
 #include <AK/RefPtr.h>
 #include <LibCore/EventLoop.h>
 #include <LibMedia/Audio/Forward.h>
+#include <LibMedia/Audio/TimeStretchProcessor.h>
 #include <LibMedia/Export.h>
 #include <LibMedia/Forward.h>
 #include <LibMedia/Providers/MediaTimeProvider.h>
@@ -38,9 +39,11 @@ public:
     void resume();
     void pause();
     void set_time(AK::Duration);
+    void set_playback_rate(double);
     void clear_track_data(Track const&);
 
     void set_volume(double);
+    void set_preserves_pitch(bool);
 
     Function<void(Error&&)> on_audio_output_error;
     Function<void(Track const&)> on_start_buffering;
@@ -79,6 +82,7 @@ private:
     };
 
     void create_playback_stream();
+    void mix_tracks_into_buffer(Span<float> target_buffer, i64 buffer_start, size_t sample_count);
     ReadonlySpan<float> write_audio_data_to_playback_stream(Span<float>);
 
     Core::EventLoop& m_main_thread_event_loop;
@@ -98,6 +102,12 @@ private:
     AK::Duration m_last_stream_time;
     AK::Duration m_last_media_time;
     Optional<AK::Duration> m_temporary_time;
+
+    Audio::TimeStretchProcessor m_time_stretch_processor;
+    Vector<float> m_intermediate_buffer;
+    double m_playback_rate { 1.0 };
+
+    static constexpr double AUDIO_MUTE_RATE_THRESHOLD = 8.0;
 };
 
 }

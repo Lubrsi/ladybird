@@ -23,6 +23,7 @@ public:
     virtual void resume() override { m_inner->resume(); }
     virtual void pause() override { m_inner->pause(); }
     virtual void set_time(AK::Duration time) override { m_inner->set_time(time); }
+    virtual void set_playback_rate(double rate) override { m_inner->set_playback_rate(rate); }
 
 private:
     NonnullRefPtr<T> m_inner;

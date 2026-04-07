@@ -1667,6 +1667,9 @@ void HTMLMediaElement::on_metadata_parsed()
 {
     // FIXME: Move this to setup_playback_manager()
     update_volume();
+    update_playback_rate();
+    if (!m_preserves_pitch)
+        m_playback_manager->set_preserves_pitch(false);
 
     // AD-HOC: After selecting a track, we do not need the source element selector anymore.
     m_source_element_selector = nullptr;
@@ -2518,9 +2521,8 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::set_playback_rate(double new_value)
     // on setting, the user agent must follow these steps:
 
     // 1. If the given value is not supported by the user agent, then throw a "NotSupportedError" DOMException.
-    // FIXME: We need to support playback rates other than 1 for this to be even remotely useful.
-    if (new_value != 1.0)
-        return WebIDL::NotSupportedError::create(realm(), "Playback rates other than 1 are not supported."_utf16);
+    if (new_value < 0.0)
+        return WebIDL::NotSupportedError::create(realm(), "Negative playback rates are not supported."_utf16);
 
     // When the defaultPlaybackRate or playbackRate attributes change value (either by being set by script or by being changed directly by the user agent, e.g. in response to user
     // control), the user agent must queue a media element task given the media element to fire an event named ratechange at the media element.
@@ -2532,11 +2534,25 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::set_playback_rate(double new_value)
 
     // 2. Set playbackRate to the new value, and if the element is potentially playing, change the playback speed.
     m_playback_rate = new_value;
-    if (potentially_playing()) {
-        // FIXME: Do this once playback speeds other than 1 are supported.
-    }
+    update_playback_rate();
 
     return {};
+}
+
+void HTMLMediaElement::update_playback_rate()
+{
+    if (m_playback_manager) {
+        // Clamp the effective rate to [1/16, 16].
+        auto effective_rate = clamp(m_playback_rate, 1.0 / 16.0, 16.0);
+        m_playback_manager->set_playback_rate(effective_rate);
+    }
+}
+
+void HTMLMediaElement::set_preserves_pitch(bool preserves_pitch)
+{
+    m_preserves_pitch = preserves_pitch;
+    if (m_playback_manager)
+        m_playback_manager->set_preserves_pitch(preserves_pitch);
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#blocked-media-element

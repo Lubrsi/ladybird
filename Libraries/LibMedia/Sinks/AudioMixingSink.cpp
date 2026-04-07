@@ -6,6 +6,7 @@
 
 #include <AK/Time.h>
 #include <LibMedia/Audio/PlaybackStream.h>
+#include <LibMedia/Audio/TimeStretchProcessor.h>
 #include <LibMedia/Providers/AudioDataProvider.h>
 
 #include "AudioMixingSink.h"
@@ -92,6 +93,14 @@ void AudioMixingSink::create_playback_stream()
         Threading::MutexLocker locker { self->m_mutex };
         self->m_sample_specification = stream->sample_specification();
 
+        self->m_time_stretch_processor.initialize(
+            self->m_sample_specification.sample_rate(),
+            self->m_sample_specification.channel_count());
+
+        // Pre-allocate intermediate buffer for maximum rate (16x) plus WSOLA overhead.
+        auto max_buffer_frames = stream->sample_specification().sample_rate(); // 1 second of audio should be more than enough.
+        self->m_intermediate_buffer.resize(max_buffer_frames * self->m_sample_specification.channel_count());
+
         for (auto& [track, track_data] : self->m_track_mixing_datas) {
             track_data.provider->set_output_sample_specification(self->m_sample_specification);
             track_data.provider->start();
@@ -112,53 +121,11 @@ void AudioMixingSink::create_playback_stream()
     });
 }
 
-ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<float> buffer)
+void AudioMixingSink::mix_tracks_into_buffer(Span<float> target_buffer, i64 buffer_start, size_t sample_count)
 {
-    VERIFY(m_sample_specification.is_valid());
-    VERIFY(buffer.size() > 0);
-
     auto channel_count = m_sample_specification.channel_count();
-    auto sample_count = buffer.size() / channel_count;
-    buffer.fill(0.0f);
-
-    Threading::MutexLocker mixing_data_locker { m_mutex };
-    auto buffer_start = m_next_sample_to_write.load();
     auto samples_end = buffer_start + static_cast<i64>(sample_count);
-
-    auto buffering = false;
-    for (auto& [track, track_data] : m_track_mixing_datas) {
-        if (!track_data.provider->is_blocked())
-            continue;
-        auto available_end = track_data.provider->queue_end_sample();
-        if (available_end < samples_end) {
-            samples_end = available_end;
-            buffering = true;
-        }
-    }
-
-    for (auto& [track, track_data] : m_track_mixing_datas) {
-        if (!buffering) {
-            track_data.buffering = false;
-        } else {
-            if (!track_data.provider->is_blocked())
-                continue;
-            if (track_data.buffering)
-                continue;
-            track_data.buffering = true;
-
-            m_main_thread_event_loop.deferred_invoke([weak_self = m_weak_self, track] {
-                auto self = weak_self->take_strong();
-                if (self && self->on_start_buffering)
-                    self->on_start_buffering(track);
-            });
-        }
-    }
-
-    sample_count = max(samples_end - buffer_start, 0);
     auto write_size = sample_count * channel_count;
-
-    if (sample_count == 0)
-        return buffer;
 
     for (auto& [track, track_data] : m_track_mixing_datas) {
         auto next_sample = buffer_start;
@@ -217,7 +184,7 @@ ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<fl
             VERIFY(write_count % channel_count == 0);
 
             for (size_t i = 0; i < write_count; i++)
-                buffer[index_in_buffer + i] += current_block.data()[index_in_block + i];
+                target_buffer[index_in_buffer + i] += current_block.data()[index_in_block + i];
 
             auto write_end = index_in_block + write_count;
             if (write_end == current_block.data_count()) {
@@ -233,8 +200,97 @@ ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<fl
             VERIFY(next_sample < samples_end);
         }
     }
+}
 
-    m_next_sample_to_write += static_cast<i64>(sample_count);
+ReadonlySpan<float> AudioMixingSink::write_audio_data_to_playback_stream(Span<float> buffer)
+{
+    VERIFY(m_sample_specification.is_valid());
+    VERIFY(buffer.size() > 0);
+
+    auto channel_count = m_sample_specification.channel_count();
+    auto output_sample_count = buffer.size() / channel_count;
+
+    Threading::MutexLocker mixing_data_locker { m_mutex };
+
+    auto rate = m_playback_rate;
+
+    // Calculate how many input (media) samples we need.
+    size_t input_sample_count;
+    if (rate == 1.0)
+        input_sample_count = output_sample_count;
+    else
+        input_sample_count = m_time_stretch_processor.input_frames_needed(output_sample_count);
+
+    auto buffer_start = m_next_sample_to_write.load();
+    auto samples_end = buffer_start + static_cast<i64>(input_sample_count);
+
+    // Check for buffering.
+    auto buffering = false;
+    for (auto& [track, track_data] : m_track_mixing_datas) {
+        if (!track_data.provider->is_blocked())
+            continue;
+        auto available_end = track_data.provider->queue_end_sample();
+        if (available_end < samples_end) {
+            samples_end = available_end;
+            buffering = true;
+        }
+    }
+
+    for (auto& [track, track_data] : m_track_mixing_datas) {
+        if (!buffering) {
+            track_data.buffering = false;
+        } else {
+            if (!track_data.provider->is_blocked())
+                continue;
+            if (track_data.buffering)
+                continue;
+            track_data.buffering = true;
+
+            m_main_thread_event_loop.deferred_invoke([weak_self = m_weak_self, track] {
+                auto self = weak_self->take_strong();
+                if (self && self->on_start_buffering)
+                    self->on_start_buffering(track);
+            });
+        }
+    }
+
+    input_sample_count = max(samples_end - buffer_start, 0);
+
+    if (input_sample_count == 0) {
+        buffer.fill(0.0f);
+        return buffer;
+    }
+
+    if (rate == 1.0) {
+        // Fast path: no time stretching needed.
+        buffer.fill(0.0f);
+        mix_tracks_into_buffer(buffer, buffer_start, input_sample_count);
+        m_next_sample_to_write += static_cast<i64>(input_sample_count);
+        return buffer;
+    }
+
+    // Mute audio at extreme rates but still advance media time.
+    if (rate > AUDIO_MUTE_RATE_THRESHOLD || rate < (1.0 / AUDIO_MUTE_RATE_THRESHOLD)) {
+        buffer.fill(0.0f);
+        m_next_sample_to_write += static_cast<i64>(input_sample_count);
+        return buffer;
+    }
+
+    // Time-stretched path: mix into intermediate buffer, then process.
+    auto input_data_size = input_sample_count * channel_count;
+    VERIFY(input_data_size <= m_intermediate_buffer.size());
+
+    auto intermediate = Span<float>(m_intermediate_buffer.data(), input_data_size);
+    intermediate.fill(0.0f);
+
+    mix_tracks_into_buffer(intermediate, buffer_start, input_sample_count);
+
+    buffer.fill(0.0f);
+    auto result = m_time_stretch_processor.process(
+        ReadonlySpan<float>(intermediate.data(), input_data_size),
+        buffer);
+
+    m_next_sample_to_write += static_cast<i64>(result.input_frames_consumed);
     return buffer;
 }
 
@@ -247,7 +303,8 @@ AK::Duration AudioMixingSink::current_time() const
     if (!m_playback_stream)
         return m_last_media_time;
 
-    auto time = m_last_media_time + (m_playback_stream->total_time_played() - m_last_stream_time);
+    auto elapsed = m_playback_stream->total_time_played() - m_last_stream_time;
+    auto time = m_last_media_time + AK::Duration::from_nanoseconds(static_cast<i64>(static_cast<double>(elapsed.to_nanoseconds()) * m_playback_rate));
     auto max_time = AK::Duration::from_time_units(m_next_sample_to_write.load(MemoryOrder::memory_order_acquire), 1, m_sample_specification.sample_rate());
     time = min(time, max_time);
     return time;
@@ -347,6 +404,8 @@ void AudioMixingSink::set_time(AK::Duration time)
 
                     for (auto& [track, track_data] : self->m_track_mixing_datas)
                         track_data.current_block.clear();
+
+                    self->m_time_stretch_processor.reset();
                 }
 
                 if (self->m_playing)
@@ -364,6 +423,26 @@ void AudioMixingSink::clear_track_data(Track const& track)
     if (track_data == m_track_mixing_datas.end())
         return;
     track_data->value.current_block.clear();
+}
+
+void AudioMixingSink::set_playback_rate(double rate)
+{
+    Threading::MutexLocker locker { m_mutex };
+
+    // Snapshot current time before changing rate to avoid a time jump.
+    if (m_playback_stream) {
+        m_last_media_time = current_time();
+        m_last_stream_time = m_playback_stream->total_time_played();
+    }
+
+    m_playback_rate = rate;
+    m_time_stretch_processor.set_rate(rate);
+}
+
+void AudioMixingSink::set_preserves_pitch(bool preserves_pitch)
+{
+    Threading::MutexLocker locker { m_mutex };
+    m_time_stretch_processor.set_preserves_pitch(preserves_pitch);
 }
 
 void AudioMixingSink::set_volume(double volume)

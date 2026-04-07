@@ -15,8 +15,10 @@ GenericTimeProvider::~GenericTimeProvider() = default;
 AK::Duration GenericTimeProvider::current_time() const
 {
     auto time = m_media_time;
-    if (m_monotonic_time_on_resume.has_value())
-        time += MonotonicTime::now() - m_monotonic_time_on_resume.value();
+    if (m_monotonic_time_on_resume.has_value()) {
+        auto elapsed = MonotonicTime::now() - m_monotonic_time_on_resume.value();
+        time += AK::Duration::from_nanoseconds(static_cast<i64>(static_cast<double>(elapsed.to_nanoseconds()) * m_playback_rate));
+    }
     return time;
 }
 
@@ -39,6 +41,16 @@ void GenericTimeProvider::set_time(AK::Duration time)
         m_monotonic_time_on_resume.emplace(MonotonicTime::now());
 
     m_media_time = time;
+}
+
+void GenericTimeProvider::set_playback_rate(double rate)
+{
+    // Snapshot current time before changing rate to avoid a time jump.
+    if (m_monotonic_time_on_resume.has_value()) {
+        m_media_time = current_time();
+        m_monotonic_time_on_resume.emplace(MonotonicTime::now());
+    }
+    m_playback_rate = rate;
 }
 
 }

@@ -19,6 +19,7 @@ public:
     virtual void resume() = 0;
     virtual void pause() = 0;
     virtual void set_time(AK::Duration) = 0;
+    virtual void set_playback_rate(double) = 0;
 };
 
 }
