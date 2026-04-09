@@ -35,9 +35,6 @@ class RootHashTable final
     : public RootHashTableBase
     , public HashTable<T, TraitsForT, IsOrdered> {
 
-    static_assert(IsBaseOf<NanBoxedValue, T> || IsConvertible<T, Cell const*>,
-        "RootHashTable element type must be convertible to Cell const* or derive from NanBoxedValue");
-
     using HashTableBase = HashTable<T, TraitsForT, IsOrdered>;
 
 public:
@@ -50,6 +47,8 @@ public:
 
     virtual void gather_roots(HashMap<Cell*, GC::HeapRoot>& roots) const override
     {
+        static_assert(IsBaseOf<NanBoxedValue, T> || IsConvertible<T, Cell const*>,
+            "RootHashTable element type must be convertible to Cell const* or derive from NanBoxedValue");
         for (auto& value : *this) {
             if constexpr (IsBaseOf<NanBoxedValue, T>) {
                 if (value.is_cell())
