@@ -44,6 +44,35 @@ public:
     {
     }
 
+    RootHashMap(RootHashMap const& other)
+        : RootHashMapBase(*other.m_heap)
+        , HashMapBase(other)
+    {
+    }
+
+    RootHashMap(RootHashMap&& other)
+        : RootHashMapBase(*other.m_heap)
+        , HashMapBase(move(static_cast<HashMapBase&>(other)))
+    {
+    }
+
+    RootHashMap& operator=(RootHashMap const& other)
+    {
+        if (&other == this)
+            return *this;
+
+        assign_heap(other.m_heap);
+        HashMapBase::operator=(other);
+        return *this;
+    }
+
+    RootHashMap& operator=(RootHashMap&& other)
+    {
+        assign_heap(other.m_heap);
+        HashMapBase::operator=(move(static_cast<HashMapBase&>(other)));
+        return *this;
+    }
+
     ~RootHashMap() = default;
 
     virtual void gather_roots(HashMap<Cell*, GC::HeapRoot>& roots) const override
