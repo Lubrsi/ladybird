@@ -210,6 +210,9 @@ public:
                 auto type = it.value.root_origin->type;
                 auto const* location = it.value.root_origin->location;
                 switch (type) {
+                case HeapRoot::Type::ConservativeHashMap:
+                    node.set("root"sv, "ConservativeHashMap"sv);
+                    break;
                 case HeapRoot::Type::ConservativeHashTable:
                     node.set("root"sv, "ConservativeHashTable"sv);
                     break;
@@ -600,10 +603,16 @@ NO_SANITIZE_ADDRESS void Heap::gather_conservative_roots(HashMap<Cell*, HeapRoot
         }
     }
 
+    for (auto& hash_map : m_conservative_hash_maps) {
+        hash_map.for_each_possible_value([&](FlatPtr possible_value) {
+            add_possible_value(possible_pointers, possible_value, HeapRoot { .type = HeapRoot::Type::ConservativeHashMap }, min_block_address, max_block_address);
+        });
+    }
+
     for (auto& hash_table : m_conservative_hash_tables) {
-        for (auto possible_value : hash_table.possible_values()) {
+        hash_table.for_each_possible_value([&](FlatPtr possible_value) {
             add_possible_value(possible_pointers, possible_value, HeapRoot { .type = HeapRoot::Type::ConservativeHashTable }, min_block_address, max_block_address);
-        }
+        });
     }
 
     for_each_cell_among_possible_pointers(all_live_heap_blocks, possible_pointers, [&](Cell* cell, FlatPtr possible_pointer) {

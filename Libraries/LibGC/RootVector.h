@@ -90,7 +90,7 @@ public:
                 if (value.is_cell())
                     roots.set(&const_cast<T&>(value).as_cell(), HeapRoot { .type = HeapRoot::Type::RootVector });
             } else {
-                roots.set(value, HeapRoot { .type = HeapRoot::Type::RootVector });
+                roots.set(const_cast<Cell*>(static_cast<Cell const*>(value)), HeapRoot { .type = HeapRoot::Type::RootVector });
             }
         }
     }
