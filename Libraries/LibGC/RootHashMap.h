@@ -36,11 +36,6 @@ class RootHashMap final
     : public RootHashMapBase
     , public HashMap<K, V, KeyTraits, ValueTraits, IsOrdered> {
 
-    static constexpr bool KeyIsGCType = IsBaseOf<NanBoxedValue, K> || IsConvertible<K, Cell const*>;
-    static constexpr bool ValueIsGCType = IsBaseOf<NanBoxedValue, V> || IsConvertible<V, Cell const*>;
-    static_assert(KeyIsGCType || ValueIsGCType,
-        "RootHashMap requires at least one of key or value types to be convertible to Cell const* or derive from NanBoxedValue");
-
     using HashMapBase = HashMap<K, V, KeyTraits, ValueTraits, IsOrdered>;
 
 public:
@@ -53,6 +48,10 @@ public:
 
     virtual void gather_roots(HashMap<Cell*, GC::HeapRoot>& roots) const override
     {
+        static constexpr bool KeyIsGCType = IsBaseOf<NanBoxedValue, K> || IsConvertible<K, Cell const*>;
+        static constexpr bool ValueIsGCType = IsBaseOf<NanBoxedValue, V> || IsConvertible<V, Cell const*>;
+        static_assert(KeyIsGCType || ValueIsGCType,
+            "RootHashMap requires at least one of key or value types to be convertible to Cell const* or derive from NanBoxedValue");
         for (auto& [key, value] : *this) {
             if constexpr (IsBaseOf<NanBoxedValue, K>) {
                 if (key.is_cell())
