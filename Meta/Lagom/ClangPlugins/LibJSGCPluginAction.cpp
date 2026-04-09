@@ -122,6 +122,8 @@ static ContainsGCPtrResult record_contains_gc_ptr(clang::CXXRecordDecl const* re
         "GC::Heap",
         "GC::MarkedVector",
         "GC::ConservativeVector",
+        "GC::ConservativeHashMap",
+        "GC::ConservativeHashMapBase",
         "GC::ConservativeHashTable",
         "GC::ConservativeHashTableBase",
     };
@@ -195,7 +197,7 @@ static ContainsGCPtrResult type_contains_gc_ptr(clang::QualType const& type, std
             return ContainsGCPtrResult::No;
 
         // Root types handle their own visiting
-        if (template_name == "GC::Root" || template_name == "GC::RootVector" || template_name == "GC::ConservativeVector" || template_name == "GC::ConservativeHashTable" || template_name == "GC::RootHashMap" || template_name == "GC::RootHashTable")
+        if (template_name == "GC::Root" || template_name == "GC::RootVector" || template_name == "GC::ConservativeVector" || template_name == "GC::ConservativeHashMap" || template_name == "GC::ConservativeHashTable" || template_name == "GC::RootHashMap" || template_name == "GC::RootHashTable")
             return ContainsGCPtrResult::No;
 
         // Check template arguments recursively for containers
@@ -236,6 +238,7 @@ static std::vector<clang::QualType> get_all_qualified_types(clang::QualType cons
             "GC::RawRef",
             "GC::RootVector",
             "GC::ConservativeVector",
+            "GC::ConservativeHashMap",
             "GC::ConservativeHashTable",
             "GC::RootHashMap",
             "GC::RootHashTable",
@@ -803,6 +806,7 @@ bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
     static std::set<std::string> gc_root_container_types {
         "GC::RootVector",
         "GC::ConservativeVector",
+        "GC::ConservativeHashMap",
         "GC::ConservativeHashTable",
         "GC::RootHashMap",
         "GC::RootHashTable",

@@ -81,4 +81,7 @@ public:
     }
 };
 
+template<typename T, typename TraitsForT = Traits<T>>
+using OrderedConservativeHashTable = ConservativeHashTable<T, TraitsForT, true>;
+
 }
