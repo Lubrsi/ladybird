@@ -72,7 +72,8 @@ static Vector<CalendarFieldData> sorted_calendar_fields(VM& vm, CalendarFieldLis
         VERIFY_NOT_REACHED();
     };
 
-    Vector<CalendarFieldData> result;
+    // AD-HOC: CalendarFieldData references VM-owned PropertyKeys that outlive this scope.
+    IGNORE_GC Vector<CalendarFieldData> result;
     result.ensure_capacity(fields.size());
 
     for (auto field : fields)
@@ -356,7 +357,8 @@ ThrowCompletionOr<CalendarFields> prepare_calendar_fields(VM& vm, String const& 
 
     // 8. Let sortedPropertyNames be a List whose elements are the values in the Property Key column of Table 19
     //    corresponding to the elements of fieldNames, sorted according to lexicographic code unit order.
-    auto sorted_property_names = sorted_calendar_fields(vm, field_names);
+    // AD-HOC: CalendarFieldData references VM-owned PropertyKeys that outlive this scope.
+    IGNORE_GC auto sorted_property_names = sorted_calendar_fields(vm, field_names);
 
     // 9. For each property name property of sortedPropertyNames, do
     for (auto const& [key, property, conversion] : sorted_property_names) {

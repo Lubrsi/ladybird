@@ -41,7 +41,7 @@ public:
 
     size_t size() const { return m_sparse_elements.size(); }
     size_t array_like_size() const { return m_array_size; }
-    bool set_array_like_size(size_t new_size);
+    bool set_array_like_size(GC::Heap&, size_t new_size);
 
     void visit_edges(Cell::Visitor& visitor)
     {

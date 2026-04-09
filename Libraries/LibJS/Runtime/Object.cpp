@@ -9,6 +9,7 @@
 #include <AK/QuickSort.h>
 #include <AK/TypeCasts.h>
 #include <AK/kmalloc.h>
+#include <LibGC/WeakHashMap.h>
 #include <LibJS/Bytecode/PropertyAccess.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Accessor.h>
@@ -33,7 +34,7 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(Object);
 
-static HashMap<GC::Ptr<Object const>, HashMap<Utf16FlyString, Object::IntrinsicAccessor>> s_intrinsics;
+static GC::WeakHashMap<GC::Ptr<Object const>, HashMap<Utf16FlyString, Object::IntrinsicAccessor>> s_intrinsics;
 
 // Heap-allocated named property storage layout:
 //   [u32 capacity] [u32 padding] [Value 0] [Value 1] ...
@@ -1273,16 +1274,16 @@ static Optional<Object::IntrinsicAccessor> find_intrinsic_accessor(Object const*
     if (!property_key.is_string())
         return {};
 
-    auto intrinsics = s_intrinsics.find(object);
-    if (intrinsics == s_intrinsics.end())
+    auto intrinsics = s_intrinsics.get(object);
+    if (!intrinsics.has_value())
         return {};
 
-    auto accessor_iterator = intrinsics->value.find(property_key.as_string());
-    if (accessor_iterator == intrinsics->value.end())
+    auto accessor_iterator = intrinsics->find(property_key.as_string());
+    if (accessor_iterator == intrinsics->end())
         return {};
 
     auto accessor = accessor_iterator->value;
-    intrinsics->value.remove(accessor_iterator);
+    intrinsics->remove(accessor_iterator);
     return accessor;
 }
 
@@ -1339,8 +1340,8 @@ Optional<u32> Object::storage_set(PropertyKey const& property_key, ValueAndAttri
     }
 
     if (has_intrinsic_accessors() && property_key.is_string()) {
-        if (auto intrinsics = s_intrinsics.find(this); intrinsics != s_intrinsics.end())
-            intrinsics->value.remove(property_key.as_string());
+        if (auto intrinsics = s_intrinsics.get(this); intrinsics.has_value())
+            intrinsics->remove(property_key.as_string());
     }
 
     auto metadata = shape().lookup(property_key);
@@ -1379,8 +1380,8 @@ void Object::storage_delete(PropertyKey const& property_key)
         return indexed_delete(property_key.as_number());
 
     if (has_intrinsic_accessors() && property_key.is_string()) {
-        if (auto intrinsics = s_intrinsics.find(this); intrinsics != s_intrinsics.end())
-            intrinsics->value.remove(property_key.as_string());
+        if (auto intrinsics = s_intrinsics.get(this); intrinsics.has_value())
+            intrinsics->remove(property_key.as_string());
     }
 
     auto metadata = shape().lookup(property_key);
@@ -1555,7 +1556,7 @@ ThrowCompletionOr<Object*> Object::define_properties(Value properties)
     };
 
     // 3. Let descriptors be a new empty List.
-    Vector<NameAndDescriptor> descriptors;
+    GC::ConservativeVector<NameAndDescriptor> descriptors(vm.heap());
 
     // 4. For each element nextKey of keys, do
     for (auto& next_key : keys) {
@@ -1798,7 +1799,7 @@ void Object::transition_to_dictionary()
     }
 
     // Set the array_like_size on the dictionary
-    dict->set_array_like_size(m_indexed_array_like_size);
+    dict->set_array_like_size(heap(), m_indexed_array_like_size);
 
     m_indexed_elements = reinterpret_cast<Value*>(dict);
     m_indexed_storage_kind = IndexedStorageKind::Dictionary;
@@ -1949,7 +1950,7 @@ bool Object::set_indexed_array_like_size(size_t new_size)
         return true;
 
     if (m_indexed_storage_kind == IndexedStorageKind::Dictionary) {
-        bool result = indexed_dictionary()->set_array_like_size(new_size);
+        bool result = indexed_dictionary()->set_array_like_size(heap(), new_size);
         m_indexed_array_like_size = indexed_dictionary()->array_like_size();
         return result;
     }

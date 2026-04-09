@@ -312,13 +312,13 @@ void RopeString::resolve(EncodingPreference preference) const
 
     // This vector will hold all the pieces of the rope that need to be assembled
     // into the resolved string.
-    Vector<PrimitiveString const*, 2> pieces;
+    GC::RootVector<PrimitiveString const*> pieces(heap());
     size_t approximate_length = 0;
     size_t length_in_utf16_code_units = 0;
 
     // NOTE: We traverse the rope tree without using recursion, since we'd run out of
     //       stack space quickly when handling a long sequence of unresolved concatenations.
-    Vector<PrimitiveString const*, 2> stack;
+    GC::RootVector<PrimitiveString const*> stack(heap());
     stack.append(m_rhs);
     stack.append(m_lhs);
     while (!stack.is_empty()) {

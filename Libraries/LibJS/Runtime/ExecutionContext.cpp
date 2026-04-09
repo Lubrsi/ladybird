@@ -104,7 +104,7 @@ NonnullOwnPtr<ExecutionContext> ExecutionContext::copy() const
 {
     // NB: We pass the entire non-argument count as registers_and_locals_count with 0 constants.
     //     This means all slots get initialized to empty, but we immediately overwrite them below.
-    auto copy = create(registers_and_constants_and_locals_and_arguments_count - argument_count, ReadonlySpan<Value> {}, argument_count);
+    IGNORE_GC auto copy = create(registers_and_constants_and_locals_and_arguments_count - argument_count, ReadonlySpan<Value> {}, argument_count);
     copy->function = function;
     copy->realm = realm;
     copy->script_or_module = script_or_module;

@@ -11,6 +11,7 @@
 #include <AK/HashTable.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
+#include <LibGC/WeakHashSet.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/ArrayConstructor.h>
@@ -29,7 +30,7 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(ArrayPrototype);
 
-static HashTable<GC::Ref<Object>> s_array_join_seen_objects;
+static GC::WeakHashSet<Object> s_array_join_seen_objects;
 
 ArrayPrototype::ArrayPrototype(Realm& realm)
     : Array(realm, realm.intrinsics().object_prototype())

@@ -108,7 +108,7 @@ JS_DEFINE_NATIVE_FUNCTION(FunctionPrototype::bind)
 
     auto& target = static_cast<FunctionObject&>(target_value.as_object());
 
-    Vector<Value> arguments;
+    GC::RootVector<Value> arguments(vm.heap());
     if (vm.argument_count() > 1) {
         arguments.append(vm.running_execution_context().arguments_span().slice(1).data(), vm.argument_count() - 1);
     }

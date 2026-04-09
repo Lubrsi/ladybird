@@ -826,7 +826,8 @@ extern "C" void* rust_create_executable(
     }
 
     // Build property key table
-    auto prop_key_table = make<JS::Bytecode::PropertyKeyTable>();
+    // FIXME: PropertyKeyTable should be GC-allocated so this is properly rooted.
+    IGNORE_GC auto prop_key_table = make<JS::Bytecode::PropertyKeyTable>();
     for (size_t i = 0; i < data->property_key_count; ++i) {
         prop_key_table->insert(utf16_fly_from_ffi(data->property_key_table[i]));
     }
@@ -847,7 +848,7 @@ extern "C" void* rust_create_executable(
     }
 
     // Decode constants
-    Vector<JS::Value> constants_vec;
+    GC::RootVector<JS::Value> constants_vec(vm.heap());
     constants_vec.ensure_capacity(data->constants_count);
     auto const* cursor = data->constants_data;
     auto const* end = data->constants_data + data->constants_data_length;
