@@ -1051,7 +1051,9 @@ namespace JS {
 
 ErrorOr<void> print(JS::Value value, PrintContext& print_context)
 {
-    HashTable<JS::Object*> seen_objects;
+    // AD-HOC: No heap reference available in this debug printing utility.
+    // Objects in seen_objects are kept alive by the value being printed.
+    IGNORE_GC HashTable<JS::Object*> seen_objects;
     return print_value(print_context, value, seen_objects);
 }
 

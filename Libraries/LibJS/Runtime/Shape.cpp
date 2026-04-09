@@ -6,6 +6,8 @@
  */
 
 #include <LibGC/DeferGC.h>
+#include <LibGC/RootHashTable.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/VM.h>
@@ -240,7 +242,7 @@ void Shape::ensure_property_table() const
 
     u32 next_offset = 0;
 
-    Vector<Shape const&, 64> transition_chain;
+    GC::RootVector<GC::Ref<Shape const>> transition_chain(heap());
     transition_chain.append(*this);
     for (auto shape = m_previous; shape; shape = shape->m_previous) {
         if (shape->m_property_table) {
@@ -252,18 +254,18 @@ void Shape::ensure_property_table() const
     }
 
     for (auto const& shape : transition_chain.in_reverse()) {
-        if (!shape.m_property_key.has_value()) {
+        if (!shape->m_property_key.has_value()) {
             // Ignore prototype transitions as they don't affect the key map.
             continue;
         }
-        if (shape.m_transition_type == TransitionType::Put) {
-            m_property_table->set(*shape.m_property_key, { next_offset++, shape.m_attributes });
-        } else if (shape.m_transition_type == TransitionType::Configure) {
-            auto it = m_property_table->find(*shape.m_property_key);
+        if (shape->m_transition_type == TransitionType::Put) {
+            m_property_table->set(*shape->m_property_key, { next_offset++, shape->m_attributes });
+        } else if (shape->m_transition_type == TransitionType::Configure) {
+            auto it = m_property_table->find(*shape->m_property_key);
             VERIFY(it != m_property_table->end());
-            it->value.attributes = shape.m_attributes;
-        } else if (shape.m_transition_type == TransitionType::Delete) {
-            auto remove_it = m_property_table->find(*shape.m_property_key);
+            it->value.attributes = shape->m_attributes;
+        } else if (shape->m_transition_type == TransitionType::Delete) {
+            auto remove_it = m_property_table->find(*shape->m_property_key);
             VERIFY(remove_it != m_property_table->end());
             auto removed_offset = remove_it->value.offset;
             m_property_table->remove(remove_it);
@@ -398,8 +400,8 @@ void Shape::invalidate_all_prototype_chains_leading_to_this()
     if (!m_child_prototype_shapes || m_child_prototype_shapes->is_empty())
         return;
 
-    HashTable<Shape*> shapes_to_invalidate;
-    Vector<Shape*> worklist;
+    GC::RootHashTable<Shape*> shapes_to_invalidate(heap());
+    GC::RootVector<Shape*> worklist(heap());
     auto enqueue_children_of = [&](Shape& shape) {
         if (!shape.m_child_prototype_shapes)
             return;

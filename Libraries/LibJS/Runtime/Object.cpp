@@ -33,7 +33,9 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(Object);
 
-static HashMap<GC::Ptr<Object const>, HashMap<Utf16FlyString, Object::IntrinsicAccessor>> s_intrinsics;
+// AD-HOC: This static maps objects to their intrinsic accessors. Entries are managed
+// manually and the objects are otherwise kept alive by the realm.
+IGNORE_GC static HashMap<GC::Ptr<Object const>, HashMap<Utf16FlyString, Object::IntrinsicAccessor>> s_intrinsics;
 
 // Heap-allocated named property storage layout:
 //   [u32 capacity] [u32 padding] [Value 0] [Value 1] ...
@@ -1555,7 +1557,7 @@ ThrowCompletionOr<Object*> Object::define_properties(Value properties)
     };
 
     // 3. Let descriptors be a new empty List.
-    Vector<NameAndDescriptor> descriptors;
+    GC::ConservativeVector<NameAndDescriptor> descriptors(vm.heap());
 
     // 4. For each element nextKey of keys, do
     for (auto& next_key : keys) {
@@ -1798,7 +1800,7 @@ void Object::transition_to_dictionary()
     }
 
     // Set the array_like_size on the dictionary
-    dict->set_array_like_size(m_indexed_array_like_size);
+    dict->set_array_like_size(heap(), m_indexed_array_like_size);
 
     m_indexed_elements = reinterpret_cast<Value*>(dict);
     m_indexed_storage_kind = IndexedStorageKind::Dictionary;
@@ -1949,7 +1951,7 @@ bool Object::set_indexed_array_like_size(size_t new_size)
         return true;
 
     if (m_indexed_storage_kind == IndexedStorageKind::Dictionary) {
-        bool result = indexed_dictionary()->set_array_like_size(new_size);
+        bool result = indexed_dictionary()->set_array_like_size(heap(), new_size);
         m_indexed_array_like_size = indexed_dictionary()->array_like_size();
         return result;
     }

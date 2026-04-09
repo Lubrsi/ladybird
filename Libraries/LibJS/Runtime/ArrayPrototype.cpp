@@ -29,7 +29,9 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(ArrayPrototype);
 
-static HashTable<GC::Ref<Object>> s_array_join_seen_objects;
+// AD-HOC: This static is manually managed — entries are added and removed within
+// the same call to Array.prototype.join, so objects remain alive for the duration.
+IGNORE_GC static HashTable<GC::Ref<Object>> s_array_join_seen_objects;
 
 ArrayPrototype::ArrayPrototype(Realm& realm)
     : Array(realm, realm.intrinsics().object_prototype())
