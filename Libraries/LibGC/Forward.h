@@ -27,6 +27,9 @@ class Function;
 template<typename T>
 class HeapHashTable;
 
+template<typename K, typename V, typename KeyTraits, typename ValueTraits, bool IsOrdered>
+class HeapHashMap;
+
 template<class T>
 class Root;
 
