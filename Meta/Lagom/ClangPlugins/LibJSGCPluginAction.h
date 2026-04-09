@@ -62,6 +62,7 @@ public:
 
     bool VisitCXXRecordDecl(clang::CXXRecordDecl*);
     bool VisitCXXMethodDecl(clang::CXXMethodDecl*);
+    bool VisitVarDecl(clang::VarDecl*);
 
 private:
     struct CellMacroExpectation {

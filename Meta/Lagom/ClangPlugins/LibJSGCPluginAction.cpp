@@ -750,6 +750,80 @@ bool LibJSGCVisitor::VisitCXXMethodDecl(clang::CXXMethodDecl* method)
     return true;
 }
 
+bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
+{
+    if (!var)
+        return true;
+
+    // Skip function parameters
+    if (llvm::isa<clang::ParmVarDecl>(var))
+        return true;
+
+    // Only check local and static/global variables.
+    // Member fields are handled by VisitCXXRecordDecl.
+    if (!var->hasLocalStorage() && !var->hasGlobalStorage())
+        return true;
+
+    if (decl_has_annotation(var, "serenity::ignore_gc"))
+        return true;
+
+    auto type = var->getType();
+
+    // References don't own storage, the referent is managed elsewhere
+    if (type->isReferenceType())
+        return true;
+
+    if (auto const* elaborated = llvm::dyn_cast<clang::ElaboratedType>(type.getTypePtr()))
+        type = elaborated->desugar();
+
+    // We're looking for heap-allocating containers that store GC-managed pointers.
+    // These are dangerous because the GC cannot see into heap-allocated backing storage
+    // (conservative stack scanning only covers stack-inline data).
+    auto const* specialization = type->getAs<clang::TemplateSpecializationType>();
+    if (!specialization)
+        return true;
+
+    auto template_name = specialization->getTemplateName().getAsTemplateDecl()->getQualifiedNameAsString();
+
+    // Types that allocate storage invisible to the GC (heap-backed containers, smart pointers, etc.)
+    static std::set<std::string> types_with_gc_invisible_storage {
+        "AK::Vector",
+        "AK::HashMap",
+        "AK::HashTable",
+        "AK::OrderedHashMap",
+        "AK::OrderedHashTable",
+        "AK::OwnPtr",
+        "AK::NonnullOwnPtr",
+    };
+
+    // GC root container types register themselves with the heap - safe
+    static std::set<std::string> gc_root_container_types {
+        "GC::RootVector",
+        "GC::ConservativeVector",
+        "GC::RootHashMap",
+        "GC::RootHashTable",
+    };
+
+    if (!types_with_gc_invisible_storage.contains(template_name) || gc_root_container_types.contains(template_name))
+        return true;
+
+    // Check if any template argument contains GC-managed pointers
+    for (auto const& arg : specialization->template_arguments()) {
+        if (arg.getKind() == clang::TemplateArgument::Type) {
+            if (type_contains_gc_ptr(arg.getAsType()) != ContainsGCPtrResult::No) {
+                auto& diag_engine = m_context.getDiagnostics();
+                auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
+                    "Variable with type %0 contains pointers to GC-managed objects but is not a GC root");
+                auto builder = diag_engine.Report(var->getLocation(), diag_id);
+                builder << var->getType();
+                return true;
+            }
+        }
+    }
+
+    return true;
+}
+
 struct CellTypeWithOrigin {
     clang::CXXRecordDecl const& base_origin;
     LibJSCellMacro::Type type;
