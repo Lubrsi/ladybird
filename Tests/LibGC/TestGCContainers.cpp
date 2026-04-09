@@ -6,6 +6,7 @@
 
 #include <LibGC/Cell.h>
 #include <LibGC/CellAllocator.h>
+#include <LibGC/ConservativeHashTable.h>
 #include <LibGC/ConservativeVector.h>
 #include <LibGC/Heap.h>
 #include <LibGC/HeapHashTable.h>
@@ -49,6 +50,17 @@ static bool possible_values_contain(GC::ConservativeVectorBase const& container,
             return true;
     }
     return false;
+}
+
+static bool possible_values_contain(GC::ConservativeHashTableBase const& container, GC::Cell* cell)
+{
+    bool found = false;
+    auto target = bit_cast<FlatPtr>(cell);
+    container.for_each_possible_value([&](FlatPtr value) {
+        if (value == target)
+            found = true;
+    });
+    return found;
 }
 
 TEST_CASE(root_vector_reports_roots)
@@ -248,4 +260,39 @@ TEST_CASE(empty_containers_report_no_roots)
     map.gather_roots(roots);
 
     EXPECT_EQ(roots.size(), 0u);
+}
+
+TEST_CASE(conservative_hash_table_reports_possible_values)
+{
+    auto& heap = test_heap();
+    GC::ConservativeHashTable<GC::Ref<TestCell>> table(heap);
+
+    auto cell = heap.allocate<TestCell>();
+    table.set(cell);
+
+    EXPECT(possible_values_contain(table, cell.ptr()));
+}
+
+TEST_CASE(cleared_conservative_hash_table_reports_no_stale_values)
+{
+    auto& heap = test_heap();
+    GC::ConservativeHashTable<GC::Ref<TestCell>> table(heap);
+
+    auto cell = heap.allocate<TestCell>();
+    table.set(cell);
+    table.clear();
+
+    EXPECT(!possible_values_contain(table, cell.ptr()));
+}
+
+TEST_CASE(removed_conservative_hash_table_entry_not_reported)
+{
+    auto& heap = test_heap();
+    GC::ConservativeHashTable<GC::Ref<TestCell>> table(heap);
+
+    auto cell = heap.allocate<TestCell>();
+    table.set(cell);
+    table.remove(cell);
+
+    EXPECT(!possible_values_contain(table, cell.ptr()));
 }
