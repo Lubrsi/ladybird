@@ -10,6 +10,7 @@
 #include <LibGC/ConservativeHashTable.h>
 #include <LibGC/ConservativeVector.h>
 #include <LibGC/Heap.h>
+#include <LibGC/HeapHashMap.h>
 #include <LibGC/HeapHashTable.h>
 #include <LibGC/HeapVector.h>
 #include <LibGC/Ptr.h>
@@ -363,6 +364,61 @@ TEST_CASE(empty_heap_hash_table_visit_edges_reports_nothing)
 
     TestVisitor visitor;
     table->visit_edges(visitor);
+
+    EXPECT_EQ(visitor.visited_cells.size(), 0u);
+}
+
+TEST_CASE(heap_hash_map_visit_edges_reports_value)
+{
+    auto& heap = test_heap();
+    auto map = heap.allocate<GC::HeapHashMap<int, GC::Ref<TestCell>>>();
+
+    auto cell = heap.allocate<TestCell>();
+    map->map().set(42, cell);
+
+    TestVisitor visitor;
+    map->visit_edges(visitor);
+
+    EXPECT(visitor.visited_cells.contains(cell.ptr()));
+}
+
+TEST_CASE(heap_hash_map_visit_edges_reports_key)
+{
+    auto& heap = test_heap();
+    auto map = heap.allocate<GC::HeapHashMap<GC::Ref<TestCell>, int>>();
+
+    auto cell = heap.allocate<TestCell>();
+    map->map().set(cell, 42);
+
+    TestVisitor visitor;
+    map->visit_edges(visitor);
+
+    EXPECT(visitor.visited_cells.contains(cell.ptr()));
+}
+
+TEST_CASE(heap_hash_map_visit_edges_reports_key_and_value)
+{
+    auto& heap = test_heap();
+    auto map = heap.allocate<GC::HeapHashMap<GC::Ref<TestCell>, GC::Ref<TestCell>>>();
+
+    auto key_cell = heap.allocate<TestCell>();
+    auto value_cell = heap.allocate<TestCell>();
+    map->map().set(key_cell, value_cell);
+
+    TestVisitor visitor;
+    map->visit_edges(visitor);
+
+    EXPECT(visitor.visited_cells.contains(key_cell.ptr()));
+    EXPECT(visitor.visited_cells.contains(value_cell.ptr()));
+}
+
+TEST_CASE(empty_heap_hash_map_visit_edges_reports_nothing)
+{
+    auto& heap = test_heap();
+    auto map = heap.allocate<GC::HeapHashMap<int, GC::Ref<TestCell>>>();
+
+    TestVisitor visitor;
+    map->visit_edges(visitor);
 
     EXPECT_EQ(visitor.visited_cells.size(), 0u);
 }
