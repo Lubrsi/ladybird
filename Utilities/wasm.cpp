@@ -11,6 +11,7 @@
 #include <AK/StackInfo.h>
 #include <AK/Utf16String.h>
 #include <LibCore/ArgsParser.h>
+#include <LibGC/RootVector.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <LibCore/MappedFile.h>
@@ -313,7 +314,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     Wasm::AbstractMachine machine;
     auto vm = JS::VM::create();
-    auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
+    // FIXME: Use a GC-allocated execution context
+    IGNORE_GC auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
     Core::ArgsParser parser;
@@ -441,7 +443,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             Wasm::FunctionType function_type = { move(params), move(results) };
             auto host_function = Wasm::HostFunction {
                 [&vm, &function, formal_params, returns, name](Wasm::Configuration&, Span<Wasm::Value> args) mutable -> Wasm::Result {
-                    Vector<JS::Value> js_args;
+                    GC::RootVector<JS::Value> js_args(vm->heap());
                     js_args.ensure_capacity(args.size());
                     for (size_t i = 0; i < formal_params.size(); ++i) {
                         auto type = formal_params[i].type;
