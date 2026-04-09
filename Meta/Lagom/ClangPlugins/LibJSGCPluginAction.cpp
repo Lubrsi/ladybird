@@ -115,6 +115,8 @@ static ContainsGCPtrResult record_contains_gc_ptr(clang::CXXRecordDecl const* re
         "GC::CellAllocator",
         "GC::TypeIsolatingCellAllocator",
         "GC::RootVector",
+        "GC::RootHashMap",
+        "GC::RootHashMapBase",
         "GC::RootHashTable",
         "GC::RootHashTableBase",
         "GC::Heap",
@@ -197,7 +199,7 @@ static ContainsGCPtrResult type_contains_gc_ptr(clang::QualType const& type, std
             return ContainsGCPtrResult::No;
 
         // Root types handle their own visiting
-        if (template_name == "GC::Root" || template_name == "GC::RootVector" || template_name == "GC::ConservativeHashMap" || template_name == "GC::ConservativeHashTable" || template_name == "GC::RootHashTable")
+        if (template_name == "GC::Root" || template_name == "GC::RootVector" || template_name == "GC::ConservativeVector" || template_name == "GC::ConservativeHashMap" || template_name == "GC::ConservativeHashTable" || template_name == "GC::RootHashMap" || template_name == "GC::RootHashTable")
             return ContainsGCPtrResult::No;
 
         // Check template arguments recursively for containers
@@ -237,8 +239,10 @@ static std::vector<clang::QualType> get_all_qualified_types(clang::QualType cons
             "GC::RawPtr",
             "GC::RawRef",
             "GC::RootVector",
+            "GC::ConservativeVector",
             "GC::ConservativeHashMap",
             "GC::ConservativeHashTable",
+            "GC::RootHashMap",
             "GC::RootHashTable",
             "GC::Root",
         };
@@ -749,6 +753,81 @@ bool LibJSGCVisitor::VisitCXXMethodDecl(clang::CXXMethodDecl* method)
             "Missing call to Base::%0 (required by must_upcall attribute)");
         auto builder = diag_engine.Report(method->getBeginLoc(), diag_id);
         builder << method_name;
+    }
+
+    return true;
+}
+
+bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
+{
+    if (!var)
+        return true;
+
+    // FIXME: By-value function parameters also own their own heap-backed storage
+    // and should be flagged.
+    if (llvm::isa<clang::ParmVarDecl>(var))
+        return true;
+
+    // Only check local and static/global variables.
+    // Member fields are handled by VisitCXXRecordDecl.
+    if (!var->hasLocalStorage() && !var->hasGlobalStorage())
+        return true;
+
+    if (decl_has_annotation(var, "serenity::ignore_gc"))
+        return true;
+
+    auto type = var->getType();
+
+    // References don't own storage, the referent is managed elsewhere
+    if (type->isReferenceType())
+        return true;
+
+    if (auto const* elaborated = llvm::dyn_cast<clang::ElaboratedType>(type.getTypePtr()))
+        type = elaborated->desugar();
+
+    // We're looking for heap-allocating containers that store GC-managed pointers.
+    // These are dangerous because the GC cannot see into heap-allocated backing storage
+    // (conservative stack scanning only covers stack-inline data).
+    auto const* specialization = type->getAs<clang::TemplateSpecializationType>();
+    if (!specialization)
+        return true;
+
+    auto template_name = specialization->getTemplateName().getAsTemplateDecl()->getQualifiedNameAsString();
+
+    // Types that allocate storage invisible to the GC (heap-backed containers, smart pointers, etc.)
+    static std::set<std::string> types_with_gc_invisible_storage {
+        "AK::Vector",
+        "AK::HashMap",
+        "AK::HashTable",
+        "AK::OrderedHashMap",
+        "AK::OrderedHashTable",
+        "AK::OwnPtr",
+        "AK::NonnullOwnPtr",
+    };
+
+    // GC root container types register themselves with the heap - safe
+    static std::set<std::string> gc_root_container_types {
+        "GC::RootVector",
+        "GC::ConservativeVector",
+        "GC::RootHashMap",
+        "GC::RootHashTable",
+    };
+
+    if (!types_with_gc_invisible_storage.contains(template_name) || gc_root_container_types.contains(template_name))
+        return true;
+
+    // Check if any template argument contains GC-managed pointers
+    for (auto const& arg : specialization->template_arguments()) {
+        if (arg.getKind() == clang::TemplateArgument::Type) {
+            if (type_contains_gc_ptr(arg.getAsType()) != ContainsGCPtrResult::No) {
+                auto& diag_engine = m_context.getDiagnostics();
+                auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
+                    "Variable with type %0 contains pointers to GC-managed objects but is not a GC root");
+                auto builder = diag_engine.Report(var->getLocation(), diag_id);
+                builder << var->getType();
+                return true;
+            }
+        }
     }
 
     return true;
