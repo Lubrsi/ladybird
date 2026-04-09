@@ -604,7 +604,7 @@ static ErrorOr<int> run_repl(bool gc_on_every_allocation, bool syntax_highlight)
 {
     s_print_last_result = true;
 
-    auto root_execution_context = JS::create_simple_execution_context<ReplObject>(*g_vm);
+    auto root_execution_context = JS::RootedExecutionContext(*g_vm, JS::create_simple_execution_context<ReplObject>(*g_vm));
     auto& realm = *root_execution_context->realm;
 
     auto& console_object = *realm.intrinsics().console_object();
@@ -920,11 +920,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         return run_repl(gc_on_every_allocation, syntax_highlight);
 #endif
     } else {
-        OwnPtr<JS::ExecutionContext> root_execution_context;
-        if (use_test262_global)
-            root_execution_context = JS::create_simple_execution_context<JS::Test262::GlobalObject>(*g_vm);
-        else
-            root_execution_context = JS::create_simple_execution_context<ScriptObject>(*g_vm);
+        JS::RootedExecutionContext root_execution_context = use_test262_global
+            ? JS::RootedExecutionContext(*g_vm, JS::create_simple_execution_context<JS::Test262::GlobalObject>(*g_vm))
+            : JS::RootedExecutionContext(*g_vm, JS::create_simple_execution_context<ScriptObject>(*g_vm));
 
         auto& realm = *root_execution_context->realm;
         auto& console_object = *realm.intrinsics().console_object();
