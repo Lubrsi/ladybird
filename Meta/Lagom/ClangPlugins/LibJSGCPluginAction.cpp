@@ -757,6 +757,87 @@ bool LibJSGCVisitor::VisitCXXMethodDecl(clang::CXXMethodDecl* method)
     return true;
 }
 
+// Recursively checks if a type contains an unrooted heap-backed container storing GC pointers.
+// This recurses through:
+// - wrapper templates (Optional, Variant, etc.) so that e.g. Optional<Vector<GC::Ptr<T>>> is caught
+// - record fields so that named wrapper structs are also caught
+static bool type_has_unrooted_gc_container(clang::QualType type, std::set<clang::CXXRecordDecl const*>& visited)
+{
+    if (auto const* elaborated = llvm::dyn_cast<clang::ElaboratedType>(type.getTypePtr()))
+        type = elaborated->desugar();
+
+    if (auto const* specialization = type->getAs<clang::TemplateSpecializationType>()) {
+        auto template_name = specialization->getTemplateName().getAsTemplateDecl()->getQualifiedNameAsString();
+
+        // All GC:: types handle their own GC concerns (smart pointers, root containers,
+        // heap containers, infrastructure types like TypeIsolatingCellAllocator, etc.)
+        if (template_name.starts_with("GC::"))
+            return false;
+
+        // Types that allocate storage invisible to the GC (heap-backed containers, smart pointers, etc.)
+        static std::set<std::string> types_with_gc_invisible_storage {
+            "AK::Vector",
+            "AK::HashMap",
+            "AK::HashTable",
+            "AK::OrderedHashMap",
+            "AK::OrderedHashTable",
+            "AK::OwnPtr",
+            "AK::NonnullOwnPtr",
+        };
+
+        if (types_with_gc_invisible_storage.contains(template_name)) {
+            // This is a dangerous container - check if its args contain GC pointers
+            for (auto const& arg : specialization->template_arguments()) {
+                if (arg.getKind() == clang::TemplateArgument::Type) {
+                    if (type_contains_gc_ptr(arg.getAsType()) != ContainsGCPtrResult::No)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Not a known container - recurse through template arguments to find
+        // wrapped containers (e.g. Optional<Vector<GC::Ptr<T>>>)
+        for (auto const& arg : specialization->template_arguments()) {
+            if (arg.getKind() == clang::TemplateArgument::Type) {
+                if (type_has_unrooted_gc_container(arg.getAsType(), visited))
+                    return true;
+            }
+        }
+    }
+
+    // Check record types (structs/classes) whose fields may contain unrooted GC containers.
+    // Skip Cell subclasses and GC:: types — they handle their own GC concerns.
+    // GC:: types also appear here (not just as TemplateSpecializationType above) when
+    // the type comes from auto deduction of an instantiated template.
+    if (auto const* record = type->getAsCXXRecordDecl()) {
+        if (!record->hasDefinition())
+            return false;
+        if (record_inherits_from_cell(*record))
+            return false;
+        if (record->getQualifiedNameAsString().starts_with("GC::"))
+            return false;
+        if (!visited.insert(record).second)
+            return false;
+        for (auto const* field : record->fields()) {
+            if (type_has_unrooted_gc_container(field->getType(), visited))
+                return true;
+        }
+        for (auto const& base : record->bases()) {
+            if (type_has_unrooted_gc_container(base.getType(), visited))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+static bool type_has_unrooted_gc_container(clang::QualType type)
+{
+    std::set<clang::CXXRecordDecl const*> visited;
+    return type_has_unrooted_gc_container(type, visited);
+}
+
 bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
 {
     if (!var)
@@ -771,6 +852,11 @@ bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
     if (!var->hasLocalStorage() && !var->hasGlobalStorage())
         return true;
 
+    // Skip static data members of classes (e.g., GC::TypeIsolatingCellAllocator<T>).
+    // These are class infrastructure, not standalone variables.
+    if (var->isStaticDataMember())
+        return true;
+
     if (decl_has_annotation(var, "serenity::ignore_gc"))
         return true;
 
@@ -780,54 +866,12 @@ bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
     if (type->isReferenceType())
         return true;
 
-    if (auto const* elaborated = llvm::dyn_cast<clang::ElaboratedType>(type.getTypePtr()))
-        type = elaborated->desugar();
-
-    // We're looking for heap-allocating containers that store GC-managed pointers.
-    // These are dangerous because the GC cannot see into heap-allocated backing storage
-    // (conservative stack scanning only covers stack-inline data).
-    auto const* specialization = type->getAs<clang::TemplateSpecializationType>();
-    if (!specialization)
-        return true;
-
-    auto template_name = specialization->getTemplateName().getAsTemplateDecl()->getQualifiedNameAsString();
-
-    // Types that allocate storage invisible to the GC (heap-backed containers, smart pointers, etc.)
-    static std::set<std::string> types_with_gc_invisible_storage {
-        "AK::Vector",
-        "AK::HashMap",
-        "AK::HashTable",
-        "AK::OrderedHashMap",
-        "AK::OrderedHashTable",
-        "AK::OwnPtr",
-        "AK::NonnullOwnPtr",
-    };
-
-    // GC root container types register themselves with the heap - safe
-    static std::set<std::string> gc_root_container_types {
-        "GC::RootVector",
-        "GC::ConservativeVector",
-        "GC::ConservativeHashMap",
-        "GC::ConservativeHashTable",
-        "GC::RootHashMap",
-        "GC::RootHashTable",
-    };
-
-    if (!types_with_gc_invisible_storage.contains(template_name) || gc_root_container_types.contains(template_name))
-        return true;
-
-    // Check if any template argument contains GC-managed pointers
-    for (auto const& arg : specialization->template_arguments()) {
-        if (arg.getKind() == clang::TemplateArgument::Type) {
-            if (type_contains_gc_ptr(arg.getAsType()) != ContainsGCPtrResult::No) {
-                auto& diag_engine = m_context.getDiagnostics();
-                auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
-                    "Variable with type %0 contains pointers to GC-managed objects but is not a GC root");
-                auto builder = diag_engine.Report(var->getLocation(), diag_id);
-                builder << var->getType();
-                return true;
-            }
-        }
+    if (type_has_unrooted_gc_container(type)) {
+        auto& diag_engine = m_context.getDiagnostics();
+        auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
+            "Variable with type %0 contains pointers to GC-managed objects but is not a GC root");
+        auto builder = diag_engine.Report(var->getLocation(), diag_id);
+        builder << var->getType();
     }
 
     return true;

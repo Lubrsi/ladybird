@@ -23,6 +23,8 @@ protected:
     explicit RootHashTableBase(Heap&);
     ~RootHashTableBase();
 
+    void assign_heap(Heap*);
+
     Heap* m_heap { nullptr };
     IntrusiveListNode<RootHashTableBase> m_list_node;
 
@@ -41,6 +43,35 @@ public:
     explicit RootHashTable(Heap& heap)
         : RootHashTableBase(heap)
     {
+    }
+
+    RootHashTable(RootHashTable const& other)
+        : RootHashTableBase(*other.m_heap)
+        , HashTableBase(other)
+    {
+    }
+
+    RootHashTable(RootHashTable&& other)
+        : RootHashTableBase(*other.m_heap)
+        , HashTableBase(move(static_cast<HashTableBase&>(other)))
+    {
+    }
+
+    RootHashTable& operator=(RootHashTable const& other)
+    {
+        if (&other == this)
+            return *this;
+
+        assign_heap(other.m_heap);
+        HashTableBase::operator=(other);
+        return *this;
+    }
+
+    RootHashTable& operator=(RootHashTable&& other)
+    {
+        assign_heap(other.m_heap);
+        HashTableBase::operator=(move(static_cast<HashTableBase&>(other)));
+        return *this;
     }
 
     ~RootHashTable() = default;

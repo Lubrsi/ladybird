@@ -8,6 +8,8 @@
 
 #include <AK/HashMap.h>
 #include <AK/HashTable.h>
+#include <AK/Optional.h>
+#include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <LibGC/ConservativeHashMap.h>
 #include <LibGC/ConservativeHashTable.h>
@@ -62,6 +64,41 @@ void test_gc_root_containers_ok(GC::Heap& heap)
     GC::ConservativeVector<JS::PropertyKey> ok_conservative_vector(heap);
     GC::ConservativeHashTable<JS::PropertyKey> ok_conservative_hash_table(heap);
     GC::ConservativeHashMap<int, JS::PropertyKey> ok_conservative_hash_map(heap);
+}
+
+// Wrapper types around dangerous containers should also be caught
+void test_wrapper_types()
+{
+    // expected-error@+1 {{contains pointers to GC-managed objects but is not a GC root}}
+    Optional<Vector<GC::Ref<JS::Object>>> bad_optional_vector;
+
+    // expected-error@+1 {{contains pointers to GC-managed objects but is not a GC root}}
+    Optional<HashMap<int, GC::Ptr<JS::Object>>> bad_optional_hashmap;
+
+    // expected-error@+1 {{contains pointers to GC-managed objects but is not a GC root}}
+    Variant<int, Vector<GC::Ref<JS::Object>>> bad_variant { 0 };
+
+    // Non-GC wrapper types are fine
+    Optional<Vector<int>> ok_optional_vector_int;
+    Optional<int> ok_optional_int;
+}
+
+// Named wrapper structs containing dangerous containers should also be caught
+struct WrapperWithGCContainer {
+    Optional<HashTable<GC::Ptr<JS::Object>>> value;
+};
+
+struct SafeWrapper {
+    int value;
+};
+
+void test_named_wrapper_types()
+{
+    // expected-error@+1 {{contains pointers to GC-managed objects but is not a GC root}}
+    WrapperWithGCContainer bad_wrapper;
+
+    // Non-GC wrapper structs are fine
+    SafeWrapper ok_wrapper;
 }
 
 // Direct GC types on the stack are fine (conservative stack scanning finds them)
