@@ -33,6 +33,9 @@ class Root;
 template<class T, size_t inline_capacity = 0>
 class ConservativeVector;
 
+template<typename T, typename TraitsForT, bool IsOrdered>
+class ConservativeHashTable;
+
 template<class T>
 class HeapVector;
 
