@@ -47,7 +47,7 @@ public:
 
     RootHashTable(RootHashTable const& other)
         : RootHashTableBase(*other.m_heap)
-        , HashTableBase(other)
+        , HashTableBase(static_cast<HashTableBase const&>(other))
     {
     }
 
@@ -63,7 +63,7 @@ public:
             return *this;
 
         assign_heap(other.m_heap);
-        HashTableBase::operator=(other);
+        HashTableBase::operator=(static_cast<HashTableBase const&>(other));
         return *this;
     }
 

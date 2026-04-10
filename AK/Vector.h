@@ -130,6 +130,10 @@ public:
             update_metadata();
     }
 
+    template<typename Derived>
+    requires(IsBaseOf<Vector, RemoveCVReference<Derived>> && !IsSame<Vector, RemoveCVReference<Derived>>)
+    Vector(Derived&&) = delete;
+
     ~Vector()
     {
         clear();
@@ -476,6 +480,10 @@ public:
             update_metadata();
         return *this;
     }
+
+    template<typename Derived>
+    requires(IsBaseOf<Vector, RemoveCVReference<Derived>> && !IsSame<Vector, RemoveCVReference<Derived>>)
+    Vector& operator=(Derived&&) = delete;
 
     void clear()
     {

@@ -46,7 +46,7 @@ public:
 
     RootHashMap(RootHashMap const& other)
         : RootHashMapBase(*other.m_heap)
-        , HashMapBase(other)
+        , HashMapBase(static_cast<HashMapBase const&>(other))
     {
     }
 
@@ -62,7 +62,7 @@ public:
             return *this;
 
         assign_heap(other.m_heap);
-        HashMapBase::operator=(other);
+        HashMapBase::operator=(static_cast<HashMapBase const&>(other));
         return *this;
     }
 
