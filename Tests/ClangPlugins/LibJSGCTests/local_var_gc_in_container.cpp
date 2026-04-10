@@ -115,6 +115,10 @@ void test_references_ok(Vector<GC::Ref<JS::Object>>& vec_ref)
     (void)local_ref;
 }
 
+// FIXME: By-value parameters own their own heap-backed storage and should eventually
+// be flagged, but are deferred until spec-compliance patterns like resolve_export's
+// recursion accumulator are refactored.
+
 // Static variables with GC pointers in containers should also be flagged
 // expected-error@+1 {{contains pointers to GC-managed objects but is not a GC root}}
 static Vector<GC::Ptr<JS::Object>> s_bad_static_vector;

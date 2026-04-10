@@ -843,7 +843,10 @@ bool LibJSGCVisitor::VisitVarDecl(clang::VarDecl* var)
     if (!var)
         return true;
 
-    // Skip function parameters
+    // FIXME: By-value function parameters also own their own heap-backed storage
+    // and should be flagged. Deferred because several spec-compliance patterns
+    // (e.g. resolve_export's recursion accumulator) rely on by-value passing and
+    // would need non-trivial refactoring.
     if (llvm::isa<clang::ParmVarDecl>(var))
         return true;
 
