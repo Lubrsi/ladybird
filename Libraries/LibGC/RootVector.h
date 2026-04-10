@@ -56,7 +56,7 @@ public:
 
     RootVector(RootVector const& other)
         : RootVectorBase(*other.m_heap)
-        , Vector<T, inline_capacity>(other)
+        , Vector<T, inline_capacity>(static_cast<VectorBase const&>(other))
     {
     }
 
@@ -72,7 +72,7 @@ public:
             return *this;
 
         assign_heap(other.m_heap);
-        VectorBase::operator=(other);
+        VectorBase::operator=(static_cast<VectorBase const&>(other));
         return *this;
     }
 

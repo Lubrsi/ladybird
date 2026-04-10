@@ -49,6 +49,14 @@ public:
     HashMap& operator=(HashMap const& other) = default; // FIXME: Not OOM-safe! Use clone() instead.
     HashMap& operator=(HashMap&& other) noexcept = default;
 
+    template<typename Derived>
+    requires(IsBaseOf<HashMap, RemoveCVReference<Derived>> && !IsSame<HashMap, RemoveCVReference<Derived>>)
+    HashMap(Derived&&) = delete;
+
+    template<typename Derived>
+    requires(IsBaseOf<HashMap, RemoveCVReference<Derived>> && !IsSame<HashMap, RemoveCVReference<Derived>>)
+    HashMap& operator=(Derived&&) = delete;
+
     [[nodiscard]] bool is_empty() const
     {
         return m_table.is_empty();

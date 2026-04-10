@@ -50,7 +50,7 @@ public:
 
     ConservativeVector(ConservativeVector const& other)
         : ConservativeVectorBase(*other.m_heap)
-        , Vector<T, inline_capacity>(other)
+        , Vector<T, inline_capacity>(static_cast<Vector<T, inline_capacity> const&>(other))
     {
     }
 
@@ -64,7 +64,7 @@ public:
     {
         if (&other == this)
             return *this;
-        Vector<T, inline_capacity>::operator=(other);
+        Vector<T, inline_capacity>::operator=(static_cast<Vector<T, inline_capacity> const&>(other));
         return *this;
     }
 

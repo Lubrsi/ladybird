@@ -227,6 +227,14 @@ public:
         return *this;
     }
 
+    template<typename Derived>
+    requires(IsBaseOf<HashTable, RemoveCVReference<Derived>> && !IsSame<HashTable, RemoveCVReference<Derived>>)
+    HashTable(Derived&&) = delete;
+
+    template<typename Derived>
+    requires(IsBaseOf<HashTable, RemoveCVReference<Derived>> && !IsSame<HashTable, RemoveCVReference<Derived>>)
+    HashTable& operator=(Derived&&) = delete;
+
     friend void swap(HashTable& a, HashTable& b) noexcept
     {
         swap(a.m_buckets, b.m_buckets);
