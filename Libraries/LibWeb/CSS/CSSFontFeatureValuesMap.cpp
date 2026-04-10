@@ -50,7 +50,7 @@ WebIDL::ExceptionOr<void> CSSFontFeatureValuesMap::set(String const& feature_val
     if (value_vector.size() > m_max_value_count)
         return WebIDL::InvalidAccessError::create(realm(), Utf16String::formatted("CSSFontFeatureValuesMap.set only allows a maximum of {} values for the associated feature", m_max_value_count));
 
-    Vector<JS::Value> wrapped_values;
+    GC::RootVector<JS::Value> wrapped_values(realm().heap());
     wrapped_values.ensure_capacity(value_vector.size());
 
     for (auto const& value : value_vector)
