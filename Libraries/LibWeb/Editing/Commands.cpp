@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/RootHashTable.h>
+#include <LibGC/RootVector.h>
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Segmenter.h>
 #include <LibWeb/CSS/PropertyID.h>
@@ -79,7 +81,7 @@ bool command_create_link_action(DOM::Document& document, Utf16String const& valu
 
     // 2. For each editable a element that has an href attribute and is an ancestor of some node effectively contained
     //    in the active range, set that a element's href attribute to value.
-    HashTable<DOM::Node*> visited_ancestors;
+    GC::RootHashTable<DOM::Node*> visited_ancestors(document.heap());
     auto set_value_for_ancestor_anchors = [&](GC::Ref<DOM::Node> node) {
         node->for_each_ancestor([&](GC::Ref<DOM::Node> ancestor) {
             if (visited_ancestors.contains(ancestor.ptr()))
@@ -236,7 +238,7 @@ bool command_delete_action(DOM::Document& document, Utf16String const&)
     if (offset == 0 && node->index() == 0
         && node_element.local_name().is_one_of(HTML::TagNames::li, HTML::TagNames::dt, HTML::TagNames::dd)) {
         // 1. Let items be a list of all lis that are ancestors of node.
-        Vector<GC::Ref<DOM::Node>> items;
+        GC::RootVector<GC::Ref<DOM::Node>> items(node->heap());
         node->for_each_ancestor([&items](GC::Ref<DOM::Node> ancestor) {
             if (is<HTML::HTMLLIElement>(*ancestor))
                 items.append(ancestor);
@@ -330,7 +332,7 @@ bool command_delete_action(DOM::Document& document, Utf16String const&)
             auto new_range = block_extend_a_range(DOM::Range::create(*node, 0, *node, 0));
 
             // 2. Let node list be a list of nodes, initially empty.
-            Vector<GC::Ref<DOM::Node>> node_list;
+            GC::RootVector<GC::Ref<DOM::Node>> node_list(node->heap());
 
             // 3. For each node current node contained in new range, append current node to node list if
             //    the last member of node list (if any) is not an ancestor of current node, and current
@@ -646,7 +648,7 @@ bool command_format_block_action(DOM::Document& document, Utf16String const& val
     auto new_range = block_extend_a_range(*active_range(document));
 
     // 5. Let node list be an empty list of nodes.
-    Vector<GC::Ref<DOM::Node>> node_list;
+    GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
 
     // 6. For each node node contained in new range, append node to node list if it is editable, the last member of
     //    original node list (if any) is not an ancestor of node, node is either a non-list single-line container or an
@@ -703,7 +705,7 @@ bool command_format_block_action(DOM::Document& document, Utf16String const& val
 
     // 10. While node list is not empty:
     while (!node_list.is_empty()) {
-        Vector<GC::Ref<DOM::Node>> sublist;
+        GC::RootVector<GC::Ref<DOM::Node>> sublist(document.heap());
 
         // 1. If the first member of node list is a single-line container:
         if (is_single_line_container(node_list.first())) {
@@ -782,7 +784,7 @@ bool command_format_block_indeterminate(DOM::Document const& document)
     auto new_range = block_extend_a_range(*range);
 
     // 3. Let node list be all visible editable nodes that are contained in new range and have no children.
-    Vector<GC::Ref<DOM::Node>> node_list;
+    GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
     new_range->for_each_contained([&](GC::Ref<DOM::Node> node) {
         if (is_visible_node(node) && node->is_editable() && !node->has_children())
             node_list.append(node);
@@ -1078,7 +1080,7 @@ bool command_forward_delete_action(DOM::Document& document, Utf16String const&)
 bool command_indent_action(DOM::Document& document, Utf16String const&)
 {
     // 1. Let items be a list of all lis that are inclusive ancestors of the active range's start and/or end node.
-    Vector<GC::Ref<DOM::Node>> items;
+    GC::RootVector<GC::Ref<DOM::Node>> items(document.heap());
     auto add_all_lis = [&items](GC::Ref<DOM::Node> node) {
         node->for_each_inclusive_ancestor([&items](GC::Ref<DOM::Node> ancestor) {
             if (is<HTML::HTMLLIElement>(*ancestor) && !items.contains_slow(ancestor))
@@ -1098,7 +1100,7 @@ bool command_indent_action(DOM::Document& document, Utf16String const&)
     auto new_range = block_extend_a_range(*active_range(document));
 
     // 4. Let node list be a list of nodes, initially empty.
-    Vector<GC::Ref<DOM::Node>> node_list;
+    GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
 
     // 5. For each node node contained in new range, if node is editable and is an allowed child of "div" or "ol" and if
     //    the last member of node list (if any) is not an ancestor of node, append node to node list.
@@ -1131,7 +1133,7 @@ bool command_indent_action(DOM::Document& document, Utf16String const&)
     // 7. While node list is not empty:
     while (!node_list.is_empty()) {
         // 1. Let sublist be a list of nodes, initially empty.
-        Vector<GC::Ref<DOM::Node>> sublist;
+        GC::RootVector<GC::Ref<DOM::Node>> sublist(document.heap());
 
         // 2. Remove the first member of node list and append it to sublist.
         sublist.append(node_list.take_first());
@@ -1250,7 +1252,7 @@ bool command_insert_html_action(DOM::Document& document, Utf16String const& valu
         return true;
 
     // 7. Let descendants be all descendants of frag.
-    Vector<GC::Ref<DOM::Node>> descendants;
+    GC::RootVector<GC::Ref<DOM::Node>> descendants(document.heap());
     frag->for_each_in_subtree([&descendants](GC::Ref<DOM::Node> descendant) {
         descendants.append(descendant);
         return TraversalDecision::Continue;
@@ -1260,7 +1262,7 @@ bool command_insert_html_action(DOM::Document& document, Utf16String const& valu
     if (is_block_node(range->start_container())) {
         // 1. Let collapsed block props be all editable collapsed block prop children of the active range's start node
         //    that have index greater than or equal to the active range's start offset.
-        Vector<GC::Ref<DOM::Node>> collapsed_block_props;
+        GC::RootVector<GC::Ref<DOM::Node>> collapsed_block_props(document.heap());
         range->start_container()->for_each_child([&](GC::Ref<DOM::Node> child) {
             if (child->is_editable() && is_collapsed_block_prop(child) && child->index() >= range->start_offset())
                 collapsed_block_props.append(child);
@@ -1532,7 +1534,7 @@ bool command_insert_paragraph_action(DOM::Document& document, Utf16String const&
         auto new_range = block_extend_a_range(active_range);
 
         // 3. Let node list be a list of nodes, initially empty.
-        Vector<GC::Ref<DOM::Node>> node_list;
+        GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
 
         // 4. Append to node list the first node in tree order that is contained in new range and is an allowed child of
         //    "p", if any.
@@ -1713,7 +1715,7 @@ bool command_insert_paragraph_action(DOM::Document& document, Utf16String const&
     container->parent()->insert_before(*new_container, container->next_sibling());
 
     // 26. Let contained nodes be all nodes contained in new line range.
-    Vector<GC::Ref<DOM::Node>> contained_nodes;
+    GC::RootVector<GC::Ref<DOM::Node>> contained_nodes(document.heap());
     new_line_range->for_each_contained([&contained_nodes](GC::Ref<DOM::Node> node) {
         contained_nodes.append(node);
         return IterationDecision::Continue;
@@ -1942,7 +1944,7 @@ static bool justify_indeterminate(DOM::Document const& document, JustifyAlignmen
 
     // Return true if among visible editable nodes that are contained in the result and have no children, at least one
     // has alignment value "[alignment]" and at least one does not. Otherwise return false.
-    Vector<GC::Ref<DOM::Node>> matching_nodes;
+    GC::RootVector<GC::Ref<DOM::Node>> matching_nodes(document.heap());
     range->for_each_contained([&matching_nodes](GC::Ref<DOM::Node> node) {
         if (is_visible_node(node) && node->is_editable() && !node->has_children())
             matching_nodes.append(node);
@@ -1968,7 +1970,7 @@ static bool justify_state(DOM::Document const& document, JustifyAlignment alignm
 
     // Return true if there is at least one visible editable node that is contained in the result and has no children,
     // and all such nodes have alignment value "[alignment]". Otherwise return false.
-    Vector<GC::Ref<DOM::Node>> matching_nodes;
+    GC::RootVector<GC::Ref<DOM::Node>> matching_nodes(document.heap());
     range->for_each_contained([&matching_nodes](GC::Ref<DOM::Node> node) {
         if (is_visible_node(node) && node->is_editable() && !node->has_children())
             matching_nodes.append(node);
@@ -2115,7 +2117,7 @@ Utf16String command_justify_right_value(DOM::Document const& document)
 bool command_outdent_action(DOM::Document& document, Utf16String const&)
 {
     // 1. Let items be a list of all lis that are inclusive ancestors of the active range's start and/or end node.
-    Vector<GC::Ref<DOM::Node>> items;
+    GC::RootVector<GC::Ref<DOM::Node>> items(document.heap());
     auto add_all_lis = [&items](GC::Ref<DOM::Node> node) {
         node->for_each_inclusive_ancestor([&items](GC::Ref<DOM::Node> ancestor) {
             if (is<HTML::HTMLLIElement>(*ancestor) && !items.contains_slow(ancestor))
@@ -2135,7 +2137,7 @@ bool command_outdent_action(DOM::Document& document, Utf16String const&)
     auto new_range = block_extend_a_range(*active_range(document));
 
     // 4. Let node list be a list of nodes, initially empty.
-    Vector<GC::Ref<DOM::Node>> node_list;
+    GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
 
     // 5. For each node node contained in new range, append node to node list if the last member of node list (if any)
     //    is not an ancestor of node; node is editable; and either node has no editable descendants, or is an ol or ul,
@@ -2174,7 +2176,7 @@ bool command_outdent_action(DOM::Document& document, Utf16String const&)
             break;
 
         // 3. Let sublist be a list of nodes, initially empty.
-        Vector<GC::Ref<DOM::Node>> sublist;
+        GC::RootVector<GC::Ref<DOM::Node>> sublist(document.heap());
 
         // 4. Remove the first member of node list and append it to sublist.
         sublist.append(node_list.take_first());
@@ -2206,7 +2208,7 @@ bool command_outdent_action(DOM::Document& document, Utf16String const&)
 bool command_remove_format_action(DOM::Document& document, Utf16String const&)
 {
     // 1. Let elements to remove be a list of every removeFormat candidate effectively contained in the active range.
-    Vector<GC::Ref<DOM::Element>> elements_to_remove;
+    GC::RootVector<GC::Ref<DOM::Element>> elements_to_remove(document.heap());
     for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> descendant) {
         if (is_remove_format_candidate(descendant))
             elements_to_remove.append(static_cast<DOM::Element&>(*descendant));
@@ -2242,7 +2244,7 @@ bool command_remove_format_action(DOM::Document& document, Utf16String const&)
         MUST(static_cast<DOM::Text&>(*end.node).split_text(end.offset));
 
     // 5. Let node list consist of all editable nodes effectively contained in the active range.
-    Vector<GC::Ref<DOM::Node>> node_list;
+    GC::RootVector<GC::Ref<DOM::Node>> node_list(document.heap());
     for_each_node_effectively_contained_in_range(active_range(document), [&](GC::Ref<DOM::Node> descendant) {
         if (descendant->is_editable())
             node_list.append(descendant);
@@ -2467,7 +2469,7 @@ bool command_unlink_action(DOM::Document& document, Utf16String const&)
 {
     // 1. Let hyperlinks be a list of every a element that has an href attribute and is contained in the active range or
     //    is an ancestor of one of its boundary points.
-    Vector<GC::Ref<DOM::Element>> hyperlinks;
+    GC::RootVector<GC::Ref<DOM::Element>> hyperlinks(document.heap());
     if (auto range = active_range(document)) {
         auto node_matches = [](GC::Ref<DOM::Node> node) {
             return is<HTML::HTMLAnchorElement>(*node)
