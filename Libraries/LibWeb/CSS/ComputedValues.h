@@ -10,6 +10,7 @@
 #include <AK/FlyString.h>
 #include <AK/HashMap.h>
 #include <AK/Optional.h>
+#include <LibGC/Cell.h>
 #include <LibGfx/FontCascadeList.h>
 #include <LibGfx/ScalingMode.h>
 #include <LibWeb/CSS/Clip.h>
@@ -741,7 +742,8 @@ public:
 
     NonnullOwnPtr<ComputedValues> clone_inherited_values() const
     {
-        auto clone = make<ComputedValues>();
+        // FIXME: ComputedValues should be GC-allocated so this is properly rooted.
+        IGNORE_GC auto clone = make<ComputedValues>();
         clone->m_inherited = m_inherited;
         return clone;
     }

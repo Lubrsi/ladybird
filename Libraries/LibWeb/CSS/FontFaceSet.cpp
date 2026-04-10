@@ -142,7 +142,7 @@ void FontFaceSet::clear()
     // 1. Remove all non-CSS-connected items from the FontFaceSet's set entries,
     //    its [[LoadedFonts]] list, and its [[FailedFonts]] list.
     auto* window = as_if<HTML::Window>(HTML::relevant_global_object(*this));
-    Vector<JS::Value> to_remove;
+    GC::RootVector<JS::Value> to_remove(heap());
     for (auto font_face_value : *m_set_entries) {
         auto& font_face = as<FontFace>(font_face_value.key.as_object());
         if (!font_face.is_css_connected()) {
