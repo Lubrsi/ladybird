@@ -55,7 +55,7 @@ ThrowCompletionOr<Optional<String>> JSONObject::stringify_impl(VM& vm, Value val
 {
     auto& realm = *vm.current_realm();
 
-    StringifyState state;
+    StringifyState state { vm.heap() };
 
     if (replacer.is_object()) {
         if (replacer.as_object().is_function()) {

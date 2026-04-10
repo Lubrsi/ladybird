@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGC/RootHashTable.h>
 #include <LibJS/Export.h>
 #include <LibJS/Runtime/Object.h>
 
@@ -29,8 +30,13 @@ private:
     explicit JSONObject(Realm&);
 
     struct StringifyState {
+        explicit StringifyState(GC::Heap& heap)
+            : seen_objects(heap)
+        {
+        }
+
         GC::Ptr<FunctionObject> replacer_function;
-        HashTable<GC::Ptr<Object>> seen_objects;
+        GC::RootHashTable<GC::Ptr<Object>> seen_objects;
         size_t indent_depth { 0 };
         String gap;
         Optional<Vector<Utf16String>> property_list;

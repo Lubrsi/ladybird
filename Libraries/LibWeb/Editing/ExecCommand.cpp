@@ -5,6 +5,7 @@
  */
 
 #include <AK/TemporaryChange.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/Range.h>
@@ -336,7 +337,7 @@ WebIDL::ExceptionOr<bool> Document::query_command_state(FlyString const& command
         if (!range)
             return false;
 
-        Vector<GC::Ref<Node>> formattable_nodes;
+        GC::RootVector<GC::Ref<Node>> formattable_nodes(heap());
         Editing::for_each_node_effectively_contained_in_range(range, [&](GC::Ref<Node> descendant) {
             if (Editing::is_formattable_node(descendant))
                 formattable_nodes.append(descendant);
