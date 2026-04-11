@@ -94,4 +94,22 @@ public:
 template<typename T, typename TraitsForT = Traits<T>>
 using OrderedRootHashTable = RootHashTable<T, TraitsForT, true>;
 
+// Move the underlying storage of `root_hash_table` into a plain HashTable that
+// can be stored as a directly-traced field of a GC::Cell-derived class. The
+// returned HashTable is no longer registered with the heap; the destination is
+// expected to be traced via visit_edges().
+//
+// Only callable from the member-initializer list of a GC::Cell-derived class's
+// constructor (`m_field(GC::adopt_root_hash_table(move(rht)))`) or a direct
+// assignment to a traced member field
+// (`m_field = GC::adopt_root_hash_table(move(rht));`). Enforced at compile time
+// by LibJSGCPluginAction's VisitCallExpr check — see
+// Tests/ClangPlugins/LibJSGCTests/adopt_container_restricted.cpp for the full
+// set of allowed and rejected contexts.
+template<typename T, typename TraitsForT = Traits<T>, bool IsOrdered = false>
+HashTable<T, TraitsForT, IsOrdered> adopt_root_hash_table(RootHashTable<T, TraitsForT, IsOrdered>&& root_hash_table)
+{
+    return move(static_cast<HashTable<T, TraitsForT, IsOrdered>&>(root_hash_table));
+}
+
 }

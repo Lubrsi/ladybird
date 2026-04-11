@@ -78,4 +78,22 @@ public:
     }
 };
 
+// Move the underlying storage of `conservative_vector` into a plain Vector
+// that can be stored as a directly-traced field of a GC::Cell-derived class.
+// The returned Vector is no longer registered with the heap; the destination
+// is expected to be traced via visit_edges().
+//
+// Only callable from the member-initializer list of a GC::Cell-derived class's
+// constructor (`m_field(GC::adopt_conservative_vector(move(cv)))`) or a direct
+// assignment to a traced member field
+// (`m_field = GC::adopt_conservative_vector(move(cv));`). Enforced at compile
+// time by LibJSGCPluginAction's VisitCallExpr check — see
+// Tests/ClangPlugins/LibJSGCTests/adopt_container_restricted.cpp for the full
+// set of allowed and rejected contexts.
+template<typename T, size_t inline_capacity>
+Vector<T, inline_capacity> adopt_conservative_vector(ConservativeVector<T, inline_capacity>&& conservative_vector)
+{
+    return move(static_cast<Vector<T, inline_capacity>&>(conservative_vector));
+}
+
 }

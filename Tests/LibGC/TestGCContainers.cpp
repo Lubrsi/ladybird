@@ -422,3 +422,281 @@ TEST_CASE(empty_heap_hash_map_visit_edges_reports_nothing)
 
     EXPECT_EQ(visitor.visited_cells.size(), 0u);
 }
+
+// Helpers for testing the GC::adopt_* functions. Each wraps a plain container
+// in a Cell-derived class and uses adopt in a direct member assignment, which
+// is one of the contexts the LibJSGCPluginAction VisitCallExpr check permits.
+// The test cases below construct one of these helpers, populate a temporary
+// Root/Conservative source container, hand it off via `replace`, and verify
+// the destination has the contents while the source is left empty.
+
+class TestRootVectorAdopter : public GC::Cell {
+    GC_CELL(TestRootVectorAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestRootVectorAdopter);
+
+public:
+    void replace(GC::RootVector<GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_root_vector(move(source));
+    }
+
+    Vector<GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    Vector<GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestRootVectorAdopter);
+
+class TestConservativeVectorAdopter : public GC::Cell {
+    GC_CELL(TestConservativeVectorAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestConservativeVectorAdopter);
+
+public:
+    void replace(GC::ConservativeVector<GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_conservative_vector(move(source));
+    }
+
+    Vector<GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    Vector<GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestConservativeVectorAdopter);
+
+class TestRootHashMapAdopter : public GC::Cell {
+    GC_CELL(TestRootHashMapAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestRootHashMapAdopter);
+
+public:
+    void replace(GC::RootHashMap<int, GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_root_hash_map(move(source));
+    }
+
+    HashMap<int, GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    HashMap<int, GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestRootHashMapAdopter);
+
+class TestConservativeHashMapAdopter : public GC::Cell {
+    GC_CELL(TestConservativeHashMapAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestConservativeHashMapAdopter);
+
+public:
+    void replace(GC::ConservativeHashMap<int, GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_conservative_hash_map(move(source));
+    }
+
+    HashMap<int, GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    HashMap<int, GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestConservativeHashMapAdopter);
+
+class TestRootHashTableAdopter : public GC::Cell {
+    GC_CELL(TestRootHashTableAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestRootHashTableAdopter);
+
+public:
+    void replace(GC::RootHashTable<GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_root_hash_table(move(source));
+    }
+
+    HashTable<GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    HashTable<GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestRootHashTableAdopter);
+
+class TestConservativeHashTableAdopter : public GC::Cell {
+    GC_CELL(TestConservativeHashTableAdopter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TestConservativeHashTableAdopter);
+
+public:
+    void replace(GC::ConservativeHashTable<GC::Ref<TestCell>>&& source)
+    {
+        m_cells = GC::adopt_conservative_hash_table(move(source));
+    }
+
+    HashTable<GC::Ref<TestCell>> const& cells() const { return m_cells; }
+
+    virtual void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_cells);
+    }
+
+private:
+    HashTable<GC::Ref<TestCell>> m_cells;
+};
+GC_DEFINE_ALLOCATOR(TestConservativeHashTableAdopter);
+
+TEST_CASE(adopt_root_vector_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestRootVectorAdopter>();
+
+    GC::RootVector<GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.append(cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    // Destination has the contents.
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    EXPECT_EQ(adopter->cells()[0].ptr(), cell.ptr());
+
+    // Source is empty (its underlying storage was moved out).
+    EXPECT_EQ(source.size(), 0u);
+
+    // The source's intrusive heap-list node is still alive until its
+    // destructor runs at end of scope, but its now-empty Vector means
+    // gather_roots reports nothing — the heap won't see stale entries.
+    HashMap<GC::Cell*, GC::HeapRoot> roots;
+    source.gather_roots(roots);
+    EXPECT_EQ(roots.size(), 0u);
+}
+
+TEST_CASE(adopt_conservative_vector_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestConservativeVectorAdopter>();
+
+    GC::ConservativeVector<GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.append(cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    EXPECT_EQ(adopter->cells()[0].ptr(), cell.ptr());
+
+    // Source's underlying storage is empty, so possible_values reports nothing.
+    EXPECT_EQ(source.size(), 0u);
+    EXPECT(!possible_values_contain(source, cell.ptr()));
+}
+
+TEST_CASE(adopt_root_hash_map_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestRootHashMapAdopter>();
+
+    GC::RootHashMap<int, GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.set(42, cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    auto entry = adopter->cells().get(42);
+    EXPECT(entry.has_value());
+    EXPECT_EQ(entry->ptr(), cell.ptr());
+
+    EXPECT_EQ(source.size(), 0u);
+
+    HashMap<GC::Cell*, GC::HeapRoot> roots;
+    source.gather_roots(roots);
+    EXPECT_EQ(roots.size(), 0u);
+}
+
+TEST_CASE(adopt_conservative_hash_map_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestConservativeHashMapAdopter>();
+
+    GC::ConservativeHashMap<int, GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.set(42, cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    auto entry = adopter->cells().get(42);
+    EXPECT(entry.has_value());
+    EXPECT_EQ(entry->ptr(), cell.ptr());
+
+    EXPECT_EQ(source.size(), 0u);
+    EXPECT(!possible_values_contain(source, cell.ptr()));
+}
+
+TEST_CASE(adopt_root_hash_table_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestRootHashTableAdopter>();
+
+    GC::RootHashTable<GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.set(cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    EXPECT(adopter->cells().contains(cell));
+
+    EXPECT_EQ(source.size(), 0u);
+
+    HashMap<GC::Cell*, GC::HeapRoot> roots;
+    source.gather_roots(roots);
+    EXPECT_EQ(roots.size(), 0u);
+}
+
+TEST_CASE(adopt_conservative_hash_table_moves_storage)
+{
+    auto& heap = test_heap();
+    auto adopter = heap.allocate<TestConservativeHashTableAdopter>();
+
+    GC::ConservativeHashTable<GC::Ref<TestCell>> source(heap);
+    auto cell = heap.allocate<TestCell>();
+    source.set(cell);
+    EXPECT_EQ(source.size(), 1u);
+
+    adopter->replace(move(source));
+
+    EXPECT_EQ(adopter->cells().size(), 1u);
+    EXPECT(adopter->cells().contains(cell));
+
+    EXPECT_EQ(source.size(), 0u);
+    EXPECT(!possible_values_contain(source, cell.ptr()));
+}

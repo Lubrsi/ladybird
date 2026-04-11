@@ -102,4 +102,22 @@ public:
 template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>>
 using OrderedRootHashMap = RootHashMap<K, V, KeyTraits, ValueTraits, true>;
 
+// Move the underlying storage of `root_hash_map` into a plain HashMap that
+// can be stored as a directly-traced field of a GC::Cell-derived class. The
+// returned HashMap is no longer registered with the heap; the destination is
+// expected to be traced via visit_edges().
+//
+// Only callable from the member-initializer list of a GC::Cell-derived class's
+// constructor (`m_field(GC::adopt_root_hash_map(move(rhm)))`) or a direct
+// assignment to a traced member field
+// (`m_field = GC::adopt_root_hash_map(move(rhm));`). Enforced at compile time
+// by LibJSGCPluginAction's VisitCallExpr check — see
+// Tests/ClangPlugins/LibJSGCTests/adopt_container_restricted.cpp for the full
+// set of allowed and rejected contexts.
+template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>, bool IsOrdered = false>
+HashMap<K, V, KeyTraits, ValueTraits, IsOrdered> adopt_root_hash_map(RootHashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&& root_hash_map)
+{
+    return move(static_cast<HashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&>(root_hash_map));
+}
+
 }
