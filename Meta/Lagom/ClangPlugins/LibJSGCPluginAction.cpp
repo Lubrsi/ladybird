@@ -353,6 +353,143 @@ static bool decl_has_annotation(clang::Decl const* decl, std::string name)
     return false;
 }
 
+static bool is_gc_adopt_container_function(clang::FunctionDecl const* function)
+{
+    if (!function)
+        return false;
+
+    if (auto const* primary_template = function->getPrimaryTemplate())
+        function = primary_template->getTemplatedDecl();
+
+    auto function_name = function->getQualifiedNameAsString();
+    return function_name == "GC::adopt_root_vector"
+        || function_name == "GC::adopt_root_hash_map"
+        || function_name == "GC::adopt_root_hash_table"
+        || function_name == "GC::adopt_conservative_vector"
+        || function_name == "GC::adopt_conservative_hash_map"
+        || function_name == "GC::adopt_conservative_hash_table";
+}
+
+struct AdoptContainerCallContext {
+    clang::CXXCtorInitializer const* initializer { nullptr };
+    clang::CXXConstructorDecl const* constructor { nullptr };
+    clang::FieldDecl const* assigned_field { nullptr };
+    clang::CXXMethodDecl const* enclosing_method { nullptr };
+};
+
+static clang::FieldDecl const* field_decl_from_member_assignment_lhs(clang::Expr const* lhs)
+{
+    if (!lhs)
+        return nullptr;
+
+    auto const* member = llvm::dyn_cast<clang::MemberExpr>(lhs->IgnoreParenImpCasts());
+    if (!member)
+        return nullptr;
+
+    if (!llvm::isa<clang::CXXThisExpr>(member->getBase()->IgnoreParenImpCasts()))
+        return nullptr;
+
+    return llvm::dyn_cast<clang::FieldDecl>(member->getMemberDecl());
+}
+
+static AdoptContainerCallContext find_adopt_container_call_context(clang::ASTContext& context, clang::CallExpr const& call)
+{
+    clang::DynTypedNode current = clang::DynTypedNode::create(call);
+    AdoptContainerCallContext call_context;
+
+    for (;;) {
+        auto parents = context.getParents(current);
+        if (parents.empty())
+            return call_context;
+
+        auto const& parent = parents[0];
+        if (auto const* initializer = parent.get<clang::CXXCtorInitializer>()) {
+            call_context.initializer = initializer;
+            current = clang::DynTypedNode::create(*initializer);
+            continue;
+        }
+
+        if (auto const* constructor = parent.get<clang::CXXConstructorDecl>()) {
+            call_context.constructor = constructor;
+            if (!call_context.initializer) {
+                for (auto const* initializer : constructor->inits()) {
+                    if (initializer->getSourceRange().fullyContains(call.getSourceRange())) {
+                        call_context.initializer = initializer;
+                        break;
+                    }
+                }
+            }
+            return call_context;
+        }
+
+        if (auto const* operator_call = parent.get<clang::CXXOperatorCallExpr>()) {
+            if (operator_call->getOperator() == clang::OO_Equal && operator_call->getNumArgs() == 2 && operator_call->getArg(1)->getSourceRange().fullyContains(call.getSourceRange()))
+                call_context.assigned_field = field_decl_from_member_assignment_lhs(operator_call->getArg(0));
+
+            current = clang::DynTypedNode::create(*operator_call);
+            continue;
+        }
+
+        if (auto const* binary_operator = parent.get<clang::BinaryOperator>()) {
+            if (binary_operator->isAssignmentOp() && binary_operator->getRHS()->getSourceRange().fullyContains(call.getSourceRange()))
+                call_context.assigned_field = field_decl_from_member_assignment_lhs(binary_operator->getLHS());
+
+            current = clang::DynTypedNode::create(*binary_operator);
+            continue;
+        }
+
+        if (auto const* lambda = parent.get<clang::LambdaExpr>()) {
+            (void)lambda;
+            return {};
+        }
+
+        if (auto const* method = parent.get<clang::CXXMethodDecl>()) {
+            call_context.enclosing_method = method;
+            return call_context;
+        }
+
+        if (auto const* stmt = parent.get<clang::Stmt>()) {
+            current = clang::DynTypedNode::create(*stmt);
+            continue;
+        }
+
+        if (auto const* decl = parent.get<clang::Decl>()) {
+            current = clang::DynTypedNode::create(*decl);
+            continue;
+        }
+
+        return call_context;
+    }
+}
+
+bool LibJSGCVisitor::VisitCallExpr(clang::CallExpr* call)
+{
+    if (!call)
+        return true;
+
+    if (!is_gc_adopt_container_function(call->getDirectCallee()))
+        return true;
+
+    auto call_context = find_adopt_container_call_context(m_context, *call);
+    if (call_context.initializer && call_context.initializer->isMemberInitializer() && call_context.constructor) {
+        auto const* record = call_context.constructor->getParent();
+        if (record && (record_inherits_from_cell(*record) || type_has_visit_edges_method(record)))
+            return true;
+    }
+    if (call_context.assigned_field && call_context.enclosing_method) {
+        auto const* record = call_context.enclosing_method->getParent();
+        if (record == call_context.assigned_field->getParent() && (record_inherits_from_cell(*record) || type_has_visit_edges_method(record)))
+            return true;
+    }
+
+    auto& diag_engine = m_context.getDiagnostics();
+    auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
+        "GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member");
+    diag_engine.Report(call->getBeginLoc(), diag_id);
+
+    return true;
+}
+
 bool LibJSGCVisitor::VisitCXXRecordDecl(clang::CXXRecordDecl* record)
 {
     using namespace clang::ast_matchers;
