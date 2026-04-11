@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGC/ConservativeVector.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Export.h>
 #include <LibJS/Runtime/Iterator.h>
@@ -22,7 +23,7 @@ class JS_API PropertyNameIterator final
 public:
     using FastPath = ObjectPropertyIteratorFastPath;
 
-    static GC::Ref<PropertyNameIterator> create(Realm&, GC::Ref<Object>, Vector<PropertyKey>, FastPath = FastPath::None, u32 indexed_property_count = 0, GC::Ptr<Shape> = nullptr, GC::Ptr<PrototypeChainValidity> = nullptr);
+    static GC::Ref<PropertyNameIterator> create(Realm&, GC::Ref<Object>, GC::ConservativeVector<PropertyKey>&&, FastPath = FastPath::None, u32 indexed_property_count = 0, GC::Ptr<Shape> = nullptr, GC::Ptr<PrototypeChainValidity> = nullptr);
     static GC::Ref<PropertyNameIterator> create(Realm&, GC::Ref<Object>, ObjectPropertyIteratorCacheData&, ObjectPropertyIteratorCache* = nullptr);
 
     virtual ~PropertyNameIterator() override = default;
@@ -33,7 +34,7 @@ public:
     void reset_with_cache_data(GC::Ref<Object>, ObjectPropertyIteratorCacheData&, ObjectPropertyIteratorCache*);
 
 private:
-    PropertyNameIterator(Realm&, GC::Ref<Object>, Vector<PropertyKey>, FastPath, u32 indexed_property_count, GC::Ptr<Shape>, GC::Ptr<PrototypeChainValidity>);
+    PropertyNameIterator(Realm&, GC::Ref<Object>, GC::ConservativeVector<PropertyKey>&&, FastPath, u32 indexed_property_count, GC::Ptr<Shape>, GC::Ptr<PrototypeChainValidity>);
     PropertyNameIterator(Realm&, GC::Ref<Object>, ObjectPropertyIteratorCacheData&, ObjectPropertyIteratorCache*);
 
     ReadonlySpan<PropertyKey> property_list() const;

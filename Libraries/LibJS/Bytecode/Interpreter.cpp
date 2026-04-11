@@ -1438,12 +1438,9 @@ inline ThrowCompletionOr<void> append(VM& vm, Value lhs, Value rhs, bool is_spre
 }
 
 struct FastPropertyNameIteratorData {
-    Vector<PropertyKey> properties;
     PropertyNameIterator::FastPath fast_path { PropertyNameIterator::FastPath::None };
     u32 indexed_property_count { 0 };
     bool receiver_has_magical_length_property { false };
-    GC::Ptr<Shape> shape;
-    GC::Ptr<PrototypeChainValidity> prototype_chain_validity;
 };
 
 static bool shape_has_enumerable_string_property(Shape const& shape)
@@ -1505,13 +1502,17 @@ static bool object_property_iterator_cache_matches(Object& object, ObjectPropert
     return property_name_iterator_fast_path_is_still_eligible(object, cache.fast_path(), cache.indexed_property_count());
 }
 
-static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_property_name_iterator_data(Object& object)
+static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_property_name_iterator_data(
+    Object& object,
+    GC::ConservativeVector<PropertyKey>& out_properties,
+    GC::Ptr<Shape>& out_shape,
+    GC::Ptr<PrototypeChainValidity>& out_prototype_chain_validity)
 {
     auto& vm = object.vm();
     FastPropertyNameIteratorData result {};
     result.fast_path = PropertyNameIterator::FastPath::PlainNamed;
     result.receiver_has_magical_length_property = object.has_magical_length_property();
-    result.shape = &object.shape();
+    out_shape = &object.shape();
 
     GC::RootHashTable<GC::Ref<Object>> seen_objects(vm.heap());
     size_t estimated_properties_count = 0;
@@ -1542,23 +1543,23 @@ static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_pr
     seen_objects.clear_with_capacity();
 
     if (auto* prototype = object.shape().prototype()) {
-        result.prototype_chain_validity = prototype->shape().prototype_chain_validity();
-        if (!result.prototype_chain_validity)
+        out_prototype_chain_validity = prototype->shape().prototype_chain_validity();
+        if (!out_prototype_chain_validity)
             return Optional<FastPropertyNameIteratorData> {};
     }
 
     if (!prototype_chain_has_enumerable_named_properties) {
         // Common case: only the receiver contributes enumerable string keys, so
         // we can copy them straight from the shape without any shadowing work.
-        result.properties.ensure_capacity(object.shape().property_count());
+        out_properties.ensure_capacity(object.shape().property_count());
         for (auto const& [property_key, metadata] : object.shape().property_table()) {
             if (property_key.is_string() && metadata.attributes.is_enumerable())
-                result.properties.append(property_key);
+                out_properties.append(property_key);
         }
         return result;
     }
 
-    result.properties.ensure_capacity(estimated_properties_count);
+    out_properties.ensure_capacity(estimated_properties_count);
 
     GC::ConservativeHashTable<PropertyKey> seen_non_enumerable_properties(vm.heap());
     GC::ConservativeHashTable<PropertyKey> seen_properties(vm.heap());
@@ -1570,8 +1571,8 @@ static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_pr
         // above the receiver we need an explicit visited set for names we have
         // already decided to expose from lower objects.
         seen_properties_initialized = true;
-        seen_properties.ensure_capacity(result.properties.size());
-        for (auto const& property : result.properties)
+        seen_properties.ensure_capacity(out_properties.size());
+        for (auto const& property : out_properties)
             seen_properties.set(property);
     };
 
@@ -1600,7 +1601,7 @@ static ThrowCompletionOr<Optional<FastPropertyNameIteratorData>> try_get_fast_pr
                     continue;
             }
             if (enumerable)
-                result.properties.append(property_key);
+                out_properties.append(property_key);
             if (seen_properties_initialized)
                 seen_properties.set(property_key);
         }
@@ -1645,16 +1646,19 @@ inline ThrowCompletionOr<GC::Ref<PropertyNameIterator>> get_object_property_iter
         }
     }
 
-    if (auto fast_iterator_data = TRY(try_get_fast_property_name_iterator_data(*object)); fast_iterator_data.has_value()) {
-        VERIFY(fast_iterator_data->shape);
+    GC::ConservativeVector<PropertyKey> fast_path_properties(vm.heap());
+    GC::Ptr<Shape> fast_path_shape;
+    GC::Ptr<PrototypeChainValidity> fast_path_prototype_chain_validity;
+    if (auto fast_iterator_data = TRY(try_get_fast_property_name_iterator_data(*object, fast_path_properties, fast_path_shape, fast_path_prototype_chain_validity)); fast_iterator_data.has_value()) {
+        VERIFY(fast_path_shape);
         auto cache_data = vm.heap().allocate<ObjectPropertyIteratorCacheData>(
             vm,
-            move(fast_iterator_data->properties),
+            move(fast_path_properties),
             fast_iterator_data->fast_path,
             fast_iterator_data->indexed_property_count,
             fast_iterator_data->receiver_has_magical_length_property,
-            *fast_iterator_data->shape,
-            fast_iterator_data->prototype_chain_validity);
+            *fast_path_shape,
+            fast_path_prototype_chain_validity);
         if (cache)
             cache->data = cache_data;
         if (cache && cache->reusable_property_name_iterator) {

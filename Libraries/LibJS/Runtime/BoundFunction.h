@@ -16,7 +16,7 @@ class BoundFunction final : public FunctionObject {
     GC_DECLARE_ALLOCATOR(BoundFunction);
 
 public:
-    static ThrowCompletionOr<GC::Ref<BoundFunction>> create(Realm&, FunctionObject& target_function, Value bound_this, Vector<Value> bound_arguments);
+    static ThrowCompletionOr<GC::Ref<BoundFunction>> create(Realm&, FunctionObject& target_function, Value bound_this, GC::RootVector<Value>&& bound_arguments);
 
     virtual ~BoundFunction() override = default;
 
@@ -33,7 +33,7 @@ public:
     virtual Utf16String name_for_call_stack() const override;
 
 private:
-    BoundFunction(Realm&, FunctionObject& target_function, Value bound_this, Vector<Value> bound_arguments, Object* prototype);
+    BoundFunction(Realm&, FunctionObject& target_function, Value bound_this, GC::RootVector<Value>&& bound_arguments, Object* prototype);
 
     void get_stack_frame_info(size_t& registers_and_locals_count, ReadonlySpan<Value>& constants, size_t& argument_count) override;
     virtual void visit_edges(Visitor&) override;

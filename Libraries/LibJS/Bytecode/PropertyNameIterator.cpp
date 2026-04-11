@@ -12,7 +12,7 @@ namespace JS::Bytecode {
 
 GC_DEFINE_ALLOCATOR(PropertyNameIterator);
 
-GC::Ref<PropertyNameIterator> PropertyNameIterator::create(Realm& realm, GC::Ref<Object> object, Vector<PropertyKey> properties, FastPath fast_path, u32 indexed_property_count, GC::Ptr<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
+GC::Ref<PropertyNameIterator> PropertyNameIterator::create(Realm& realm, GC::Ref<Object> object, GC::ConservativeVector<PropertyKey>&& properties, FastPath fast_path, u32 indexed_property_count, GC::Ptr<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
 {
     return realm.create<PropertyNameIterator>(realm, object, move(properties), fast_path, indexed_property_count, shape, prototype_chain_validity);
 }
@@ -100,10 +100,10 @@ void PropertyNameIterator::reset_with_cache_data(GC::Ref<Object> object, ObjectP
     VERIFY(m_shape);
 }
 
-PropertyNameIterator::PropertyNameIterator(Realm& realm, GC::Ref<Object> object, Vector<PropertyKey> properties, FastPath fast_path, u32 indexed_property_count, GC::Ptr<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
+PropertyNameIterator::PropertyNameIterator(Realm& realm, GC::Ref<Object> object, GC::ConservativeVector<PropertyKey>&& properties, FastPath fast_path, u32 indexed_property_count, GC::Ptr<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
     : Object(realm, nullptr)
     , m_object(object)
-    , m_owned_properties(move(properties))
+    , m_owned_properties(GC::adopt_conservative_vector(move(properties)))
     , m_shape(shape)
     , m_prototype_chain_validity(prototype_chain_validity)
     , m_indexed_property_count(indexed_property_count)

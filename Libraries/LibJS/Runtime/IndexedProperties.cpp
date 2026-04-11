@@ -91,7 +91,7 @@ bool GenericIndexedPropertyStorage::set_array_like_size(GC::Heap& heap, size_t n
     else
         m_array_size = new_size;
 
-    m_sparse_elements = move(new_sparse_elements);
+    m_sparse_elements = GC::adopt_conservative_hash_map(move(new_sparse_elements));
     return !any_failed;
 }
 
