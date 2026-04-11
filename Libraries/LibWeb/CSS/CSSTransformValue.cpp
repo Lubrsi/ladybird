@@ -18,7 +18,7 @@ namespace Web::CSS {
 
 GC_DEFINE_ALLOCATOR(CSSTransformValue);
 
-GC::Ref<CSSTransformValue> CSSTransformValue::create(JS::Realm& realm, Vector<GC::Ref<CSSTransformComponent>> transforms)
+GC::Ref<CSSTransformValue> CSSTransformValue::create(JS::Realm& realm, GC::RootVector<GC::Ref<CSSTransformComponent>>&& transforms)
 {
     return realm.create<CSSTransformValue>(realm, move(transforms));
 }
@@ -33,16 +33,16 @@ WebIDL::ExceptionOr<GC::Ref<CSSTransformValue>> CSSTransformValue::construct_imp
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "CSSTransformValue's transforms list cannot be empty."sv };
 
     // 2. Return a new CSSTransformValue whose values to iterate over is transforms.
-    Vector<GC::Ref<CSSTransformComponent>> converted_transforms;
+    GC::RootVector<GC::Ref<CSSTransformComponent>> converted_transforms(realm.heap());
     converted_transforms.ensure_capacity(transforms.size());
     for (auto const& transform : transforms)
         converted_transforms.append(*transform);
     return CSSTransformValue::create(realm, move(converted_transforms));
 }
 
-CSSTransformValue::CSSTransformValue(JS::Realm& realm, Vector<GC::Ref<CSSTransformComponent>> transforms)
+CSSTransformValue::CSSTransformValue(JS::Realm& realm, GC::RootVector<GC::Ref<CSSTransformComponent>>&& transforms)
     : CSSStyleValue(realm)
-    , m_transforms(move(transforms))
+    , m_transforms(GC::adopt_root_vector(move(transforms)))
 {
     m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
         .supports_indexed_properties = true,

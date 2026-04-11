@@ -30,7 +30,7 @@ SourceTextModule::SourceTextModule(Realm& realm, StringView filename, Script::Ho
     Vector<ExportEntry> local_export_entries, Vector<ExportEntry> indirect_export_entries,
     Vector<ExportEntry> star_export_entries, Optional<Utf16FlyString> default_export_binding_name,
     Vector<Utf16FlyString> var_declared_names, Vector<LexicalBinding> lexical_bindings,
-    Vector<FunctionToInitialize> functions_to_initialize,
+    GC::ConservativeVector<FunctionToInitialize>&& functions_to_initialize,
     GC::Ptr<Bytecode::Executable> executable,
     GC::Ptr<SharedFunctionInstanceData> tla_shared_data)
     : CyclicModule(realm, filename, has_top_level_await, move(requested_modules), host_defined)
@@ -41,7 +41,7 @@ SourceTextModule::SourceTextModule(Realm& realm, StringView filename, Script::Ho
     , m_star_export_entries(move(star_export_entries))
     , m_var_declared_names(move(var_declared_names))
     , m_lexical_bindings(move(lexical_bindings))
-    , m_functions_to_initialize(move(functions_to_initialize))
+    , m_functions_to_initialize(GC::adopt_conservative_vector(move(functions_to_initialize)))
     , m_default_export_binding_name(move(default_export_binding_name))
     , m_executable(executable)
     , m_tla_shared_data(tla_shared_data)

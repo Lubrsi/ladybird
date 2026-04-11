@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <LibGC/ConservativeVector.h>
 #include <LibJS/CyclicModule.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
@@ -58,7 +59,7 @@ protected:
     virtual ThrowCompletionOr<void> execute_module(VM& vm, GC::Ptr<PromiseCapability> capability) override;
 
 private:
-    SourceTextModule(Realm&, StringView filename, Script::HostDefined* host_defined, bool has_top_level_await, Vector<ModuleRequest> requested_modules, Vector<ImportEntry> import_entries, Vector<ExportEntry> local_export_entries, Vector<ExportEntry> indirect_export_entries, Vector<ExportEntry> star_export_entries, Optional<Utf16FlyString> default_export_binding_name, Vector<Utf16FlyString> var_declared_names, Vector<LexicalBinding> lexical_bindings, Vector<FunctionToInitialize> functions_to_initialize, GC::Ptr<Bytecode::Executable> executable, GC::Ptr<SharedFunctionInstanceData> tla_shared_data);
+    SourceTextModule(Realm&, StringView filename, Script::HostDefined* host_defined, bool has_top_level_await, Vector<ModuleRequest> requested_modules, Vector<ImportEntry> import_entries, Vector<ExportEntry> local_export_entries, Vector<ExportEntry> indirect_export_entries, Vector<ExportEntry> star_export_entries, Optional<Utf16FlyString> default_export_binding_name, Vector<Utf16FlyString> var_declared_names, Vector<LexicalBinding> lexical_bindings, GC::ConservativeVector<FunctionToInitialize>&& functions_to_initialize, GC::Ptr<Bytecode::Executable> executable, GC::Ptr<SharedFunctionInstanceData> tla_shared_data);
 
     virtual void visit_edges(Cell::Visitor&) override;
 

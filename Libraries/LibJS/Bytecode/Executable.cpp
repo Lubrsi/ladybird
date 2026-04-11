@@ -21,8 +21,8 @@ namespace JS::Bytecode {
 GC_DEFINE_ALLOCATOR(Executable);
 GC_DEFINE_ALLOCATOR(ObjectPropertyIteratorCacheData);
 
-ObjectPropertyIteratorCacheData::ObjectPropertyIteratorCacheData(VM& vm, Vector<PropertyKey> properties, ObjectPropertyIteratorFastPath fast_path, u32 indexed_property_count, bool receiver_has_magical_length_property, GC::Ref<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
-    : m_properties(move(properties))
+ObjectPropertyIteratorCacheData::ObjectPropertyIteratorCacheData(VM& vm, GC::ConservativeVector<PropertyKey>&& properties, ObjectPropertyIteratorFastPath fast_path, u32 indexed_property_count, bool receiver_has_magical_length_property, GC::Ref<Shape> shape, GC::Ptr<PrototypeChainValidity> prototype_chain_validity)
+    : m_properties(GC::adopt_conservative_vector(move(properties)))
     , m_shape(shape)
     , m_prototype_chain_validity(prototype_chain_validity)
     , m_indexed_property_count(indexed_property_count)
@@ -58,7 +58,7 @@ Executable::Executable(
     NonnullOwnPtr<PropertyKeyTable> property_key_table,
     NonnullOwnPtr<StringTable> string_table,
     NonnullOwnPtr<RegexTable> regex_table,
-    Vector<Value> constants,
+    GC::RootVector<Value> constants,
     NonnullRefPtr<SourceCode const> source_code,
     size_t number_of_property_lookup_caches,
     size_t number_of_global_variable_caches,
@@ -73,7 +73,7 @@ Executable::Executable(
     , identifier_table(move(identifier_table))
     , property_key_table(move(property_key_table))
     , regex_table(move(regex_table))
-    , constants(move(constants))
+    , constants(GC::adopt_root_vector(move(constants)))
     , source_code(move(source_code))
     , number_of_registers(number_of_registers)
     , is_strict_mode(strict == Strict::Yes)

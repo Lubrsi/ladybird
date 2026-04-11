@@ -11,6 +11,7 @@
 #include <AK/String.h>
 #include <AK/Utf16FlyString.h>
 #include <LibGC/CellAllocator.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Ptr.h>
 #include <LibGC/WeakContainer.h>
 #include <LibJS/Bytecode/ClassBlueprint.h>
@@ -106,7 +107,7 @@ class JS_API ObjectPropertyIteratorCacheData final : public Cell {
     GC_DECLARE_ALLOCATOR(ObjectPropertyIteratorCacheData);
 
 public:
-    ObjectPropertyIteratorCacheData(VM&, Vector<PropertyKey>, ObjectPropertyIteratorFastPath, u32 indexed_property_count, bool receiver_has_magical_length_property, GC::Ref<Shape>, GC::Ptr<PrototypeChainValidity> = nullptr);
+    ObjectPropertyIteratorCacheData(VM&, GC::ConservativeVector<PropertyKey>&&, ObjectPropertyIteratorFastPath, u32 indexed_property_count, bool receiver_has_magical_length_property, GC::Ref<Shape>, GC::Ptr<PrototypeChainValidity> = nullptr);
     virtual ~ObjectPropertyIteratorCacheData() override = default;
 
     [[nodiscard]] ReadonlySpan<PropertyKey> properties() const { return m_properties.span(); }
@@ -159,7 +160,7 @@ public:
         NonnullOwnPtr<PropertyKeyTable>,
         NonnullOwnPtr<StringTable>,
         NonnullOwnPtr<RegexTable>,
-        Vector<Value> constants,
+        GC::RootVector<Value> constants,
         NonnullRefPtr<SourceCode const>,
         size_t number_of_property_lookup_caches,
         size_t number_of_global_variable_caches,
