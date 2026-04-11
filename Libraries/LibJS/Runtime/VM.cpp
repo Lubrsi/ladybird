@@ -50,7 +50,9 @@ NonnullRefPtr<VM> VM::create()
     ErrorMessages error_messages {};
     error_messages[to_underlying(ErrorMessage::OutOfMemory)] = ErrorType::OutOfMemory.message();
 
-    auto vm = adopt_ref(*new VM(move(error_messages)));
+    // VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+    // so the plugin's recursive check for unrooted GC containers doesn't apply here.
+    IGNORE_GC auto vm = adopt_ref(*new VM(move(error_messages)));
 
     WellKnownSymbols well_known_symbols {
 #define __JS_ENUMERATE(SymbolName, snake_name) \
@@ -306,7 +308,11 @@ void VM::gather_roots(HashMap<GC::Cell*, GC::HeapRoot>& roots)
 
     auto gather_roots_from_execution_context_stack = [&roots](Vector<ExecutionContext*> const& stack, Vector<ExecutionContext*> const& previous_running_contexts, ExecutionContext* running_execution_context) {
         for_each_execution_context_top_to_bottom(stack, previous_running_contexts, running_execution_context, [&](ExecutionContext& execution_context) {
-            ExecutionContextRootsCollector visitor;
+            // The visitor transiently aggregates cells already reachable via
+            // execution context edges; they get immediately copied into the
+            // main root set below, so its internal HashTable doesn't need
+            // separate GC rooting.
+            IGNORE_GC ExecutionContextRootsCollector visitor;
             execution_context.visit_edges(visitor);
             for (auto cell : visitor.roots)
                 roots.set(cell, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
