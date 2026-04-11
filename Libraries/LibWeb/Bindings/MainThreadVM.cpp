@@ -368,7 +368,7 @@ void initialize_main_thread_vm(AgentType type)
     };
 
     // 8.1.6.7.1 HostGetImportMetaProperties(moduleRecord), https://html.spec.whatwg.org/multipage/webappapis.html#hostgetimportmetaproperties
-    s_main_thread_vm->host_get_import_meta_properties = [](JS::SourceTextModule& module_record) {
+    s_main_thread_vm->host_get_import_meta_properties = [](JS::SourceTextModule& module_record) -> GC::RootHashMap<JS::PropertyKey, JS::Value> {
         auto& realm = module_record.realm();
         auto& vm = realm.vm();
 
@@ -401,7 +401,7 @@ void initialize_main_thread_vm(AgentType type)
         auto resolve_function = JS::NativeFunction::create(realm, move(steps), 1, vm.names.resolve);
 
         // 5. Return « Record { [[Key]]: "url", [[Value]]: urlString }, Record { [[Key]]: "resolve", [[Value]]: resolveFunction } ».
-        HashMap<JS::PropertyKey, JS::Value> meta;
+        GC::RootHashMap<JS::PropertyKey, JS::Value> meta { vm.heap() };
         meta.set("url"_utf16_fly_string, JS::PrimitiveString::create(vm, move(url_string)));
         meta.set("resolve"_utf16_fly_string, resolve_function);
 
