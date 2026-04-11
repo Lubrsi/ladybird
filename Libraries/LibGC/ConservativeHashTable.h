@@ -84,4 +84,12 @@ public:
 template<typename T, typename TraitsForT = Traits<T>>
 using OrderedConservativeHashTable = ConservativeHashTable<T, TraitsForT, true>;
 
+// Move a ConservativeHashTable's storage into a plain HashTable for direct
+// tracing as a GC::Cell-derived field.
+template<typename T, typename TraitsForT = Traits<T>, bool IsOrdered = false>
+HashTable<T, TraitsForT, IsOrdered> adopt_conservative_hash_table(ConservativeHashTable<T, TraitsForT, IsOrdered>&& conservative_hash_table)
+{
+    return move(static_cast<HashTable<T, TraitsForT, IsOrdered>&>(conservative_hash_table));
+}
+
 }

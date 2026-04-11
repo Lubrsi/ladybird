@@ -86,4 +86,12 @@ public:
 template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>>
 using OrderedConservativeHashMap = ConservativeHashMap<K, V, KeyTraits, ValueTraits, true>;
 
+// Move a ConservativeHashMap's storage into a plain HashMap for direct tracing
+// as a GC::Cell-derived field.
+template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>, bool IsOrdered = false>
+HashMap<K, V, KeyTraits, ValueTraits, IsOrdered> adopt_conservative_hash_map(ConservativeHashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&& conservative_hash_map)
+{
+    return move(static_cast<HashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&>(conservative_hash_map));
+}
+
 }

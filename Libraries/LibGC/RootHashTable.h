@@ -63,4 +63,12 @@ public:
 template<typename T, typename TraitsForT = Traits<T>>
 using OrderedRootHashTable = RootHashTable<T, TraitsForT, true>;
 
+// Move a RootHashTable's storage into a plain HashTable for direct tracing as
+// a GC::Cell-derived field.
+template<typename T, typename TraitsForT = Traits<T>, bool IsOrdered = false>
+HashTable<T, TraitsForT, IsOrdered> adopt_root_hash_table(RootHashTable<T, TraitsForT, IsOrdered>&& root_hash_table)
+{
+    return move(static_cast<HashTable<T, TraitsForT, IsOrdered>&>(root_hash_table));
+}
+
 }

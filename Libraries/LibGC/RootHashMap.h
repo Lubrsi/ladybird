@@ -73,4 +73,12 @@ public:
 template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>>
 using OrderedRootHashMap = RootHashMap<K, V, KeyTraits, ValueTraits, true>;
 
+// Move a RootHashMap's storage into a plain HashMap for direct tracing as a
+// GC::Cell-derived field.
+template<typename K, typename V, typename KeyTraits = Traits<K>, typename ValueTraits = Traits<V>, bool IsOrdered = false>
+HashMap<K, V, KeyTraits, ValueTraits, IsOrdered> adopt_root_hash_map(RootHashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&& root_hash_map)
+{
+    return move(static_cast<HashMap<K, V, KeyTraits, ValueTraits, IsOrdered>&>(root_hash_map));
+}
+
 }

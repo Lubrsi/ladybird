@@ -107,4 +107,12 @@ RootVector(Heap&, Span<T> const&) -> RootVector<T>;
 template<typename T>
 RootVector(Heap&, Vector<T> const&) -> RootVector<T>;
 
+// Move a RootVector's storage into a plain Vector for direct tracing as a
+// GC::Cell-derived field.
+template<typename T, size_t inline_capacity>
+Vector<T, inline_capacity> adopt_root_vector(RootVector<T, inline_capacity>&& root_vector)
+{
+    return move(static_cast<Vector<T, inline_capacity>&>(root_vector));
+}
+
 }

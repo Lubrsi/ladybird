@@ -78,4 +78,12 @@ public:
     }
 };
 
+// Move a ConservativeVector's storage into a plain Vector for direct tracing
+// as a GC::Cell-derived field.
+template<typename T, size_t inline_capacity>
+Vector<T, inline_capacity> adopt_conservative_vector(ConservativeVector<T, inline_capacity>&& conservative_vector)
+{
+    return move(static_cast<Vector<T, inline_capacity>&>(conservative_vector));
+}
+
 }
