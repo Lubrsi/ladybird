@@ -130,8 +130,8 @@ VM::VM(ErrorMessages error_messages)
         return load_imported_module(referrer, module_request, load_state, move(payload));
     };
 
-    host_get_import_meta_properties = [&](SourceTextModule const&) -> HashMap<PropertyKey, Value> {
-        return {};
+    host_get_import_meta_properties = [](SourceTextModule& module) -> GC::RootHashMap<PropertyKey, Value> {
+        return GC::RootHashMap<PropertyKey, Value> { module.vm().heap() };
     };
 
     host_finalize_import_meta = [&](Object*, SourceTextModule const&) {
