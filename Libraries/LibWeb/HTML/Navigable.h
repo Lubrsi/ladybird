@@ -165,7 +165,7 @@ public:
         bool exceptions_enabled = false;
         Bindings::NavigationHistoryBehavior history_handling = Bindings::NavigationHistoryBehavior::Auto;
         Optional<SerializationRecord> navigation_api_state = {};
-        Optional<Vector<XHR::FormDataEntry>> form_data_entry_list = {};
+        Optional<GC::ConservativeVector<XHR::FormDataEntry>> form_data_entry_list = {};
         ReferrerPolicy::ReferrerPolicy referrer_policy = ReferrerPolicy::ReferrerPolicy::EmptyString;
         UserNavigationInvolvement user_involvement = UserNavigationInvolvement::None;
         GC::Ptr<DOM::Element> source_element = nullptr;
