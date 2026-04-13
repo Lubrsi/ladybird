@@ -514,6 +514,81 @@ The current pattern is sound but invisible to the plugin. Two options for closin
 
 Option 2 is the better long-term answer since the pattern is generic enough that it could appear elsewhere as the codebase grows — but it requires a non-trivial plugin extension. Defer to a separate piece of work; in the interim, the site is a known plugin false-positive that hasn't been silenced yet.
 
+### 7. Plugin trusts the rooting mechanism without checking it actually reaches every GC pointer
+
+Concrete example from this branch — `Web::Animations::AnimationUpdateContext::elements` (`Libraries/LibWeb/Animations/AnimationEffect.h`) before the fix:
+
+```cpp
+struct AnimationUpdateContext {
+    struct ElementData {
+        HashMap<CSS::PropertyID, NonnullRefPtr<CSS::StyleValue const>> animated_properties_before_update;
+        GC::Ptr<CSS::ComputedProperties> target_style; // <- GC pointer
+    };
+
+    // Plain HashMap: plugin flags this — sees through NonnullOwnPtr to the GC::Ptr inside ElementData.
+    HashMap<DOM::AbstractElement, NonnullOwnPtr<ElementData>> elements;
+};
+```
+
+A naive "fix" would be to swap the outer container for `GC::ConservativeHashMap`:
+
+```cpp
+GC::ConservativeHashMap<DOM::AbstractElement, NonnullOwnPtr<ElementData>> elements;
+//                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+// Plugin reports clean — but for_each_possible_value only scans `sizeof(NonnullOwnPtr)`
+// bytes per entry. Those bytes are just a pointer to ElementData on the heap; the actual
+// `GC::Ptr<ComputedProperties> target_style` lives at a different address that the
+// conservative scan never visits, so the GC can still free target_style mid-update.
+```
+
+The actual fix was to inline `ElementData` so its bytes (including `target_style`) sit inside what `for_each_possible_value` scans:
+
+```cpp
+GC::ConservativeHashMap<DOM::AbstractElement, ElementData> elements;
+```
+
+It's worth noting *why* this was an OwnPtr in the first place — the original commit (`92221f0c57`) added the struct as part of an animation-correctness fix, not for any specific pointer-stability requirement. Inspecting the call sites, nothing keeps a reference to an entry across map mutations, so the indirection wasn't load-bearing. Two reasons authors reach for `OwnPtr<Heavy>` inside maps even when they don't need to:
+
+1. **Reflex.** "Big struct in a map → wrap in OwnPtr." Often the only heavy thing is some heap-backed member (here, the inner `HashMap`'s storage), which is allocated separately either way — wrapping the *outer* struct just adds an extra hop.
+2. **Defensive against rehash invalidation.** If anything holds a `T&` or `T*` to an entry across an insertion that triggers rehash, the reference dangles. `OwnPtr` stabilises the pointee. But you only need this when references actually *do* survive across mutations.
+
+Both motivations are reasonable in isolation, and neither author would normally think "this also affects GC rooting". That's exactly what the plugin extension below would catch — so the rooting hole isn't gated on whether the original choice of `OwnPtr` was justified.
+
+The same trap can hide inside a Cell's manually written `visit_edges`:
+
+```cpp
+struct Helper {
+    GC::Ptr<Foo> m_foo; // <- GC pointer hidden behind OwnPtr indirection
+    // (no visit_edges)
+};
+
+class MyCell : public Cell {
+    GC_CELL(MyCell, Cell);
+    NonnullOwnPtr<Helper> m_helper;
+
+    void visit_edges(Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(m_helper); // <- no-op! Visitor doesn't know to traverse OwnPtr's pointee.
+                                 //    m_helper->m_foo is never visited.
+    }
+};
+```
+
+This is one symptom of a broader gap: **the plugin treats every rooting mechanism (Conservative scan, `gather_roots`, Cell `visit_edges`) as a black box that it trusts to handle all GC pointers in the value type, but it never verifies that the mechanism actually reaches them when there's indirect storage in the way.** Each rooting mechanism has different reach:
+
+- **Conservative scan** (`Conservative{Vector,HashMap,HashTable}::for_each_possible_value`): walks the *direct bytes* of each entry. Any GC pointer hidden behind a smart-pointer or raw-pointer hop into a separate heap allocation is invisible.
+- **Exact gather_roots** (`Root{Vector,HashMap,HashTable}::gather_roots`): only handles entry types that are directly Cell-convertible or `NanBoxedValue` (enforced by static_assert) — but says nothing about whether those entries' fields contain further indirect storage. In practice the static_assert means most root containers' values can't even be wrappers, so this gap is narrower here.
+- **Cell `visit_edges`** (manually written): visits the fields the author lists. If the author writes `visitor.visit(m_owned_struct)` where `m_owned_struct` is a `NonnullOwnPtr<NonCellStruct>` with internal GC pointers, the visitor does nothing useful — `NonnullOwnPtr` isn't a GC type, and the visitor has no way to know the pointee carries GC pointers. The Cell field needs an explicit `m_owned_struct->visit_edges(visitor)` (and `NonCellStruct` needs that method). Today nothing forces the author to do this.
+
+A first cut at closing the gap: extend the plugin's existing transitive GC-pointer check to validate, *per rooting mechanism*, that every reachable `GC::Ptr` / `GC::Ref` / `Cell*` is actually traversed.
+
+- For `Conservative*` sites, walk the value type's field types and reject if any field is a known indirect-storage wrapper (`OwnPtr<U>`, `NonnullOwnPtr<U>`, `RefPtr<U>`, `NonnullRefPtr<U>`, raw `U*`, `Vector<U>`, `HashMap<…, U>`, …) where `U` transitively contains a GC pointer.
+- For Cell `visit_edges` bodies, verify that every field whose type transitively contains a GC pointer is either visited directly (when the field type is itself a GC pointer the visitor handles) or routed through an explicit `field.visit_edges(visitor)` call (when the field type is a non-Cell struct with its own `visit_edges`).
+- For `Root*` sites, the static_assert already rules out most of the dangerous cases at the entry-type level, but the same recursive walk would tighten the residual surface.
+
+Done well, this would have caught the `AnimationUpdateContext::elements` regression at compile time. The same machinery would also catch the symmetric bug in any future Cell that adds an `OwnPtr`-wrapped helper struct holding GC pointers and forgets to forward `visit_edges` through it.
+
 ## Known Issues / In Progress
 
 ### Test Status
