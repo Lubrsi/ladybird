@@ -9,6 +9,7 @@
 #include <AK/Optional.h>
 #include <AK/String.h>
 #include <AK/Variant.h>
+#include <LibGC/ConservativeHashMap.h>
 #include <LibWeb/Animations/TimeValue.h>
 #include <LibWeb/Bindings/AnimationEffect.h>
 #include <LibWeb/Bindings/PlatformObject.h>
@@ -70,10 +71,18 @@ struct AnimationUpdateContext {
         GC::Ptr<CSS::ComputedProperties> target_style;
     };
 
+    explicit AnimationUpdateContext(GC::Heap& heap)
+        : elements(heap)
+    {
+    }
+
     ~AnimationUpdateContext();
 
     // NOTE: This is lazily populated by KeyframeEffects as their respective animations are applied to an element.
-    HashMap<DOM::AbstractElement, NonnullOwnPtr<ElementData>> elements;
+    // ElementData is stored inline so its GC::Ptr target_style sits inside the map entry bytes that
+    // ConservativeHashMap scans — a NonnullOwnPtr<ElementData> would only register the OwnPtr's pointer
+    // bytes, leaving the heap-allocated ElementData (and its GC::Ptr) unreachable from the scan.
+    GC::ConservativeHashMap<DOM::AbstractElement, ElementData> elements;
 };
 
 // https://www.w3.org/TR/web-animations-1/#the-animationeffect-interface

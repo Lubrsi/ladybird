@@ -1889,7 +1889,7 @@ void Document::update_animated_style_if_needed()
     if (!m_needs_animated_style_update)
         return;
 
-    Animations::AnimationUpdateContext context;
+    Animations::AnimationUpdateContext context { heap() };
 
     for (auto& timeline : m_associated_animation_timelines) {
         for (auto& animation : timeline->associated_animations()) {

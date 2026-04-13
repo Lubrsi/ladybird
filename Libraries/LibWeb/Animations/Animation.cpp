@@ -98,7 +98,7 @@ void Animation::set_effect(GC::Ptr<AnimationEffect> new_effect)
 
     // Once animated properties of the old effect no longer apply, we need to ensure appropriate invalidations are scheduled
     if (old_effect) {
-        AnimationUpdateContext context;
+        AnimationUpdateContext context { heap() };
         old_effect->update_computed_properties(context);
     }
 
