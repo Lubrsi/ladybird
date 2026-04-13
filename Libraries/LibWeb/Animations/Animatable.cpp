@@ -67,21 +67,21 @@ WebIDL::ExceptionOr<GC::Ref<Animation>> Animatable::animate(Optional<GC::Root<JS
 }
 
 // https://drafts.csswg.org/web-animations-1/#dom-animatable-getanimations
-WebIDL::ExceptionOr<Vector<GC::Ref<Animation>>> Animatable::get_animations(Optional<GetAnimationsOptions> options)
+WebIDL::ExceptionOr<GC::RootVector<GC::Ref<Animation>>> Animatable::get_animations(Optional<GetAnimationsOptions> options)
 {
     as<DOM::Element>(*this).document().update_style();
     return get_animations_internal(GetAnimationsSorted::Yes, options);
 }
 
-WebIDL::ExceptionOr<Vector<GC::Ref<Animation>>> Animatable::get_animations_internal(GetAnimationsSorted sorted, Optional<GetAnimationsOptions> options)
+WebIDL::ExceptionOr<GC::RootVector<GC::Ref<Animation>>> Animatable::get_animations_internal(GetAnimationsSorted sorted, Optional<GetAnimationsOptions> options)
 {
     // 1. Let object be the object on which this method was called.
 
     // 2. Let pseudoElement be the result of pseudo-element parsing applied to pseudoElement of options, or null if options is not passed.
     // FIXME: Currently only DOM::Element includes Animatable, but that might not always be true.
+    auto& realm = static_cast<DOM::Element&>(*this).realm();
     Optional<CSS::Selector::PseudoElementSelector> pseudo_element;
     if (options.has_value() && options->pseudo_element.has_value()) {
-        auto& realm = static_cast<DOM::Element&>(*this).realm();
         pseudo_element = TRY(pseudo_element_parsing(realm, options->pseudo_element));
     }
 
@@ -93,7 +93,7 @@ WebIDL::ExceptionOr<Vector<GC::Ref<Animation>>> Animatable::get_animations_inter
 
     // 4. If options is passed with subtree set to true, then return the set of relevant animations for a subtree of target.
     //    Otherwise, return the set of relevant animations for target.
-    Vector<GC::Ref<Animation>> relevant_animations;
+    GC::RootVector<GC::Ref<Animation>> relevant_animations { realm.heap() };
     if (m_impl) {
         auto& associated_animations = m_impl->associated_animations;
         for (auto const& animation : associated_animations) {

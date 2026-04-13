@@ -76,7 +76,7 @@ public:
     void for_each_css_style_sheet(Function<void(CSS::CSSStyleSheet&)>&& callback) const;
     void for_each_active_css_style_sheet(Function<void(CSS::CSSStyleSheet&)> const& callback) const;
 
-    WebIDL::ExceptionOr<Vector<GC::Ref<Animations::Animation>>> get_animations();
+    WebIDL::ExceptionOr<GC::RootVector<GC::Ref<Animations::Animation>>> get_animations();
 
     ElementByIdMap& element_by_id() const;
 
