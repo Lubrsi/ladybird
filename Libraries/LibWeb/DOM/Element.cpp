@@ -191,8 +191,7 @@ void Element::visit_edges(Cell::Visitor& visitor)
         for (auto& observer : *m_registered_intersection_observers)
             visitor.visit(observer);
     }
-    if (m_counters_set)
-        m_counters_set->visit_edges(visitor);
+    visitor.visit(m_counters_set);
 }
 
 // https://dom.spec.whatwg.org/#dom-element-getattribute
@@ -4448,23 +4447,21 @@ WebIDL::ExceptionOr<void> Element::set_html_unsafe(TrustedTypes::TrustedHTMLOrSt
     return {};
 }
 
-Optional<CSS::CountersSet const&> Element::counters_set() const
+GC::Ptr<CSS::CountersSet const> Element::counters_set() const
 {
-    if (!m_counters_set)
-        return {};
-    return *m_counters_set;
+    return m_counters_set;
 }
 
 CSS::CountersSet& Element::ensure_counters_set()
 {
     if (!m_counters_set)
-        m_counters_set = make<CSS::CountersSet>();
+        m_counters_set = heap().allocate<CSS::CountersSet>();
     return *m_counters_set;
 }
 
-void Element::set_counters_set(OwnPtr<CSS::CountersSet>&& counters_set)
+void Element::set_counters_set(GC::Ptr<CSS::CountersSet> counters_set)
 {
-    m_counters_set = move(counters_set);
+    m_counters_set = counters_set;
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#the-lang-and-xml:lang-attributes

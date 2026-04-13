@@ -489,9 +489,9 @@ public:
     bool rendered_in_top_layer() const { return m_rendered_in_top_layer; }
 
     bool has_non_empty_counters_set() const { return m_counters_set; }
-    Optional<CSS::CountersSet const&> counters_set() const;
+    GC::Ptr<CSS::CountersSet const> counters_set() const;
     CSS::CountersSet& ensure_counters_set();
-    void set_counters_set(OwnPtr<CSS::CountersSet>&&);
+    void set_counters_set(GC::Ptr<CSS::CountersSet>);
 
     ProximityToTheViewport proximity_to_the_viewport() const { return m_proximity_to_the_viewport; }
     void determine_proximity_to_the_viewport();
@@ -744,7 +744,7 @@ private:
 
     size_t m_sibling_invalidation_distance { 0 };
 
-    OwnPtr<CSS::CountersSet> m_counters_set;
+    GC::Ptr<CSS::CountersSet> m_counters_set;
 
     // https://html.spec.whatwg.org/multipage/grouping-content.html#ordinal-value
     Optional<i32> m_ordinal_value;

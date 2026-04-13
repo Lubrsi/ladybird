@@ -13,8 +13,18 @@
 
 namespace Web::CSS {
 
-void CountersSet::visit_edges(GC::Cell::Visitor& visitor)
+GC_DEFINE_ALLOCATOR(CountersSet);
+
+GC::Ref<CountersSet> CountersSet::clone() const
 {
+    auto copy = heap().allocate<CountersSet>();
+    copy->m_counters = m_counters;
+    return copy;
+}
+
+void CountersSet::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
     for (auto const& counter : m_counters)
         counter.originating_element.visit(visitor);
 }
@@ -161,16 +171,16 @@ void inherit_counters(DOM::AbstractElement& element_reference)
 
     // 2. Let element counters, representing element’s own CSS counters set, be a copy of the CSS counters
     //    set of element’s parent element.
-    OwnPtr<CountersSet> element_counters;
+    auto& heap = element_reference.element().heap();
+    GC::Ptr<CountersSet> element_counters;
     // OPTIMIZATION: If parent has a set, we create a copy. Otherwise, we avoid allocating one until we need
     // to add something to it.
     auto ensure_element_counters = [&]() {
         if (!element_counters)
-            element_counters = make<CountersSet>();
+            element_counters = heap.allocate<CountersSet>();
     };
     if (parent->has_non_empty_counters_set()) {
-        element_counters = make<CountersSet>();
-        *element_counters = *parent->counters_set();
+        element_counters = parent->counters_set()->clone();
     }
 
     // 3. Let sibling counters be the CSS counters set of element’s preceding sibling (if it has one),
@@ -178,7 +188,7 @@ void inherit_counters(DOM::AbstractElement& element_reference)
     //    For each counter of sibling counters, if element counters does not already contain a counter with
     //    the same name, append a copy of counter to element counters.
     if (auto sibling = element_reference.previous_sibling_in_tree_order(); sibling.has_value() && sibling->has_non_empty_counters_set()) {
-        auto& sibling_counters = sibling->counters_set().release_value();
+        auto& sibling_counters = *sibling->counters_set();
         ensure_element_counters();
         for (auto const& counter : sibling_counters.counters()) {
             if (!element_counters->last_counter_with_name(counter.name).has_value())
@@ -192,7 +202,7 @@ void inherit_counters(DOM::AbstractElement& element_reference)
     if (auto const previous = element_reference.previous_in_tree_order(); previous.has_value() && previous->has_non_empty_counters_set()) {
         // NOTE: If element_counters is empty (AKA null) then we can skip this since nothing will match.
         if (element_counters) {
-            auto& value_source = previous->counters_set().release_value();
+            auto& value_source = *previous->counters_set();
             for (auto const& source_counter : value_source.counters()) {
                 auto maybe_existing_counter = element_counters->counter_with_same_name_and_creator(source_counter.name, source_counter.originating_element);
                 if (maybe_existing_counter.has_value())
@@ -202,7 +212,7 @@ void inherit_counters(DOM::AbstractElement& element_reference)
     }
 
     VERIFY(!element_counters || !element_counters->is_empty());
-    element_reference.set_counters_set(move(element_counters));
+    element_reference.set_counters_set(element_counters);
 }
 
 String CountersSet::dump() const
