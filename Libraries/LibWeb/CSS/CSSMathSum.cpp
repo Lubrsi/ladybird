@@ -22,7 +22,7 @@ GC::Ref<CSSMathSum> CSSMathSum::create(JS::Realm& realm, NumericType type, GC::R
     return realm.create<CSSMathSum>(realm, move(type), move(values));
 }
 
-WebIDL::ExceptionOr<GC::Ref<CSSMathSum>> CSSMathSum::add_all_types_into_math_sum(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>> const& values)
+WebIDL::ExceptionOr<GC::Ref<CSSMathSum>> CSSMathSum::add_all_types_into_math_sum(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>>&& values)
 {
     auto type = values.first()->type();
     bool first = true;
@@ -38,7 +38,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathSum>> CSSMathSum::add_all_types_into_math_sum
         }
     }
 
-    auto values_array = CSSNumericArray::create(realm, { values });
+    auto values_array = CSSNumericArray::create(realm, move(values));
     return CSSMathSum::create(realm, type, values_array);
 }
 
@@ -60,7 +60,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathSum>> CSSMathSum::construct_impl(JS::Realm& r
 
     // 3. Let type be the result of adding the types of all the items of args. If type is failure, throw a TypeError.
     // 4. Return a new CSSMathSum whose values internal slot is set to args.
-    return add_all_types_into_math_sum(realm, converted_values);
+    return add_all_types_into_math_sum(realm, move(converted_values));
 }
 
 CSSMathSum::CSSMathSum(JS::Realm& realm, NumericType type, GC::Ref<CSSNumericArray> values)

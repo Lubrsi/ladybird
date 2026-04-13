@@ -23,7 +23,7 @@ GC::Ref<CSSMathMin> CSSMathMin::create(JS::Realm& realm, NumericType type, GC::R
     return realm.create<CSSMathMin>(realm, move(type), move(values));
 }
 
-WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::add_all_types_into_math_min(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>> const& values)
+WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::add_all_types_into_math_min(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>>&& values)
 {
     auto type = values.first()->type();
     bool first = true;
@@ -39,7 +39,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::add_all_types_into_math_min
         }
     }
 
-    auto values_array = CSSNumericArray::create(realm, { values });
+    auto values_array = CSSNumericArray::create(realm, move(values));
     return CSSMathMin::create(realm, type, values_array);
 }
 
@@ -63,7 +63,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathMin>> CSSMathMin::construct_impl(JS::Realm& r
 
     // 3. Let type be the result of adding the types of all the items of args. If type is failure, throw a TypeError.
     // 4. Return a new CSSMathMin whose values internal slot is set to args.
-    return CSSMathMin::add_all_types_into_math_min(realm, converted_values);
+    return CSSMathMin::add_all_types_into_math_min(realm, move(converted_values));
 }
 
 CSSMathMin::CSSMathMin(JS::Realm& realm, NumericType type, GC::Ref<CSSNumericArray> values)

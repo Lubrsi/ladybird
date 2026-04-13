@@ -114,7 +114,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSNumericValue>> CSSNumericValue::add(Vector<CSSNum
 
     // 4. Let type be the result of adding the types of every item in values. If type is failure, throw a TypeError.
     // 5. Return a new CSSMathSum object whose values internal slot is set to values.
-    return TRY(CSSMathSum::add_all_types_into_math_sum(realm, values));
+    return TRY(CSSMathSum::add_all_types_into_math_sum(realm, move(values)));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#dom-cssnumericvalue-sub
@@ -205,7 +205,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSNumericValue>> CSSNumericValue::mul(Vector<CSSNum
 
     // 5. Let type be the result of multiplying the types of every item in values. If type is failure, throw a TypeError.
     // 6. Return a new CSSMathProduct object whose values internal slot is set to values.
-    return TRY(CSSMathProduct::multiply_all_types_into_math_product(realm, values));
+    return TRY(CSSMathProduct::multiply_all_types_into_math_product(realm, move(values)));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#dom-cssnumericvalue-div
@@ -271,7 +271,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSNumericValue>> CSSNumericValue::min(Vector<CSSNum
 
     // 4. Let type be the result of adding the types of every item in values. If type is failure, throw a TypeError.
     // 5. Return a new CSSMathMin object whose values internal slot is set to values.
-    return TRY(CSSMathMin::add_all_types_into_math_min(realm, values));
+    return TRY(CSSMathMin::add_all_types_into_math_min(realm, move(values)));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#dom-cssnumericvalue-max
@@ -301,7 +301,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSNumericValue>> CSSNumericValue::max(Vector<CSSNum
 
     // 4. Let type be the result of adding the types of every item in values. If type is failure, throw a TypeError.
     // 5. Return a new CSSMathMax object whose values internal slot is set to values.
-    return TRY(CSSMathMax::add_all_types_into_math_max(realm, values));
+    return TRY(CSSMathMax::add_all_types_into_math_max(realm, move(values)));
 }
 
 // https://drafts.css-houdini.org/css-typed-om-1/#dom-cssnumericvalue-equals

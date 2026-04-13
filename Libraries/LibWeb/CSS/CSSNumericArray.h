@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGC/RootVector.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/WebIDL/Types.h>
 
@@ -17,20 +18,20 @@ class CSSNumericArray : public Bindings::PlatformObject {
     GC_DECLARE_ALLOCATOR(CSSNumericArray);
 
 public:
-    [[nodiscard]] static GC::Ref<CSSNumericArray> create(JS::Realm&, Vector<GC::Ref<CSSNumericValue>>);
+    [[nodiscard]] static GC::Ref<CSSNumericArray> create(JS::Realm&, GC::RootVector<GC::Ref<CSSNumericValue>>&&);
 
     virtual ~CSSNumericArray() override;
 
     WebIDL::UnsignedLong length() const;
     virtual Optional<JS::Value> item_value(size_t index) const override;
-    Vector<GC::Ref<CSSNumericValue>> values() { return m_values; }
+    Vector<GC::Ref<CSSNumericValue>> const& values() const { return m_values; }
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Visitor&) override;
     bool is_equal_numeric_values(GC::Ref<CSSNumericArray> other) const;
 
 private:
-    CSSNumericArray(JS::Realm&, Vector<GC::Ref<CSSNumericValue>>);
+    CSSNumericArray(JS::Realm&, GC::RootVector<GC::Ref<CSSNumericValue>>&&);
 
     Vector<GC::Ref<CSSNumericValue>> m_values;
 };

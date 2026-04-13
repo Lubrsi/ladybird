@@ -13,14 +13,14 @@ namespace Web::CSS {
 
 GC_DEFINE_ALLOCATOR(CSSNumericArray);
 
-GC::Ref<CSSNumericArray> CSSNumericArray::create(JS::Realm& realm, Vector<GC::Ref<CSSNumericValue>> values)
+GC::Ref<CSSNumericArray> CSSNumericArray::create(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>>&& values)
 {
     return realm.create<CSSNumericArray>(realm, move(values));
 }
 
-CSSNumericArray::CSSNumericArray(JS::Realm& realm, Vector<GC::Ref<CSSNumericValue>> values)
+CSSNumericArray::CSSNumericArray(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>>&& values)
     : Bindings::PlatformObject(realm)
-    , m_values(move(values))
+    , m_values(GC::adopt_root_vector(move(values)))
 {
     m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
         .supports_indexed_properties = true,
