@@ -19,7 +19,11 @@
 
 namespace Web::Bindings {
 
-struct WebEngineCustomJobCallbackData final : public JS::JobCallback::CustomData {
+class WebEngineCustomJobCallbackData final : public JS::JobCallback::CustomData {
+    GC_CELL(WebEngineCustomJobCallbackData, JS::JobCallback::CustomData);
+    GC_DECLARE_ALLOCATOR(WebEngineCustomJobCallbackData);
+
+public:
     WebEngineCustomJobCallbackData(HTML::EnvironmentSettingsObject& incumbent_settings, OwnPtr<JS::ExecutionContext> active_script_context)
         : incumbent_settings(incumbent_settings)
         , active_script_context(move(active_script_context))
@@ -27,6 +31,14 @@ struct WebEngineCustomJobCallbackData final : public JS::JobCallback::CustomData
     }
 
     virtual ~WebEngineCustomJobCallbackData() override = default;
+
+    virtual void visit_edges(JS::Cell::Visitor& visitor) override
+    {
+        Base::visit_edges(visitor);
+        visitor.visit(incumbent_settings);
+        if (active_script_context)
+            active_script_context->visit_edges(visitor);
+    }
 
     GC::Ref<HTML::EnvironmentSettingsObject> incumbent_settings;
     OwnPtr<JS::ExecutionContext> active_script_context;
