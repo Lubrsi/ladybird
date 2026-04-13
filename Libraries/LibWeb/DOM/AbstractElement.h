@@ -56,9 +56,9 @@ public:
     void set_cascaded_properties(GC::Ptr<CSS::CascadedProperties>);
 
     bool has_non_empty_counters_set() const;
-    Optional<CSS::CountersSet const&> counters_set() const;
+    GC::Ptr<CSS::CountersSet const> counters_set() const;
     CSS::CountersSet& ensure_counters_set();
-    void set_counters_set(OwnPtr<CSS::CountersSet>&&);
+    void set_counters_set(GC::Ptr<CSS::CountersSet>);
 
     HashMap<FlyString, GC::Ref<CSS::CSSAnimation>>* css_defined_animations() const;
     void set_has_css_defined_animations();

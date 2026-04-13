@@ -8,6 +8,8 @@
 
 #include <AK/FlyString.h>
 #include <AK/Optional.h>
+#include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
 #include <LibWeb/DOM/AbstractElement.h>
 #include <LibWeb/Forward.h>
 
@@ -27,10 +29,14 @@ struct Counter {
 };
 
 // https://drafts.csswg.org/css-lists-3/#css-counters-set
-class CountersSet {
+class CountersSet final : public GC::Cell {
+    GC_CELL(CountersSet, GC::Cell);
+    GC_DECLARE_ALLOCATOR(CountersSet);
+
 public:
-    CountersSet() = default;
-    ~CountersSet() = default;
+    virtual ~CountersSet() override = default;
+
+    GC::Ref<CountersSet> clone() const;
 
     Counter& instantiate_a_counter(FlyString name, DOM::AbstractElement const&, bool reversed, Optional<CounterValue>);
     void set_a_counter(FlyString name, DOM::AbstractElement const&, CounterValue value);
@@ -43,11 +49,13 @@ public:
     Vector<Counter> const& counters() const { return m_counters; }
     bool is_empty() const { return m_counters.is_empty(); }
 
-    void visit_edges(GC::Cell::Visitor&);
+    virtual void visit_edges(Visitor&) override;
 
     String dump() const;
 
 private:
+    CountersSet() = default;
+
     Vector<Counter> m_counters;
 };
 
