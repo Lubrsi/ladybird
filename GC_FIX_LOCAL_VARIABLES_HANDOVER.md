@@ -113,6 +113,35 @@ git log --oneline 094e4bacf8..HEAD
     - LibWeb/Editing/Internal/Algorithms.cpp: 16+ local `Vector<GC::Ref<DOM::Node>>` → `GC::RootVector`. `Vector<RecordedNodeValue>` → `GC::ConservativeVector` (struct transitively contains GC pointers).
     - LibWeb/Editing/ExecCommand.cpp: 1 site fixed.
 
+### Recent commits since the documented baseline (chronological)
+
+This section tracks work since commit #13 above. Run `git log --oneline 094e4bacf8..HEAD` for the full live list — entries here highlight what shipped, not full per-commit detail.
+
+| Commit | Summary |
+|---|---|
+| `1963ac15df` | AK+LibGC: Block GC root container slicing at compile time (the deleted constrained ctor; see "Compile-time block" section) |
+| `c16bbf5320` | LibWeb/CSS: Use GC-rooted containers for some local variables |
+| `e1964d13fc` | LibGC: Add `adopt_*` free functions for root/conservative containers |
+| `96364690bd` | LibJS+LibWeb: Use `adopt_*` for moving root container storage into traced members |
+| `fe63cdaac7` | LibJSGCPlugin: Restrict `adopt_*` calls to traced member contexts |
+| `815298a8ca` | LibJS: Annotate VM singleton and root-gather visitor locals with IGNORE_GC |
+| `612c2b96c6` | LibWeb/SVG: Root seen-element hash tables in gradient/pattern recursion |
+| `02bdb7476d` | LibJS+LibWeb: Return `GC::RootHashMap` from `host_get_import_meta_properties` |
+| `81f3ead348` | LibWeb/Bindings: Annotate MainThreadVM locals and singleton with IGNORE_GC |
+| `eb55880066` | **LibJS+LibWeb: Promote `JobCallback::CustomData` to `GC::Cell`** (executes section-4 bucket-C plan; `host_defined` IGNORE_GC removed) |
+| `9757bd5b07` | LibJS/Temporal: Store `Utf16FlyString` by value in `CalendarFieldData` |
+| `e65d011746` | LibWeb/CSS: Move-adopt RootVector storage in `CSSNumericArray::create` |
+| `f39bd44929` | LibWeb: Return `GC::RootVector` from `Animatable::get_animations` and friends |
+| `7cfe01c097` | LibWeb/HTML: Root form-related GC containers in the submission flow (`get_submittable_elements`, `Vector<SourcedName>`, `NavigateParams::form_data_entry_list`) |
+| `b6aa990731` | LibWeb/WebAssembly: Annotate `s_caches` with IGNORE_GC + tracing rationale |
+| `95107490eb` | LibWeb/Animations: Root `AnimationUpdateContext` via inlined `ConservativeHashMap` |
+| `a0da2f382b` | Handover: document plugin gap for unreached GC pointers behind indirection (section 7) |
+| `e33704e2ef` | LibWeb/CSS: Promote `CountersSet` to `GC::Cell` |
+| `cd2763dad2` | LibWeb/CSS: Return `GC::ConservativeVector` from `ComputedProperties::animations` |
+| `321f943fdc` | LibWeb/CSS: Promote `ContentData` to `GC::Cell` |
+
+Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
+
 ## Outstanding Tasks
 
 Live task list (mirrored from the in-session TaskList tool, lowest ID first):
@@ -132,9 +161,9 @@ Live task list (mirrored from the in-session TaskList tool, lowest ID first):
 
 Roughly in priority order, the next things to land are:
 
-1. **Fix the four LibWeb sites the new compile-time block surfaced** (see "Newly surfaced violations from the compile-time block" above) — these block the branch from building. None of them are in the existing task list because they were only discovered after adding the slicing protection.
-2. **Finish task #10 (CSS)** — already in progress, see "CSS Progress" section below for the remaining files.
-3. **Continue tasks #6–#9 and #11** — fix the remaining LibWeb violation directories. Suggested order is by violation count (Layout → HTML → DOM → SVG → Crypto → smaller dirs) but they're independent and can be tackled in any order.
+1. **Continue task #10 (CSS)** — see updated "CSS Progress" section below for what's done and what's still to do (Parser, StyleComputer, StyleScope).
+2. **Continue tasks #6–#9 and #11** — fix the remaining LibWeb violation directories. Suggested order is by violation count (Layout → HTML → DOM → SVG → Crypto → smaller dirs) but they're independent and can be tackled in any order. The Crypto cluster (`SubtleCrypto.cpp` + `CryptoAlgorithms.cpp`, ~10+ sites) is the largest single block of related sites and probably wants its own pass — `NormalizedAlgorithmAndParameter` is a struct holding GC pointers that's returned through `WebIDL::ExceptionOr<...>` and used as captures in `deferred_invoke` lambdas.
+3. **Implement the `JS::RootedExecutionContext` plan** (section 4 below, bucket A) — covers the `script_execution_context` / `dummy_execution_context` IGNORE_GC sites in `MainThreadVM.cpp` and similar transient-local hazards in LibJS. The bucket-C `CustomData` half is already done.
 4. **Task #12 (commit reordering)** — once everything builds, rebase to put the plugin-enforcement commit at the end of the branch so the history reads "fix all issues, then enforce".
 
 ### Deferred (not in the task list, tracked here for the next session)
@@ -253,6 +282,8 @@ The `WebEngineCustomJobCallbackData` case is slightly different but related: `Jo
 4. **Promoting `ExecutionContext` to `GC::Cell` directly** — deferred. It's the cleanest fix in principle but pays the hot-path cost, loses the pool allocator, and cascades signature changes across ~130 files. Revisit only if profiling shows GC pressure from contexts or if the GC heap grows a variable-size / pooled allocator variant.
 
 #### Cell-promotion plan for `JobCallback::CustomData`
+
+**Status: completed in `eb55880066` (LibJS+LibWeb: Promote `JobCallback::CustomData` to `GC::Cell`).** The `host_defined` IGNORE_GC came off; `WebEngineCustomJobCallbackData::active_script_context` is still an `OwnPtr<JS::ExecutionContext>` traced through the Cell's hand-written `visit_edges`, matching the `GeneratorObject` / `SourceTextModule` pattern. Plan retained below for historical reference.
 
 Changes to land together (should all fit in one commit or a small sequence):
 
@@ -660,15 +691,27 @@ Started fixing CSS violations. Completed:
 - `LibWeb/CSS/FontFaceSet.cpp:145` — `Vector<JS::Value>` → `GC::RootVector<JS::Value>`.
 - `LibWeb/CSS/CSSTransformValue.cpp:36` — `Vector<GC::Ref<CSSTransformComponent>>` → `GC::RootVector`.
 - `LibWeb/CSS/CSSUnparsedValue.cpp:22` — `Vector<CSSUnparsedSegment>` → `GC::ConservativeVector`.
+- `LibWeb/CSS/CSSMath{Sum,Product,Min,Max}.cpp` + `CSSNumericArray` — `RootVector<...>&&` + `adopt_root_vector` (commit `e65d011746`).
+- `LibWeb/CSS/ComputedProperties.cpp:1137` — `ContentData` promoted to `GC::Cell` (commit `321f943fdc`). Cascaded through `ContentDataAndQuoteNestingLevel`, `ComputedValues::m_noninherited.content`, `TreeBuilder.cpp`, `Node.cpp`.
+- `LibWeb/CSS/ComputedProperties.cpp:1942` — `Vector<AnimationProperties>` → `GC::ConservativeVector` (commit `cd2763dad2`).
+- `LibWeb/CSS/CountersSet.cpp:164` + `CountersSet.h` — promoted `CountersSet` to `GC::Cell` (commit `e33704e2ef`); cascaded through `Element` / `PseudoElement` / `AbstractElement`.
 
 Still to do in CSS:
-- `ComputedProperties.cpp:1137` — `ContentData` struct (transitively GC)
-- `ComputedProperties.cpp:1942` — `Vector<AnimationProperties>`
-- `CountersSet.cpp:164` — `OwnPtr<CountersSet>`
 - `Parser/Helpers.cpp:28,42` — `OwnPtr<JS::ExecutionContext>`, `NonnullOwnPtr<HostDefined>`
 - `Parser/RuleParsing.cpp:1404` — `Vector<GC::Ref<CSSRule>>`
 - `StyleComputer.cpp:1947,2127` — `Vector<DOM::AbstractElement>`, `WebIDL::ExceptionOr<Vector<GC::Ref<Animation>>>`
 - `StyleScope.cpp:215,535` — `Vector<MatchingRule>`, `HashTable<DOM::Element*>`
+
+### Animations Progress (added)
+
+- `Libraries/LibWeb/Animations/Animatable.cpp:96` + cascading return-type changes — `Vector<GC::Ref<Animation>>` → `GC::RootVector<GC::Ref<Animation>>` across `Animatable::get_animations[_internal]`, `Document::get_animations`, `ShadowRoot::get_animations`, `calculate_get_animations<T>` (commit `f39bd44929`).
+- `Libraries/LibWeb/Animations/Animation.cpp:97` + `AnimationEffect.h` — `AnimationUpdateContext` now constructs with a `GC::Heap&` and uses `GC::ConservativeHashMap<DOM::AbstractElement, ElementData>` with `ElementData` inlined into the entry value (commit `95107490eb`). See section 7 below for the gap this exposed in the plugin.
+
+### Form Submission Progress (added)
+
+- `Libraries/LibWeb/HTML/HTMLFormElement::get_submittable_elements` — return type `Vector<GC::Ref<DOM::Element>>` → `GC::RootVector<GC::Ref<DOM::Element>>` (commit `7cfe01c097`).
+- `Libraries/LibWeb/HTML/HTMLFormElement::supported_property_names` — local `Vector<SourcedName>` → `GC::ConservativeVector<SourcedName>`.
+- `Libraries/LibWeb/HTML/Navigable::NavigateParams::form_data_entry_list` — `Optional<Vector<XHR::FormDataEntry>>` → `Optional<GC::ConservativeVector<XHR::FormDataEntry>>` (matches the actual `construct_entry_list` producer; the slicing block had been blocking the assignment).
 
 ### Plugin extension attempted and reverted (superseded for slicing by the compile-time block)
 
