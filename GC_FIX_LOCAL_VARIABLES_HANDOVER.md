@@ -443,10 +443,9 @@ No flow-sensitive analysis needed: the declared variable type at each call site 
    ```
    Then update `JobCallback::visit_edges` (`Libraries/LibJS/Runtime/JobCallback.cpp:19-23`) to add `if (m_custom_data) m_custom_data->visit_edges(visitor);`. At that point the custom data's internal `OwnPtr<ExecutionContext>` is correctly traced through its `Cell` owner.
 
-3. **Rewrite the construction path in `host_make_job_callback` to build the `ExecutionContext` directly inside the struct, not as a rooted stack local.** Since the struct now forwards tracing, the `ExecutionContext` is protected as soon as the struct is constructed. The window of concern is between `ExecutionContext::create(...)` returning a populated (well, initially-empty — see below) `NonnullOwnPtr` and the `WebEngineCustomJobCallbackData` ctor receiving it. That's the standard bucket-A shape: `ExecutionContext::create` goes through the pool allocator (no GC), and the field population happens on the struct's member. The cleanest form passes the ctor args through:
+3. **Rewrite the construction path in `host_make_job_callback` to build the `ExecutionContext` directly inside the struct, not as a rooted stack local.** Give `WebEngineCustomJobCallbackData` a ctor that forwards `ExecutionContext::create` args, so the struct owns the `ExecutionContext` from its own construction onward:
    ```cpp
-   // In MainThreadVM.h, give WebEngineCustomJobCallbackData a ctor that
-   // allocates the ExecutionContext internally:
+   // In MainThreadVM.h:
    WebEngineCustomJobCallbackData(
        HTML::EnvironmentSettingsObject& incumbent_settings,
        u32 regs_locals, ReadonlySpan<JS::Value> constants, u32 args)
@@ -454,34 +453,56 @@ No flow-sensitive analysis needed: the declared variable type at each call site 
        , active_script_context(JS::ExecutionContext::create(regs_locals, constants, args))
    {
    }
+   // Plus a second ctor for the no-script path if active_script_context stays OwnPtr:
+   explicit WebEngineCustomJobCallbackData(HTML::EnvironmentSettingsObject& incumbent_settings)
+       : incumbent_settings(incumbent_settings) {}
    ```
    And in `host_make_job_callback`:
    ```cpp
-   OwnPtr<WebEngineCustomJobCallbackData> host_defined;
+   OwnPtr<WebEngineCustomJobCallbackData> host_defined = script
+       ? make<WebEngineCustomJobCallbackData>(
+             incumbent_settings, 0, ReadonlySpan<JS::Value> {}, 0)
+       : make<WebEngineCustomJobCallbackData>(incumbent_settings);
    if (script) {
-       host_defined = make<WebEngineCustomJobCallbackData>(
-           incumbent_settings, 0, ReadonlySpan<JS::Value>{}, 0);
        host_defined->active_script_context->function = nullptr;
        host_defined->active_script_context->realm = &script->settings_object().realm();
        // ... script_or_module population ...
-   } else {
-       host_defined = make<WebEngineCustomJobCallbackData>(incumbent_settings);
-       // requires a second ctor that doesn't allocate an ExecutionContext —
-       // or, if active_script_context becomes NonnullOwnPtr as in option 1
-       // above, the no-script branch doesn't construct the struct at all
-       // and threads a null custom_data through JobCallback::create.
    }
    return JS::JobCallback::create(*s_main_thread_vm, callable, move(host_defined));
    ```
-   The `OwnPtr<WebEngineCustomJobCallbackData> host_defined` local itself is not a plugin violation — `WebEngineCustomJobCallbackData` contains GC pointers, but its `visit_edges` is now wired in, and the plugin's existing "OwnPtr to a Cell-adjacent thing with `visit_edges`" allowlist handling should cover it. If the plugin disagrees, the simplest workaround is to hoist the allocation into `JS::JobCallback::create` itself (`Libraries/LibJS/Runtime/JobCallback.cpp:26-30`) so the `OwnPtr` local lives inside `JobCallback` from the start — but that's a larger change and probably unnecessary.
 
-After all three parts land, the five `IGNORE_GC` + `FIXME` annotations this branch added come off:
+   **Safety window for the `host_defined` local — narrower than the "as soon as the struct is constructed" claim an earlier draft of this doc made.** `JobCallback::CustomData::visit_edges` forwarding only helps *after* the custom data is owned by a `JobCallback`. While `host_defined` sits in the `OwnPtr<WebEngineCustomJobCallbackData>` local, nothing is tracing it — the struct and the `ExecutionContext` it holds are unrooted. The narrow argument that this is OK is:
 
-- `dummy_execution_context` → `Optional<RootedExecutionContext>` + `.emplace(...)` (bucket A, rows 4-ish of the table).
+   - Between `make<WebEngineCustomJobCallbackData>(...)` completing and `JobCallback::create(...)` returning, the only GC-triggering call is `Heap::allocate<JobCallback>` inside `JobCallback::create` (which may collect before returning the new cell).
+   - If a collection fires during that allocation, the inner GC pointers are not *directly* rooted via the custom data path — but in practice they are reachable through other root paths: `incumbent_settings`'s realm and its global object, the active script's settings object's realm, and the script/module record held by the global scope. In the current codebase, there is no realistic collection during this window that would free those specific cells.
+   - Once `Heap::allocate<JobCallback>` returns and the `JobCallback` constructor runs, the custom data is installed in `JobCallback::m_custom_data` and correctly traced from that point onward.
+
+   This is a contingent safety argument (depending on what's transitively reachable from other roots during the allocation of a single `JobCallback`), not a structural one. Keep that distinction in mind when touching this path.
+
+4. **Plugin annotation for the `host_defined` local.** The plugin's `type_has_unrooted_gc_container` (`Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp:900-970`) recursively walks *fields* of non-Cell record types looking for unrooted GC containers. There is no "has `visit_edges`?" escape hatch — an earlier draft of this doc incorrectly assumed one existed. `OwnPtr<WebEngineCustomJobCallbackData>` will be flagged, because `WebEngineCustomJobCallbackData::active_script_context` is an `OwnPtr<JS::ExecutionContext>` which is in the `types_with_gc_invisible_storage` list.
+
+   The pragmatic answer is to keep an `IGNORE_GC` on the `host_defined` local with a tightened FIXME — something like:
+   ```cpp
+   // FIXME: OwnPtr<WebEngineCustomJobCallbackData> carries an
+   //        OwnPtr<JS::ExecutionContext> as a member, which the plugin flags.
+   //        Between construction here and the transfer into JobCallback::create
+   //        below, the struct is unrooted. No allocation happens in this
+   //        window except JobCallback's own cell allocation, and the inner
+   //        GC pointers are reachable via other root paths during that
+   //        allocation. See the handover doc for the full argument.
+   IGNORE_GC OwnPtr<WebEngineCustomJobCallbackData> host_defined = ...;
+   ```
+
+   A cleaner alternative would be to eliminate the named local entirely by inlining the `make<WebEngineCustomJobCallbackData>(...)` call directly into `JobCallback::create`'s argument list — the plugin only flags `VarDecl`s, so a temporary subexpression isn't inspected. But the current code has a conditional field-population block on `host_defined->active_script_context`, so inlining requires either a helper function that returns a fully-populated struct (which would then have its own `IGNORE_GC` on its local `NonnullOwnPtr` return) or moving the field population into the `WebEngineCustomJobCallbackData` ctor itself. Worth considering once the surrounding code is less spec-comment-heavy, but keep the FIXME approach for this branch.
+
+After all four parts land, the five `IGNORE_GC` + `FIXME` annotations this branch added come off to four:
+
+- `dummy_execution_context` → `Optional<RootedExecutionContext>` + `.emplace(...)` (bucket A).
 - `new_context` in `Realm.cpp` → direct `RootedExecutionContext` ctor (bucket A).
 - `async_context` in `ECMAScriptFunctionObject.cpp` → direct `RootedExecutionContext` copy ctor (bucket B, solved by the ctor).
 - The `ExecutionContext.cpp:108` annotation inside `copy()` → either leave with a rewritten FIXME (if `copy()` stays an internal call), or comes off once the `RootedExecutionContext` copy ctor is the only caller.
-- `script_execution_context` + `host_defined` → merged bucket-C fix above.
+- `script_execution_context` → disappears as a named local (now built inline inside `WebEngineCustomJobCallbackData`'s ctor).
+- `host_defined` → **stays as `IGNORE_GC`** with a tightened FIXME explaining the narrow synchronous-GC safety window. Structural removal would require refactoring `JobCallback`'s construction path so the custom data is never held in a local; not worth it for one site.
 
 **Step 5: internal-only forwarders (optional, related but separate).** Six sites currently hand-write `m_execution_context->visit_edges(visitor)` inside their Cell's own `visit_edges`:
 
