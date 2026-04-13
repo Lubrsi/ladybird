@@ -55,7 +55,7 @@ enum class CalendarFieldConversion {
 
 struct CalendarFieldData {
     CalendarField key;
-    NonnullRawPtr<PropertyKey> property;
+    Utf16FlyString property;
     CalendarFieldConversion conversion;
 };
 static Vector<CalendarFieldData> sorted_calendar_fields(VM& vm, CalendarFieldList fields)
@@ -64,7 +64,7 @@ static Vector<CalendarFieldData> sorted_calendar_fields(VM& vm, CalendarFieldLis
         switch (field) {
 #define __JS_ENUMERATE(enumeration, field_name, property_key, conversion) \
     case enumeration:                                                     \
-        return { enumeration, property_key, conversion };
+        return { enumeration, property_key.as_string(), conversion };
             JS_ENUMERATE_CALENDAR_FIELDS
 #undef __JS_ENUMERATE
         }
@@ -72,15 +72,14 @@ static Vector<CalendarFieldData> sorted_calendar_fields(VM& vm, CalendarFieldLis
         VERIFY_NOT_REACHED();
     };
 
-    // AD-HOC: CalendarFieldData references VM-owned PropertyKeys that outlive this scope.
-    IGNORE_GC Vector<CalendarFieldData> result;
+    Vector<CalendarFieldData> result;
     result.ensure_capacity(fields.size());
 
     for (auto field : fields)
         result.unchecked_append(data_for_field(field));
 
     quick_sort(result, [](auto const& lhs, auto const& rhs) {
-        return lhs.property->as_string() < rhs.property->as_string();
+        return lhs.property < rhs.property;
     });
 
     return result;
@@ -357,8 +356,7 @@ ThrowCompletionOr<CalendarFields> prepare_calendar_fields(VM& vm, String const& 
 
     // 8. Let sortedPropertyNames be a List whose elements are the values in the Property Key column of Table 19
     //    corresponding to the elements of fieldNames, sorted according to lexicographic code unit order.
-    // AD-HOC: CalendarFieldData references VM-owned PropertyKeys that outlive this scope.
-    IGNORE_GC auto sorted_property_names = sorted_calendar_fields(vm, field_names);
+    auto sorted_property_names = sorted_calendar_fields(vm, field_names);
 
     // 9. For each property name property of sortedPropertyNames, do
     for (auto const& [key, property, conversion] : sorted_property_names) {
@@ -378,13 +376,13 @@ ThrowCompletionOr<CalendarFields> prepare_calendar_fields(VM& vm, String const& 
             case CalendarFieldConversion::ToIntegerWithTruncation:
                 // 1. Set value to ? ToIntegerWithTruncation(value).
                 // 2. Set value to 𝔽(value).
-                set_field_value(key, result, TRY(to_integer_with_truncation(vm, value, ErrorType::TemporalInvalidCalendarFieldName, *property)));
+                set_field_value(key, result, TRY(to_integer_with_truncation(vm, value, ErrorType::TemporalInvalidCalendarFieldName, property)));
                 break;
             // iv. Else if Conversion is TO-POSITIVE-INTEGER-WITH-TRUNCATION, then
             case CalendarFieldConversion::ToPositiveIntegerWithTruncation:
                 // 1. Set value to ? ToPositiveIntegerWithTruncation(value).
                 // 2. Set value to 𝔽(value).
-                set_field_value(key, result, TRY(to_positive_integer_with_truncation(vm, value, ErrorType::TemporalInvalidCalendarFieldName, *property)));
+                set_field_value(key, result, TRY(to_positive_integer_with_truncation(vm, value, ErrorType::TemporalInvalidCalendarFieldName, property)));
                 break;
             // v. Else if Conversion is TO-STRING, then
             case CalendarFieldConversion::ToString:
@@ -420,7 +418,7 @@ ThrowCompletionOr<CalendarFields> prepare_calendar_fields(VM& vm, String const& 
         else if (auto const* required = required_field_names.get_pointer<CalendarFieldList>()) {
             // i. If requiredFieldNames contains key, throw a TypeError exception.
             if (required->contains_slow(key))
-                return vm.throw_completion<TypeError>(ErrorType::MissingRequiredProperty, *property);
+                return vm.throw_completion<TypeError>(ErrorType::MissingRequiredProperty, property);
 
             // ii. Set result's field whose name is given in the Field Name column of the same row to the corresponding
             //     Default value of the same row.
