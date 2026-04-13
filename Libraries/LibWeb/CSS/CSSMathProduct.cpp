@@ -22,7 +22,7 @@ GC::Ref<CSSMathProduct> CSSMathProduct::create(JS::Realm& realm, NumericType typ
     return realm.create<CSSMathProduct>(realm, move(type), move(values));
 }
 
-WebIDL::ExceptionOr<GC::Ref<CSSMathProduct>> CSSMathProduct::multiply_all_types_into_math_product(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>> const& values)
+WebIDL::ExceptionOr<GC::Ref<CSSMathProduct>> CSSMathProduct::multiply_all_types_into_math_product(JS::Realm& realm, GC::RootVector<GC::Ref<CSSNumericValue>>&& values)
 {
     auto type = values.first()->type();
     bool first = true;
@@ -38,7 +38,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathProduct>> CSSMathProduct::multiply_all_types_
         }
     }
 
-    auto values_array = CSSNumericArray::create(realm, { values });
+    auto values_array = CSSNumericArray::create(realm, move(values));
     return CSSMathProduct::create(realm, type, values_array);
 }
 
@@ -62,7 +62,7 @@ WebIDL::ExceptionOr<GC::Ref<CSSMathProduct>> CSSMathProduct::construct_impl(JS::
 
     // 3. Let type be the result of multiplying the types of all the items of args. If type is failure, throw a TypeError.
     // 4. Return a new CSSMathProduct whose values internal slot is set to args.
-    return multiply_all_types_into_math_product(realm, converted_values);
+    return multiply_all_types_into_math_product(realm, move(converted_values));
 }
 
 CSSMathProduct::CSSMathProduct(JS::Realm& realm, NumericType type, GC::Ref<CSSNumericArray> values)
