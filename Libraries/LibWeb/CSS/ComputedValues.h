@@ -11,6 +11,8 @@
 #include <AK/HashMap.h>
 #include <AK/Optional.h>
 #include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
+#include <LibGC/Ptr.h>
 #include <LibGfx/FontCascadeList.h>
 #include <LibGfx/ScalingMode.h>
 #include <LibWeb/CSS/Clip.h>
@@ -441,7 +443,13 @@ struct ShadowData {
     ShadowPlacement placement { ShadowPlacement::Outer };
 };
 
-struct ContentData {
+class ContentData final : public GC::Cell {
+    GC_CELL(ContentData, GC::Cell);
+    GC_DECLARE_ALLOCATOR(ContentData);
+
+public:
+    virtual ~ContentData() override = default;
+
     enum class Type {
         Normal,
         None,
@@ -452,14 +460,18 @@ struct ContentData {
     Vector<ValueComparingRefPtr<CounterStyle const>> counter_style_dependencies;
     Optional<String> alt_text {};
 
-    void visit_edges(GC::Cell::Visitor& visitor) const
+    virtual void visit_edges(Visitor& visitor) override
     {
+        Base::visit_edges(visitor);
         for (auto const& item : data) {
             if (auto* ptr = item.get_pointer<NonnullRefPtr<ImageStyleValue>>()) {
                 (*ptr)->visit_edges(visitor);
             }
         }
     }
+
+private:
+    ContentData() = default;
 };
 
 struct CounterData {
@@ -527,7 +539,7 @@ public:
     PreferredColorScheme color_scheme() const { return m_inherited.color_scheme; }
     ContentVisibility content_visibility() const { return m_inherited.content_visibility; }
     Vector<CursorData> const& cursor() const { return m_inherited.cursor; }
-    Optional<ContentData> const& content() const { return m_noninherited.content; }
+    GC::Ptr<ContentData const> content() const { return m_noninherited.content; }
     PointerEvents pointer_events() const { return m_inherited.pointer_events; }
     Display display() const { return m_noninherited.display; }
     Display display_before_box_type_transformation() const { return m_noninherited.display_before_box_type_transformation; }
@@ -880,7 +892,7 @@ protected:
         Vector<ShadowData> box_shadow {};
         Vector<NonnullRefPtr<TransformationStyleValue const>> transformations {};
         TransformOrigin transform_origin {};
-        Optional<ContentData> content;
+        GC::Ptr<ContentData> content;
         Variant<VerticalAlign, LengthPercentage> vertical_align { InitialValues::vertical_align() };
         GridTrackSizeList grid_auto_columns;
         GridTrackSizeList grid_auto_rows;
@@ -955,8 +967,7 @@ protected:
                 translate->visit_edges(visitor);
             if (scale)
                 scale->visit_edges(visitor);
-            if (content.has_value())
-                content->visit_edges(visitor);
+            visitor.visit(content);
         }
     };
 
@@ -988,7 +999,7 @@ public:
     void set_color_interpolation(ColorInterpolation color_interpolation) { m_inherited.color_interpolation = color_interpolation; }
     void set_color_scheme(PreferredColorScheme color_scheme) { m_inherited.color_scheme = color_scheme; }
     void set_clip(Clip const& clip) { m_noninherited.clip = clip; }
-    void set_content(ContentData const& content) { m_noninherited.content = content; }
+    void set_content(GC::Ptr<ContentData> content) { m_noninherited.content = content; }
     void set_content_visibility(ContentVisibility content_visibility) { m_inherited.content_visibility = content_visibility; }
     void set_cursor(Vector<CursorData> cursor) { m_inherited.cursor = move(cursor); }
     void set_image_rendering(ImageRendering value) { m_inherited.image_rendering = value; }
