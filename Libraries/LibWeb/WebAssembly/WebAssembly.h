@@ -118,7 +118,14 @@ JS::ThrowCompletionOr<void> host_ensure_can_compile_wasm_bytes(JS::VM&);
 JS::ThrowCompletionOr<JS::HandledByHost> host_resize_array_buffer(JS::VM&, JS::ArrayBuffer&, size_t);
 JS::ThrowCompletionOr<JS::HandledByHost> host_grow_shared_array_buffer(JS::VM&, JS::ArrayBuffer&, size_t);
 
-extern HashMap<GC::Ptr<JS::Object>, WebAssemblyCache> s_caches;
+// Per-global WebAssembly state, keyed by the global object. Each entry is
+// reached and traced through WebAssembly::visit_edges (WebAssembly.cpp:58),
+// which the global object's own visit hook calls — so the cache for any live
+// global is visited as part of that global's edge walk, while caches for
+// collected globals are dropped via the finalize hook. The plugin can't see
+// that indirection — see GC_FIX_LOCAL_VARIABLES_HANDOVER.md section 6 for the
+// proposed plugin extension that would make the IGNORE_GC unnecessary.
+IGNORE_GC extern HashMap<GC::Ptr<JS::Object>, WebAssemblyCache> s_caches;
 
 }
 

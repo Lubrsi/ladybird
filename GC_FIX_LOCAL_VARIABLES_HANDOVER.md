@@ -503,6 +503,17 @@ These aren't incorrect today — they're the existing "manually-traced owner" pa
 - **Custom AK-adjacent containers**: `AK::CircularQueue`, `AK::RedBlackTree`, `AK::DoublyLinkedList`, `AK::Queue`, etc. are not on the `types_with_gc_invisible_storage` list. Any of those holding GC pointers would evade the check. `AK::IntrusiveList` is safe — it doesn't own storage.
 - **`memcpy` / `bit_cast` of `GC::Ptr` / containers**: no tool catches raw bit moves of GC pointers. Unusual in this codebase but worth a note.
 
+### 6. Plugin can't see indirect rooting via per-object `visit_edges` hooks
+
+`Web::WebAssembly::Detail::s_caches` (`Libraries/LibWeb/WebAssembly/WebAssembly.h:116`) is a namespace-scope `HashMap<GC::Ptr<JS::Object>, WebAssemblyCache>` that the plugin flags as an unrooted GC container. It's actually rooted indirectly: each entry's `WebAssemblyCache` is reached and traced through the per-object `WebAssembly::visit_edges(JS::Object&, ...)` hook (`Libraries/LibWeb/WebAssembly/WebAssembly.cpp:58`), which the global object's own `visit_edges` invokes — so the cache for any live global is visited as part of that global's edge walk, while caches for collected globals are dropped via the `finalize` hook.
+
+The current pattern is sound but invisible to the plugin. Two options for closing the gap:
+
+1. **Annotate the site with `IGNORE_GC` + comment**: keeps the existing pattern, costs ~5 lines, but adds one more `IGNORE_GC` we'd ideally not have.
+2. **Teach the plugin about indirect rooting**: extend it to recognize containers that are visited from a sibling `visit_edges` overload taking the key type as its first argument. Concretely, for `HashMap<GC::Ptr<K>, V>` declared at namespace scope, look for a same-namespace `visit_edges(K&, Cell::Visitor&)` (or similar) and treat the map as rooted if found. This would also cover any future per-object cache patterns of the same shape.
+
+Option 2 is the better long-term answer since the pattern is generic enough that it could appear elsewhere as the codebase grows — but it requires a non-trivial plugin extension. Defer to a separate piece of work; in the interim, the site is a known plugin false-positive that hasn't been silenced yet.
+
 ## Known Issues / In Progress
 
 ### Test Status

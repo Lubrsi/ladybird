@@ -46,7 +46,7 @@ static GC::Ref<WebIDL::Promise> compile_potential_webassembly_response(JS::VM&, 
 
 namespace Detail {
 
-HashMap<GC::Ptr<JS::Object>, WebAssemblyCache> s_caches;
+IGNORE_GC HashMap<GC::Ptr<JS::Object>, WebAssemblyCache> s_caches;
 
 WebAssemblyCache& get_cache(JS::Realm& realm)
 {
