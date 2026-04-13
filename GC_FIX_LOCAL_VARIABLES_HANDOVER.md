@@ -142,6 +142,286 @@ Roughly in priority order, the next things to land are:
 - **Refactor `resolve_export` recursion accumulator** so the deferred plugin parameter check can be re-enabled. See "Plugin extension attempted and reverted" below for context.
 - **Re-enable the deferred plugin parameter check** after the `resolve_export` refactor. The compile-time slicing block already covers the most common case (a RootVector being passed by value), but a parameter check would still catch plain `Vector<GC::Ref<T>>` parameters that aren't fed from a Root container at any call site.
 - **Possible bug: minimum Cell size not enforced at compile time** — see the section below.
+- **Dangerous patterns not yet caught by tooling** — see the new section below for the full audit and concrete instance lists.
+
+## Future work: dangerous patterns not yet caught by tooling
+
+Research pass after the adopt_* pattern landed, hunting for GC-safety hazards that slip past the current plugin + compile-time checks. Categorised by expected fix path.
+
+### 1. `AK::Function` with GC-containing captures (~15–20 visible sites, category is broader)
+
+**The hazard.** `AK::Function<Sig>` is type-erased heap storage for a callable. When a lambda with captures is assigned into it, the captures live inside the `Function`'s heap-allocated callable storage. If any capture is `GC::Ptr<T>` / `GC::Ref<T>` / `JS::Value` / `Cell*` / a struct transitively holding a cell, it is **invisible to GC** — no matter who owns the `AK::Function`. The typical dangerous pattern is **callback registration**: class A constructs a lambda capturing some of A's GC-managed state, stores it in an `AK::Function` that class B accepts and holds. B later outlives the cells A captured, and when B fires the callback the captures are dangling.
+
+This bites whether the `AK::Function` lives as:
+
+- a member of another class (Cell or non-Cell)
+- a local that escapes via registration
+- a by-value parameter being forwarded into storage
+- a return value being consumed by a caller who stores it
+
+The common factor is that the captures have been copied into heap-invisible storage the moment the lambda was assigned into the `AK::Function`.
+
+**Known-good replacement pattern.** `GC::Function<Sig>` is a `GC::Cell` that wraps a callable and participates in GC tracing. Use `GC::Ref<GC::Function<Sig>>` in every context where you'd otherwise reach for `AK::Function<Sig>` for a callback that needs to survive past its registration call — parameter type, member type, local that gets stored elsewhere, return type from a registration helper. The call sites in `EventLoop` / `Task` / `Promise` / `JobCallback` / `IDBDatabase` already use this correctly and are worth copying.
+
+**Highest-impact concrete sites found so far** (members of Cell-derived classes that aren't visited today — the tip of the iceberg, not the whole category):
+
+| File | Member | Why it's concerning |
+|---|---|---|
+| `Libraries/LibWeb/DOM/HTMLCollection.h:67-68` | `Function<bool(Element const&)> m_filter`, `m_sort` | DOM collection filters — captures frequently reference other nodes. |
+| `Libraries/LibWeb/DOM/LiveNodeList.h:44` | `Function<bool(Node const&)> m_filter` | Same pattern; widespread in traversal code. |
+| `Libraries/LibWeb/HTML/HTMLAllCollection.h:56` | `Function<bool(DOM::Element const&)> m_filter` | Same pattern. |
+| `Libraries/LibWeb/HTML/HTMLScriptElement.h:152` | `Function<void()> m_steps_to_run_when_the_result_is_ready` | Async script completion; captures execution context. |
+| `Libraries/LibWeb/HTML/Scripting/ModuleScript.h:61` | `Function<void(ModuleScript const*)> m_completed_fetch_internal_callback` | Module fetch continuation. |
+| `Libraries/LibWeb/CSS/CSSRuleList.h:70` | `Function<void()> on_change` | Style change observer. |
+| `Libraries/LibWeb/CSS/StyleValues/ImageStyleValue.h:62` | `mutable Function<void()> on_animate` | Has an explicit FIXME about this exact issue. |
+
+Rough count across `Libraries/LibJS/` and `Libraries/LibWeb/` is ~15–20 such members in Cell-derived classes. The DOM collection filter cluster (`HTMLCollection`, `LiveNodeList`, `HTMLAllCollection`) is the highest priority because it's used pervasively by DOM traversal code and the same pattern is repeated three times. That scan did not cover the broader shape of the category — callback-by-parameter APIs, helper factory functions returning `AK::Function`, and locals that escape via a registration call would need a separate pass.
+
+**Tooling opportunity.** The cleanest rule would be to scan lambda expressions assigned into (or constructing) an `AK::Function<Sig>` and flag any capture whose type transitively contains a GC pointer — that catches the problem at the point of introduction rather than at storage. A coarser alternative that is much easier to implement: flag every occurrence of `AK::Function<Sig>` in LibJS/LibWeb code and recommend `GC::Function<Sig>`, with an opt-out annotation for the small set of cases that are provably GC-free (pure formatter callbacks, debug printing, strictly no-capture lambdas). The coarser version is probably the right starting point — this codebase already seems to converge on `GC::Function` for anything GC-relevant, so the false-positive rate should be low.
+
+### 2. By-value function parameters holding heap-backed containers (~70 sites, mixed difficulty)
+
+**The hazard.** A parameter of type e.g. `Vector<GC::Ref<X>>` lives with its header on the callee's stack, but its backing allocation is on the heap and is not registered with the GC as a root. Any GC triggered inside the callee can collect the cells it holds. The current plugin `VisitVarDecl` check short-circuits on `ParmVarDecl` with a FIXME — this is the deferred parameter check.
+
+**Rough breakdown** (honest count from a recursive grep over `Libraries/LibJS/` and `Libraries/LibWeb/`, excluding tests):
+
+| Container type | By-value parameter count |
+|---|---|
+| `Vector<GC::Ref<T>>` | ~35 |
+| `Vector<GC::Ptr<T>>` | ~12 |
+| `Vector<GC::Root<T>>` | ~18 |
+| `Vector<JS::Value>` | ~3 (but see recursion accumulator hazard below) |
+| `HashMap<...>` / `HashTable<...>` with GC values | <5 |
+
+**By difficulty:**
+
+- **Trivial (~25–30 sites)**: constructors and setters that `move()` the parameter straight into a member. These can be rewritten as `GC::RootVector<T>&&` + `GC::adopt_root_vector(...)` in the member initializer — the pattern we just built. Clusters:
+  - SVG list constructors (`SVGLengthList`, `SVGNumberList`, `SVGTransformList`, …)
+  - `IDBTransaction`, `IDBObjectStore` initialization
+  - CSS numeric/transform array creation
+- **Non-trivial (~40 sites)**: spec algorithms that pass collections through recursive dispatch. Touching these risks spec-observable behavior changes. Clusters:
+  - `Libraries/LibWeb/Editing/Internal/Algorithms.cpp` — ~8 instances (indent, split_the_parent, etc.)
+  - `Libraries/LibWeb/HTML/Focus.cpp` — ~3 instances (focus chain traversal)
+  - `Libraries/LibWeb/HTML/TraversableNavigable.cpp` — ~5 instances (navigation transitions)
+  - `Libraries/LibWeb/HTML/Parser/HTMLParser.cpp:4947` — `parse_html_fragment(..., Vector<GC::Root<DOM::Node>>)`
+- **Structurally hard (2–5 sites)**: recursion accumulators where the by-value pass *is* the deduplication mechanism. The canonical example is `Libraries/LibWeb/IndexedDB/Internal/Algorithms.cpp:255` — `convert_a_value_to_a_key(realm, value, Vector<JS::Value> seen)` — the `seen` vector is accumulated across recursion and the by-value pass ensures sibling branches get independent copies. Refactoring this needs a deliberate plan (callback-based traversal? explicit rooted accumulator on caller's stack with save/restore? heap-allocated accumulator?). Similar structure to `resolve_export` (already tracked above).
+
+**Interesting individual sites for the "non-trivial" bucket:**
+
+- `Libraries/LibWeb/Page/Page.cpp:839` — `Page::update_find_in_page_selection(Vector<GC::Root<DOM::Range>> matches)`
+- `Libraries/LibWeb/XPath/XPathResult.cpp:58` — `XPathResult::set_node_set(Vector<GC::Ptr<DOM::Node>> node_set)`
+- `Libraries/LibWeb/Editing/Internal/Algorithms.cpp:1607` — `indent(Vector<GC::Ref<DOM::Node>> node_list)`
+- `Libraries/LibWeb/HTML/Focus.cpp:44` — `run_focus_update_steps(Vector<GC::Root<DOM::Node>> old_chain, Vector<GC::Root<DOM::Node>> new_chain, ...)`
+- `Libraries/LibJS/Runtime/Intrinsics.cpp:206` — `parse_builtin_file(Vector<GC::Root<SharedFunctionInstanceData>>)`
+
+**Recommended approach.** Fix the trivial constructor / setter cluster first, folding into the LibWeb violation-fixing passes as encountered. Document the spec-algorithm bucket for a dedicated pass. Defer recursion accumulators until there's a specific plan. Only re-enable the plugin parameter check once the trivial sites are cleared and the non-trivial ones are either fixed or explicitly annotated.
+
+### 3. `visit_edges` correctness gaps (small residual surface)
+
+The plugin already has thorough `visit_edges` validation (`Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp:492-784`) — member presence enforcement, member access verification, substruct tracing, smart pointer unwrapping, `Base::visit_edges()` upcall via the `must_upcall` attribute, and Optional/Variant wrapper unwrapping. The remaining gaps are narrower than expected:
+
+- **Conditional visits**: `if (cond) visitor.visit(m_ptr);` passes the "accessed somewhere in the function body" matcher but can skip marking in some paths. No test coverage. Would need control-flow analysis — expensive but small code surface.
+- **"Field mentioned ≠ actually visited"**: documented FIXME in `Tests/ClangPlugins/LibJSGCTests/gc_allocated_member_is_accessed.cpp:19`. The current matcher (`LibJSGCPluginAction.cpp:720-722`) only checks that the field name appears somewhere in the function body, not that it's passed to `visitor.visit(...)`. Tightening this is the highest-value plugin improvement in the visit_edges area — small scope, catches a real "forgot to actually visit" footgun where the developer wrote e.g. `(void)m_foo;` or referenced the field in an assertion without visiting it.
+- **Deeper non-Cell substruct chains**: a non-Cell struct `A` that composes another non-Cell struct `B` with its own `visit_edges()` — the plugin only checks the outermost level. `A::visit_edges()` is not required to call `B::visit_edges()` if `B` is one level deep inside `A`. Worth a test case to confirm and then a recursive fix.
+- **Iterator visited instead of underlying container**: visiting `m_vec.begin()` instead of `m_vec` would currently pass the matcher. No test.
+- **Const vs. non-const visitor paths**: untested — a class that has both a const-visitor and non-const-visitor path could plausibly drift.
+
+**Recommended approach.** Land the "access must be an actual `visitor.visit(field)` call" tightening first (it subsumes the "field mentioned but not visited" gap and has the highest real-world bug-catching ratio). Add regression tests for conditional visits, deeper substruct chains, and iterator-visited patterns even without code changes, so the current behavior is pinned and future regressions are caught.
+
+### 4. Non-Cell owners of `ExecutionContext` (transient locals + opaque custom data)
+
+**The hazard, recap.** `JS::ExecutionContext` is not a `GC::Cell`, but it holds GC pointers (`realm`, `function`, environments, `script_or_module`, inline value span). It has a `visit_edges` method, and its Cell-held owners forward tracing through it manually: `GeneratorObject`, `AsyncGenerator`, `SourceTextModule`, `AsyncFunctionDriverWrapper`, `EnvironmentSettingsObject`, and the VM's raw execution-context stack (via `VM::gather_roots`). Those are correctly traced today.
+
+The actual hazard is **stack-held `OwnPtr<JS::ExecutionContext>` transient locals**: between `ExecutionContext::create(...)` and `vm.push_execution_context(*ctx)`, nothing registers the inner GC pointers as roots. Any allocation in that window is a real use-after-GC risk. Currently annotated with `IGNORE_GC` + `FIXME: ExecutionContext should be GC-allocated so this is properly rooted.` at:
+
+- `Libraries/LibJS/Runtime/ExecutionContext.cpp` (copy)
+- `Libraries/LibJS/Runtime/Realm.cpp` (initialize_host_defined_realm)
+- `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp` (async context copy)
+- `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (dummy execution context in host_enqueue_promise_job, script execution context in host_make_job_callback, and the `WebEngineCustomJobCallbackData` construction)
+
+The `WebEngineCustomJobCallbackData` case is slightly different but related: `JobCallback` holds the custom data as `OwnPtr<CustomData>` and its `visit_edges` does not forward through `m_custom_data`, so `WebEngineCustomJobCallbackData::incumbent_settings` and `active_script_context` are not traced even though the `JobCallback` itself is a Cell.
+
+**`static RefPtr<JS::VM> s_main_thread_vm`** in `MainThreadVM.cpp` is annotated with `IGNORE_GC` for the same structural reason as `VM.cpp`'s `s_vm`: the VM owns the GC heap and handles its own root gathering via `VM::gather_roots`.
+
+**Options for a proper fix, in ascending order of scope:**
+
+1. **Teach the plugin the "manually-traced owner" pattern.** Recognize that a class holding `OwnPtr<T>` / `NonnullOwnPtr<T>` where `T` has a `visit_edges` method, *and* whose own `visit_edges` calls `->visit_edges(visitor)` on that member, is not a violation. This would eliminate the six Cell-held `OwnPtr<ExecutionContext>` sites from the false-positive list and generalise to any future non-Cell struct that follows the pattern. Does **not** fix transient locals.
+2. **General-purpose `GC::ScopedRoots` primitive for transient locals.** Introduce a variadic RAII helper that registers stack-held variables with the heap for the lifetime of an enclosing scope, and have it forward through `visit_edges` so it composes with the existing tracing machinery. Replaces the transient-local `IGNORE_GC` sites and any future ones. Implementation plan spelled out below. Leaves the hot path (VM execution context stack, generator/module member storage) untouched.
+3. **Make `ExecutionContext` a `GC::Cell`.** Fixes all of the above but pays the hot-path cost on every JS function call (push/pop of the VM stack becomes barrier traffic), loses the custom tail-sized pool allocator (`ExecutionContextAllocator` buckets by 4/16/64/128/256/512 Value slots), and cascades signature changes across ~130 files in LibJS and LibWeb (generators, modules, settings objects, and all creators). Probably not worth it until profiling shows GC pressure from contexts or the Cell allocator grows a pooled / variable-size variant.
+
+**Recommended path:** option 1 as a standalone plugin improvement (clears the Cell-held OwnPtr false positives for free), then option 2 as a targeted refactor for the transient-local cluster. Defer option 3 unless a deeper reason emerges.
+
+#### Implementation plan for option 2 (`GC::ScopedRoots`)
+
+Goal: a one-liner RAII helper that a caller can drop next to a stack-held `OwnPtr<ExecutionContext>` (or any other non-Cell holder-of-GC-pointers) to make the contents traced for the lifetime of the enclosing scope, with no heap allocation, no lambda storage, and no per-type wrapper class.
+
+**Target usage:**
+```cpp
+OwnPtr<JS::ExecutionContext> dummy_execution_context;
+GC::ScopedRoots scoped(vm.heap(), dummy_execution_context);
+// ... code that may allocate; ctx's inner GC pointers are traced ...
+```
+
+Construction deduces `Ts...` from the arguments (C++17 CTAD); the helper stores raw pointers to the stack slots and unregisters on destruction. Because variables are tracked by pointer, reassignment mid-scope is fine — the GC always reads the current value at trace time.
+
+**Step 1: add overloads to `GC::Cell::Visitor` (`Libraries/LibGC/Cell.h:66-185`) for non-Cell holders-of-GC-pointers.**
+
+```cpp
+// Non-Cell reference-to-object that has its own visit_edges method.
+template<typename T>
+void visit(T const& obj)
+requires requires(T const& o, Visitor& v) { o.visit_edges(v); }
+{
+    obj.visit_edges(*this);
+}
+
+// Ownership wrappers around the above.
+template<typename T>
+void visit(OwnPtr<T> const& ptr)
+requires requires(T const& t, Visitor& v) { t.visit_edges(v); }
+{
+    if (ptr) ptr->visit_edges(*this);
+}
+
+template<typename T>
+void visit(NonnullOwnPtr<T> const& ptr)
+requires requires(T const& t, Visitor& v) { t.visit_edges(v); }
+{
+    ptr->visit_edges(*this);
+}
+```
+
+Overload resolution stays correct: the non-template `visit(Cell*)` / `visit(Cell&)` in `Cell.h:66-84` is more specific than a constrained template, so Cell-derived types retain their current "mark as root; tracer later drives visit_edges" semantics. Non-Cell types (like `JS::ExecutionContext`) only match the new constrained template, which forwards straight through `visit_edges`. Types with no `visit_edges` method fail the requires-clause and produce a compile error — same footgun surface as today, just expressed at the type-system level instead of hand-written forwarders.
+
+**Step 1b (fold-in cleanup, optional but nice):** six sites currently hand-write the forwarding call. Replace them with plain `visitor.visit(m_foo)` once the overloads exist:
+
+```
+Libraries/LibJS/Runtime/GeneratorObject.cpp:73
+Libraries/LibJS/Runtime/AsyncGenerator.cpp:63
+Libraries/LibJS/Runtime/AsyncFunctionDriverWrapper.cpp:239
+Libraries/LibJS/SourceTextModule.cpp:57
+Libraries/LibWeb/HTML/Scripting/Environments.cpp:67
+Libraries/LibJS/Runtime/VM.cpp:318   (per-frame loop in gather_roots)
+```
+
+Keeps the call shape consistent with the rest of `visit_edges` code across the codebase.
+
+**Step 2: new `Libraries/LibGC/ScopedRoots.h` / `.cpp`, following the `RootVector` template.**
+
+```cpp
+// ScopedRoots.h (sketch)
+namespace GC {
+
+class GC_API ScopedRootsBase {
+public:
+    virtual void visit_edges(Cell::Visitor&) = 0;
+
+protected:
+    explicit ScopedRootsBase(Heap&);
+    ~ScopedRootsBase();
+
+    Heap* m_heap { nullptr };
+    IntrusiveListNode<ScopedRootsBase> m_list_node;
+
+public:
+    using List = IntrusiveList<&ScopedRootsBase::m_list_node>;
+};
+
+template<typename... Ts>
+class ScopedRoots final : public ScopedRootsBase {
+public:
+    explicit ScopedRoots(Heap& heap, Ts&... values)
+        : ScopedRootsBase(heap)
+        , m_refs(&values...)
+    {
+    }
+
+    ScopedRoots(ScopedRoots const&) = delete;
+    ScopedRoots(ScopedRoots&&) = delete;
+    ScopedRoots& operator=(ScopedRoots const&) = delete;
+    ScopedRoots& operator=(ScopedRoots&&) = delete;
+
+    virtual void visit_edges(Cell::Visitor& v) override
+    {
+        AK::apply([&](auto*... p) { (v.visit(*p), ...); }, m_refs);
+    }
+
+private:
+    AK::Tuple<Ts*...> m_refs;
+};
+
+}
+```
+
+```cpp
+// ScopedRoots.cpp (sketch) — mirrors RootVector.cpp:13-33
+ScopedRootsBase::ScopedRootsBase(Heap& heap) : m_heap(&heap)
+{ m_heap->did_create_scoped_roots({}, *this); }
+
+ScopedRootsBase::~ScopedRootsBase()
+{ m_heap->did_destroy_scoped_roots({}, *this); }
+```
+
+Deleting copy/move intentionally — a `ScopedRoots` is a stack-local registration; copying would double-register and moving across scopes defeats the point.
+
+**Step 3: wire into `Heap`, mirroring `m_root_vectors` exactly.**
+
+- `Heap.h:177-182`: add `ScopedRootsBase::List m_scoped_roots;` next to `m_root_vectors` / `m_root_hash_maps` / `m_root_hash_tables`.
+- `Heap.h:213-223`: add inline `did_create_scoped_roots({}, ScopedRootsBase&)` / `did_destroy_scoped_roots({}, ScopedRootsBase&)` with the same `VERIFY(!list.contains(...))` + `append` / `remove` shape.
+- `Heap.cpp:444-451`: in `gather_roots`, after the existing `m_root_hash_tables` loop, add:
+
+  ```cpp
+  class ScopedRootsGatheringVisitor final : public Cell::Visitor {
+  public:
+      explicit ScopedRootsGatheringVisitor(HashMap<Cell*, HeapRoot>& roots) : m_roots(roots) {}
+      virtual void visit_impl(Cell& cell) override
+      { m_roots.set(&cell, HeapRoot { .type = HeapRoot::Type::ScopedRoots }); }
+      virtual void visit_impl(ReadonlySpan<NanBoxedValue> values) override
+      {
+          for (auto& value : values)
+              if (value.is_cell())
+                  m_roots.set(&const_cast<NanBoxedValue&>(value).as_cell(),
+                              HeapRoot { .type = HeapRoot::Type::ScopedRoots });
+      }
+      virtual void visit_possible_values(ReadonlyBytes) override {}
+  private:
+      HashMap<Cell*, HeapRoot>& m_roots;
+  };
+
+  ScopedRootsGatheringVisitor shim(roots);
+  for (auto& scope : m_scoped_roots)
+      scope.visit_edges(shim);
+  ```
+
+  This adapter is the same shape as `ExecutionContextRootsCollector` at `VM.cpp:317` and the anonymous visitors at `Heap.cpp:150` and `Heap.cpp:640`. It bridges the `visit_edges`-style API into the `gather_roots` map.
+
+**Step 4: new enumerator in `Libraries/LibGC/HeapRoot.h:16-29`: `ScopedRoots`.** Used by the gathering visitor's tag.
+
+**Step 5: plugin allowlist.** Add `GC::ScopedRoots` / `GC::ScopedRootsBase` to the same exclusion lists that already carry `RootVector`, `RootHashMap`, `ConservativeVector`, `RootHashTable`, etc. See the "Recognize RootHashMap and ConservativeVector in clang plugin" commit in the branch history for the exact edit locations in `Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp`.
+
+**Step 6: migrate the `IGNORE_GC` sites in this branch to `ScopedRoots`.** Concrete list (file / what goes on the helper):
+
+| File | Variable(s) to pass to `ScopedRoots` | Notes |
+|---|---|---|
+| `Libraries/LibJS/Runtime/ExecutionContext.cpp` (copy) | the `copy` local | Short-lived between `create()` and the field assignments. |
+| `Libraries/LibJS/Runtime/Realm.cpp` (initialize_host_defined_realm) | `new_context` | Pushed onto VM stack shortly after. |
+| `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp` (async context copy) | `async_context` | Same shape. |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_enqueue_promise_job) | `dummy_execution_context` | |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_make_job_callback) | `script_execution_context` | |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_make_job_callback) | `host_defined` + the `WebEngineCustomJobCallbackData` it wraps | Needs an additional piece: give `JobCallback::CustomData` a virtual `visit_edges(Cell::Visitor&)` hook and override it in `WebEngineCustomJobCallbackData` to visit `incumbent_settings` and forward to `active_script_context->visit_edges`. Then `JobCallback::visit_edges` can call `m_custom_data->visit_edges(visitor)`. At that point the custom-data hazard is fixed at the source and the `IGNORE_GC` on `host_defined` can come off without needing `ScopedRoots` for that particular site. |
+
+Each migration deletes an `IGNORE_GC` + `FIXME` line and replaces the declaration with the `ScopedRoots` one-liner next to it. No further behaviour change.
+
+**Step 7: tests.** Add a `Tests/LibGC/TestScopedRoots.cpp` (or extend `TestGCContainers.cpp`) along the lines of the existing container tests: allocate a cell, put a pointer to it in a stack-held struct that the test drives with `ScopedRoots`, trigger `gather_roots`/`visit_edges` directly, assert the cell appears in the roots map. Use the `gather_roots`-direct pattern described in the "Test Status" section of this doc rather than relying on GC/conservative-scanning to avoid the dangling-reference and conservative-stack issues documented there.
+
+**Out of scope for option 2 (and for this doc):** the ~130-file ExecutionContext → Cell conversion. If that ever happens, `ScopedRoots` is still the right primitive for the general "stack-held non-Cell holder-of-GC-pointers" case, because other non-Cell structs will keep showing up (e.g. `WebEngineCustomJobCallbackData` pre-fix, `NormalizedAlgorithmAndParameter`-shaped structs that currently trip the plugin, and the `Crypto/SubtleCrypto.cpp` cluster of ExceptionOr wrappers around GC-bearing structs).
+
+### 5. Other gaps worth keeping in mind (not audited for concrete instances)
+
+- **`std::vector` / `std::map` with GC pointers**: plugin only checks `AK::*` containers. If any part of the codebase uses `std::` containers with cell pointers, it slips through. Worth a one-time grep; these types are discouraged elsewhere in the codebase so the hit rate should be near zero.
+- **Raw pointers to containers** (`Vector<GC::Ptr<T>>* p`): the variable type isn't a `TemplateSpecializationType` of a known container, so the recursive walker doesn't look through it. Rare but catastrophic if used.
+- **Custom AK-adjacent containers**: `AK::CircularQueue`, `AK::RedBlackTree`, `AK::DoublyLinkedList`, `AK::Queue`, etc. are not on the `types_with_gc_invisible_storage` list. Any of those holding GC pointers would evade the check. `AK::IntrusiveList` is safe — it doesn't own storage.
+- **`memcpy` / `bit_cast` of `GC::Ptr` / containers**: no tool catches raw bit moves of GC pointers. Unusual in this codebase but worth a note.
 
 ## Known Issues / In Progress
 
