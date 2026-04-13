@@ -292,13 +292,13 @@ GC::Ptr<NodeWithStyle> TreeBuilder::create_pseudo_element_if_needed(DOM::Element
     // We also don't create them if they are `display: none`.
     if (first_is_one_of(pseudo_element, CSS::PseudoElement::Before, CSS::PseudoElement::After)
         && (pseudo_element_display.is_none()
-            || pseudo_element_content.type == CSS::ContentData::Type::Normal
-            || pseudo_element_content.type == CSS::ContentData::Type::None))
+            || pseudo_element_content->type == CSS::ContentData::Type::Normal
+            || pseudo_element_content->type == CSS::ContentData::Type::None))
         return {};
 
     // For ::marker with content or display 'none' -- do nothing.
     if (pseudo_element == CSS::PseudoElement::Marker
-        && (pseudo_element_display.is_none() || pseudo_element_content.type == CSS::ContentData::Type::None))
+        && (pseudo_element_display.is_none() || pseudo_element_content->type == CSS::ContentData::Type::None))
         return {};
 
     // For ::marker with content 'normal', create the marker pseudo-element from a ListItemMarkerBox
@@ -306,7 +306,7 @@ GC::Ptr<NodeWithStyle> TreeBuilder::create_pseudo_element_if_needed(DOM::Element
     //        are rendered using the special list-item counter.
     //        See: https://github.com/LadybirdBrowser/ladybird/issues/4782
     // NB: Called during layout tree construction.
-    if (pseudo_element == CSS::PseudoElement::Marker && pseudo_element_content.type == CSS::ContentData::Type::Normal)
+    if (pseudo_element == CSS::PseudoElement::Marker && pseudo_element_content->type == CSS::ContentData::Type::Normal)
         if (auto* list_box = as_if<ListItemBox>(*element.unsafe_layout_node())) {
             // https://www.w3.org/TR/css-lists-3/#content-property
             // "::marker does not generate a box" when list-style-type is 'none' and there's no marker image. Custom
@@ -361,14 +361,14 @@ GC::Ptr<NodeWithStyle> TreeBuilder::create_pseudo_element_if_needed(DOM::Element
 
     CSS::resolve_counters(element_reference);
     // Now that we have counters, we can compute the content for real. Which is silly.
-    if (pseudo_element_content.type == CSS::ContentData::Type::List) {
+    if (pseudo_element_content->type == CSS::ContentData::Type::List) {
         auto [new_content, _] = pseudo_element_style->content(element_reference, initial_quote_nesting_level);
         pseudo_element_node->mutable_computed_values().set_content(new_content);
 
         // FIXME: Handle images, and multiple values
-        if (new_content.type == CSS::ContentData::Type::List) {
+        if (new_content->type == CSS::ContentData::Type::List) {
             push_parent(*pseudo_element_node);
-            for (auto& item : new_content.data) {
+            for (auto& item : new_content->data) {
                 GC::Ptr<Layout::Node> layout_node;
                 if (auto const* string = item.get_pointer<String>()) {
                     auto text = document.realm().create<DOM::Text>(document, Utf16String::from_utf8(*string));

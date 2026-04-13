@@ -3175,12 +3175,12 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             if (auto before = element->get_pseudo_element_node(CSS::PseudoElement::Before)) {
                 // NB: We know that content has a value since we set it immediately when creating a ::before pseudo
                 //     element node.
-                auto const& content = before->computed_values().content().value();
+                auto content = before->computed_values().content();
 
-                if (content.alt_text.has_value()) {
-                    total_accumulated_text.append(content.alt_text.value());
+                if (content->alt_text.has_value()) {
+                    total_accumulated_text.append(content->alt_text.value());
                 } else {
-                    for (auto const& item : content.data) {
+                    for (auto const& item : content->data) {
                         if (auto const* string = item.get_pointer<String>())
                             total_accumulated_text.append(*string);
                     }
@@ -3239,12 +3239,12 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             if (auto after = element->get_pseudo_element_node(CSS::PseudoElement::After)) {
                 // NB: We know that content has a value since we set it immediately when creating an ::after pseudo
                 //     element node.
-                auto const& content = after->computed_values().content().value();
+                auto content = after->computed_values().content();
 
-                if (content.alt_text.has_value()) {
-                    total_accumulated_text.append(content.alt_text.value());
+                if (content->alt_text.has_value()) {
+                    total_accumulated_text.append(content->alt_text.value());
                 } else {
-                    for (auto& item : content.data) {
+                    for (auto& item : content->data) {
                         if (auto const* string = item.get_pointer<String>())
                             total_accumulated_text.append(*string);
                     }

@@ -117,7 +117,7 @@ public:
     Clear clear() const;
     ColumnSpan column_span() const;
     struct ContentDataAndQuoteNestingLevel {
-        ContentData content_data;
+        GC::Ptr<ContentData> content_data;
         u32 final_quote_nesting_level { 0 };
     };
     ContentDataAndQuoteNestingLevel content(DOM::AbstractElement&, u32 initial_quote_nesting_level) const;

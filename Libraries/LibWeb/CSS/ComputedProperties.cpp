@@ -58,6 +58,7 @@
 namespace Web::CSS {
 
 GC_DEFINE_ALLOCATOR(ComputedProperties);
+GC_DEFINE_ALLOCATOR(ContentData);
 
 ComputedProperties::ComputedProperties() = default;
 
@@ -1130,18 +1131,20 @@ ComputedProperties::ContentDataAndQuoteNestingLevel ComputedProperties::content(
         VERIFY_NOT_REACHED();
     };
 
+    auto& heap = element_reference.element().heap();
+
     if (value.is_content()) {
         auto& content_style_value = value.as_content();
 
-        ContentData content_data;
+        auto content_data = heap.allocate<ContentData>();
 
         for (auto const& item : content_style_value.content().values()) {
             if (item->is_string()) {
-                content_data.data.append(item->as_string().string_value().to_string());
+                content_data->data.append(item->as_string().string_value().to_string());
             } else if (item->is_keyword()) {
                 switch (item->to_keyword()) {
                 case Keyword::OpenQuote:
-                    content_data.data.append(get_quote_string(true, quote_nesting_level++).to_string());
+                    content_data->data.append(get_quote_string(true, quote_nesting_level++).to_string());
                     break;
                 case Keyword::CloseQuote:
                     // A 'close-quote' or 'no-close-quote' that would make the depth negative is in error and is ignored
@@ -1150,7 +1153,7 @@ ComputedProperties::ContentDataAndQuoteNestingLevel ComputedProperties::content(
                     // - https://www.w3.org/TR/CSS21/generate.html#quotes-insert
                     // (This is missing from the CONTENT-3 spec.)
                     if (quote_nesting_level > 0)
-                        content_data.data.append(get_quote_string(false, --quote_nesting_level).to_string());
+                        content_data->data.append(get_quote_string(false, --quote_nesting_level).to_string());
                     break;
                 case Keyword::NoOpenQuote:
                     quote_nesting_level++;
@@ -1165,16 +1168,16 @@ ComputedProperties::ContentDataAndQuoteNestingLevel ComputedProperties::content(
                     break;
                 }
             } else if (item->is_counter()) {
-                content_data.counter_style_dependencies.append(item->as_counter().counter_style()->as_counter_style().resolve_counter_style(element_reference.style_scope()));
-                content_data.data.append(item->as_counter().resolve(element_reference));
+                content_data->counter_style_dependencies.append(item->as_counter().counter_style()->as_counter_style().resolve_counter_style(element_reference.style_scope()));
+                content_data->data.append(item->as_counter().resolve(element_reference));
             } else if (item->is_image()) {
-                content_data.data.append(NonnullRefPtr { const_cast<ImageStyleValue&>(item->as_image()) });
+                content_data->data.append(NonnullRefPtr { const_cast<ImageStyleValue&>(item->as_image()) });
             } else {
                 // TODO: Implement images, and other things.
                 dbgln("`{}` is not supported in `content` (yet?)", item->to_string(SerializationMode::Normal));
             }
         }
-        content_data.type = ContentData::Type::List;
+        content_data->type = ContentData::Type::List;
 
         if (auto alt_text = content_style_value.alt_text()) {
             StringBuilder alt_text_builder;
@@ -1182,28 +1185,31 @@ ComputedProperties::ContentDataAndQuoteNestingLevel ComputedProperties::content(
                 if (item->is_string()) {
                     alt_text_builder.append(item->as_string().string_value());
                 } else if (item->is_counter()) {
-                    content_data.counter_style_dependencies.append(item->as_counter().counter_style()->as_counter_style().resolve_counter_style(element_reference.style_scope()));
+                    content_data->counter_style_dependencies.append(item->as_counter().counter_style()->as_counter_style().resolve_counter_style(element_reference.style_scope()));
                     alt_text_builder.append(item->as_counter().resolve(element_reference));
                 } else {
                     dbgln("`{}` is not supported in `content` alt-text (yet?)", item->to_string(SerializationMode::Normal));
                 }
             }
-            content_data.alt_text = MUST(alt_text_builder.to_string());
+            content_data->alt_text = MUST(alt_text_builder.to_string());
         }
 
         return { content_data, quote_nesting_level };
     }
 
+    auto content_data = heap.allocate<ContentData>();
     switch (value.to_keyword()) {
     case Keyword::None:
-        return { { ContentData::Type::None, {}, {} }, quote_nesting_level };
+        content_data->type = ContentData::Type::None;
+        break;
     case Keyword::Normal:
-        return { { ContentData::Type::Normal, {}, {} }, quote_nesting_level };
+        content_data->type = ContentData::Type::Normal;
+        break;
     default:
         break;
     }
 
-    return { {}, quote_nesting_level };
+    return { content_data, quote_nesting_level };
 }
 
 ContentVisibility ComputedProperties::content_visibility() const
