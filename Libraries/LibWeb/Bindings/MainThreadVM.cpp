@@ -50,7 +50,10 @@
 
 namespace Web::Bindings {
 
-static RefPtr<JS::VM> s_main_thread_vm;
+// FIXME: The main-thread VM owns the GC heap and handles its own root gathering
+//        via VM::gather_roots, so the plugin's recursive check for unrooted GC
+//        containers doesn't apply here.
+IGNORE_GC static RefPtr<JS::VM> s_main_thread_vm;
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#active-script
 HTML::Script* active_script()
@@ -284,7 +287,8 @@ void initialize_main_thread_vm(AgentType type)
         auto& heap = realm ? realm->heap() : vm.heap();
         HTML::queue_a_microtask(script ? script->settings_object().responsible_document().ptr() : nullptr, GC::create_function(heap, [&vm, job_settings, job = move(job), script_or_module = move(script_or_module)] {
             // The dummy execution context has to be kept up here to keep it alive for the duration of the function.
-            OwnPtr<JS::ExecutionContext> dummy_execution_context;
+            // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
+            IGNORE_GC OwnPtr<JS::ExecutionContext> dummy_execution_context;
 
             if (job_settings) {
                 // 1. If job settings is not null, then prepare to run script with job settings.
@@ -343,7 +347,8 @@ void initialize_main_thread_vm(AgentType type)
         auto* script = active_script();
 
         // 3. Let script execution context be null.
-        OwnPtr<JS::ExecutionContext> script_execution_context;
+        // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
+        IGNORE_GC OwnPtr<JS::ExecutionContext> script_execution_context;
 
         // 4. If active script is not null, set script execution context to a new JavaScript execution context, with its Function field set to null,
         //    its Realm field set to active script's settings object's realm, and its ScriptOrModule set to active script's record.
@@ -363,7 +368,10 @@ void initialize_main_thread_vm(AgentType type)
         }
 
         // 5. Return the JobCallback Record { [[Callback]]: callable, [[HostDefined]]: { [[IncumbentSettings]]: incumbent settings, [[ActiveScriptContext]]: script execution context } }.
-        auto host_defined = adopt_own(*new WebEngineCustomJobCallbackData(incumbent_settings, move(script_execution_context)));
+        // FIXME: WebEngineCustomJobCallbackData holds GC pointers but lives in
+        //        JobCallback::m_custom_data (OwnPtr), which JobCallback::visit_edges
+        //        does not forward to.
+        IGNORE_GC auto host_defined = adopt_own(*new WebEngineCustomJobCallbackData(incumbent_settings, move(script_execution_context)));
         return JS::JobCallback::create(*s_main_thread_vm, callable, move(host_defined));
     };
 
