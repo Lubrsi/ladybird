@@ -264,6 +264,27 @@ GC::ScopedRoots scoped(vm.heap(), dummy_execution_context);
 
 Construction deduces `Ts...` from the arguments (C++17 CTAD); the helper stores raw pointers to the stack slots and unregisters on destruction. Because variables are tracked by pointer, reassignment mid-scope is fine — the GC always reads the current value at trace time.
 
+**Timing rule (important).** `ScopedRoots` protects a tracked variable from the moment the helper is constructed onward, *not retroactively*. The variable must not contain GC-relevant state at the moment the helper registers. Two patterns to keep straight:
+
+```cpp
+// SAFE: variable is empty at registration; populated afterwards under protection.
+OwnPtr<JS::ExecutionContext> ctx;
+GC::ScopedRoots scoped(vm.heap(), ctx);
+ctx = JS::ExecutionContext::create(...);
+ctx->realm = realm;
+```
+
+```cpp
+// UNSAFE: ctx already holds GC pointers when ScopedRoots registers — there is
+// a window between the populated-return and the registration line.
+auto ctx = running_execution_context.copy();   // copy() returns populated state
+GC::ScopedRoots scoped(vm.heap(), ctx);        // too late
+```
+
+The boundary is "first GC-relevant write happens after registration", not "declaration before registration". An `auto x = ExecutionContext::create(...);` is fine because `create()` returns an `ExecutionContext` whose GC pointer fields are all default-null at that moment — the dangerous writes are the field assignments below it. An `auto x = source.copy();` is *not* fine because `copy()` populates all fields before returning.
+
+**Sites where the populated-return pattern is mandatory** need either a different primitive (e.g. `GC::ScopedRoot<T>` — a singular owning wrapper that performs registration *before* the held value is initialized, sketched below) or a site-specific refactor (e.g. give `copy()` a destination parameter so the populated writes happen after the destination is registered). Don't try to retrofit `ScopedRoots` onto these sites; the protection genuinely doesn't extend backwards.
+
 **Step 1: add overloads to `GC::Cell::Visitor` (`Libraries/LibGC/Cell.h:66-185`) for non-Cell holders-of-GC-pointers.**
 
 The motivating type is `JS::ExecutionContext`, whose `visit_edges` is **non-const** (`Libraries/LibJS/Runtime/ExecutionContext.h:33`), and so are the existing `visit_edges` overrides on every `Cell`-derived class via `MUST_UPCALL virtual void visit_edges(Visitor&)` (`Cell.h:202`). The overloads must therefore take non-const references and constrain on the non-const method:
@@ -420,18 +441,57 @@ Two viable approaches, in order of preference:
 
 **Until step 5 lands, the `IGNORE_GC` annotations from commit `81f3ead348` cannot be removed.** Step 6 below assumes step 5 is in place.
 
-**Step 6: migrate the `IGNORE_GC` sites in this branch to `ScopedRoots`.** Concrete list (file / what goes on the helper):
+**Step 6: migrate the `IGNORE_GC` sites in this branch.** Each site needs to be classified by its initialization shape against the timing rule. Three buckets:
 
-| File | Variable(s) to pass to `ScopedRoots` | Notes |
+**Bucket A — empty at registration, populated afterwards.** Sibling `ScopedRoots` works. The migration deletes one `IGNORE_GC` + `FIXME` line and inserts a `ScopedRoots` line right after the declaration, before any field assignment.
+
+| File | Variable | Why bucket A |
 |---|---|---|
-| `Libraries/LibJS/Runtime/ExecutionContext.cpp` (copy) | the `copy` local | Short-lived between `create()` and the field assignments. |
-| `Libraries/LibJS/Runtime/Realm.cpp` (initialize_host_defined_realm) | `new_context` | Pushed onto VM stack shortly after. |
-| `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp` (async context copy) | `async_context` | Same shape. |
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_enqueue_promise_job) | `dummy_execution_context` | |
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_make_job_callback) | `script_execution_context` | |
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp` (host_make_job_callback) | `host_defined` + the `WebEngineCustomJobCallbackData` it wraps | Needs an additional piece: give `JobCallback::CustomData` a virtual `visit_edges(Cell::Visitor&)` hook and override it in `WebEngineCustomJobCallbackData` to visit `incumbent_settings` and forward to `active_script_context->visit_edges`. Then `JobCallback::visit_edges` can call `m_custom_data->visit_edges(visitor)`. At that point the custom-data hazard is fixed at the source and the `IGNORE_GC` on `host_defined` can come off without needing `ScopedRoots` for that particular site. |
+| `Libraries/LibJS/Runtime/ExecutionContext.cpp:108` (copy) | `copy` | `create()` returns an `ExecutionContext` with all GC pointer fields default-null. The populated writes (`copy->function = function;` ...) start on the next line. Insert `ScopedRoots` between `create()` and the first field write. |
+| `Libraries/LibJS/Runtime/Realm.cpp:42` (initialize_host_defined_realm) | `new_context` | Same shape — `create()` returns empty, fields populated below. |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:287` (host_enqueue_promise_job) | `dummy_execution_context` | Declared as a default-constructed `OwnPtr` (empty), assigned later via `dummy_execution_context = JS::ExecutionContext::create(...)`. `ScopedRoots` immediately after the declaration is correct. |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:347` (host_make_job_callback) | `script_execution_context` | Same shape — empty `OwnPtr` at declaration, populated below. |
 
-Each migration deletes an `IGNORE_GC` + `FIXME` line and replaces the declaration with the `ScopedRoots` one-liner next to it. No further behaviour change.
+**Bucket B — populated at the moment of declaration.** Sibling `ScopedRoots` cannot help; the variable already holds GC pointers before registration. These sites need either a refactor or a different primitive.
+
+| File | Variable | Why bucket B |
+|---|---|---|
+| `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp:437` (async context copy) | `async_context` | Initialised from `running_context.copy()`, which populates *all* GC fields before returning. The returned `NonnullOwnPtr` already holds live GC pointers when control reaches the next line. |
+
+Two ways forward for bucket B:
+
+- *Refactor approach.* Give `ExecutionContext::copy()` a destination parameter (e.g. `void copy_to(ExecutionContext& destination) const;`). Caller does `OwnPtr<ExecutionContext> ac; GC::ScopedRoots scoped(heap, ac); ac = ExecutionContext::create(...); running_context.copy_to(*ac);` — every populated write happens under `ScopedRoots` protection. Mechanical change, one extra line at the call site, but touches `copy()`'s API.
+- *Owning-wrapper primitive (`GC::ScopedRoot<T>`, singular).* A separate helper that performs registration *before* taking ownership of its held value. Out-of-scope for this implementation plan but worth sketching the shape so the bucket-B sites have an obvious target:
+  ```cpp
+  template<typename T>
+  class ScopedRoot final : public ScopedRootsBase {
+  public:
+      template<typename Factory>
+      ScopedRoot(Heap& heap, Factory&& factory)
+          : ScopedRootsBase(heap)
+          , m_held(/* default / empty */)
+      {
+          // Registration has already happened in ScopedRootsBase's ctor.
+          m_held = AK::forward<Factory>(factory)();
+      }
+      void visit_edges(Cell::Visitor& v) override { v.visit(m_held); }
+      T* operator->() { return m_held.ptr(); }
+      T& operator*() { return *m_held; }
+  private:
+      OwnPtr<T> m_held;
+  };
+  // Usage:
+  GC::ScopedRoot<JS::ExecutionContext> async_context(heap, [&] { return running_context.copy(); });
+  ```
+  Note the still-fiddly part: between the lambda returning the populated `NonnullOwnPtr` and the move-assign into `m_held`, there is a brief window. In practice no allocation happens between a function return and an assignment in C++, but if strictness matters, the only way to fully close that window is the refactor approach above.
+
+**Bucket C — different fix entirely.** Sibling `ScopedRoots` doesn't apply because the hazard is structural, not scope-local.
+
+| File | Variable | Fix |
+|---|---|---|
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:368` (host_make_job_callback) | `host_defined` (`WebEngineCustomJobCallbackData`) | Already populated at construction. The proper fix is structural: give `JobCallback::CustomData` a virtual `visit_edges(Cell::Visitor&)` hook, override it in `WebEngineCustomJobCallbackData` to visit `incumbent_settings` and forward to `active_script_context->visit_edges`, then have `JobCallback::visit_edges` call `m_custom_data->visit_edges(visitor)`. The `host_defined` `IGNORE_GC` then comes off because the data is correctly traced through its `Cell` owner. No `ScopedRoots` needed. |
+
+After step 6, all six `IGNORE_GC` + `FIXME` annotations from this branch can be removed: four via `ScopedRoots` (bucket A), one via `copy_to`-style refactor or the `ScopedRoot<T>` follow-up primitive (bucket B), and one via the `JobCallback::CustomData::visit_edges` hook (bucket C).
 
 **Step 7: tests.** Add a `Tests/LibGC/TestScopedRoots.cpp` (or extend `TestGCContainers.cpp`) along the lines of the existing container tests: allocate a cell, put a pointer to it in a stack-held struct that the test drives with `ScopedRoots`, trigger `gather_roots`/`visit_edges` directly, assert the cell appears in the roots map. Use the `gather_roots`-direct pattern described in the "Test Status" section of this doc rather than relying on GC/conservative-scanning to avoid the dangling-reference and conservative-stack issues documented there.
 
