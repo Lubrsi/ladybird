@@ -50,6 +50,8 @@
 
 namespace Web::Bindings {
 
+GC_DEFINE_ALLOCATOR(WebEngineCustomJobCallbackData);
+
 // FIXME: The main-thread VM owns the GC heap and handles its own root gathering
 //        via VM::gather_roots, so the plugin's recursive check for unrooted GC
 //        containers doesn't apply here.
@@ -368,11 +370,8 @@ void initialize_main_thread_vm(AgentType type)
         }
 
         // 5. Return the JobCallback Record { [[Callback]]: callable, [[HostDefined]]: { [[IncumbentSettings]]: incumbent settings, [[ActiveScriptContext]]: script execution context } }.
-        // FIXME: WebEngineCustomJobCallbackData holds GC pointers but lives in
-        //        JobCallback::m_custom_data (OwnPtr), which JobCallback::visit_edges
-        //        does not forward to.
-        IGNORE_GC auto host_defined = adopt_own(*new WebEngineCustomJobCallbackData(incumbent_settings, move(script_execution_context)));
-        return JS::JobCallback::create(*s_main_thread_vm, callable, move(host_defined));
+        auto host_defined = s_main_thread_vm->heap().allocate<WebEngineCustomJobCallbackData>(incumbent_settings, move(script_execution_context));
+        return JS::JobCallback::create(*s_main_thread_vm, callable, host_defined);
     };
 
     // 8.1.6.7.1 HostGetImportMetaProperties(moduleRecord), https://html.spec.whatwg.org/multipage/webappapis.html#hostgetimportmetaproperties
