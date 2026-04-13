@@ -637,9 +637,9 @@ WebIDL::ExceptionOr<bool> HTMLFormElement::report_validity()
 }
 
 // https://html.spec.whatwg.org/multipage/forms.html#category-submit
-Vector<GC::Ref<DOM::Element>> HTMLFormElement::get_submittable_elements()
+GC::RootVector<GC::Ref<DOM::Element>> HTMLFormElement::get_submittable_elements()
 {
-    Vector<GC::Ref<DOM::Element>> submittable_elements;
+    GC::RootVector<GC::Ref<DOM::Element>> submittable_elements { realm().heap() };
 
     root().for_each_in_subtree([&](auto& node) {
         if (auto* form_associated_element = as_if<FormAssociatedElement>(node)) {
@@ -1041,7 +1041,7 @@ Vector<FlyString> HTMLFormElement::supported_property_names() const
         } source;
         AK::Duration age;
     };
-    Vector<SourcedName> sourced_names;
+    GC::ConservativeVector<SourcedName> sourced_names { realm().heap() };
 
     // 2. For each listed element candidate whose form owner is the form element, with the exception of any
     //    input elements whose type attribute is in the Image Button state:
