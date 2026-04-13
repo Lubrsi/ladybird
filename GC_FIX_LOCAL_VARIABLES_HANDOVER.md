@@ -245,82 +245,245 @@ The `WebEngineCustomJobCallbackData` case is slightly different but related: `Jo
 
 **Options for a proper fix, in ascending order of scope:**
 
-1. **Teach the plugin the "manually-traced owner" pattern.** Recognize that a class holding `OwnPtr<T>` / `NonnullOwnPtr<T>` where `T` has a `visit_edges` method, *and* whose own `visit_edges` calls `->visit_edges(visitor)` on that member, is not a violation. This would eliminate the six Cell-held `OwnPtr<ExecutionContext>` sites from the false-positive list and generalise to any future non-Cell struct that follows the pattern. Does **not** fix transient locals.
-2. **General-purpose `GC::ScopedRoots` primitive for transient locals.** Introduce a variadic RAII helper that registers stack-held variables with the heap for the lifetime of an enclosing scope, and have it forward through `visit_edges` so it composes with the existing tracing machinery. Replaces the transient-local `IGNORE_GC` sites and any future ones. Implementation plan spelled out below. Leaves the hot path (VM execution context stack, generator/module member storage) untouched.
+1. **Specialized `JS::RootedExecutionContext` wrapper for transient locals.** Introduce an RAII wrapper that owns a `NonnullOwnPtr<ExecutionContext>` inside it, registers itself with the heap on construction, and traces its held context via the existing `ExecutionContext::visit_edges`. Factory functions combine "allocate + register + populate" into one atomic step (the pool allocator is not the GC heap, so no GC fires during the allocation), eliminating the timing-window hazard. Replaces the five transient-local `IGNORE_GC` sites with a wrapper whose declared variable type is `JS::RootedExecutionContext`, so the plugin sees no `OwnPtr<ExecutionContext>` local to flag in the first place — no flow-sensitive plugin work needed. Leaves the hot path (VM execution context stack, generator/module member storage) untouched. Implementation plan spelled out below.
+2. **Teach the plugin the "manually-traced owner" pattern.** Recognize that a class holding `OwnPtr<T>` / `NonnullOwnPtr<T>` where `T` has a `visit_edges` method, *and* whose own `visit_edges` calls `->visit_edges(visitor)` on that member, is not a violation. This is a separate plugin refinement — it's not needed for the migration below because `RootedExecutionContext` already dodges the plugin by keeping the `OwnPtr` as an internal member. But it would clean up the six *existing* Cell-held hand-written forwarders (`GeneratorObject`, `AsyncGenerator`, etc. — see list below), which aren't actually violations today but would be flagged if the plugin were stricter in the future.
 3. **Make `ExecutionContext` a `GC::Cell`.** Fixes all of the above but pays the hot-path cost on every JS function call (push/pop of the VM stack becomes barrier traffic), loses the custom tail-sized pool allocator (`ExecutionContextAllocator` buckets by 4/16/64/128/256/512 Value slots), and cascades signature changes across ~130 files in LibJS and LibWeb (generators, modules, settings objects, and all creators). Probably not worth it until profiling shows GC pressure from contexts or the Cell allocator grows a pooled / variable-size variant.
 
-**Recommended path:** option 1 as a standalone plugin improvement (clears the Cell-held OwnPtr false positives for free), then option 2 as a targeted refactor for the transient-local cluster. Defer option 3 unless a deeper reason emerges.
+**Recommended path:** option 1 — it's self-contained, solves every `IGNORE_GC` site in this branch (bucket B as well as bucket A, because the factory collapses the timing window), and requires no changes to the existing plugin or `GC::Cell::Visitor` API. Defer options 2 and 3 unless a deeper reason emerges.
 
-#### Implementation plan for option 2 (`GC::ScopedRoots`)
+#### Why specialized instead of a generic `GC::ScopedRoots`
 
-Goal: a one-liner RAII helper that a caller can drop next to a stack-held `OwnPtr<ExecutionContext>` (or any other non-Cell holder-of-GC-pointers) to make the contents traced for the lifetime of the enclosing scope, with no heap allocation, no lambda storage, and no per-type wrapper class.
+An earlier version of this section proposed a generic `GC::ScopedRoots<Ts...>` variadic RAII helper plus `Cell::Visitor::visit(T&)` / `visit(OwnPtr<T>&)` overloads constrained on `visit_edges`. In principle it's more general, but for the actual cluster of sites in this branch, it carries costs that the specialized approach avoids entirely:
 
-**Target usage:**
-```cpp
-OwnPtr<JS::ExecutionContext> dummy_execution_context;
-GC::ScopedRoots scoped(vm.heap(), dummy_execution_context);
-// ... code that may allocate; ctx's inner GC pointers are traced ...
-```
+- **Timing-window hazard for populated locals.** `ScopedRoots` can't protect a variable retroactively; the "populated at declaration" cluster (e.g. `async_context = running_context.copy()`) either needs a `copy_to`-style refactor or a separate owning-wrapper primitive. `RootedExecutionContext::copy_from` wraps allocation and registration into one call and sidesteps this.
+- **Flow-sensitive plugin work.** `ScopedRoots` leaves a bare `OwnPtr<ExecutionContext>` local in the source — the plugin's `VisitVarDecl` (`Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp:978-1018`) flags it on type alone, so removing the `IGNORE_GC` requires a same-`CompoundStmt` lookahead in the plugin that verifies a paired `ScopedRoots` construction. That's a non-trivial extension with subtle correctness requirements around ordering and scope. `RootedExecutionContext` has no bare `OwnPtr` local — the plugin sees `JS::RootedExecutionContext ctx;` and a simple type-level allowlist entry is enough.
+- **`Cell::Visitor` surface extension.** `ScopedRoots` requires `visit(T&)` / `visit(OwnPtr<T>&)` / `visit(NonnullOwnPtr<T>&)` overloads constrained on `visit_edges` across `LibGC/Cell.h:66-185`. `RootedExecutionContext::visit_edges` calls `m_ctx->visit_edges(visitor)` directly with no new overload needed.
+- **No actual generic use case in the tree.** The other non-Cell holders-of-GC-pointers (`GeneratorObject::m_execution_context`, `SourceTextModule::m_execution_context`, settings-object contexts, etc.) are already members of `Cell`s and correctly traced by their owner's `visit_edges` (see "Step 5" below for the list). Only stack-held transient `ExecutionContext`s have this shape, and there's exactly one non-Cell type in the codebase that needs this treatment.
 
-Construction deduces `Ts...` from the arguments (C++17 CTAD); the helper stores raw pointers to the stack slots and unregisters on destruction. Because variables are tracked by pointer, reassignment mid-scope is fine — the GC always reads the current value at trace time.
+If another non-Cell type with `visit_edges` and a timing hazard ever appears, writing a second specialized wrapper is cheap — each one is ~50 lines.
 
-**Timing rule (important).** `ScopedRoots` protects a tracked variable from the moment the helper is constructed onward, *not retroactively*. The variable must not contain GC-relevant state at the moment the helper registers. Two patterns to keep straight:
+#### Implementation plan for option 1 (`JS::RootedExecutionContext`)
 
-```cpp
-// SAFE: variable is empty at registration; populated afterwards under protection.
-OwnPtr<JS::ExecutionContext> ctx;
-GC::ScopedRoots scoped(vm.heap(), ctx);
-ctx = JS::ExecutionContext::create(...);
-ctx->realm = realm;
-```
+Goal: an RAII wrapper that owns a `NonnullOwnPtr<ExecutionContext>`, registers with the heap on construction so the held context is traced via `ExecutionContext::visit_edges` from that point forward, and offers factory functions that collapse "allocate + register + populate" into one timing-window-free call. Declared variable type is `JS::RootedExecutionContext`, so the plugin sees nothing to flag.
+
+**Target usage (covering all five `IGNORE_GC` transient-local sites):**
 
 ```cpp
-// UNSAFE: ctx already holds GC pointers when ScopedRoots registers — there is
-// a window between the populated-return and the registration line.
-auto ctx = running_execution_context.copy();   // copy() returns populated state
-GC::ScopedRoots scoped(vm.heap(), ctx);        // too late
-```
+// Allocate-and-register — direct construction. Mandatory copy elision (C++17)
+// means no move is required even though the wrapper is non-movable.
+JS::RootedExecutionContext ctx(vm, 0, ReadonlySpan<Value> {}, 0);
+ctx->realm = &realm;
+vm.push_execution_context(*ctx);
 
-The boundary is "first GC-relevant write happens after registration", not "declaration before registration". An `auto x = ExecutionContext::create(...);` is fine because `create()` returns an `ExecutionContext` whose GC pointer fields are all default-null at that moment — the dangerous writes are the field assignments below it. An `auto x = source.copy();` is *not* fine because `copy()` populates all fields before returning.
+// Copy-and-register — second public ctor selected by parameter shape.
+JS::RootedExecutionContext async_context(vm, running_context);
 
-**Sites where the populated-return pattern is mandatory** need either a different primitive (e.g. `GC::ScopedRoot<T>` — a singular owning wrapper that performs registration *before* the held value is initialized, sketched below) or a site-specific refactor (e.g. give `copy()` a destination parameter so the populated writes happen after the destination is registered). Don't try to retrofit `ScopedRoots` onto these sites; the protection genuinely doesn't extend backwards.
-
-**Step 1: add overloads to `GC::Cell::Visitor` (`Libraries/LibGC/Cell.h:66-185`) for non-Cell holders-of-GC-pointers.**
-
-The motivating type is `JS::ExecutionContext`, whose `visit_edges` is **non-const** (`Libraries/LibJS/Runtime/ExecutionContext.h:33`), and so are the existing `visit_edges` overrides on every `Cell`-derived class via `MUST_UPCALL virtual void visit_edges(Visitor&)` (`Cell.h:202`). The overloads must therefore take non-const references and constrain on the non-const method:
-
-```cpp
-// Non-Cell reference-to-object that has its own visit_edges method.
-template<typename T>
-void visit(T& obj)
-requires requires(T& o, Visitor& v) { o.visit_edges(v); }
-{
-    obj.visit_edges(*this);
-}
-
-// Ownership wrappers around the above. The OwnPtr itself can be const
-// (we only need the held T to be mutable), matching how OwnPtr<T>::operator->
-// returns a non-const T* on a const OwnPtr<T>&.
-template<typename T>
-void visit(OwnPtr<T> const& ptr)
-requires requires(T& t, Visitor& v) { t.visit_edges(v); }
-{
-    if (ptr) ptr->visit_edges(*this);
-}
-
-template<typename T>
-void visit(NonnullOwnPtr<T> const& ptr)
-requires requires(T& t, Visitor& v) { t.visit_edges(v); }
-{
-    ptr->visit_edges(*this);
+// Conditional population — Optional<T>::emplace calls the ctor in-place, so
+// non-movability is fine. Do NOT use operator= assignment; that would need
+// move-assignment, which is deleted. Note the double-dereference below:
+// `*dummy_execution_context` yields the RootedExecutionContext, and its
+// operator-> reaches the held ExecutionContext — `(*dummy)->script_or_module`
+// is the access path, not `dummy->script_or_module`.
+Optional<JS::RootedExecutionContext> dummy_execution_context;
+if (!job_settings) {
+    dummy_execution_context.emplace(vm, 0, ReadonlySpan<Value> {}, 0);
+    (*dummy_execution_context)->script_or_module = script_or_module;
+    vm.push_execution_context(**dummy_execution_context);
 }
 ```
 
-A const overload (`visit(T const&) requires { o.visit_edges(v); }` with a const-callable `visit_edges`) is not added in this step because no current type needs it — `ExecutionContext::visit_edges` is non-const and so is every Cell's `visit_edges`. Add a const-receiver overload only if a future non-Cell type chooses to declare its `visit_edges` as `const`.
+**The Optional constraint matters.** `RootedExecutionContext` has copy and move deleted (the intrusive list node pins the object to its registration address). Consequently:
 
-Overload resolution stays correct: the non-template `visit(Cell*)` / `visit(Cell&)` in `Cell.h:66-84` is more specific than a constrained template, so Cell-derived types retain their current "mark as root; tracer later drives visit_edges" semantics. Non-Cell types (like `JS::ExecutionContext`) only match the new constrained template, which forwards straight through `visit_edges`. Types with no `visit_edges` method fail the requires-clause and produce a compile error — same footgun surface as today, just expressed at the type-system level instead of hand-written forwarders.
+- `auto ctx = ...;` works via C++17 mandatory copy elision only when the RHS is a prvalue of the same type — so `JS::RootedExecutionContext ctx(vm, ...);` (direct initialization) is fine, and `JS::RootedExecutionContext ctx = JS::RootedExecutionContext(vm, ...);` is also fine.
+- `opt.emplace(vm, ...)` works — emplace forwards ctor args and constructs in-place.
+- `opt = JS::RootedExecutionContext(vm, ...)` does **not** compile: this is move-assignment of the held value, and move-assign is deleted. Linter-style error.
+- Named factory functions (`::create`, `::copy_from`) returning the wrapper by value would also work for simple locals via NRVO, but **cannot** be used as an argument to `emplace` (emplace forwards ctor args, not a constructed prvalue). For this reason the implementation should prefer direct public ctors over static factories — `::create` would be a usability trap.
 
-**Step 1b (fold-in cleanup, optional but nice):** six sites currently hand-write the forwarding call. Replace them with plain `visitor.visit(m_foo)` once the overloads exist:
+If `AK::Optional` turns out not to support a non-movable `T` at all (some implementations require the type to be move-constructible even when `emplace` is used — worth actually checking `AK/Optional.h` before committing to the shape), two fallbacks are:
+
+- `AK::Variant<Empty, JS::RootedExecutionContext>` — Variant uses in-place construction and doesn't require T to be movable.
+- A tiny `JS::OptionalRootedExecutionContext` type that wraps a manual `alignas(T) std::byte[sizeof(T)]` with a live flag — trivial to write if needed.
+
+Before committing to the shape, verify `AK::Optional<T>::emplace` compiles for a non-movable `T`.
+
+**Step 1: new `Libraries/LibJS/Runtime/RootedExecutionContext.h` / `.cpp` next to `ExecutionContext.{h,cpp}`.**
+
+```cpp
+// RootedExecutionContext.h (sketch)
+namespace JS {
+
+class JS_API [[nodiscard]] RootedExecutionContext {
+public:
+    // Allocate-and-register.
+    RootedExecutionContext(VM&, u32 registers_and_locals_count,
+        ReadonlySpan<Value> constants, u32 arguments_count);
+
+    // Copy-and-register. Distinguished from the allocate ctor by parameter shape.
+    RootedExecutionContext(VM&, ExecutionContext const& source);
+
+    ~RootedExecutionContext();
+
+    RootedExecutionContext(RootedExecutionContext const&) = delete;
+    RootedExecutionContext& operator=(RootedExecutionContext const&) = delete;
+    RootedExecutionContext(RootedExecutionContext&&) = delete;
+    RootedExecutionContext& operator=(RootedExecutionContext&&) = delete;
+
+    ExecutionContext& operator*() { return *m_ctx; }
+    ExecutionContext const& operator*() const { return *m_ctx; }
+    ExecutionContext* operator->() { return m_ctx.ptr(); }
+    ExecutionContext const* operator->() const { return m_ctx.ptr(); }
+    ExecutionContext* ptr() { return m_ctx.ptr(); }
+
+    void visit_edges(Cell::Visitor& visitor) { m_ctx->visit_edges(visitor); }
+
+private:
+    VM* m_vm { nullptr };
+    NonnullOwnPtr<ExecutionContext> m_ctx;
+    IntrusiveListNode<RootedExecutionContext> m_list_node;
+
+public:
+    using List = IntrusiveList<&RootedExecutionContext::m_list_node>;
+};
+
+}
+```
+
+```cpp
+// RootedExecutionContext.cpp (sketch)
+namespace JS {
+
+RootedExecutionContext::RootedExecutionContext(VM& vm, u32 regs_locals,
+    ReadonlySpan<Value> constants, u32 args)
+    : m_vm(&vm)
+    // ExecutionContext::create goes through ExecutionContextAllocator's pool,
+    // NOT the GC heap — no GC can fire here, so no timing window.
+    , m_ctx(ExecutionContext::create(regs_locals, constants, args))
+{
+    m_vm->did_create_rooted_execution_context({}, *this);
+}
+
+RootedExecutionContext::RootedExecutionContext(VM& vm, ExecutionContext const& source)
+    : m_vm(&vm)
+    // source.copy() allocates (pool) and does a sequence of GC-pointer copies
+    // and a memcpy of the Value tail. None of these trigger GC. By the time
+    // control reaches did_create_rooted_execution_context below, the
+    // populated m_ctx is already accessible through *this, so any GC that
+    // fires afterwards will trace its fields precisely.
+    , m_ctx(source.copy())
+{
+    m_vm->did_create_rooted_execution_context({}, *this);
+}
+
+RootedExecutionContext::~RootedExecutionContext()
+{
+    m_vm->did_destroy_rooted_execution_context({}, *this);
+}
+
+}
+```
+
+Copy/move deleted intentionally — the intrusive list node pins the object to its registration slot; copying would double-register and moving mid-scope is the kind of thing we want the type system to forbid.
+
+**Step 2: wire into `VM`, not `Heap`.** The architecture has a clean embedder-roots seam already: `Heap` takes an `AK::Function<void(HashMap<Cell*, HeapRoot>&)> gather_embedder_roots` in its ctor at `Libraries/LibGC/Heap.h:44`, and `JS::VM::gather_roots` (`Libraries/LibJS/Runtime/VM.cpp:277`) is what gets registered there. VM already owns the raw execution-context stack walk at `VM.cpp:311-325` — `RootedExecutionContext` slots in next to it. **No changes to LibGC headers or `Heap.cpp` are needed**; LibGC stays oblivious to `JS::RootedExecutionContext`.
+
+- `Libraries/LibJS/Runtime/VM.h`: add `JS::RootedExecutionContext::List m_rooted_execution_contexts;` next to the existing `m_execution_context_stack` (around `VM.h:335`). Also add inline helpers:
+
+  ```cpp
+  inline void VM::did_create_rooted_execution_context(Badge<RootedExecutionContext>, RootedExecutionContext& rooted)
+  {
+      VERIFY(!m_rooted_execution_contexts.contains(rooted));
+      m_rooted_execution_contexts.append(rooted);
+  }
+  inline void VM::did_destroy_rooted_execution_context(Badge<RootedExecutionContext>, RootedExecutionContext& rooted)
+  {
+      VERIFY(m_rooted_execution_contexts.contains(rooted));
+      m_rooted_execution_contexts.remove(rooted);
+  }
+  ```
+
+- `Libraries/LibJS/Runtime/VM.cpp:277-329`: in `VM::gather_roots`, after the existing `gather_roots_from_execution_context_stack` block (which already uses `ExecutionContextRootsCollector` to extract cells out of each frame), add:
+
+  ```cpp
+  for (auto& rooted : m_rooted_execution_contexts) {
+      IGNORE_GC ExecutionContextRootsCollector visitor;
+      rooted.visit_edges(visitor);
+      for (auto cell : visitor.roots)
+          roots.set(cell, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
+  }
+  ```
+
+  Reuses the existing `ExecutionContextRootsCollector` visitor and the existing `HeapRoot::Type::VM` tag. No new `HeapRoot::Type` enumerator needed, and no corresponding switch updates in `Heap.cpp`'s dump path — the `VM` tag path is already handled at `Heap.cpp:250-252`.
+
+**Step 3: plugin allowlist.** Add `JS::RootedExecutionContext` to the same allowlist that already carries `GC::RootVector`, `GC::RootHashMap`, `GC::ConservativeVector`, `GC::RootHashTable`, etc. Edit location: the recognition list in `Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp`. See the "Recognize RootHashMap and ConservativeVector in clang plugin" commit in the branch history for the exact entry points.
+
+No flow-sensitive analysis needed: the declared variable type at each call site is `JS::RootedExecutionContext`, not `OwnPtr<ExecutionContext>`, so `VisitVarDecl`'s type-level check passes trivially.
+
+**Step 4: migrate the `IGNORE_GC` sites.** Five of the six current annotations become `RootedExecutionContext`:
+
+| File | Current | Replacement |
+|---|---|---|
+| `Libraries/LibJS/Runtime/ExecutionContext.cpp:108` (in `copy()` itself) | `IGNORE_GC auto copy = create(...); copy->function = function; ...; return copy;` | This is the *body* of `ExecutionContext::copy()`, which the `RootedExecutionContext(VM&, ExecutionContext const&)` ctor wraps. The `IGNORE_GC` here can come off once the new ctor is the only caller of `copy()` — i.e. when all external users of `ExecutionContext::copy()` are migrated and `copy()` becomes an internal detail. If that's too aggressive for one commit, leave the annotation with a rewritten FIXME pointing at `RootedExecutionContext` as the intended public entry point. |
+| `Libraries/LibJS/Runtime/Realm.cpp:42` | `IGNORE_GC auto new_context = ExecutionContext::create(0, {}, 0); new_context->function = nullptr; ...` | `JS::RootedExecutionContext new_context(vm, 0, ReadonlySpan<Value> {}, 0); new_context->function = nullptr; ...` |
+| `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp:437` | `IGNORE_GC auto async_context = running_context.copy();` | `JS::RootedExecutionContext async_context(vm, running_context);` — this is the bucket-B site; the copy-ctor variant solves the timing window. |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:287` (`dummy_execution_context`) | `IGNORE_GC OwnPtr<JS::ExecutionContext> dummy_execution_context;` + later conditional `dummy_execution_context = JS::ExecutionContext::create(...); ...` | `Optional<JS::RootedExecutionContext> dummy_execution_context;` + inside the `else` branch: `dummy_execution_context.emplace(vm, 0, ReadonlySpan<JS::Value> {}, 0); (*dummy_execution_context)->script_or_module = script_or_module; vm.push_execution_context(**dummy_execution_context);`. |
+| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:347` (`script_execution_context`) + `:374` (`host_defined`) | `IGNORE_GC OwnPtr<JS::ExecutionContext> script_execution_context;` + conditional populate + `move(script_execution_context)` into `WebEngineCustomJobCallbackData` | **These two sites must migrate together.** The current code builds `script_execution_context` as a stack local and then transfers it into `WebEngineCustomJobCallbackData` via `move(...)` at line 374. A non-movable `RootedExecutionContext` can't participate in that transfer, so there's no intermediate stack-local form to reach for. The fix folds both sites into one structural change (see bucket-C note below). |
+
+**Bucket C (combined with `script_execution_context`).** The `WebEngineCustomJobCallbackData` hazard and the `script_execution_context` transfer hazard are the same problem in two halves. The fix has three parts:
+
+1. **Change `WebEngineCustomJobCallbackData`'s storage** (`Libraries/LibWeb/Bindings/MainThreadVM.h:22-33`) from `OwnPtr<JS::ExecutionContext> active_script_context` to `NonnullOwnPtr<JS::ExecutionContext> active_script_context`, since by the point the struct is constructed the decision "should there be a script execution context?" has already been made in the caller (only constructed on the `if (script)` path). If the `Optional`-ness is actually needed at the callback site, keep `OwnPtr<ExecutionContext>` — what changes is how the struct *participates in tracing*.
+
+2. **Give `JobCallback::CustomData` a virtual `visit_edges(Cell::Visitor&)` hook** (`Libraries/LibJS/Runtime/JobCallback.h`), default-empty. Override it in `WebEngineCustomJobCallbackData`:
+   ```cpp
+   virtual void visit_edges(JS::Cell::Visitor& visitor) override
+   {
+       visitor.visit(incumbent_settings);
+       if (active_script_context)
+           active_script_context->visit_edges(visitor);
+   }
+   ```
+   Then update `JobCallback::visit_edges` (`Libraries/LibJS/Runtime/JobCallback.cpp:19-23`) to add `if (m_custom_data) m_custom_data->visit_edges(visitor);`. At that point the custom data's internal `OwnPtr<ExecutionContext>` is correctly traced through its `Cell` owner.
+
+3. **Rewrite the construction path in `host_make_job_callback` to build the `ExecutionContext` directly inside the struct, not as a rooted stack local.** Since the struct now forwards tracing, the `ExecutionContext` is protected as soon as the struct is constructed. The window of concern is between `ExecutionContext::create(...)` returning a populated (well, initially-empty — see below) `NonnullOwnPtr` and the `WebEngineCustomJobCallbackData` ctor receiving it. That's the standard bucket-A shape: `ExecutionContext::create` goes through the pool allocator (no GC), and the field population happens on the struct's member. The cleanest form passes the ctor args through:
+   ```cpp
+   // In MainThreadVM.h, give WebEngineCustomJobCallbackData a ctor that
+   // allocates the ExecutionContext internally:
+   WebEngineCustomJobCallbackData(
+       HTML::EnvironmentSettingsObject& incumbent_settings,
+       u32 regs_locals, ReadonlySpan<JS::Value> constants, u32 args)
+       : incumbent_settings(incumbent_settings)
+       , active_script_context(JS::ExecutionContext::create(regs_locals, constants, args))
+   {
+   }
+   ```
+   And in `host_make_job_callback`:
+   ```cpp
+   OwnPtr<WebEngineCustomJobCallbackData> host_defined;
+   if (script) {
+       host_defined = make<WebEngineCustomJobCallbackData>(
+           incumbent_settings, 0, ReadonlySpan<JS::Value>{}, 0);
+       host_defined->active_script_context->function = nullptr;
+       host_defined->active_script_context->realm = &script->settings_object().realm();
+       // ... script_or_module population ...
+   } else {
+       host_defined = make<WebEngineCustomJobCallbackData>(incumbent_settings);
+       // requires a second ctor that doesn't allocate an ExecutionContext —
+       // or, if active_script_context becomes NonnullOwnPtr as in option 1
+       // above, the no-script branch doesn't construct the struct at all
+       // and threads a null custom_data through JobCallback::create.
+   }
+   return JS::JobCallback::create(*s_main_thread_vm, callable, move(host_defined));
+   ```
+   The `OwnPtr<WebEngineCustomJobCallbackData> host_defined` local itself is not a plugin violation — `WebEngineCustomJobCallbackData` contains GC pointers, but its `visit_edges` is now wired in, and the plugin's existing "OwnPtr to a Cell-adjacent thing with `visit_edges`" allowlist handling should cover it. If the plugin disagrees, the simplest workaround is to hoist the allocation into `JS::JobCallback::create` itself (`Libraries/LibJS/Runtime/JobCallback.cpp:26-30`) so the `OwnPtr` local lives inside `JobCallback` from the start — but that's a larger change and probably unnecessary.
+
+After all three parts land, the five `IGNORE_GC` + `FIXME` annotations this branch added come off:
+
+- `dummy_execution_context` → `Optional<RootedExecutionContext>` + `.emplace(...)` (bucket A, rows 4-ish of the table).
+- `new_context` in `Realm.cpp` → direct `RootedExecutionContext` ctor (bucket A).
+- `async_context` in `ECMAScriptFunctionObject.cpp` → direct `RootedExecutionContext` copy ctor (bucket B, solved by the ctor).
+- The `ExecutionContext.cpp:108` annotation inside `copy()` → either leave with a rewritten FIXME (if `copy()` stays an internal call), or comes off once the `RootedExecutionContext` copy ctor is the only caller.
+- `script_execution_context` + `host_defined` → merged bucket-C fix above.
+
+**Step 5: internal-only forwarders (optional, related but separate).** Six sites currently hand-write `m_execution_context->visit_edges(visitor)` inside their Cell's own `visit_edges`:
 
 ```
 Libraries/LibJS/Runtime/GeneratorObject.cpp:73
@@ -331,171 +494,11 @@ Libraries/LibWeb/HTML/Scripting/Environments.cpp:67
 Libraries/LibJS/Runtime/VM.cpp:318   (per-frame loop in gather_roots)
 ```
 
-Keeps the call shape consistent with the rest of `visit_edges` code across the codebase.
+These aren't incorrect today — they're the existing "manually-traced owner" pattern and they work correctly. They also don't trigger the plugin, because each one's enclosing class is a `Cell` whose `visit_edges` the plugin trusts. Leaving them alone is fine. If consistency matters, one could either convert these classes to hold `RootedExecutionContext` members (not worth it — they already get free tracing from their Cell owner) or adopt option 2 (teach the plugin about manually-traced owners and leave the call shape as-is). No action required for the branch's `IGNORE_GC` cleanup.
 
-**Step 2: new `Libraries/LibGC/ScopedRoots.h` / `.cpp`, following the `RootVector` template.**
+**Step 6: tests.** Add `Tests/LibJS/TestRootedExecutionContext.cpp` (tests live in LibJS because `RootedExecutionContext` itself is a LibJS type). Construct a `RootedExecutionContext` with known GC pointer fields (e.g. a stub `FunctionObject*`), call `VM::gather_roots()` directly, and assert the inner cells show up in the roots map with `HeapRoot::Type::VM`. Also cover: destruction unregisters, the copy-ctor variant populates before the next GC sees the new wrapper, and `Optional<RootedExecutionContext>::emplace(...)` round-trips correctly. Use the `gather_roots`-direct pattern described in "Test Status" below rather than relying on GC/conservative-scanning to avoid the dangling-reference and conservative-stack issues documented there.
 
-```cpp
-// ScopedRoots.h (sketch)
-namespace GC {
-
-class GC_API ScopedRootsBase {
-public:
-    virtual void visit_edges(Cell::Visitor&) = 0;
-
-protected:
-    explicit ScopedRootsBase(Heap&);
-    ~ScopedRootsBase();
-
-    Heap* m_heap { nullptr };
-    IntrusiveListNode<ScopedRootsBase> m_list_node;
-
-public:
-    using List = IntrusiveList<&ScopedRootsBase::m_list_node>;
-};
-
-template<typename... Ts>
-class ScopedRoots final : public ScopedRootsBase {
-public:
-    explicit ScopedRoots(Heap& heap, Ts&... values)
-        : ScopedRootsBase(heap)
-        , m_refs(&values...)
-    {
-    }
-
-    ScopedRoots(ScopedRoots const&) = delete;
-    ScopedRoots(ScopedRoots&&) = delete;
-    ScopedRoots& operator=(ScopedRoots const&) = delete;
-    ScopedRoots& operator=(ScopedRoots&&) = delete;
-
-    virtual void visit_edges(Cell::Visitor& v) override
-    {
-        AK::apply([&](auto*... p) { (v.visit(*p), ...); }, m_refs);
-    }
-
-private:
-    AK::Tuple<Ts*...> m_refs;
-};
-
-}
-```
-
-```cpp
-// ScopedRoots.cpp (sketch) — mirrors RootVector.cpp:13-33
-ScopedRootsBase::ScopedRootsBase(Heap& heap) : m_heap(&heap)
-{ m_heap->did_create_scoped_roots({}, *this); }
-
-ScopedRootsBase::~ScopedRootsBase()
-{ m_heap->did_destroy_scoped_roots({}, *this); }
-```
-
-Deleting copy/move intentionally — a `ScopedRoots` is a stack-local registration; copying would double-register and moving across scopes defeats the point.
-
-**Step 3: wire into `Heap`, mirroring `m_root_vectors` exactly.**
-
-- `Heap.h:177-182`: add `ScopedRootsBase::List m_scoped_roots;` next to `m_root_vectors` / `m_root_hash_maps` / `m_root_hash_tables`.
-- `Heap.h:213-223`: add inline `did_create_scoped_roots({}, ScopedRootsBase&)` / `did_destroy_scoped_roots({}, ScopedRootsBase&)` with the same `VERIFY(!list.contains(...))` + `append` / `remove` shape.
-- `Heap.cpp:444-451`: in `gather_roots`, after the existing `m_root_hash_tables` loop, add:
-
-  ```cpp
-  class ScopedRootsGatheringVisitor final : public Cell::Visitor {
-  public:
-      explicit ScopedRootsGatheringVisitor(HashMap<Cell*, HeapRoot>& roots) : m_roots(roots) {}
-      virtual void visit_impl(Cell& cell) override
-      { m_roots.set(&cell, HeapRoot { .type = HeapRoot::Type::ScopedRoots }); }
-      virtual void visit_impl(ReadonlySpan<NanBoxedValue> values) override
-      {
-          for (auto& value : values)
-              if (value.is_cell())
-                  m_roots.set(&const_cast<NanBoxedValue&>(value).as_cell(),
-                              HeapRoot { .type = HeapRoot::Type::ScopedRoots });
-      }
-      virtual void visit_possible_values(ReadonlyBytes) override {}
-  private:
-      HashMap<Cell*, HeapRoot>& m_roots;
-  };
-
-  ScopedRootsGatheringVisitor shim(roots);
-  for (auto& scope : m_scoped_roots)
-      scope.visit_edges(shim);
-  ```
-
-  This adapter is the same shape as `ExecutionContextRootsCollector` at `VM.cpp:317` and the anonymous visitors at `Heap.cpp:150` and `Heap.cpp:640`. It bridges the `visit_edges`-style API into the `gather_roots` map.
-
-**Step 4: new enumerator in `Libraries/LibGC/HeapRoot.h:16-29`: `ScopedRoots`.** Used by the gathering visitor's tag. The enum is also exhaustively switched on (no `default:` arm) in the heap graph dump path at `Libraries/LibGC/Heap.cpp:212-253` — that switch needs a new `case HeapRoot::Type::ScopedRoots: node.set("root"sv, "ScopedRoots"sv); break;` arm to keep the build green. Search for any other exhaustive switch over `HeapRoot::Type` before landing the change (none today, but worth grepping in case a debug tool gets one before this lands).
-
-**Step 5: plugin work — *not* a simple allowlist add.** This is the part that determines whether the `IGNORE_GC` sites can actually come off, and the answer is "only after a flow-sensitive plugin extension".
-
-The current `LibJSGCVisitor::VisitVarDecl` (`Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp:978-1018`) flags variables purely based on type — at line 1003 it reads `var->getType()` and at line 1009 calls `type_has_unrooted_gc_container(type)`. It never inspects the surrounding statements. So a sibling `GC::ScopedRoots scoped(heap, ctx);` line in the same scope does nothing for the diagnostic on `OwnPtr<JS::ExecutionContext> ctx;`. Allowlisting `GC::ScopedRoots` (the helper's own type) would only suppress diagnostics on the helper itself — which doesn't carry GC pointers in its visible type anyway — and would not unblock the surrounding `OwnPtr<...>` declarations.
-
-Two viable approaches, in order of preference:
-
-1. **Flow-sensitive same-scope check (preferred).** Extend `VisitVarDecl` so that when an unrooted GC container is detected, it walks the parent `CompoundStmt` (the enclosing block) looking for a later statement that constructs `GC::ScopedRoots` with a `DeclRefExpr` referencing this var in its argument list. If found, the diagnostic is suppressed. This mirrors the existing same-function-body matcher used for `visit_edges` field-access verification (the `gc_allocated_member_is_accessed.cpp` test path), so the plugin already has the AST-walking primitives. Caveats to call out in the implementation: must require the `ScopedRoots` construction to be in the *same* `CompoundStmt` as the declaration, not just anywhere in the function (otherwise a conditional registration would silently disarm the check); and must reject declarations that appear *after* their `ScopedRoots` (since the registration must outlive the variable to do anything useful — `ScopedRoots` is destroyed first, leaving the variable unrooted for the rest of its lifetime).
-
-2. **Explicit annotation fallback (uglier, but trivial to implement).** Define a `GC_SCOPED_ROOTS_LOCAL` macro that expands to `[[clang::annotate("serenity::scoped_roots_local")]]`, and have `VisitVarDecl` add it to the existing `serenity::ignore_gc` check at line 1000-1001. Migration becomes:
-   ```cpp
-   GC_SCOPED_ROOTS_LOCAL OwnPtr<JS::ExecutionContext> dummy;
-   GC::ScopedRoots scoped(vm.heap(), dummy);
-   ```
-   Two lines per site instead of (ideally) one, plus a noisy macro on every declaration. Worth keeping as an escape hatch even if (1) lands, for cases where the flow check can't statically prove the registration.
-
-**Until step 5 lands, the `IGNORE_GC` annotations from commit `81f3ead348` cannot be removed.** Step 6 below assumes step 5 is in place.
-
-**Step 6: migrate the `IGNORE_GC` sites in this branch.** Each site needs to be classified by its initialization shape against the timing rule. Three buckets:
-
-**Bucket A — empty at registration, populated afterwards.** Sibling `ScopedRoots` works. The migration deletes one `IGNORE_GC` + `FIXME` line and inserts a `ScopedRoots` line right after the declaration, before any field assignment.
-
-| File | Variable | Why bucket A |
-|---|---|---|
-| `Libraries/LibJS/Runtime/ExecutionContext.cpp:108` (copy) | `copy` | `create()` returns an `ExecutionContext` with all GC pointer fields default-null. The populated writes (`copy->function = function;` ...) start on the next line. Insert `ScopedRoots` between `create()` and the first field write. |
-| `Libraries/LibJS/Runtime/Realm.cpp:42` (initialize_host_defined_realm) | `new_context` | Same shape — `create()` returns empty, fields populated below. |
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:287` (host_enqueue_promise_job) | `dummy_execution_context` | Declared as a default-constructed `OwnPtr` (empty), assigned later via `dummy_execution_context = JS::ExecutionContext::create(...)`. `ScopedRoots` immediately after the declaration is correct. |
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:347` (host_make_job_callback) | `script_execution_context` | Same shape — empty `OwnPtr` at declaration, populated below. |
-
-**Bucket B — populated at the moment of declaration.** Sibling `ScopedRoots` cannot help; the variable already holds GC pointers before registration. These sites need either a refactor or a different primitive.
-
-| File | Variable | Why bucket B |
-|---|---|---|
-| `Libraries/LibJS/Runtime/ECMAScriptFunctionObject.cpp:437` (async context copy) | `async_context` | Initialised from `running_context.copy()`, which populates *all* GC fields before returning. The returned `NonnullOwnPtr` already holds live GC pointers when control reaches the next line. |
-
-Two ways forward for bucket B:
-
-- *Refactor approach.* Give `ExecutionContext::copy()` a destination parameter (e.g. `void copy_to(ExecutionContext& destination) const;`). Caller does `OwnPtr<ExecutionContext> ac; GC::ScopedRoots scoped(heap, ac); ac = ExecutionContext::create(...); running_context.copy_to(*ac);` — every populated write happens under `ScopedRoots` protection. Mechanical change, one extra line at the call site, but touches `copy()`'s API.
-- *Owning-wrapper primitive (`GC::ScopedRoot<T>`, singular).* A separate helper that performs registration *before* taking ownership of its held value. Out-of-scope for this implementation plan but worth sketching the shape so the bucket-B sites have an obvious target:
-  ```cpp
-  template<typename T>
-  class ScopedRoot final : public ScopedRootsBase {
-  public:
-      template<typename Factory>
-      ScopedRoot(Heap& heap, Factory&& factory)
-          : ScopedRootsBase(heap)
-          , m_held(/* default / empty */)
-      {
-          // Registration has already happened in ScopedRootsBase's ctor.
-          m_held = AK::forward<Factory>(factory)();
-      }
-      void visit_edges(Cell::Visitor& v) override { v.visit(m_held); }
-      T* operator->() { return m_held.ptr(); }
-      T& operator*() { return *m_held; }
-  private:
-      OwnPtr<T> m_held;
-  };
-  // Usage:
-  GC::ScopedRoot<JS::ExecutionContext> async_context(heap, [&] { return running_context.copy(); });
-  ```
-  Note the still-fiddly part: between the lambda returning the populated `NonnullOwnPtr` and the move-assign into `m_held`, there is a brief window. In practice no allocation happens between a function return and an assignment in C++, but if strictness matters, the only way to fully close that window is the refactor approach above.
-
-**Bucket C — different fix entirely.** Sibling `ScopedRoots` doesn't apply because the hazard is structural, not scope-local.
-
-| File | Variable | Fix |
-|---|---|---|
-| `Libraries/LibWeb/Bindings/MainThreadVM.cpp:368` (host_make_job_callback) | `host_defined` (`WebEngineCustomJobCallbackData`) | Already populated at construction. The proper fix is structural: give `JobCallback::CustomData` a virtual `visit_edges(Cell::Visitor&)` hook, override it in `WebEngineCustomJobCallbackData` to visit `incumbent_settings` and forward to `active_script_context->visit_edges`, then have `JobCallback::visit_edges` call `m_custom_data->visit_edges(visitor)`. The `host_defined` `IGNORE_GC` then comes off because the data is correctly traced through its `Cell` owner. No `ScopedRoots` needed. |
-
-After step 6, all six `IGNORE_GC` + `FIXME` annotations from this branch can be removed: four via `ScopedRoots` (bucket A), one via `copy_to`-style refactor or the `ScopedRoot<T>` follow-up primitive (bucket B), and one via the `JobCallback::CustomData::visit_edges` hook (bucket C).
-
-**Step 7: tests.** Add a `Tests/LibGC/TestScopedRoots.cpp` (or extend `TestGCContainers.cpp`) along the lines of the existing container tests: allocate a cell, put a pointer to it in a stack-held struct that the test drives with `ScopedRoots`, trigger `gather_roots`/`visit_edges` directly, assert the cell appears in the roots map. Use the `gather_roots`-direct pattern described in the "Test Status" section of this doc rather than relying on GC/conservative-scanning to avoid the dangling-reference and conservative-stack issues documented there.
-
-**Out of scope for option 2 (and for this doc):** the ~130-file ExecutionContext → Cell conversion. If that ever happens, `ScopedRoots` is still the right primitive for the general "stack-held non-Cell holder-of-GC-pointers" case, because other non-Cell structs will keep showing up (e.g. `WebEngineCustomJobCallbackData` pre-fix, `NormalizedAlgorithmAndParameter`-shaped structs that currently trip the plugin, and the `Crypto/SubtleCrypto.cpp` cluster of ExceptionOr wrappers around GC-bearing structs).
+**Out of scope for option 1 (and for this doc):** the ~130-file ExecutionContext → Cell conversion.
 
 ### 5. Other gaps worth keeping in mind (not audited for concrete instances)
 
