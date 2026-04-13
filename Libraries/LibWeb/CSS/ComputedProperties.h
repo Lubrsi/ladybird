@@ -10,6 +10,7 @@
 #include <AK/HashMap.h>
 #include <AK/NonnullRefPtr.h>
 #include <LibGC/CellAllocator.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Ptr.h>
 #include <LibGfx/Font/Font.h>
 #include <LibGfx/FontCascadeList.h>
@@ -214,7 +215,7 @@ public:
         FlyString name;
         GC::Ptr<Animations::AnimationTimeline> timeline;
     };
-    Vector<AnimationProperties> animations(DOM::AbstractElement const&) const;
+    GC::ConservativeVector<AnimationProperties> animations(DOM::AbstractElement const&) const;
     Vector<TransitionProperties> transitions() const;
 
     Display display_before_box_type_transformation() const;
