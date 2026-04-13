@@ -266,30 +266,36 @@ Construction deduces `Ts...` from the arguments (C++17 CTAD); the helper stores 
 
 **Step 1: add overloads to `GC::Cell::Visitor` (`Libraries/LibGC/Cell.h:66-185`) for non-Cell holders-of-GC-pointers.**
 
+The motivating type is `JS::ExecutionContext`, whose `visit_edges` is **non-const** (`Libraries/LibJS/Runtime/ExecutionContext.h:33`), and so are the existing `visit_edges` overrides on every `Cell`-derived class via `MUST_UPCALL virtual void visit_edges(Visitor&)` (`Cell.h:202`). The overloads must therefore take non-const references and constrain on the non-const method:
+
 ```cpp
 // Non-Cell reference-to-object that has its own visit_edges method.
 template<typename T>
-void visit(T const& obj)
-requires requires(T const& o, Visitor& v) { o.visit_edges(v); }
+void visit(T& obj)
+requires requires(T& o, Visitor& v) { o.visit_edges(v); }
 {
     obj.visit_edges(*this);
 }
 
-// Ownership wrappers around the above.
+// Ownership wrappers around the above. The OwnPtr itself can be const
+// (we only need the held T to be mutable), matching how OwnPtr<T>::operator->
+// returns a non-const T* on a const OwnPtr<T>&.
 template<typename T>
 void visit(OwnPtr<T> const& ptr)
-requires requires(T const& t, Visitor& v) { t.visit_edges(v); }
+requires requires(T& t, Visitor& v) { t.visit_edges(v); }
 {
     if (ptr) ptr->visit_edges(*this);
 }
 
 template<typename T>
 void visit(NonnullOwnPtr<T> const& ptr)
-requires requires(T const& t, Visitor& v) { t.visit_edges(v); }
+requires requires(T& t, Visitor& v) { t.visit_edges(v); }
 {
     ptr->visit_edges(*this);
 }
 ```
+
+A const overload (`visit(T const&) requires { o.visit_edges(v); }` with a const-callable `visit_edges`) is not added in this step because no current type needs it — `ExecutionContext::visit_edges` is non-const and so is every Cell's `visit_edges`. Add a const-receiver overload only if a future non-Cell type chooses to declare its `visit_edges` as `const`.
 
 Overload resolution stays correct: the non-template `visit(Cell*)` / `visit(Cell&)` in `Cell.h:66-84` is more specific than a constrained template, so Cell-derived types retain their current "mark as root; tracer later drives visit_edges" semantics. Non-Cell types (like `JS::ExecutionContext`) only match the new constrained template, which forwards straight through `visit_edges`. Types with no `visit_edges` method fail the requires-clause and produce a compile error — same footgun surface as today, just expressed at the type-system level instead of hand-written forwarders.
 
@@ -395,9 +401,24 @@ Deleting copy/move intentionally — a `ScopedRoots` is a stack-local registrati
 
   This adapter is the same shape as `ExecutionContextRootsCollector` at `VM.cpp:317` and the anonymous visitors at `Heap.cpp:150` and `Heap.cpp:640`. It bridges the `visit_edges`-style API into the `gather_roots` map.
 
-**Step 4: new enumerator in `Libraries/LibGC/HeapRoot.h:16-29`: `ScopedRoots`.** Used by the gathering visitor's tag.
+**Step 4: new enumerator in `Libraries/LibGC/HeapRoot.h:16-29`: `ScopedRoots`.** Used by the gathering visitor's tag. The enum is also exhaustively switched on (no `default:` arm) in the heap graph dump path at `Libraries/LibGC/Heap.cpp:212-253` — that switch needs a new `case HeapRoot::Type::ScopedRoots: node.set("root"sv, "ScopedRoots"sv); break;` arm to keep the build green. Search for any other exhaustive switch over `HeapRoot::Type` before landing the change (none today, but worth grepping in case a debug tool gets one before this lands).
 
-**Step 5: plugin allowlist.** Add `GC::ScopedRoots` / `GC::ScopedRootsBase` to the same exclusion lists that already carry `RootVector`, `RootHashMap`, `ConservativeVector`, `RootHashTable`, etc. See the "Recognize RootHashMap and ConservativeVector in clang plugin" commit in the branch history for the exact edit locations in `Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp`.
+**Step 5: plugin work — *not* a simple allowlist add.** This is the part that determines whether the `IGNORE_GC` sites can actually come off, and the answer is "only after a flow-sensitive plugin extension".
+
+The current `LibJSGCVisitor::VisitVarDecl` (`Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp:978-1018`) flags variables purely based on type — at line 1003 it reads `var->getType()` and at line 1009 calls `type_has_unrooted_gc_container(type)`. It never inspects the surrounding statements. So a sibling `GC::ScopedRoots scoped(heap, ctx);` line in the same scope does nothing for the diagnostic on `OwnPtr<JS::ExecutionContext> ctx;`. Allowlisting `GC::ScopedRoots` (the helper's own type) would only suppress diagnostics on the helper itself — which doesn't carry GC pointers in its visible type anyway — and would not unblock the surrounding `OwnPtr<...>` declarations.
+
+Two viable approaches, in order of preference:
+
+1. **Flow-sensitive same-scope check (preferred).** Extend `VisitVarDecl` so that when an unrooted GC container is detected, it walks the parent `CompoundStmt` (the enclosing block) looking for a later statement that constructs `GC::ScopedRoots` with a `DeclRefExpr` referencing this var in its argument list. If found, the diagnostic is suppressed. This mirrors the existing same-function-body matcher used for `visit_edges` field-access verification (the `gc_allocated_member_is_accessed.cpp` test path), so the plugin already has the AST-walking primitives. Caveats to call out in the implementation: must require the `ScopedRoots` construction to be in the *same* `CompoundStmt` as the declaration, not just anywhere in the function (otherwise a conditional registration would silently disarm the check); and must reject declarations that appear *after* their `ScopedRoots` (since the registration must outlive the variable to do anything useful — `ScopedRoots` is destroyed first, leaving the variable unrooted for the rest of its lifetime).
+
+2. **Explicit annotation fallback (uglier, but trivial to implement).** Define a `GC_SCOPED_ROOTS_LOCAL` macro that expands to `[[clang::annotate("serenity::scoped_roots_local")]]`, and have `VisitVarDecl` add it to the existing `serenity::ignore_gc` check at line 1000-1001. Migration becomes:
+   ```cpp
+   GC_SCOPED_ROOTS_LOCAL OwnPtr<JS::ExecutionContext> dummy;
+   GC::ScopedRoots scoped(vm.heap(), dummy);
+   ```
+   Two lines per site instead of (ideally) one, plus a noisy macro on every declaration. Worth keeping as an escape hatch even if (1) lands, for cases where the flow check can't statically prove the registration.
+
+**Until step 5 lands, the `IGNORE_GC` annotations from commit `81f3ead348` cannot be removed.** Step 6 below assumes step 5 is in place.
 
 **Step 6: migrate the `IGNORE_GC` sites in this branch to `ScopedRoots`.** Concrete list (file / what goes on the helper):
 
