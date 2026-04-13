@@ -1916,13 +1916,15 @@ Optional<FlyString> ComputedProperties::view_transition_name() const
     return {};
 }
 
-Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations(DOM::AbstractElement const& abstract_element) const
+GC::ConservativeVector<ComputedProperties::AnimationProperties> ComputedProperties::animations(DOM::AbstractElement const& abstract_element) const
 {
+    GC::ConservativeVector<AnimationProperties> animations { abstract_element.element().heap() };
+
     auto const& animation_name_values = property(PropertyID::AnimationName).as_value_list().values();
 
     // OPTIMIZATION: If all animation names are 'none', there are no animations to process
     if (all_of(animation_name_values, [](auto const& value) { return value->to_keyword() == Keyword::None; }))
-        return {};
+        return animations;
 
     // CSS Animations are defined by binding keyframes to an element using the animation-* properties. These list-valued
     // properties, which are all longhands of the animation shorthand, form a coordinating list property group with
@@ -1940,8 +1942,6 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations(D
             PropertyID::AnimationComposition,
             PropertyID::AnimationName,
             PropertyID::AnimationTimeline });
-
-    Vector<AnimationProperties> animations;
 
     for (size_t i = 0; i < coordinated_properties.get(PropertyID::AnimationName)->size(); i++) {
         // https://drafts.csswg.org/css-animations-1/#propdef-animation-name
