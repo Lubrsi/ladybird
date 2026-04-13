@@ -825,7 +825,7 @@ public:
     void update_animations_and_send_events(double timestamp);
     void remove_replaced_animations();
 
-    WebIDL::ExceptionOr<Vector<GC::Ref<Animations::Animation>>> get_animations();
+    WebIDL::ExceptionOr<GC::RootVector<GC::Ref<Animations::Animation>>> get_animations();
 
     bool ready_to_run_scripts() const { return m_ready_to_run_scripts; }
     void set_ready_to_run_scripts();
