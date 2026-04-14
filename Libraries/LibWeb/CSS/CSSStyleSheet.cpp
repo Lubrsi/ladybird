@@ -242,7 +242,7 @@ GC::Ref<WebIDL::Promise> CSSStyleSheet::replace(String text)
             rule->set_parent_style_sheet(this);
 
         // 3. Set sheet’s CSS rules to rules.
-        m_rules->set_rules({}, rules_without_import);
+        m_rules->set_rules({}, move(rules_without_import));
         invalidate_owners(DOM::StyleInvalidationReason::StyleSheetReplace, &previous_sheet_effects);
 
         // 4. Unset sheet’s disallow modification flag.
@@ -281,7 +281,7 @@ WebIDL::ExceptionOr<void> CSSStyleSheet::replace_sync(StringView text)
     }
 
     // 4. Set sheet’s CSS rules to rules.
-    m_rules->set_rules({}, rules_without_import);
+    m_rules->set_rules({}, move(rules_without_import));
     invalidate_owners(DOM::StyleInvalidationReason::StyleSheetReplace, &previous_sheet_effects);
 
     return {};
