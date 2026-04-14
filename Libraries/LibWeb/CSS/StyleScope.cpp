@@ -237,7 +237,7 @@ void StyleScope::for_each_stylesheet(CascadeOrigin cascade_origin, Function<void
 
 void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, StyleCache& style_cache)
 {
-    Vector<MatchingRule> matching_rules;
+    GC::ConservativeVector<MatchingRule> matching_rules { m_node->heap() };
     size_t style_sheet_index = 0;
     for_each_stylesheet(cascade_origin, [&](auto& sheet) {
         auto& rule_caches = [&] -> RuleCaches& {
@@ -1185,11 +1185,13 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
         return !found_has_rule || may_be_affected;
     };
 
-    HashTable<GC::Ref<DOM::Element>> elements_already_invalidated_for_has;
-    auto pending_has_invalidations = m_pending_has_invalidations;
+    GC::RootHashTable<GC::Ref<DOM::Element>> elements_already_invalidated_for_has { m_node->heap() };
+    GC::OrderedRootHashMap<GC::Ref<DOM::Node>, PendingHasInvalidationMutationFeatures> pending_has_invalidations { m_node->heap() };
+    for (auto& [node, features] : m_pending_has_invalidations)
+        pending_has_invalidations.set(node, features);
     bool should_scan_ancestor_siblings = have_has_selectors_with_relative_selector_that_has_sibling_combinator();
     for (auto& [node, mutation_features] : pending_has_invalidations) {
-        Vector<GC::Ref<DOM::Element>, 16> has_scope_ancestors;
+        GC::RootVector<GC::Ref<DOM::Element>, 16> has_scope_ancestors { m_node->heap() };
         bool should_delay_ancestor_sibling_scans = false;
         for (GC::Ptr<DOM::Node> ancestor = node; ancestor; ancestor = ancestor->parent_or_shadow_host()) {
             if (!ancestor->is_element())
