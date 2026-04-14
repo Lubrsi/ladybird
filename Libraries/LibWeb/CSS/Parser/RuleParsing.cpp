@@ -1402,7 +1402,7 @@ GC::Ptr<CSSFunctionRule> Parser::convert_to_function_rule(AtRule const& function
     if (!prelude.has_value())
         return nullptr;
 
-    Vector<GC::Ref<CSSRule>> child_rules {};
+    GC::RootVector<GC::Ref<CSSRule>> child_rules(realm().heap());
 
     // https://drafts.csswg.org/css-mixins-1/#function-body
     for (auto const& child : function_rule.child_rules_and_lists_of_declarations) {

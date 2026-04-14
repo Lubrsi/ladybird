@@ -9,6 +9,7 @@
 #pragma once
 
 #include <AK/Function.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/Bindings/PlatformObject.h>
 #include <LibWeb/CSS/CSSRule.h>
 #include <LibWeb/CSS/Parser/RuleContext.h>
@@ -65,7 +66,7 @@ public:
     bool evaluate_media_queries(DOM::Document const&);
 
     void set_owner_rule(GC::Ref<CSSRule> owner_rule) { m_owner_rule = owner_rule; }
-    void set_rules(Badge<CSSStyleSheet>, Vector<GC::Ref<CSSRule>> rules) { m_rules = move(rules); }
+    void set_rules(Badge<CSSStyleSheet>, GC::RootVector<GC::Ref<CSSRule>>&& rules) { m_rules = GC::adopt_root_vector(move(rules)); }
 
     Function<void()> on_change;
 
