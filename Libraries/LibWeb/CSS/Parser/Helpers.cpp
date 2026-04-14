@@ -23,11 +23,10 @@ namespace Web {
 
 GC::Ref<JS::Realm> internal_css_realm()
 {
-    static GC::Root<JS::Realm> realm;
     static GC::Root<HTML::Window> window;
-    static OwnPtr<JS::ExecutionContext> execution_context;
-    if (!realm) {
-        execution_context = Bindings::create_a_new_javascript_realm(
+    static JS::RootedExecutionContext execution_context(
+        Bindings::main_thread_vm(),
+        Bindings::create_a_new_javascript_realm(
             Bindings::main_thread_vm(),
             [&](JS::Realm& realm) -> JS::Object* {
                 window = HTML::Window::create(realm);
@@ -35,12 +34,13 @@ GC::Ref<JS::Realm> internal_css_realm()
             },
             [&](JS::Realm&) -> JS::Object* {
                 return window;
-            });
+            }));
 
+    static GC::Root<JS::Realm> realm;
+    if (!realm) {
         realm = *execution_context->realm;
         auto intrinsics = realm->create<Bindings::Intrinsics>(*realm);
-        auto host_defined = make<Bindings::HostDefined>(intrinsics);
-        realm->set_host_defined(move(host_defined));
+        realm->set_host_defined(realm->heap().allocate<Bindings::HostDefined>(intrinsics));
     }
     return *realm;
 }

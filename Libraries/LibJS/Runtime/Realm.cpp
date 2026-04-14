@@ -17,6 +17,7 @@
 namespace JS {
 
 GC_DEFINE_ALLOCATOR(Realm);
+GC_DEFINE_ALLOCATOR(Realm::HostDefined);
 
 // 9.3.1 InitializeHostDefinedRealm ( ), https://tc39.es/ecma262/#sec-initializehostdefinedrealm
 ThrowCompletionOr<NonnullOwnPtr<ExecutionContext>> Realm::initialize_host_defined_realm(VM& vm, Function<Object*(Realm&)> create_global_object, Function<Object*(Realm&)> create_global_this_value)
@@ -108,8 +109,7 @@ void Realm::visit_edges(Visitor& visitor)
     visitor.visit(m_global_object);
     visitor.visit(m_global_environment);
     visitor.visit(m_global_declarative_environment);
-    if (m_host_defined)
-        m_host_defined->visit_edges(visitor);
+    visitor.visit(m_host_defined);
 }
 
 }

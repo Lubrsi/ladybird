@@ -28,10 +28,11 @@ class JS_API Realm final : public Cell {
     GC_DECLARE_ALLOCATOR(Realm);
 
 public:
-    struct HostDefined {
-        virtual ~HostDefined() = default;
+    struct HostDefined : public Cell {
+        GC_CELL(HostDefined, Cell);
+        GC_DECLARE_ALLOCATOR(HostDefined);
 
-        virtual void visit_edges(Cell::Visitor&) { }
+        virtual ~HostDefined() override = default;
 
         template<typename T>
         bool fast_is() const = delete;
@@ -69,7 +70,7 @@ public:
     HostDefined* host_defined() { return m_host_defined; }
     HostDefined const* host_defined() const { return m_host_defined; }
 
-    void set_host_defined(OwnPtr<HostDefined> host_defined) { m_host_defined = move(host_defined); }
+    void set_host_defined(GC::Ptr<HostDefined> host_defined) { m_host_defined = host_defined; }
 
 private:
     Realm() = default;
@@ -80,7 +81,7 @@ private:
     GC::Ptr<Object> m_global_object;                                  // [[GlobalObject]]
     GC::Ptr<DeclarativeEnvironment> m_global_declarative_environment; // Cached from GlobalEnv
     GC::Ptr<GlobalEnvironment> m_global_environment;                  // [[GlobalEnv]]
-    OwnPtr<HostDefined> m_host_defined;                               // [[HostDefined]]
+    GC::Ptr<HostDefined> m_host_defined;                              // [[HostDefined]]
 };
 
 }

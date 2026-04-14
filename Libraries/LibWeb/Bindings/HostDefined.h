@@ -13,6 +13,9 @@
 namespace Web::Bindings {
 
 struct HostDefined : public JS::Realm::HostDefined {
+    GC_CELL(HostDefined, JS::Realm::HostDefined);
+    GC_DECLARE_ALLOCATOR(HostDefined);
+
     explicit HostDefined(GC::Ref<Intrinsics> intrinsics)
         : intrinsics(intrinsics)
     {

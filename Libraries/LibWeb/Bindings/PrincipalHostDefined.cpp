@@ -13,9 +13,11 @@
 
 namespace Web::Bindings {
 
+GC_DEFINE_ALLOCATOR(PrincipalHostDefined);
+
 void PrincipalHostDefined::visit_edges(JS::Cell::Visitor& visitor)
 {
-    HostDefined::visit_edges(visitor);
+    Base::visit_edges(visitor);
     visitor.visit(environment_settings_object);
     visitor.visit(page);
 }

@@ -56,8 +56,7 @@ GC::Ref<WorkerEnvironmentSettingsObject> WorkerEnvironmentSettingsObject::setup(
 
     // 8. Set realm's [[HostDefined]] field to settings object.
     auto intrinsics = realm->create<Bindings::Intrinsics>(*realm);
-    auto host_defined = make<Bindings::PrincipalHostDefined>(settings_object, intrinsics, page);
-    realm->set_host_defined(move(host_defined));
+    realm->set_host_defined(realm->heap().allocate<Bindings::PrincipalHostDefined>(settings_object, intrinsics, page));
 
     // Non-Standard: We cannot fully initialize worker object until *after* the we set up
     //    the realm's [[HostDefined]] internal slot as the internal slot contains the web platform intrinsics

@@ -15,6 +15,9 @@
 namespace Web::Bindings {
 
 struct PrincipalHostDefined final : public HostDefined {
+    GC_CELL(PrincipalHostDefined, HostDefined);
+    GC_DECLARE_ALLOCATOR(PrincipalHostDefined);
+
     PrincipalHostDefined(GC::Ref<HTML::EnvironmentSettingsObject> eso, GC::Ref<Intrinsics> intrinsics, GC::Ref<Page> page)
         : HostDefined(intrinsics)
         , environment_settings_object(eso)
