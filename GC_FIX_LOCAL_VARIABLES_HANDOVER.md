@@ -141,9 +141,21 @@ This section tracks work since commit #13 above. Run `git log --oneline 094e4bac
 | `cd2763dad2` | LibWeb/CSS: Return `GC::ConservativeVector` from `ComputedProperties::animations` |
 | `321f943fdc` | LibWeb/CSS: Promote `ContentData` to `GC::Cell` |
 | `17d9765b09` | LibTest+Utilities: Annotate VM singleton holders with IGNORE_GC (post-rebase fallout; 5 new `RefPtr<JS::VM>` / `NonnullRefPtr<JS::VM>` sites outside LibJS that the plugin commit now catches) |
-| `e9376d83d0` | **LibWeb/Crypto: Promote `AlgorithmMethods`/`AlgorithmParams` to `GC::Cell`** — 49 subclasses total (24 methods + 25 params) plus `NormalizedAlgorithmAndParameter` itself; `normalize_an_algorithm` returns `GC::Ref<NormalizedAlgorithmAndParameter>`, `from_value` / `create` factories return `GC::Ref`. Closes the largest remaining violation cluster. |
-| `4919629f74` | LibJS+LibWeb: Promote `Realm::HostDefined` to `GC::Cell` — includes the `Web::Bindings::HostDefined` and `Web::Bindings::PrincipalHostDefined` subclasses; `Realm::m_host_defined` becomes `GC::Ptr`, `set_host_defined` takes `GC::Ptr`. Removes the `OwnPtr`-forwarding in `Realm::visit_edges`. |
-| `76d94c5227` | LibWeb/CSS: Root transient CSSRule vectors via `GC::RootVector` — `CSSRuleList::set_rules` now takes `GC::RootVector<GC::Ref<CSSRule>>&&` and `adopt_root_vector`s its storage. |
+| `41053664b3` | LibGC: Relax container visitors and add a Variant visit helper — `GC::Cell::Visitor`'s template helpers for `Vector`/`Span`/`HashTable`/`Optional` gained `if constexpr (requires { visit(value); })` guards and a new `visit(Variant<Ts...>)` overload. `visitor.visit(container)` now compiles for any element type. See the section 3 follow-up for the silent-no-op risk this introduces. |
+| `7391fabfce` | **LibWeb/Crypto: Promote `AlgorithmMethods`/`AlgorithmParams` to `GC::Cell`** — 49 subclasses total (24 methods + 25 params) plus `NormalizedAlgorithmAndParameter`; `normalize_an_algorithm` returns `GC::Ref<NormalizedAlgorithmAndParameter>`, `from_value` / `create` factories return `GC::Ref`. Also flips `AlgorithmIdentifier` to `Variant<GC::Ref<JS::Object>, String>` and adds `visit_edges` on every `*Params` subclass that holds a `HashAlgorithmIdentifier`. Closes the largest remaining violation cluster. |
+| `dea519a1d9` | LibJS+LibWeb: Promote `Realm::HostDefined` to `GC::Cell` — includes the `Web::Bindings::HostDefined` and `Web::Bindings::PrincipalHostDefined` subclasses; `Realm::m_host_defined` becomes `GC::Ptr`, `set_host_defined` takes `GC::Ptr`. Removes the `OwnPtr`-forwarding in `Realm::visit_edges`. |
+| `3653c2d69d` | LibWeb/CSS: Root transient CSSRule vectors via `GC::RootVector` — `CSSRuleList::set_rules` now takes `GC::RootVector<GC::Ref<CSSRule>>&&` and `adopt_root_vector`s its storage. |
+| `4ce9404b16` | LibJS+LibWeb: Use the unified Visitor for Variant-holding members — collapses ~18 hand-rolled `member.visit([&](GC::Ref<T>) {...}, ...)` dispatchers. |
+| `54e7098b08` | LibWeb/CSS: Root the last StyleScope and StyleComputer locals — closes CSS at zero flagged variables. |
+| `80156f841d` | LibWeb/DOM: Adopt `GC::WeakHashSet` for `Range::live_ranges`, replacing the raw `HashTable<Range*>` the other registries (`all_message_ports`, `all_windows`, etc.) already outgrew. |
+| `fb328cea06` | LibWeb/DOM: Root `Node::queue_mutation_record`'s observer map; drops the `GC::DeferGC` workaround that had been parked on top. |
+| `73421cf517` | LibWeb/DOM: Root `normalize` and `compare_document_position` ancestors. |
+| `f00cfe7e11` | LibWeb/DOM: Root `Range::{extract,clone_the_contents}` contained_children. |
+| `c010fe28b2` | LibWeb/Editing: Take `GC::RootVector` in `clear_the_value`, `indent`, and `wrap`. |
+| `74bfbf934b` | LibWeb/DOM: Root transient locals across `Document` methods. |
+| `9806e92902` | LibWeb/DOM: Root `scrolling_boxes` in `scroll_an_element_into_view`. |
+| `fca31f95ca` | LibWeb/DOM: Root touch target list in `EventDispatcher::dispatch`. |
+| `01cb088340` | LibWeb/DOM: Avoid copying PaintableFragment list in `Range::get_client_rects`. |
 
 Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
 
@@ -155,12 +167,12 @@ Live task list (mirrored from the in-session TaskList tool, lowest ID first):
 |---|---|---|
 | #4 | completed | Collect LibWeb violations from build |
 | #5 | completed | Fix LibWeb/Editing violations |
-| #6 | pending | Fix LibWeb/Layout violations (~40) |
-| #7 | pending | Fix LibWeb/HTML violations (~20) |
-| #8 | pending | Fix LibWeb/DOM violations (~22) |
+| #6 | pending | Fix LibWeb/Layout violations (47 — biggest remaining cluster; mostly `OwnPtr<FormattingContext>` + `LayoutState`) |
+| #7 | pending | Fix LibWeb/HTML violations (32 — Window/NamedObjects, Plugin+MimeType, Select, Scripting, StructuredSerialize) |
+| #8 | pending | Fix LibWeb/DOM violations (12 — Slottable, Document, Node, Text) |
 | #9 | pending | Fix LibWeb/SVG violations (1 — `SVGComponentTransferFunctionElement::table_values`) |
-| #10 | in_progress | Fix LibWeb/CSS violations (~6 remaining: StyleComputer, StyleScope) |
-| #11 | in_progress | Fix remaining LibWeb violations (Crypto done; IndexedDB, HTML/Scripting, WindowProxy, Geometry, etc. remain) |
+| #10 | completed | Fix LibWeb/CSS violations (done — StyleScope and StyleComputer closed out in the in-flight changes) |
+| #11 | in_progress | Fix remaining LibWeb violations (Crypto done; IndexedDB=5, Painting=2, Geometry=1, XHR/XPath/WebIDL/WebGL/ViewTransition=1 each) |
 | #12 | pending | Reorder commits to put plugin enforcement at the end of the branch |
 | #13 | completed | Add compile-time block for GC container downgrades |
 | #14 | completed | Polish adopt pattern: doc comments, runtime tests, plugin cleanup |
@@ -169,8 +181,8 @@ Live task list (mirrored from the in-session TaskList tool, lowest ID first):
 Roughly in priority order, the next things to land are:
 
 1. **Continue task #10 (CSS)** — see updated "CSS Progress" section below for what's done and what's still to do (StyleComputer, StyleScope; Parser is mostly closed out).
-2. **Continue tasks #6–#9 and #11** — fix the remaining LibWeb violation directories. Suggested order is by violation count (Layout → HTML → DOM → SVG → smaller dirs); they're independent and can be tackled in any order. The Crypto cluster has been fully resolved via Cell promotion (commit `e9376d83d0`).
-3. **Implement the `JS::RootedExecutionContext` plan** (section 4 below, bucket A) — covers the `script_execution_context` / `dummy_execution_context` IGNORE_GC sites in `MainThreadVM.cpp` and similar transient-local hazards in LibJS. The bucket-C `CustomData` half is already done. A second small occurrence is now in `LibWeb/CSS/Parser/Helpers.cpp` (`execution_context` process-static; annotated with IGNORE_GC + rationale in commit `4919629f74`).
+2. **Continue tasks #6–#9 and #11** — fix the remaining LibWeb violation directories. Suggested order is by violation count (Layout → HTML → DOM → SVG → smaller dirs); they're independent and can be tackled in any order. The Crypto cluster has been fully resolved via Cell promotion (commit `7391fabfce`).
+3. **Implement the `JS::RootedExecutionContext` plan** (section 4 below, bucket A) — covers the `script_execution_context` / `dummy_execution_context` IGNORE_GC sites in `MainThreadVM.cpp` and similar transient-local hazards in LibJS. The bucket-C `CustomData` half is already done. A second small occurrence is now in `LibWeb/CSS/Parser/Helpers.cpp` (`execution_context` process-static; annotated with IGNORE_GC + rationale in commit `dea519a1d9`).
 4. **Task #12 (commit reordering)** — once everything builds, rebase to put the plugin-enforcement commit at the end of the branch so the history reads "fix all issues, then enforce".
 
 ### Deferred (not in the task list, tracked here for the next session)
@@ -260,6 +272,7 @@ The plugin already has thorough `visit_edges` validation (`Meta/Lagom/ClangPlugi
 - **"Field mentioned ≠ actually visited"**: documented FIXME in `Tests/ClangPlugins/LibJSGCTests/gc_allocated_member_is_accessed.cpp:19`. The current matcher (`LibJSGCPluginAction.cpp:720-722`) only checks that the field name appears somewhere in the function body, not that it's passed to `visitor.visit(...)`. Tightening this is the highest-value plugin improvement in the visit_edges area — small scope, catches a real "forgot to actually visit" footgun where the developer wrote e.g. `(void)m_foo;` or referenced the field in an assertion without visiting it.
 - **Deeper non-Cell substruct chains**: a non-Cell struct `A` that composes another non-Cell struct `B` with its own `visit_edges()` — the plugin only checks the outermost level. `A::visit_edges()` is not required to call `B::visit_edges()` if `B` is one level deep inside `A`. Worth a test case to confirm and then a recursive fix.
 - **Iterator visited instead of underlying container**: visiting `m_vec.begin()` instead of `m_vec` would currently pass the matcher. No test.
+- **Silently-dropped `visit(container)` calls after the Visitor SFINAE uplift**: the template container helpers in `GC::Cell::Visitor` (`visit(Vector<T>)`, `visit(HashTable<T>)`, `visit(Span<T>)`, `visit(Optional<T>)`, and the new `visit(Variant<Ts...>)`) were guarded with `if constexpr (requires { visit(value); })` so they become no-ops when the element type isn't traceable. This makes `visitor.visit(member)` uniformly callable but creates a silent-failure hazard: if a future refactor renames a Cell type or changes a `GC::Ref<Cell>` member to a non-Cell type, the `visit(member)` call stops tracing without a compile error. The risk is sharpest for `Variant<...>` with mixed alternatives, where dropping one alternative from traceable to non-traceable silently skips that branch. Mitigations to consider: (a) a plugin check that `visit_edges` on a Cell covers every traceable member (the complement to the "field mentioned ≠ actually visited" gap above, but for the "member never mentioned at all" case); (b) keeping the container helpers strict and requiring an explicit `visit_ignored(...)` opt-in for the non-traceable case, so the unsafe path is loud at the callsite. No immediate fix needed, but this should be tracked before more `visit_edges` implementations rely on the uniform-call ergonomics.
 - **Const vs. non-const visitor paths**: untested — a class that has both a const-visitor and non-const-visitor path could plausibly drift.
 
 **Recommended approach.** Land the "access must be an actual `visitor.visit(field)` call" tightening first (it subsumes the "field mentioned but not visited" gap and has the highest real-world bug-catching ratio). Add regression tests for conditional visits, deeper substruct chains, and iterator-visited patterns even without code changes, so the current behavior is pinned and future regressions are caught.
@@ -644,39 +657,38 @@ Tests call `gather_roots()` / `for_each_possible_value()` / `visit_edges()` dire
 
 ### Remaining Violations (LibWeb)
 
-Post-rebase, post-Crypto/HostDefined/CSS-RootVector, a keep-going build (`./Meta/ladybird.py build -- -k0`) surfaces **127** `error: Variable with type ... not a GC root` entries plus a further 13 `call to deleted constructor` entries (pre-existing slicing call sites).
+After the in-flight DOM/CSS/Crypto-follow-up work (uncommitted at time of writing), a keep-going build (`./Meta/ladybird.py build -- -k0`) surfaces **105** `error: Variable with type ... not a GC root` entries plus 1 `call to deleted constructor` entry.
 
-Biggest remaining subsystems (rough, from the grep):
+Biggest remaining subsystems:
 
 | Directory | Count |
 |---|---|
-| LibWeb/Layout | ~40 |
-| LibWeb/DOM | ~22 (Document, Node, Range, Slottable, Text, Element) |
-| LibWeb/HTML | ~20 (Window, HTMLSelect, Scripting, Plugin/MimeType, etc.) |
-| LibWeb/CSS | 6 (StyleComputer, StyleScope, CSSStyleSheet deleted-ctor is a pre-existing slicing site) |
-| LibWeb/HTML/Scripting | 2 (WindowProxy `OrderedHashMap<FlyString, GC::Ref<Navigable>>`) |
+| LibWeb/Layout | 47 |
+| LibWeb/HTML | 32 |
+| LibWeb/DOM | 12 |
 | LibWeb/IndexedDB (+ Internal) | 5 |
-| LibWeb/Geometry | 1 |
+| LibWeb/Painting | 2 |
+| LibWeb/Geometry / SVG / XPath / XHR / WebIDL / WebGL / ViewTransition | 1 each |
 
-The Crypto cluster is fully resolved (was 23 sites; now 0). The Bindings cluster's `HostDefined` locals are resolved (3 sites; now 0).
+CSS/Bindings/Crypto are at zero. The Crypto cluster was closed by `7391fabfce` + the in-flight visit_edges/allocator follow-up.
 
-Violation counts by type (top entries, post-Crypto/HostDefined):
+Violation counts by type (top entries):
 
 | Type | Count |
 |---|---|
 | `OwnPtr<FormattingContext>` / `NonnullOwnPtr<FormattingContext>` | 14 + 4 |
-| `Vector<Slottable>` | 7 |
-| `Vector<GC::Ref<DOM::Element>>` | 7 |
-| `LayoutState` | 7 (struct transitively contains GC) |
-| `Vector<JS::Value>` | 6 |
-| `Vector<GC::Ref<Node>>` | 4 |
+| `Vector<Slottable>` (aka `Vector<Variant<GC::Ref<Element>, GC::Ref<Text>>>`) | 8 |
+| `LayoutState` (struct transitively contains GC) | 7 |
+| `Vector<JS::Value>` | 4 |
 | `Vector<GC::Ref<MimeType>>` | 4 |
 | `OrderedHashMap<FlyString, GC::Ref<Navigable>>` | 4 |
 | `Vector<GC::Ref<Plugin>>` | 3 |
-| `OwnPtr<JS::ExecutionContext>` / `NonnullOwnPtr<JS::ExecutionContext>` | 3 |
 | `NonnullOwnPtr<ComputedValues>` | 3 |
-| `Vector<Text *>` | 2 |
-| ...many single-occurrence patterns |
+| `NonnullOwnPtr<JS::ExecutionContext>` | 2 |
+| `Web::HTML::SelectItemOptionGroup` | 2 |
+| `NamedObjects` | 2 |
+| `Layout::BlockFormattingContext` | 2 |
+| `Vector<Text *>`, `Vector<SelectItemOption>`, `Vector<TextBlock>`, `Vector<TextPosition>`, plus many single-occurrence patterns | 1 each |
 
 ### CSS Progress (in progress)
 
@@ -690,9 +702,9 @@ Started fixing CSS violations. Completed:
 - `LibWeb/CSS/ComputedProperties.cpp:1137` — `ContentData` promoted to `GC::Cell` (commit `321f943fdc`). Cascaded through `ContentDataAndQuoteNestingLevel`, `ComputedValues::m_noninherited.content`, `TreeBuilder.cpp`, `Node.cpp`.
 - `LibWeb/CSS/ComputedProperties.cpp:1942` — `Vector<AnimationProperties>` → `GC::ConservativeVector` (commit `cd2763dad2`).
 - `LibWeb/CSS/CountersSet.cpp:164` + `CountersSet.h` — promoted `CountersSet` to `GC::Cell` (commit `e33704e2ef`); cascaded through `Element` / `PseudoElement` / `AbstractElement`.
-- `LibWeb/CSS/Parser/Helpers.cpp:42` — was `NonnullOwnPtr<HostDefined>`; now allocated via `realm->heap().allocate<Bindings::HostDefined>` after the `Realm::HostDefined` Cell promotion (commit `4919629f74`).
+- `LibWeb/CSS/Parser/Helpers.cpp:42` — was `NonnullOwnPtr<HostDefined>`; now allocated via `realm->heap().allocate<Bindings::HostDefined>` after the `Realm::HostDefined` Cell promotion (commit `dea519a1d9`).
 - `LibWeb/CSS/Parser/Helpers.cpp:28` — `OwnPtr<JS::ExecutionContext>` process-static; annotated `IGNORE_GC` with rationale pointing to section-4 bucket A. Same disposition as MainThreadVM sites.
-- `LibWeb/CSS/CSSRuleList.h` + `CSSStyleSheet.cpp:230,268` + `Parser/RuleParsing.cpp:1404` — transient `Vector<GC::Ref<CSSRule>>` locals replaced with `GC::RootVector<GC::Ref<CSSRule>>`; `set_rules` takes the root vector by rvalue and adopts its storage (commit `76d94c5227`).
+- `LibWeb/CSS/CSSRuleList.h` + `CSSStyleSheet.cpp:230,268` + `Parser/RuleParsing.cpp:1404` — transient `Vector<GC::Ref<CSSRule>>` locals replaced with `GC::RootVector<GC::Ref<CSSRule>>`; `set_rules` takes the root vector by rvalue and adopts its storage (commit `3653c2d69d`).
 
 Still to do in CSS:
 - `StyleComputer.cpp:1947,2127` — `Vector<DOM::AbstractElement>`, `WebIDL::ExceptionOr<Vector<GC::Ref<Animation>>>`
