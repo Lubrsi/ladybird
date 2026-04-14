@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <LibGC/Forward.h>
 #include <LibWeb/DOM/AbstractRange.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/Export.h>
@@ -85,7 +86,7 @@ public:
 
     Utf16String to_string() const;
 
-    static HashTable<Range*>& live_ranges();
+    static GC::WeakHashSet<Range>& live_ranges();
 
     GC::Ref<Geometry::DOMRectList> get_client_rects();
     GC::Ref<Geometry::DOMRect> get_bounding_client_rect();
