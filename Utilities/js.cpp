@@ -40,7 +40,7 @@
 
 // FIXME: https://github.com/LadybirdBrowser/ladybird/issues/2412
 //    We should be able to destroy the VM on process exit.
-NeverDestroyed<RefPtr<JS::VM>> g_vm_storage;
+IGNORE_GC NeverDestroyed<RefPtr<JS::VM>> g_vm_storage;
 JS::VM* g_vm;
 Vector<String> g_repl_statements;
 GC::Root<JS::Value> g_last_value = GC::make_root(JS::js_undefined());

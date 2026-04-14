@@ -207,7 +207,7 @@ static ErrorOr<void, TestError> run_test(StringView source, StringView filepath,
         return parse_only_check(source, metadata.program_type);
     }
 
-    auto vm = JS::VM::create();
+    IGNORE_GC auto vm = JS::VM::create();
     vm->set_dynamic_imports_allowed(true);
 
     GC::Ptr<JS::Realm> realm;

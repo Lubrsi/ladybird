@@ -313,7 +313,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     HashMap<Wasm::Linker::Name, Wasm::ExternValue> js_exports;
 
     Wasm::AbstractMachine machine;
-    auto vm = JS::VM::create();
+    IGNORE_GC auto vm = JS::VM::create();
     auto root_execution_context = JS::RootedExecutionContext(*vm, JS::create_simple_execution_context<JS::GlobalObject>(*vm));
     auto& realm = *root_execution_context->realm;
 

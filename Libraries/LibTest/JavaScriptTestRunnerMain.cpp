@@ -24,7 +24,7 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(TestRunnerGlobalObject);
 
-RefPtr<::JS::VM> g_vm;
+IGNORE_GC RefPtr<::JS::VM> g_vm;
 bool g_collect_on_every_allocation = false;
 ByteString g_currently_running_test;
 HashMap<Utf16String, FunctionWithLength> s_exposed_global_functions;
