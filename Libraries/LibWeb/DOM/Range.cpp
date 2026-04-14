@@ -35,9 +35,9 @@ namespace Web::DOM {
 
 GC_DEFINE_ALLOCATOR(Range);
 
-HashTable<Range*>& Range::live_ranges()
+GC::WeakHashSet<Range>& Range::live_ranges()
 {
-    static HashTable<Range*> ranges;
+    static GC::WeakHashSet<Range> ranges;
     return ranges;
 }
 
@@ -75,7 +75,7 @@ Range::Range(GC::Ref<Node> start_container, WebIDL::UnsignedLong start_offset, G
     VERIFY(start_offset <= start_container->length());
     VERIFY(end_offset <= end_container->length());
 
-    live_ranges().set(this);
+    live_ranges().set(*this);
 }
 
 Range::~Range() = default;
@@ -83,7 +83,7 @@ Range::~Range() = default;
 void Range::finalize()
 {
     Base::finalize();
-    live_ranges().remove(this);
+    live_ranges().remove(*this);
 }
 
 void Range::initialize(JS::Realm& realm)

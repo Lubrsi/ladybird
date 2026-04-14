@@ -784,15 +784,15 @@ void Node::insert_before(GC::Ref<Node> node, GC::Ptr<Node> child, bool suppress_
         // 1. For each live range whose start node is parent and start offset is greater than child’s index:
         //    increase its start offset by count.
         for (auto& range : Range::live_ranges()) {
-            if (range->start_container() == this && range->start_offset() > child->index())
-                range->increase_start_offset(count);
+            if (range.start_container() == this && range.start_offset() > child->index())
+                range.increase_start_offset(count);
         }
 
         // 2. For each live range whose end node is parent and end offset is greater than child’s index:
         //    increase its end offset by count.
         for (auto& range : Range::live_ranges()) {
-            if (range->end_container() == this && range->end_offset() > child->index())
-                range->increase_end_offset(count);
+            if (range.end_container() == this && range.end_offset() > child->index())
+                range.increase_end_offset(count);
         }
     }
 
@@ -1005,28 +1005,28 @@ void Node::live_range_pre_remove()
     auto index = this->index();
 
     // 4. For each live range whose start node is an inclusive descendant of node, set its start to (parent, index).
-    for (auto* range : Range::live_ranges()) {
-        if (range->start_container()->is_inclusive_descendant_of(*this))
-            MUST(range->set_start(*parent, index));
+    for (auto& range : Range::live_ranges()) {
+        if (range.start_container()->is_inclusive_descendant_of(*this))
+            MUST(range.set_start(*parent, index));
     }
 
     // 5. For each live range whose end node is an inclusive descendant of node, set its end to (parent, index).
-    for (auto* range : Range::live_ranges()) {
-        if (range->end_container()->is_inclusive_descendant_of(*this))
-            MUST(range->set_end(*parent, index));
+    for (auto& range : Range::live_ranges()) {
+        if (range.end_container()->is_inclusive_descendant_of(*this))
+            MUST(range.set_end(*parent, index));
     }
 
     // 6. For each live range whose start node is parent and start offset is greater than index, decrease its start
     //    offset by 1.
-    for (auto* range : Range::live_ranges()) {
-        if (range->start_container() == parent && range->start_offset() > index)
-            range->decrease_start_offset(1);
+    for (auto& range : Range::live_ranges()) {
+        if (range.start_container() == parent && range.start_offset() > index)
+            range.decrease_start_offset(1);
     }
 
     // 7. For each live range whose end node is parent and end offset is greater than index, decrease its end offset by 1.
-    for (auto* range : Range::live_ranges()) {
-        if (range->end_container() == parent && range->end_offset() > index)
-            range->decrease_end_offset(1);
+    for (auto& range : Range::live_ranges()) {
+        if (range.end_container() == parent && range.end_offset() > index)
+            range.decrease_end_offset(1);
     }
 }
 
@@ -1442,15 +1442,15 @@ WebIDL::ExceptionOr<void> Node::move_node(Node& new_parent, Node* child)
         // 1. For each live range whose start node is newParent and start offset is greater than child’s index:
         //    increase its start offset by 1.
         for (auto& range : Range::live_ranges()) {
-            if (range->start_container() == &new_parent && range->start_offset() > child->index())
-                range->increase_start_offset(1);
+            if (range.start_container() == &new_parent && range.start_offset() > child->index())
+                range.increase_start_offset(1);
         }
 
         // 2. For each live range whose end node is newParent and end offset is greater than child’s index:
         //    increase its end offset by 1.
         for (auto& range : Range::live_ranges()) {
-            if (range->end_container() == &new_parent && range->end_offset() > child->index())
-                range->increase_end_offset(1);
+            if (range.end_container() == &new_parent && range.end_offset() > child->index())
+                range.increase_end_offset(1);
         }
     }
 

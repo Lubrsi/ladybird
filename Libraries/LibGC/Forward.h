@@ -51,4 +51,7 @@ class RootVector;
 template<typename T, typename TraitsForT, bool IsOrdered>
 class RootHashTable;
 
+template<typename T>
+class WeakHashSet;
+
 }
