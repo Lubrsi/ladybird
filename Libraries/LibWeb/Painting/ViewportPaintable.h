@@ -41,7 +41,7 @@ public:
     ScrollState const& scroll_state() const { return m_scroll_state; }
     ScrollStateSnapshot const& scroll_state_snapshot() const { return m_scroll_state_snapshot; }
 
-    void set_paintable_boxes_with_auto_content_visibility(Vector<GC::Ref<PaintableBox>> paintable_boxes) { m_paintable_boxes_with_auto_content_visibility = move(paintable_boxes); }
+    void set_paintable_boxes_with_auto_content_visibility(GC::RootVector<GC::Ref<PaintableBox>>&& paintable_boxes) { m_paintable_boxes_with_auto_content_visibility = GC::adopt_root_vector(move(paintable_boxes)); }
     ReadonlySpan<GC::Ref<PaintableBox>> paintable_boxes_with_auto_content_visibility() const { return m_paintable_boxes_with_auto_content_visibility; }
 
     AccumulatedVisualContextTree const& visual_context_tree() const
