@@ -45,11 +45,70 @@
 
 namespace Web::Crypto {
 
+GC_DEFINE_ALLOCATOR(AlgorithmParams);
+GC_DEFINE_ALLOCATOR(AesCbcParams);
+GC_DEFINE_ALLOCATOR(AesCtrParams);
+GC_DEFINE_ALLOCATOR(AesGcmParams);
+GC_DEFINE_ALLOCATOR(HKDFParams);
+GC_DEFINE_ALLOCATOR(PBKDF2Params);
+GC_DEFINE_ALLOCATOR(RsaKeyGenParams);
+GC_DEFINE_ALLOCATOR(RsaHashedKeyGenParams);
+GC_DEFINE_ALLOCATOR(RsaHashedImportParams);
+GC_DEFINE_ALLOCATOR(RsaOaepParams);
+GC_DEFINE_ALLOCATOR(RsaPssParams);
+GC_DEFINE_ALLOCATOR(EcdsaParams);
+GC_DEFINE_ALLOCATOR(EcKeyGenParams);
+GC_DEFINE_ALLOCATOR(AesKeyGenParams);
+GC_DEFINE_ALLOCATOR(AesDerivedKeyParams);
+GC_DEFINE_ALLOCATOR(HmacImportParams);
+GC_DEFINE_ALLOCATOR(HmacKeyGenParams);
+GC_DEFINE_ALLOCATOR(EcdhKeyDeriveParams);
+GC_DEFINE_ALLOCATOR(EcKeyImportParams);
+GC_DEFINE_ALLOCATOR(Ed448Params);
+GC_DEFINE_ALLOCATOR(Argon2Params);
+GC_DEFINE_ALLOCATOR(CShakeParams);
+GC_DEFINE_ALLOCATOR(KmacParams);
+GC_DEFINE_ALLOCATOR(KmacKeyGenParams);
+GC_DEFINE_ALLOCATOR(KmacImportParams);
+GC_DEFINE_ALLOCATOR(AeadParams);
+
+GC_DEFINE_ALLOCATOR(AlgorithmMethods);
+GC_DEFINE_ALLOCATOR(RSAOAEP);
+GC_DEFINE_ALLOCATOR(RSAPSS);
+GC_DEFINE_ALLOCATOR(RSASSAPKCS1);
+GC_DEFINE_ALLOCATOR(AesCbc);
+GC_DEFINE_ALLOCATOR(AesCtr);
+GC_DEFINE_ALLOCATOR(AesGcm);
+GC_DEFINE_ALLOCATOR(AesKw);
+GC_DEFINE_ALLOCATOR(HKDF);
+GC_DEFINE_ALLOCATOR(PBKDF2);
+GC_DEFINE_ALLOCATOR(SHA);
+GC_DEFINE_ALLOCATOR(ECDSA);
+GC_DEFINE_ALLOCATOR(ECDH);
+GC_DEFINE_ALLOCATOR(ED25519);
+GC_DEFINE_ALLOCATOR(ED448);
+GC_DEFINE_ALLOCATOR(X25519);
+GC_DEFINE_ALLOCATOR(X448);
+GC_DEFINE_ALLOCATOR(HMAC);
+GC_DEFINE_ALLOCATOR(MLDSA);
+GC_DEFINE_ALLOCATOR(MLKEM);
+GC_DEFINE_ALLOCATOR(Argon2);
+GC_DEFINE_ALLOCATOR(CShake);
+GC_DEFINE_ALLOCATOR(KMAC);
+GC_DEFINE_ALLOCATOR(ChaCha20Poly1305);
+GC_DEFINE_ALLOCATOR(AesOcb);
+
+void AlgorithmMethods::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_realm);
+}
+
 static JS::ThrowCompletionOr<HashAlgorithmIdentifier> hash_algorithm_identifier_from_value(JS::VM& vm, JS::Value const hash_value)
 {
     auto* realm = vm.current_realm();
 
-    auto maybe_normalized_algorithm = [&]() -> WebIDL::ExceptionOr<NormalizedAlgorithmAndParameter> {
+    auto maybe_normalized_algorithm = [&]() -> WebIDL::ExceptionOr<GC::Ref<NormalizedAlgorithmAndParameter>> {
         if (hash_value.is_string()) {
             auto const hash_string = TRY(hash_value.to_string(vm));
             return normalize_an_algorithm(*realm, hash_string, "digest"_string);
@@ -66,7 +125,7 @@ static JS::ThrowCompletionOr<HashAlgorithmIdentifier> hash_algorithm_identifier_
         return Bindings::exception_to_throw_completion(vm, maybe_normalized_algorithm.exception());
     }
 
-    return HashAlgorithmIdentifier { maybe_normalized_algorithm.value().parameter->name };
+    return HashAlgorithmIdentifier { maybe_normalized_algorithm.value()->parameter->name };
 }
 
 // https://w3c.github.io/webcrypto/#concept-usage-intersection
@@ -80,9 +139,6 @@ static Vector<Bindings::KeyUsage> usage_intersection(ReadonlySpan<Bindings::KeyU
     quick_sort(result);
     return result;
 }
-
-// Out of line to ensure this class has a key function
-AlgorithmMethods::~AlgorithmMethods() = default;
 
 // https://w3c.github.io/webcrypto/#big-integer
 static ::Crypto::UnsignedBigInteger big_integer_from_api_big_integer(GC::Ptr<JS::Uint8Array> const& big_integer)
@@ -306,16 +362,12 @@ JS::ThrowCompletionOr<GC::Ref<JS::Object>> EncapsulatedBits::to_object(JS::Realm
     return object;
 }
 
-AlgorithmParams::~AlgorithmParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AlgorithmParams::from_value(JS::VM&, JS::Value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AlgorithmParams::from_value(JS::VM& vm, JS::Value)
 {
-    return adopt_own(*new AlgorithmParams {});
+    return vm.heap().allocate<AlgorithmParams>();
 }
 
-AesCbcParams::~AesCbcParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesCbcParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AesCbcParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -324,12 +376,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesCbcParams::from_value(J
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "BufferSource");
     auto iv = TRY_OR_THROW_OOM(vm, WebIDL::get_buffer_source_copy(iv_value.as_object()));
 
-    return adopt_own<AlgorithmParams>(*new AesCbcParams { iv });
+    return vm.heap().allocate<AesCbcParams>(iv);
 }
 
-AesCtrParams::~AesCtrParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesCtrParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AesCtrParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -341,12 +391,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesCtrParams::from_value(J
     auto length_value = TRY(object.get("length"_utf16_fly_string));
     auto length = TRY(length_value.to_u8(vm));
 
-    return adopt_own<AlgorithmParams>(*new AesCtrParams { iv, length });
+    return vm.heap().allocate<AesCtrParams>(iv, length);
 }
 
-AesGcmParams::~AesGcmParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesGcmParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AesGcmParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -369,12 +417,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesGcmParams::from_value(J
         maybe_tag_length = TRY(tag_length_value.to_u8(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new AesGcmParams { iv, maybe_additional_data, maybe_tag_length });
+    return vm.heap().allocate<AesGcmParams>(iv, maybe_additional_data, maybe_tag_length);
 }
 
-HKDFParams::~HKDFParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HKDFParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> HKDFParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -391,12 +437,16 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HKDFParams::from_value(JS:
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "BufferSource");
     auto info = TRY_OR_THROW_OOM(vm, WebIDL::get_buffer_source_copy(info_value.as_object()));
 
-    return adopt_own<AlgorithmParams>(*new HKDFParams { hash, salt, info });
+    return vm.heap().allocate<HKDFParams>(hash, salt, info);
 }
 
-PBKDF2Params::~PBKDF2Params() = default;
+void HKDFParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> PBKDF2Params::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> PBKDF2Params::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -413,12 +463,16 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> PBKDF2Params::from_value(J
     auto hash_value = TRY(object.get("hash"_utf16_fly_string));
     auto hash = TRY(hash_algorithm_identifier_from_value(vm, hash_value));
 
-    return adopt_own<AlgorithmParams>(*new PBKDF2Params { salt, iterations, hash });
+    return vm.heap().allocate<PBKDF2Params>(salt, iterations, hash);
 }
 
-RsaKeyGenParams::~RsaKeyGenParams() = default;
+void PBKDF2Params::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> RsaKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -433,12 +487,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaKeyGenParams::from_valu
 
     public_exponent = static_cast<JS::Uint8Array&>(public_exponent_value.as_object());
 
-    return adopt_own<AlgorithmParams>(*new RsaKeyGenParams { modulus_length, big_integer_from_api_big_integer(public_exponent) });
+    return vm.heap().allocate<RsaKeyGenParams>(modulus_length, big_integer_from_api_big_integer(public_exponent));
 }
 
-RsaHashedKeyGenParams::~RsaHashedKeyGenParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaHashedKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> RsaHashedKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -456,24 +508,32 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaHashedKeyGenParams::fro
     auto hash_value = TRY(object.get("hash"_utf16_fly_string));
     auto hash = TRY(hash_algorithm_identifier_from_value(vm, hash_value));
 
-    return adopt_own<AlgorithmParams>(*new RsaHashedKeyGenParams { modulus_length, big_integer_from_api_big_integer(public_exponent), hash });
+    return vm.heap().allocate<RsaHashedKeyGenParams>(modulus_length, big_integer_from_api_big_integer(public_exponent), hash);
 }
 
-RsaHashedImportParams::~RsaHashedImportParams() = default;
+void RsaHashedKeyGenParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaHashedImportParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> RsaHashedImportParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto hash_value = TRY(object.get("hash"_utf16_fly_string));
     auto hash = TRY(hash_algorithm_identifier_from_value(vm, hash_value));
 
-    return adopt_own<AlgorithmParams>(*new RsaHashedImportParams { hash });
+    return vm.heap().allocate<RsaHashedImportParams>(hash);
 }
 
-RsaOaepParams::~RsaOaepParams() = default;
+void RsaHashedImportParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaOaepParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> RsaOaepParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -487,73 +547,73 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaOaepParams::from_value(
         label = TRY_OR_THROW_OOM(vm, WebIDL::get_buffer_source_copy(label_value.as_object()));
     }
 
-    return adopt_own<AlgorithmParams>(*new RsaOaepParams { move(label) });
+    return vm.heap().allocate<RsaOaepParams>(move(label));
 }
 
-RsaPssParams::~RsaPssParams() = default;
-
 // https://w3c.github.io/webcrypto/#RsaPssParams-dictionary
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> RsaPssParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> RsaPssParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto salt_length_value = TRY(object.get("saltLength"_utf16_fly_string));
     auto salt_length = TRY(salt_length_value.to_u32(vm));
 
-    return adopt_own<AlgorithmParams>(*new RsaPssParams { salt_length });
+    return vm.heap().allocate<RsaPssParams>(salt_length);
 }
 
-EcdsaParams::~EcdsaParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> EcdsaParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> EcdsaParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto hash_value = TRY(object.get("hash"_utf16_fly_string));
     auto hash = TRY(hash_algorithm_identifier_from_value(vm, hash_value));
 
-    return adopt_own<AlgorithmParams>(*new EcdsaParams { hash });
+    return vm.heap().allocate<EcdsaParams>(hash);
 }
 
-EcKeyGenParams::~EcKeyGenParams() = default;
+void EcdsaParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> EcKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> EcKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto curve_value = TRY(object.get("namedCurve"_utf16_fly_string));
     auto curve = TRY(curve_value.to_string(vm));
 
-    return adopt_own<AlgorithmParams>(*new EcKeyGenParams { curve });
+    return vm.heap().allocate<EcKeyGenParams>(curve);
 }
 
-AesKeyGenParams::~AesKeyGenParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AesKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto length_value = TRY(object.get("length"_utf16_fly_string));
     auto length = TRY(length_value.to_u16(vm));
 
-    return adopt_own<AlgorithmParams>(*new AesKeyGenParams { length });
+    return vm.heap().allocate<AesKeyGenParams>(length);
 }
 
-AesDerivedKeyParams::~AesDerivedKeyParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AesDerivedKeyParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AesDerivedKeyParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto length_value = TRY(object.get("length"_utf16_fly_string));
     auto length = TRY(length_value.to_u16(vm));
 
-    return adopt_own<AlgorithmParams>(*new AesDerivedKeyParams { length });
+    return vm.heap().allocate<AesDerivedKeyParams>(length);
 }
 
-EcdhKeyDeriveParams::~EcdhKeyDeriveParams() = default;
+void EcdhKeyDeriveParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(public_key);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> EcdhKeyDeriveParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> EcdhKeyDeriveParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -566,24 +626,20 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> EcdhKeyDeriveParams::from_
 
     auto& key = as<CryptoKey>(*key_object);
 
-    return adopt_own<AlgorithmParams>(*new EcdhKeyDeriveParams { key });
+    return vm.heap().allocate<EcdhKeyDeriveParams>(key);
 }
 
-EcKeyImportParams::~EcKeyImportParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> EcKeyImportParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> EcKeyImportParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
     auto named_curve_value = TRY(object.get("namedCurve"_utf16_fly_string));
     auto named_curve = TRY(named_curve_value.to_string(vm));
 
-    return adopt_own<AlgorithmParams>(*new EcKeyImportParams { named_curve });
+    return vm.heap().allocate<EcKeyImportParams>(named_curve);
 }
 
-HmacImportParams::~HmacImportParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HmacImportParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> HmacImportParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -596,12 +652,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HmacImportParams::from_val
         maybe_length = TRY(length_value.to_u32(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new HmacImportParams { hash, maybe_length });
+    return vm.heap().allocate<HmacImportParams>(hash, maybe_length);
 }
 
-HmacKeyGenParams::~HmacKeyGenParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HmacKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> HmacKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -614,12 +668,16 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> HmacKeyGenParams::from_val
         maybe_length = TRY(length_value.to_u32(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new HmacKeyGenParams { hash, maybe_length });
+    return vm.heap().allocate<HmacKeyGenParams>(hash, maybe_length);
 }
 
-Ed448Params::~Ed448Params() = default;
+void HmacKeyGenParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
+}
 
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> Ed448Params::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> Ed448Params::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -631,7 +689,7 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> Ed448Params::from_value(JS
         maybe_context = TRY_OR_THROW_OOM(vm, WebIDL::get_buffer_source_copy(context_value.as_object()));
     }
 
-    return adopt_own<AlgorithmParams>(*new Ed448Params { maybe_context });
+    return vm.heap().allocate<Ed448Params>(maybe_context);
 }
 
 static inline JS::ThrowCompletionOr<Optional<ByteBuffer>> get_optional_buffer_source(JS::VM& vm, JS::Object const& object, JS::PropertyKey const& name)
@@ -647,9 +705,7 @@ static inline JS::ThrowCompletionOr<Optional<ByteBuffer>> get_optional_buffer_so
     return TRY_OR_THROW_OOM(vm, WebIDL::get_buffer_source_copy(value.as_object()));
 }
 
-Argon2Params::~Argon2Params() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> Argon2Params::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> Argon2Params::from_value(JS::VM& vm, JS::Value value)
 {
     VERIFY(value.is_object());
     auto& object = value.as_object();
@@ -683,12 +739,10 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> Argon2Params::from_value(J
     auto const secret_value = TRY(get_optional_buffer_source(vm, object, "secretValue"_utf16_fly_string));
     auto const associated_data = TRY(get_optional_buffer_source(vm, object, "associatedData"_utf16_fly_string));
 
-    return adopt_own<AlgorithmParams>(*new Argon2Params { nonce, parallelism, memory, passes, maybe_version, secret_value, associated_data });
+    return vm.heap().allocate<Argon2Params>(nonce, parallelism, memory, passes, maybe_version, secret_value, associated_data);
 }
 
-CShakeParams::~CShakeParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> CShakeParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> CShakeParams::from_value(JS::VM& vm, JS::Value value)
 {
     VERIFY(value.is_object());
     auto& object = value.as_object();
@@ -705,13 +759,11 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> CShakeParams::from_value(J
 
     auto const customization = TRY(get_optional_buffer_source(vm, object, "customization"_utf16_fly_string));
 
-    return adopt_own<AlgorithmParams>(*new CShakeParams { length, function_name, customization });
+    return vm.heap().allocate<CShakeParams>(length, function_name, customization);
 }
 
-KmacParams::~KmacParams() = default;
-
 // https://wicg.github.io/webcrypto-modern-algos/#kmac-params
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> KmacParams::from_value(JS::VM& vm, JS::Value value)
 {
     VERIFY(value.is_object());
     auto& object = value.as_object();
@@ -727,13 +779,11 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacParams::from_value(JS:
     // 2. Let customization be the optional customization member or the empty octet string.
     auto const customization = TRY(get_optional_buffer_source(vm, object, "customization"_utf16_fly_string));
 
-    return adopt_own<AlgorithmParams>(*new KmacParams { length, customization });
+    return vm.heap().allocate<KmacParams>(length, customization);
 }
-
-KmacKeyGenParams::~KmacKeyGenParams() = default;
 
 // https://wicg.github.io/webcrypto-modern-algos/#kmac-keygen-params
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacKeyGenParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> KmacKeyGenParams::from_value(JS::VM& vm, JS::Value value)
 {
     VERIFY(value.is_object());
     auto& object = value.as_object();
@@ -745,13 +795,11 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacKeyGenParams::from_val
         maybe_length = TRY(length_value.to_u32(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new KmacKeyGenParams { maybe_length });
+    return vm.heap().allocate<KmacKeyGenParams>(maybe_length);
 }
 
-KmacImportParams::~KmacImportParams() = default;
-
 // https://wicg.github.io/webcrypto-modern-algos/#kmac-import-params
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacImportParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> KmacImportParams::from_value(JS::VM& vm, JS::Value value)
 {
     VERIFY(value.is_object());
     auto& object = value.as_object();
@@ -763,7 +811,13 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> KmacImportParams::from_val
         maybe_length = TRY(length_value.to_u32(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new KmacImportParams { maybe_length });
+    return vm.heap().allocate<KmacImportParams>(maybe_length);
+}
+
+void HmacImportParams::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(hash);
 }
 
 // https://w3c.github.io/webcrypto/#rsa-oaep-operations-encrypt
@@ -1106,7 +1160,7 @@ WebIDL::ExceptionOr<GC::Ref<CryptoKey>> RSAOAEP::import_key(Web::Crypto::Algorit
             auto normalized_hash = TRY(normalize_an_algorithm(m_realm, AlgorithmIdentifier { *hash }, "digest"_string));
 
             // 2. If normalizedHash is not equal to the hash member of normalizedAlgorithm, throw a DataError.
-            if (normalized_hash.parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
+            if (normalized_hash->parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
                 return WebIDL::DataError::create(m_realm, "Invalid hash"_utf16);
         }
 
@@ -1440,7 +1494,7 @@ WebIDL::ExceptionOr<GC::Ref<JS::ArrayBuffer>> RSAPSS::sign(AlgorithmParams const
         return WebIDL::InvalidAccessError::create(realm, "Key is not a private key"_utf16);
 
     auto const& private_key = key->handle().get<::Crypto::PK::RSAPrivateKey>();
-    auto pss_params = static_cast<RsaPssParams const&>(params);
+    auto const& pss_params = static_cast<RsaPssParams const&>(params);
     auto hash = TRY(as<RsaHashedKeyAlgorithm>(*key->algorithm()).hash().name(vm));
 
     // 3. Perform the signature generation operation defined in Section 8.1 of [RFC3447] with the key represented by the [[handle]] internal slot
@@ -1484,7 +1538,7 @@ WebIDL::ExceptionOr<JS::Value> RSAPSS::verify(AlgorithmParams const& params, GC:
         return WebIDL::InvalidAccessError::create(realm, "Key is not a public key"_utf16);
 
     auto const& public_key = key->handle().get<::Crypto::PK::RSAPublicKey>();
-    auto pss_params = static_cast<RsaPssParams const&>(params);
+    auto const& pss_params = static_cast<RsaPssParams const&>(params);
     auto hash = TRY(as<RsaHashedKeyAlgorithm>(*key->algorithm()).hash().name(vm));
 
     // 2. Perform the signature verification operation defined in Section 8.1 of [RFC3447] with the key represented by the [[handle]] internal slot
@@ -1688,7 +1742,7 @@ WebIDL::ExceptionOr<GC::Ref<CryptoKey>> RSAPSS::import_key(AlgorithmParams const
             auto normalized_hash = TRY(normalize_an_algorithm(m_realm, AlgorithmIdentifier { *hash }, "digest"_string));
 
             // 2. If normalizedHash is not equal to the hash member of normalizedAlgorithm, throw a DataError.
-            if (normalized_hash.parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
+            if (normalized_hash->parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
                 return WebIDL::DataError::create(m_realm, "Invalid hash"_utf16);
         }
 
@@ -2265,7 +2319,7 @@ WebIDL::ExceptionOr<GC::Ref<CryptoKey>> RSASSAPKCS1::import_key(AlgorithmParams 
             auto normalized_hash = TRY(normalize_an_algorithm(m_realm, AlgorithmIdentifier { *hash }, "digest"_string));
 
             // 2. If normalizedHash is not equal to the hash member of normalizedAlgorithm, throw a DataError.
-            if (normalized_hash.parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
+            if (normalized_hash->parameter->name != TRY(normalized_algorithm.hash.name(realm.vm())))
                 return WebIDL::DataError::create(m_realm, "Invalid hash"_utf16);
         }
 
@@ -9794,9 +9848,7 @@ WebIDL::ExceptionOr<GC::Ref<JS::ArrayBuffer>> CShake::digest(AlgorithmParams con
     return JS::ArrayBuffer::create(m_realm, maybe_result.release_value());
 }
 
-AeadParams::~AeadParams() = default;
-
-JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AeadParams::from_value(JS::VM& vm, JS::Value value)
+JS::ThrowCompletionOr<GC::Ref<AlgorithmParams>> AeadParams::from_value(JS::VM& vm, JS::Value value)
 {
     auto& object = value.as_object();
 
@@ -9819,7 +9871,7 @@ JS::ThrowCompletionOr<NonnullOwnPtr<AlgorithmParams>> AeadParams::from_value(JS:
         maybe_tag_length = TRY(tag_length_value.to_u8(vm));
     }
 
-    return adopt_own<AlgorithmParams>(*new AeadParams { iv, maybe_additional_data, maybe_tag_length });
+    return vm.heap().allocate<AeadParams>(iv, maybe_additional_data, maybe_tag_length);
 }
 
 // https://wicg.github.io/webcrypto-modern-algos/#chacha20-poly1305-operations-encrypt

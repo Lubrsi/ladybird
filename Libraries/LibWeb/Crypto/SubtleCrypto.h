@@ -54,10 +54,22 @@ private:
     virtual void initialize(JS::Realm&) override;
 };
 
-struct NormalizedAlgorithmAndParameter {
-    NonnullOwnPtr<AlgorithmMethods> methods;
-    NonnullOwnPtr<AlgorithmParams> parameter;
+class NormalizedAlgorithmAndParameter final : public GC::Cell {
+    GC_CELL(NormalizedAlgorithmAndParameter, GC::Cell);
+    GC_DECLARE_ALLOCATOR(NormalizedAlgorithmAndParameter);
+
+public:
+    NormalizedAlgorithmAndParameter(GC::Ref<AlgorithmMethods> methods, GC::Ref<AlgorithmParams> parameter)
+        : methods(methods)
+        , parameter(parameter)
+    {
+    }
+
+    virtual void visit_edges(Visitor&) override;
+
+    GC::Ref<AlgorithmMethods> methods;
+    GC::Ref<AlgorithmParams> parameter;
 };
-WebIDL::ExceptionOr<NormalizedAlgorithmAndParameter> normalize_an_algorithm(JS::Realm&, AlgorithmIdentifier const& algorithm, String operation);
+WebIDL::ExceptionOr<GC::Ref<NormalizedAlgorithmAndParameter>> normalize_an_algorithm(JS::Realm&, AlgorithmIdentifier const& algorithm, String operation);
 
 }

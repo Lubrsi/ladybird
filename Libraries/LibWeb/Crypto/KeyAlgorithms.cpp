@@ -162,6 +162,12 @@ void RsaHashedKeyAlgorithm::initialize(JS::Realm& realm)
     define_native_accessor(realm, "hash"_utf16_fly_string, hash_getter, {}, JS::Attribute::Enumerable | JS::Attribute::Configurable);
 }
 
+void RsaHashedKeyAlgorithm::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_hash);
+}
+
 JS_DEFINE_NATIVE_FUNCTION(RsaHashedKeyAlgorithm::hash_getter)
 {
     auto* impl = TRY(impl_from<RsaHashedKeyAlgorithm>(vm, "RsaHashedKeyAlgorithm"sv));
