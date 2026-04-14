@@ -56,14 +56,14 @@ GC::Ref<DOM::Range> block_extend_a_range(GC::Ref<DOM::Range>);
 GC::Ptr<DOM::Node> block_node_of_node(GC::Ref<DOM::Node>);
 Utf16String canonical_space_sequence(size_t length, bool non_breaking_start, bool non_breaking_end);
 void canonicalize_whitespace(DOM::BoundaryPoint, bool fix_collapsed_space = true);
-Vector<GC::Ref<DOM::Node>> clear_the_value(FlyString const&, GC::Ref<DOM::Element>);
+GC::RootVector<GC::Ref<DOM::Node>> clear_the_value(FlyString const&, GC::Ref<DOM::Element>);
 void delete_the_selection(Selection&, bool block_merging = true, bool strip_wrappers = true, Selection::Direction = Selection::Direction::Forwards);
 Optional<Utf16String> effective_command_value(GC::Ptr<DOM::Node>, FlyString const& command);
 DOM::BoundaryPoint first_equivalent_point(DOM::BoundaryPoint);
 void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node>);
 bool follows_a_line_break(GC::Ref<DOM::Node>);
 void force_the_value(GC::Ref<DOM::Node>, FlyString const&, Optional<Utf16String const&>);
-void indent(Vector<GC::Ref<DOM::Node>>);
+void indent(GC::RootVector<GC::Ref<DOM::Node>>);
 bool is_allowed_child_of_node(Variant<GC::Ref<DOM::Node>, FlyString> child, Variant<GC::Ref<DOM::Node>, FlyString> parent);
 bool is_block_boundary_point(DOM::BoundaryPoint);
 bool is_block_end_point(DOM::BoundaryPoint);
@@ -120,7 +120,7 @@ void split_the_parent_of_nodes(Vector<GC::Ref<DOM::Node>> const&);
 void toggle_lists(DOM::Document&, FlyString const&);
 bool values_are_equivalent(FlyString const&, Optional<Utf16String const&>, Optional<Utf16String const&>);
 bool values_are_loosely_equivalent(FlyString const&, Optional<Utf16String const&>, Optional<Utf16String const&>);
-GC::Ptr<DOM::Node> wrap(Vector<GC::Ref<DOM::Node>>, Function<bool(GC::Ref<DOM::Node>)> sibling_criteria, Function<GC::Ptr<DOM::Node>()> new_parent_instructions);
+GC::Ptr<DOM::Node> wrap(GC::RootVector<GC::Ref<DOM::Node>>, Function<bool(GC::Ref<DOM::Node>)> sibling_criteria, Function<GC::Ptr<DOM::Node>()> new_parent_instructions);
 
 // Utility methods:
 
