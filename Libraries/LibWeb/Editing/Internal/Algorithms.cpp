@@ -579,22 +579,23 @@ void canonicalize_whitespace(DOM::BoundaryPoint boundary, bool fix_collapsed_spa
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#clear-the-value
-Vector<GC::Ref<DOM::Node>> clear_the_value(FlyString const& command, GC::Ref<DOM::Element> element)
+GC::RootVector<GC::Ref<DOM::Node>> clear_the_value(FlyString const& command, GC::Ref<DOM::Element> element)
 {
+    GC::RootVector<GC::Ref<DOM::Node>> children(element->heap());
+
     // 1. Let command be the current command.
 
     // 2. If element is not editable, return the empty list.
     if (!element->is_editable())
-        return {};
+        return children;
 
     // 3. If element's specified command value for command is null, return the empty list.
     if (!specified_command_value(element, command).has_value())
-        return {};
+        return children;
 
     // 4. If element is a simple modifiable element:
     if (is_simple_modifiable_element(element)) {
         // 1. Let children be the children of element.
-        GC::RootVector<GC::Ref<DOM::Node>> children(element->heap());
         element->for_each_child([&children](DOM::Node& child) {
             children.append(child);
             return IterationDecision::Continue;
@@ -681,10 +682,11 @@ Vector<GC::Ref<DOM::Node>> clear_the_value(FlyString const& command, GC::Ref<DOM
 
     // 10. If element's specified command value for command is null, return the empty list.
     if (!specified_command_value(element, command).has_value())
-        return {};
+        return children;
 
     // 11. Set the tag name of element to "span", and return the one-node list consisting of the result.
-    return { set_the_tag_name(element, HTML::TagNames::span) };
+    children.append(set_the_tag_name(element, HTML::TagNames::span));
+    return children;
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#delete-the-selection
@@ -1269,8 +1271,10 @@ void fix_disallowed_ancestors_of_node(GC::Ref<DOM::Node> node)
         //    any dl with no attributes and false otherwise, and new parent instructions returning the result of calling
         //    createElement("dl") on the context object. Then abort these steps.
         if (is<DOM::Element>(*node) && static_cast<DOM::Element&>(*node).local_name().is_one_of(HTML::TagNames::dd, HTML::TagNames::dt)) {
+            GC::RootVector<GC::Ref<DOM::Node>> node_as_list { node->heap() };
+            node_as_list.append(node);
             wrap(
-                { node },
+                move(node_as_list),
                 [](GC::Ref<DOM::Node> sibling) {
                     if (!is<DOM::Element>(*sibling))
                         return false;
@@ -1386,8 +1390,10 @@ void force_the_value(GC::Ref<DOM::Node> node, FlyString const& command, Optional
         // 3. Wrap the one-node list consisting of node, with sibling criteria returning true for a simple modifiable
         //    element whose specified command value is equivalent to new value and whose effective command value is
         //    loosely equivalent to new value and false otherwise, and with new parent instructions returning null.
+        GC::RootVector<GC::Ref<DOM::Node>> node_as_list { node->heap() };
+        node_as_list.append(node);
         wrap(
-            { node },
+            move(node_as_list),
             [&](GC::Ref<DOM::Node> sibling) {
                 return is_simple_modifiable_element(sibling)
                     && specified_command_value(static_cast<DOM::Element&>(*sibling), command) == new_value
@@ -1604,7 +1610,7 @@ void force_the_value(GC::Ref<DOM::Node> node, FlyString const& command, Optional
 }
 
 // https://w3c.github.io/editing/docs/execCommand/#indent
-void indent(Vector<GC::Ref<DOM::Node>> node_list)
+void indent(GC::RootVector<GC::Ref<DOM::Node>> node_list)
 {
     // 1. If node list is empty, do nothing and abort these steps.
     if (node_list.is_empty())
@@ -4395,7 +4401,7 @@ bool values_are_loosely_equivalent(FlyString const& command, Optional<Utf16Strin
 
 // https://w3c.github.io/editing/docs/execCommand/#wrap
 GC::Ptr<DOM::Node> wrap(
-    Vector<GC::Ref<DOM::Node>> node_list,
+    GC::RootVector<GC::Ref<DOM::Node>> node_list,
     Function<bool(GC::Ref<DOM::Node>)> sibling_criteria,
     Function<GC::Ptr<DOM::Node>()> new_parent_instructions)
 {
