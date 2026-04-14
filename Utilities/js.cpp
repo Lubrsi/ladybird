@@ -40,7 +40,9 @@
 
 // FIXME: https://github.com/LadybirdBrowser/ladybird/issues/2412
 //    We should be able to destroy the VM on process exit.
-NeverDestroyed<RefPtr<JS::VM>> g_vm_storage;
+// VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+// so the plugin's recursive check for unrooted GC containers doesn't apply here.
+IGNORE_GC NeverDestroyed<RefPtr<JS::VM>> g_vm_storage;
 JS::VM* g_vm;
 Vector<String> g_repl_statements;
 GC::Root<JS::Value> g_last_value = GC::make_root(JS::js_undefined());

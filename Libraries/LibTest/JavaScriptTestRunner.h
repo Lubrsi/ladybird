@@ -108,7 +108,9 @@ static consteval size_t __testjs_last()
 }
 
 static constexpr auto TOP_LEVEL_TEST_NAME = "__$$TOP_LEVEL$$__";
-extern RefPtr<JS::VM> g_vm;
+// VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+// so the plugin's recursive check for unrooted GC containers doesn't apply here.
+IGNORE_GC extern RefPtr<JS::VM> g_vm;
 extern bool g_collect_on_every_allocation;
 extern ByteString g_currently_running_test;
 struct FunctionWithLength {

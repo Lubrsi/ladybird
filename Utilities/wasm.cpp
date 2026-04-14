@@ -313,7 +313,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     HashMap<Wasm::Linker::Name, Wasm::ExternValue> js_exports;
 
     Wasm::AbstractMachine machine;
-    auto vm = JS::VM::create();
+    // VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+    // so the plugin's recursive check for unrooted GC containers doesn't apply here.
+    IGNORE_GC auto vm = JS::VM::create();
     // FIXME: Use a GC-allocated execution context
     IGNORE_GC auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;

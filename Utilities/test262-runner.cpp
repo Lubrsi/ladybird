@@ -207,7 +207,9 @@ static ErrorOr<void, TestError> run_test(StringView source, StringView filepath,
         return parse_only_check(source, metadata.program_type);
     }
 
-    auto vm = JS::VM::create();
+    // VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+    // so the plugin's recursive check for unrooted GC containers doesn't apply here.
+    IGNORE_GC auto vm = JS::VM::create();
     vm->set_dynamic_imports_allowed(true);
 
     GC::Ptr<JS::Realm> realm;

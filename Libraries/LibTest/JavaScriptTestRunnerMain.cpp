@@ -24,7 +24,9 @@ namespace JS {
 
 GC_DEFINE_ALLOCATOR(TestRunnerGlobalObject);
 
-RefPtr<::JS::VM> g_vm;
+// VM owns the GC heap and handles its own root gathering via VM::gather_roots,
+// so the plugin's recursive check for unrooted GC containers doesn't apply here.
+IGNORE_GC RefPtr<::JS::VM> g_vm;
 bool g_collect_on_every_allocation = false;
 ByteString g_currently_running_test;
 HashMap<Utf16String, FunctionWithLength> s_exposed_global_functions;
