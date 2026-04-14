@@ -100,8 +100,10 @@ public:
         template<typename T>
         void visit(ReadonlySpan<T> span)
         {
-            for (auto& value : span)
-                visit(value);
+            if constexpr (requires(T const& value) { visit(value); }) {
+                for (auto& value : span)
+                    visit(value);
+            }
         }
 
         template<typename T>
@@ -114,8 +116,10 @@ public:
         template<typename T>
         void visit(Span<T> span)
         {
-            for (auto& value : span)
-                visit(value);
+            if constexpr (requires(T& value) { visit(value); }) {
+                for (auto& value : span)
+                    visit(value);
+            }
         }
 
         template<typename T>
@@ -128,8 +132,10 @@ public:
         template<typename T, size_t inline_capacity>
         void visit(Vector<T, inline_capacity> const& vector)
         {
-            for (auto& value : vector)
-                visit(value);
+            if constexpr (requires(T const& value) { visit(value); }) {
+                for (auto& value : vector)
+                    visit(value);
+            }
         }
 
         template<typename T, size_t inline_capacity>
@@ -142,15 +148,19 @@ public:
         template<typename T>
         void visit(HashTable<T> const& table)
         {
-            for (auto& value : table)
-                visit(value);
+            if constexpr (requires(T const& value) { visit(value); }) {
+                for (auto& value : table)
+                    visit(value);
+            }
         }
 
         template<typename T>
         void visit(OrderedHashTable<T> const& table)
         {
-            for (auto& value : table)
-                visit(value);
+            if constexpr (requires(T const& value) { visit(value); }) {
+                for (auto& value : table)
+                    visit(value);
+            }
         }
 
         template<typename K, typename V, typename T>
@@ -178,11 +188,22 @@ public:
         template<typename T>
         void visit(Optional<T> const& optional)
         {
-            if (optional.has_value())
-                visit(optional.value());
+            if constexpr (requires(T const& value) { visit(value); }) {
+                if (optional.has_value())
+                    visit(optional.value());
+            }
         }
 
         void visit(NanBoxedValue const& value);
+
+        template<typename... Ts>
+        void visit(Variant<Ts...> const& variant)
+        {
+            variant.visit([&](auto const& value) {
+                if constexpr (requires { visit(value); })
+                    visit(value);
+            });
+        }
 
         // Allow explicitly ignoring a GC-allocated member in a visit_edges implementation instead
         // of just not using it.
