@@ -1214,7 +1214,7 @@ GC::Ref<Geometry::DOMRectList> Range::get_client_rects()
             auto const* paintable = text.paintable();
             if (paintable && selection_state != Painting::Paintable::SelectionState::None) {
                 if (auto const* paintable_lines = as_if<Painting::PaintableWithLines>(paintable->containing_block())) {
-                    auto fragments = paintable_lines->fragments();
+                    auto const& fragments = paintable_lines->fragments();
                     for (auto frag = fragments.begin(); frag != fragments.end(); frag++) {
                         auto rect = frag->range_rect(selection_state, start_offset(), end_offset());
                         rects.append(Geometry::DOMRect::create(realm(), rect.to_type<float>()));
