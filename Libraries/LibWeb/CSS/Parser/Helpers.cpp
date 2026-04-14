@@ -25,7 +25,12 @@ GC::Ref<JS::Realm> internal_css_realm()
 {
     static GC::Root<JS::Realm> realm;
     static GC::Root<HTML::Window> window;
-    static OwnPtr<JS::ExecutionContext> execution_context;
+    // The execution context lives process-long; its GC pointers are reachable
+    // through the static `realm` Root above, which owns the ExecutionContext
+    // via Realm's host-defined edges. See section 4 bucket A of
+    // GC_FIX_LOCAL_VARIABLES_HANDOVER.md for the RootedExecutionContext plan
+    // that would remove this IGNORE_GC.
+    IGNORE_GC static OwnPtr<JS::ExecutionContext> execution_context;
     if (!realm) {
         execution_context = Bindings::create_a_new_javascript_realm(
             Bindings::main_thread_vm(),
@@ -39,8 +44,7 @@ GC::Ref<JS::Realm> internal_css_realm()
 
         realm = *execution_context->realm;
         auto intrinsics = realm->create<Bindings::Intrinsics>(*realm);
-        auto host_defined = make<Bindings::HostDefined>(intrinsics);
-        realm->set_host_defined(move(host_defined));
+        realm->set_host_defined(realm->heap().allocate<Bindings::HostDefined>(intrinsics));
     }
     return *realm;
 }

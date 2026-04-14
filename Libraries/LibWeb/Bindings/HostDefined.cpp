@@ -9,9 +9,11 @@
 
 namespace Web::Bindings {
 
+GC_DEFINE_ALLOCATOR(HostDefined);
+
 void HostDefined::visit_edges(JS::Cell::Visitor& visitor)
 {
-    JS::Realm::HostDefined::visit_edges(visitor);
+    Base::visit_edges(visitor);
     visitor.visit(intrinsics);
 }
 
