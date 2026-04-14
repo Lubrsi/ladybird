@@ -227,7 +227,7 @@ bool EventDispatcher::dispatch(GC::Ref<EventTarget> target, Event& event, bool l
     // 6. If target is not relatedTarget or target is event’s relatedTarget, then:
     if (should_dispatch && (related_target != target || event.related_target() == target)) {
         // 1. Let touchTargets be a new list.
-        Event::TouchTargetList touch_targets;
+        Event::RootedTouchTargetList touch_targets { target->heap() };
 
         // 2. For each touchTarget of event’s touch target list, append the result of retargeting touchTarget against target to touchTargets.
         for (auto& touch_target : event.touch_target_list()) {
