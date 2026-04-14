@@ -1651,7 +1651,7 @@ void Document::update_layout(UpdateLayoutReason reason)
     }
 
     // Collect elements with content-visibility: auto. This is used in the HTML event loop to avoid traversing the whole tree every time.
-    Vector<GC::Ref<Painting::PaintableBox>> paintable_boxes_with_auto_content_visibility;
+    GC::RootVector<GC::Ref<Painting::PaintableBox>> paintable_boxes_with_auto_content_visibility { heap() };
     unsafe_paintable()->for_each_in_subtree_of_type<Painting::PaintableBox>([&](auto& paintable_box) {
         if (paintable_box.dom_node()
             && paintable_box.dom_node()->is_element()
@@ -2065,7 +2065,7 @@ static Node* find_common_ancestor(Node* a, Node* b)
     if (a == b)
         return a;
 
-    HashTable<Node*> ancestors;
+    GC::RootHashTable<Node*> ancestors { a->heap() };
     for (auto* node = a; node; node = node->parent_or_shadow_host())
         ancestors.set(node);
 
@@ -2187,7 +2187,7 @@ void Document::set_hovered_node(GC::Ptr<Node> node)
     // Enter events are dispatched from ancestor to descendant.
     // Leave events are dispatched in the opposite order.
     if (m_hovered_node && (!old_hovered_node || !m_hovered_node->is_ancestor_of(*old_hovered_node))) {
-        Vector<GC::Ref<Node>> entered_ancestors;
+        GC::RootVector<GC::Ref<Node>> entered_ancestors { heap() };
         for (auto target = m_hovered_node; target && target.ptr() != common_ancestor; target = target->parent_or_shadow_host())
             entered_ancestors.append(*target);
 
@@ -2704,15 +2704,15 @@ void Document::adopt_node(Node& node)
         });
 
         // AD-HOC: Transfer NodeIterators rooted at `node` from old_document to this document.
-        Vector<NodeIterator&> node_iterators_to_transfer;
+        GC::RootVector<GC::Ref<NodeIterator>> node_iterators_to_transfer { heap() };
         for (auto node_iterator : old_document.m_node_iterators) {
             if (node_iterator->root().ptr() == &node)
                 node_iterators_to_transfer.append(*node_iterator);
         }
 
         for (auto& node_iterator : node_iterators_to_transfer) {
-            old_document.m_node_iterators.remove(&node_iterator);
-            m_node_iterators.set(&node_iterator);
+            old_document.m_node_iterators.remove(node_iterator);
+            m_node_iterators.set(node_iterator);
         }
     }
 }
@@ -6035,7 +6035,7 @@ void Document::remove_replaced_animations()
     //   animation effect associated with a replaceable animation with a higher composite order than animation that
     //   includes the same target property
 
-    Vector<GC::Ref<Animations::Animation>> replaceable_animations;
+    GC::RootVector<GC::Ref<Animations::Animation>> replaceable_animations { heap() };
     for (auto const& timeline : m_associated_animation_timelines) {
         for (auto& animation : timeline->associated_animations()) {
             if (!animation.effect() || !animation.effect()->target() || &animation.effect()->target()->document() != this)
@@ -6491,9 +6491,9 @@ static bool is_named_element_with_name(Element const& element, FlyString const& 
     return false;
 }
 
-static Vector<GC::Ref<DOM::Element>> named_elements_with_name(Document const& document, FlyString const& name)
+static GC::RootVector<GC::Ref<DOM::Element>> named_elements_with_name(Document const& document, FlyString const& name)
 {
-    Vector<GC::Ref<DOM::Element>> named_elements;
+    GC::RootVector<GC::Ref<DOM::Element>> named_elements { document.heap() };
 
     for (auto const& element : document.potentially_named_elements()) {
         if (is_named_element_with_name(element, name))
@@ -7834,11 +7834,11 @@ String Document::dump_display_list()
     if (!display_list)
         return "No display list"_string;
 
-    HashMap<size_t, Painting::PaintableBox const*> context_id_to_paintable;
+    GC::RootHashMap<size_t, GC::Ref<Painting::PaintableBox const>> context_id_to_paintable { heap() };
     viewport_paintable->for_each_in_inclusive_subtree_of_type<Painting::PaintableBox>([&](auto const& paintable_box) {
         auto visual_context_index = paintable_box.accumulated_visual_context_index();
         if (visual_context_index.value())
-            (void)context_id_to_paintable.try_set(visual_context_index.value(), &paintable_box);
+            (void)context_id_to_paintable.try_set(visual_context_index.value(), paintable_box);
         return TraversalDecision::Continue;
     });
 
