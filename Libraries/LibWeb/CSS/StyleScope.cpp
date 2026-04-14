@@ -233,7 +233,7 @@ void StyleScope::for_each_stylesheet(CascadeOrigin cascade_origin, Function<void
 
 void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin, StyleCache& style_cache)
 {
-    Vector<MatchingRule> matching_rules;
+    GC::ConservativeVector<MatchingRule> matching_rules { m_node->heap() };
     size_t style_sheet_index = 0;
     for_each_stylesheet(cascade_origin, [&](auto& sheet) {
         auto& rule_caches = [&] -> RuleCaches& {
@@ -878,11 +878,11 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
             || element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator();
     };
 
-    HashTable<DOM::Element*> elements_already_invalidated_for_has;
+    GC::RootHashTable<GC::Ref<DOM::Element>> elements_already_invalidated_for_has { m_node->heap() };
     auto nodes = move(m_pending_nodes_for_style_invalidation_due_to_presence_of_has);
     bool should_scan_ancestor_siblings = have_has_selectors_with_relative_selector_that_has_sibling_combinator();
     for (auto& node : nodes) {
-        Vector<DOM::Element*, 16> has_scope_ancestors;
+        GC::RootVector<DOM::Element*, 16> has_scope_ancestors { m_node->heap() };
         bool should_delay_ancestor_sibling_scans = false;
         for (auto* ancestor = &node; ancestor; ancestor = ancestor->parent_or_shadow_host()) {
             if (!ancestor->is_element())
@@ -902,7 +902,7 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
         for (auto* element : has_scope_ancestors) {
             VERIFY(element);
 
-            if (elements_already_invalidated_for_has.set(element) != AK::HashSetResult::InsertedNewEntry)
+            if (elements_already_invalidated_for_has.set(*element) != AK::HashSetResult::InsertedNewEntry)
                 continue;
 
             ++counters.has_ancestor_walk_visits;
@@ -921,7 +921,7 @@ void StyleScope::invalidate_style_of_elements_affected_by_has()
             parent->for_each_child_of_type<DOM::Element>([&](auto& ancestor_sibling_element) {
                 ++counters.has_ancestor_sibling_element_checks;
                 if (ancestor_sibling_element.affected_by_has_pseudo_class_with_relative_selector_that_has_sibling_combinator()) {
-                    if (elements_already_invalidated_for_has.set(&ancestor_sibling_element) != AK::HashSetResult::InsertedNewEntry)
+                    if (elements_already_invalidated_for_has.set(ancestor_sibling_element) != AK::HashSetResult::InsertedNewEntry)
                         return IterationDecision::Continue;
 
                     ++counters.has_ancestor_walk_visits;
