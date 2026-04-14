@@ -32,8 +32,8 @@ public:
         BubblingPhase = 3,
     };
 
-    // FIXME: These need explicit marking somehow.
     using TouchTargetList = Vector<GC::Ptr<EventTarget>>;
+    using RootedTouchTargetList = GC::RootVector<GC::Ptr<EventTarget>>;
 
     struct PathEntry {
         GC::Ptr<EventTarget> invocation_target;

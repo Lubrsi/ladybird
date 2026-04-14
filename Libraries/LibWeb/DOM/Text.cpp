@@ -122,13 +122,13 @@ Utf16String Text::whole_text()
     // https://dom.spec.whatwg.org/#contiguous-text-nodes
     // The contiguous Text nodes of a node node are node, node’s previous sibling Text node, if any, and its contiguous
     // Text nodes, and node’s next sibling Text node, if any, and its contiguous Text nodes, avoiding any duplicates.
-    Vector<Text*> nodes;
+    GC::RootVector<GC::Ref<Text>> nodes { heap() };
 
-    nodes.append(this);
+    nodes.append(*this);
 
     auto* current_node = previous_sibling();
     while (current_node && (current_node->is_text() || current_node->is_cdata_section())) {
-        nodes.append(static_cast<Text*>(current_node));
+        nodes.append(static_cast<Text&>(*current_node));
         current_node = current_node->previous_sibling();
     }
 
@@ -137,7 +137,7 @@ Utf16String Text::whole_text()
 
     current_node = next_sibling();
     while (current_node && (current_node->is_text() || current_node->is_cdata_section())) {
-        nodes.append(static_cast<Text*>(current_node));
+        nodes.append(static_cast<Text&>(*current_node));
         current_node = current_node->next_sibling();
     }
 

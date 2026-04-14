@@ -11,6 +11,7 @@
 #include <AK/HashTable.h>
 #include <AK/JsonObjectSerializer.h>
 #include <AK/StringBuilder.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/DeferGC.h>
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Encoder.h>
@@ -2713,13 +2714,9 @@ void Node::queue_mutation_record(FlyString const& type, Optional<FlyString> cons
     auto& document = this->document();
     auto& page = document.page();
 
-    // NOTE: We defer garbage collection until the end of the scope, since we can't safely use MutationObserver* as a hashmap key otherwise.
-    // FIXME: This is a total hack.
-    GC::DeferGC defer_gc(heap());
-
     // 1. Let interestedObservers be an empty map.
     // mutationObserver -> mappedOldValue
-    OrderedHashMap<MutationObserver*, Optional<String>> interested_observers;
+    GC::OrderedRootHashMap<GC::Ref<MutationObserver>, Optional<String>> interested_observers { heap() };
 
     // 2. Let nodes be the inclusive ancestors of target.
     // 3. For each node of nodes, and then for each registered of node’s registered observer list:

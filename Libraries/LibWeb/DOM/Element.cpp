@@ -2843,7 +2843,7 @@ static GC::Ref<WebIDL::Promise> scroll_an_element_into_view(Element& target, Bin
     // 2. For each ancestor element or viewport that establishes a scrolling box scrolling box, in order of innermost
     //    to outermost scrolling box, run these substeps:
     auto* ancestor = target.parent();
-    Vector<Node&> scrolling_boxes;
+    GC::RootVector<Node&> scrolling_boxes { target.heap() };
     while (ancestor) {
         if (ancestor->paintable_box() && ancestor->paintable_box()->has_scrollable_overflow())
             scrolling_boxes.append(*ancestor);

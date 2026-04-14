@@ -85,7 +85,7 @@ void invalidate_node_style_for_properties(DOM::Node& node, DOM::StyleInvalidatio
     //     that observe property changes on this element or its light-DOM children.
     //   - The document scope and any outer shadow root scopes when this element lives inside a shadow tree, for
     //     ::part(...:has(...)) rules in the outer document or containing shadow root.
-    Vector<GC::Ref<CSS::StyleScope>, 4> additional_scopes;
+    GC::ConservativeVector<GC::Ref<CSS::StyleScope>, 4> additional_scopes(node.heap());
     node.for_each_style_scope_which_may_observe_the_node([&](CSS::StyleScope& scope) {
         if (&scope == &style_scope)
             return;
