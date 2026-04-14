@@ -255,11 +255,11 @@ WebIDL::ExceptionOr<void> Node::normalize()
         // and its contiguous exclusive Text nodes, and node’s next sibling exclusive Text node, if any,
         // and its contiguous exclusive Text nodes, avoiding any duplicates.
         // NOTE: The callers of this method require node itself to be excluded.
-        Vector<Text*> nodes;
+        GC::RootVector<GC::Ref<Text>> nodes { node.heap() };
 
         auto* current_node = node.previous_sibling();
         while (current_node && current_node->is_exclusive_text()) {
-            nodes.append(static_cast<Text*>(current_node));
+            nodes.append(as<Text>(*current_node));
             current_node = current_node->previous_sibling();
         }
 
@@ -268,7 +268,7 @@ WebIDL::ExceptionOr<void> Node::normalize()
 
         current_node = node.next_sibling();
         while (current_node && current_node->is_exclusive_text()) {
-            nodes.append(static_cast<Text*>(current_node));
+            nodes.append(as<Text>(*current_node));
             current_node = current_node->next_sibling();
         }
 
@@ -276,23 +276,22 @@ WebIDL::ExceptionOr<void> Node::normalize()
     };
 
     // The normalize() method steps are to run these steps for each descendant exclusive Text node node of this
-    Vector<Text&> descendant_exclusive_text_nodes;
-    for_each_in_inclusive_subtree_of_type<Text>([&](Text const& node) {
+    GC::RootVector<GC::Ref<Text>> descendant_exclusive_text_nodes { heap() };
+    for_each_in_inclusive_subtree_of_type<Text>([&](Text& node) {
         if (!node.is_cdata_section())
-            descendant_exclusive_text_nodes.append(const_cast<Text&>(node));
+            descendant_exclusive_text_nodes.append(node);
 
         return TraversalDecision::Continue;
     });
 
     for (auto& node : descendant_exclusive_text_nodes) {
         // 1. Let length be node’s length.
-        auto& character_data = static_cast<CharacterData&>(node);
-        auto length = character_data.length_in_utf16_code_units();
+        auto length = node->length_in_utf16_code_units();
 
         // 2. If length is zero, then remove node and continue with the next exclusive Text node, if any.
         if (length == 0) {
-            if (node.parent())
-                node.remove();
+            if (node->parent())
+                node->remove();
             continue;
         }
 
@@ -302,51 +301,51 @@ WebIDL::ExceptionOr<void> Node::normalize()
             data.append(text_node->data());
 
         // 4. Replace data with node node, offset length, count 0, and data data.
-        TRY(character_data.replace_data(length, 0, data.to_utf16_string()));
+        TRY(node->replace_data(length, 0, data.to_utf16_string()));
 
         // 5. Let currentNode be node’s next sibling.
-        auto* current_node = node.next_sibling();
+        auto* current_node = node->next_sibling();
 
         // 6. While currentNode is an exclusive Text node:
         while (current_node && current_node->is_exclusive_text()) {
             // 1. For each live range whose start node is currentNode, add length to its start offset and set its start
             //    node to node.
             for (auto& range : Range::live_ranges()) {
-                if (range->start_container() == current_node) {
-                    range->increase_start_offset(length);
-                    range->set_start_node(node);
+                if (range.start_container() == current_node) {
+                    range.increase_start_offset(length);
+                    range.set_start_node(node);
                 }
             }
 
             // 2. For each live range whose end node is currentNode, add length to its end offset and set its end node
             //    to node.
             for (auto& range : Range::live_ranges()) {
-                if (range->end_container() == current_node) {
-                    range->increase_end_offset(length);
-                    range->set_end_node(node);
+                if (range.end_container() == current_node) {
+                    range.increase_end_offset(length);
+                    range.set_end_node(node);
                 }
             }
 
             // 3. For each live range whose start node is currentNode’s parent and start offset is currentNode’s index,
             //    set its start node to node and its start offset to length.
             for (auto& range : Range::live_ranges()) {
-                if (range->start_container() == current_node->parent() && range->start_offset() == current_node->index()) {
-                    range->set_start_node(node);
-                    range->set_start_offset(length);
+                if (range.start_container() == current_node->parent() && range.start_offset() == current_node->index()) {
+                    range.set_start_node(node);
+                    range.set_start_offset(length);
                 }
             }
 
             // 4. For each live range whose end node is currentNode’s parent and end offset is currentNode’s index, set
             //    its end node to node and its end offset to length.
             for (auto& range : Range::live_ranges()) {
-                if (range->end_container() == current_node->parent() && range->end_offset() == current_node->index()) {
-                    range->set_end_node(node);
-                    range->set_end_offset(length);
+                if (range.end_container() == current_node->parent() && range.end_offset() == current_node->index()) {
+                    range.set_end_node(node);
+                    range.set_end_offset(length);
                 }
             }
 
             // 5. Add currentNode’s length to length.
-            length += static_cast<Text&>(*current_node).length();
+            length += current_node->length();
 
             // 6. Set currentNode to its next sibling.
             current_node = current_node->next_sibling();
@@ -2099,24 +2098,24 @@ u16 Node::compare_document_position(GC::Ptr<Node> other)
     if ((node1 == nullptr || node2 == nullptr) || (&node1->root() != &node2->root()))
         return DOCUMENT_POSITION_DISCONNECTED | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC | (node1 > node2 ? DOCUMENT_POSITION_PRECEDING : DOCUMENT_POSITION_FOLLOWING);
 
-    Vector<Node*> node1_ancestors;
+    GC::RootVector<GC::Ref<Node>> node1_ancestors { heap() };
     for (auto* node = node1; node; node = node->parent())
-        node1_ancestors.append(node);
+        node1_ancestors.append(*node);
 
-    Vector<Node*> node2_ancestors;
+    GC::RootVector<GC::Ref<Node>> node2_ancestors { heap() };
     for (auto* node = node2; node; node = node->parent())
-        node2_ancestors.append(node);
+        node2_ancestors.append(*node);
 
     auto it_node1_ancestors = node1_ancestors.rbegin();
     auto it_node2_ancestors = node2_ancestors.rbegin();
     // Walk ancestor chains of both nodes starting from root
     while (it_node1_ancestors != node1_ancestors.rend() && it_node2_ancestors != node2_ancestors.rend()) {
-        auto* ancestor1 = *it_node1_ancestors;
-        auto* ancestor2 = *it_node2_ancestors;
+        auto ancestor1 = *it_node1_ancestors;
+        auto ancestor2 = *it_node2_ancestors;
 
         // If ancestors of nodes at the same level in the tree are different then preceding node is the one with lower sibling position
         if (ancestor1 != ancestor2) {
-            auto* node = ancestor1;
+            GC::Ptr<Node> node = ancestor1;
             while (node) {
                 if (node == ancestor2)
                     return DOCUMENT_POSITION_PRECEDING;
