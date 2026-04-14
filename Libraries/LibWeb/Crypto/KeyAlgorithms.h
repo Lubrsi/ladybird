@@ -91,6 +91,7 @@ protected:
     RsaHashedKeyAlgorithm(JS::Realm&);
 
     virtual void initialize(JS::Realm&) override;
+    virtual void visit_edges(Visitor&) override;
 
 private:
     JS_DECLARE_NATIVE_FUNCTION(hash_getter);
