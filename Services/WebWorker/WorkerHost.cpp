@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/Cell.h>
 #include <LibIPC/File.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibWeb/Fetch/Enums.h>
@@ -58,16 +59,18 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
     auto unsafe_worker_creation_time = Web::HighResolutionTime::unsafe_shared_current_time();
 
     // 5. Let realm execution context be the result of creating a new realm given agent and the following customizations:
-    auto realm_execution_context = Web::Bindings::create_a_new_javascript_realm(
+    JS::RootedExecutionContext realm_execution_context(
         Web::Bindings::main_thread_vm(),
-        [page, is_shared](JS::Realm& realm) -> JS::Object* {
-            // For the global object, if is shared is true, create a new SharedWorkerGlobalScope object.
-            if (is_shared)
-                return realm.heap().allocate<Web::HTML::SharedWorkerGlobalScope>(realm, page);
-            // Otherwise, create a new DedicatedWorkerGlobalScope object.
-            return realm.heap().allocate<Web::HTML::DedicatedWorkerGlobalScope>(realm, page);
-        },
-        nullptr);
+        Web::Bindings::create_a_new_javascript_realm(
+            Web::Bindings::main_thread_vm(),
+            [page, is_shared](JS::Realm& realm) -> JS::Object* {
+                // For the global object, if is shared is true, create a new SharedWorkerGlobalScope object.
+                if (is_shared)
+                    return realm.heap().allocate<Web::HTML::SharedWorkerGlobalScope>(realm, page);
+                // Otherwise, create a new DedicatedWorkerGlobalScope object.
+                return realm.heap().allocate<Web::HTML::DedicatedWorkerGlobalScope>(realm, page);
+            },
+            nullptr));
 
     // 6. Let worker global scope be the global object of realm execution context's Realm component.
     // NOTE: This is the DedicatedWorkerGlobalScope or SharedWorkerGlobalScope object created in the previous step.
@@ -90,7 +93,7 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
 
     // 7. Set up a worker environment settings object with realm execution context, outside settings, and
     //    unsafeWorkerCreationTime, and let inside settings be the result.
-    auto inside_settings = Web::HTML::WorkerEnvironmentSettingsObject::setup(page, move(realm_execution_context), outside_settings_snapshot, unsafe_worker_creation_time);
+    auto inside_settings = Web::HTML::WorkerEnvironmentSettingsObject::setup(page, realm_execution_context.release(), outside_settings_snapshot, unsafe_worker_creation_time);
 
     // AD-HOC: Create a console object for the worker.
     auto& console_object = *inside_settings->realm().intrinsics().console_object();
