@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/Cell.h>
 #include <LibIPC/File.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibWeb/Fetch/Enums.h>
@@ -58,7 +59,8 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
     auto unsafe_worker_creation_time = Web::HighResolutionTime::unsafe_shared_current_time();
 
     // 5. Let realm execution context be the result of creating a new realm given agent and the following customizations:
-    auto realm_execution_context = Web::Bindings::create_a_new_javascript_realm(
+    // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
+    IGNORE_GC auto realm_execution_context = Web::Bindings::create_a_new_javascript_realm(
         Web::Bindings::main_thread_vm(),
         [page, is_shared](JS::Realm& realm) -> JS::Object* {
             // For the global object, if is shared is true, create a new SharedWorkerGlobalScope object.
