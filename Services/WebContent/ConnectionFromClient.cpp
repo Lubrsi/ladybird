@@ -354,13 +354,14 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString request, ByteSt
         };
 
         if (auto* doc = page->page().top_level_browsing_context().active_document()) {
-            Queue<Web::DOM::Node*> nodes_to_visit;
-            nodes_to_visit.enqueue(doc->document_element());
+            Vector<GC::Root<Web::DOM::Node>> nodes_to_visit;
+            if (auto* document_element = doc->document_element())
+                nodes_to_visit.append(*document_element);
             while (!nodes_to_visit.is_empty()) {
-                auto node = nodes_to_visit.dequeue();
+                auto node = nodes_to_visit.take_first();
                 for (auto& child : node->children_as_vector())
-                    nodes_to_visit.enqueue(child.ptr());
-                if (auto* element = as_if<Web::DOM::Element>(node)) {
+                    nodes_to_visit.append(child);
+                if (auto* element = as_if<Web::DOM::Element>(*node)) {
                     auto styles = doc->style_computer().compute_style({ *element });
                     dump_style(MUST(String::formatted("Element {}", node->debug_description())), styles, element->custom_property_data({}));
 
