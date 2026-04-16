@@ -265,13 +265,13 @@ WebIDL::ExceptionOr<GC::Ref<IDBTransaction>> IDBDatabase::transaction(Variant<St
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Invalid transaction mode"_string };
 
     // 7. Let transaction be a newly created transaction with this connection, mode, options’ durability member, and the set of object stores named in scope.
-    Vector<GC::Ref<ObjectStore>> scope_stores;
+    GC::RootVector<GC::Ref<ObjectStore>> scope_stores { realm.heap() };
     for (auto const& store_name : scope) {
         auto store = database->object_store_with_name(store_name);
         scope_stores.append(*store);
     }
 
-    auto transaction = IDBTransaction::create(realm, *this, mode, options.durability, scope_stores);
+    auto transaction = IDBTransaction::create(realm, *this, mode, options.durability, move(scope_stores));
 
     // 8. Set transaction’s cleanup event loop to the current event loop.
     transaction->set_cleanup_event_loop(HTML::main_thread_event_loop());
@@ -338,7 +338,7 @@ void IDBDatabase::block_on_conflicting_transactions(GC::Ref<IDBTransaction> tran
     // - A read-only transactions tx can start when there are no read/write transactions which:
     // - A read/write transaction tx can start when there are no transactions which:
 
-    Vector<GC::Ref<IDBTransaction>> blocking;
+    GC::RootVector<GC::Ref<IDBTransaction>> blocking { realm().heap() };
     for (auto const& other : m_transactions) {
         // - Were created before tx; and
         if (other.ptr() == transaction.ptr())
