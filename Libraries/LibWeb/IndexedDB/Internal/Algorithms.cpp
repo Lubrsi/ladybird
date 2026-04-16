@@ -251,8 +251,14 @@ bool fire_a_version_change_event(JS::Realm& realm, FlyString const& event_name, 
     return legacy_output_did_listeners_throw_flag;
 }
 
+WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input)
+{
+    GC::RootVector<JS::Value> seen { realm.heap() };
+    return convert_a_value_to_a_key(realm, input, seen);
+}
+
 // https://w3c.github.io/IndexedDB/#convert-value-to-key
-WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, Vector<JS::Value> seen)
+WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm& realm, JS::Value input, GC::RootVector<JS::Value>& seen)
 {
     // 1. If seen was not given, then let seen be a new empty set.
     // NOTE: This is handled by the caller.
@@ -950,7 +956,8 @@ WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_multi_entry_key(JS::Realm
         auto len = TRY(length_of_array_like(realm.vm(), value.as_object()));
 
         // 2. Let seen be a new set containing only input.
-        Vector<JS::Value> seen { value };
+        GC::RootVector<JS::Value> seen { realm.heap() };
+        seen.append(value);
 
         // 3. Let keys be a new empty list.
         auto keys = realm.heap().allocate<GC::HeapVector<GC::Ref<Key>>>();
