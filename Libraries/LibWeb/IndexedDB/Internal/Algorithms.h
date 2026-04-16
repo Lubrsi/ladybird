@@ -29,7 +29,8 @@ using RecordSource = Variant<GC::Ref<ObjectStore>, GC::Ref<Index>>;
 
 void open_a_database_connection(JS::Realm&, StorageAPI::StorageKey, String, Optional<u64>, GC::Ref<IDBRequest>, GC::Ref<GC::Function<void(WebIDL::ExceptionOr<GC::Ref<IDBDatabase>>)>>);
 bool fire_a_version_change_event(JS::Realm&, FlyString const&, GC::Ref<DOM::EventTarget>, u64, Optional<u64>);
-WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm&, JS::Value, Vector<JS::Value> = {});
+WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm&, JS::Value, GC::RootVector<JS::Value>& seen);
+WebIDL::ExceptionOr<GC::Ref<Key>> convert_a_value_to_a_key(JS::Realm&, JS::Value);
 void close_a_database_connection(GC::Ref<IDBDatabase>, GC::Ptr<GC::Function<void()>> on_complete = nullptr, bool forced = false);
 void upgrade_a_database(JS::Realm&, GC::Ref<IDBDatabase>, u64, GC::Ref<IDBRequest>, GC::Ref<GC::Function<void()>>);
 void delete_a_database(JS::Realm&, StorageAPI::StorageKey, String, GC::Ref<IDBRequest>, GC::Ref<GC::Function<void(WebIDL::ExceptionOr<u64>)>>);
