@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGC/WeakHashSet.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/HTML/HTMLElement.h>
 #include <LibWeb/HTML/InitialInsertion.h>
@@ -22,7 +23,7 @@ public:
 
     virtual ~NavigableContainer() override;
 
-    static HashTable<NavigableContainer*>& all_instances();
+    static GC::WeakHashSet<NavigableContainer>& all_instances();
 
     GC::Ptr<Navigable> content_navigable() { return m_content_navigable; }
     GC::Ptr<Navigable const> content_navigable() const { return m_content_navigable.ptr(); }

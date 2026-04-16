@@ -4764,8 +4764,8 @@ void Document::destroy()
 
     // Not in the spec:
     for (auto& navigable_container : HTML::NavigableContainer::all_instances()) {
-        if (&navigable_container->document() == this && navigable_container->content_navigable())
-            navigable_container->content_navigable()->remove_from_all_navigables();
+        if (&navigable_container.document() == this && navigable_container.content_navigable())
+            navigable_container.content_navigable()->remove_from_all_navigables();
     }
 
     // 9. Set document's node navigable's active session history entry's document state's document to null.
