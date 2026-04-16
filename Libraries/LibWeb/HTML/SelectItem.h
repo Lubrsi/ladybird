@@ -7,9 +7,9 @@
 #pragma once
 
 #include <AK/String.h>
+#include <AK/Vector.h>
 #include <LibIPC/Forward.h>
 #include <LibWeb/Export.h>
-#include <LibWeb/HTML/HTMLOptionElement.h>
 
 namespace Web::HTML {
 
@@ -17,7 +17,6 @@ struct SelectItemOption {
     u32 id { 0 };
     bool selected { false };
     bool disabled { false };
-    GC::Ptr<HTMLOptionElement> option_element {};
     String label {};
     String value {};
 };

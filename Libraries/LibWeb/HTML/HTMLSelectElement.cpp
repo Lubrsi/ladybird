@@ -64,17 +64,7 @@ void HTMLSelectElement::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_inner_text_element);
     visitor.visit(m_chevron_icon_element);
     visitor.visit(m_cached_list_of_options);
-
-    for (auto const& item : m_select_items) {
-        if (item.has<SelectItemOption>())
-            visitor.visit(item.get<SelectItemOption>().option_element);
-
-        if (item.has<SelectItemOptionGroup>()) {
-            auto item_option_group = item.get<SelectItemOptionGroup>();
-            for (auto const& item : item_option_group.items)
-                visitor.visit(item.option_element);
-        }
-    }
+    visitor.visit(m_picker_options);
 }
 
 void HTMLSelectElement::adjust_computed_style(CSS::ComputedProperties& style)
@@ -563,26 +553,30 @@ void HTMLSelectElement::show_the_picker_if_applicable()
     //    (If this closes a file selection picker, then per the above that will lead to firing either input and change
     //    events, or a cancel event.)
 
-    // Populate select items
     m_select_items.clear();
-    u32 id_counter = 1;
-    for (auto const& child : children_as_vector()) {
-        if (auto const* opt_group_element = as_if<HTMLOptGroupElement>(*child)) {
-            if (!opt_group_element->has_attribute(Web::HTML::AttributeNames::hidden)) {
+    m_picker_options.clear();
+    auto record_option = [&](HTMLOptionElement& option_element) {
+        auto id = static_cast<u32>(m_picker_options.size());
+        m_picker_options.append(option_element);
+        return SelectItemOption { id, option_element.selected(), option_element.disabled(), MUST(Infra::strip_and_collapse_whitespace(option_element.label())), option_element.value().to_utf8_but_should_be_ported_to_utf16() };
+    };
+    for (auto& child : children_as_vector()) {
+        if (auto* opt_group_element = as_if<HTMLOptGroupElement>(*child)) {
+            if (!opt_group_element->has_attribute(AttributeNames::hidden)) {
                 Vector<SelectItemOption> option_group_items;
-                for (auto const& child : opt_group_element->children_as_vector()) {
-                    if (auto const& option_element = as_if<HTMLOptionElement>(*child)) {
-                        if (!option_element->has_attribute(Web::HTML::AttributeNames::hidden))
-                            option_group_items.append(SelectItemOption { id_counter++, option_element->selected(), option_element->disabled(), option_element, MUST(Infra::strip_and_collapse_whitespace(option_element->label())), option_element->value().to_utf8_but_should_be_ported_to_utf16() });
+                for (auto& opt_group_child : opt_group_element->children_as_vector()) {
+                    if (auto* option_element = as_if<HTMLOptionElement>(*opt_group_child)) {
+                        if (!option_element->has_attribute(AttributeNames::hidden))
+                            option_group_items.append(record_option(*option_element));
                     }
                 }
                 m_select_items.append(SelectItemOptionGroup { opt_group_element->get_attribute(AttributeNames::label).value_or(String {}), option_group_items });
             }
         }
 
-        if (auto const& option_element = as_if<HTMLOptionElement>(*child)) {
-            if (!option_element->has_attribute(Web::HTML::AttributeNames::hidden))
-                m_select_items.append(SelectItemOption { id_counter++, option_element->selected(), option_element->disabled(), option_element, MUST(Infra::strip_and_collapse_whitespace(option_element->label())), option_element->value().to_utf8_but_should_be_ported_to_utf16() });
+        if (auto* option_element = as_if<HTMLOptionElement>(*child)) {
+            if (!option_element->has_attribute(AttributeNames::hidden))
+                m_select_items.append(record_option(*option_element));
         }
 
         if (auto const* hr_element = as_if<HTMLHRElement>(*child)) {
@@ -645,20 +639,8 @@ void HTMLSelectElement::did_select_item(Optional<u32> const& id)
     for (auto const& option_element : m_cached_list_of_options)
         option_element->set_selected(false);
 
-    for (auto const& item : m_select_items) {
-        if (item.has<SelectItemOption>()) {
-            auto const& item_option = item.get<SelectItemOption>();
-            if (item_option.id == *id)
-                item_option.option_element->set_selected(true);
-        }
-        if (item.has<SelectItemOptionGroup>()) {
-            auto item_option_group = item.get<SelectItemOptionGroup>();
-            for (auto const& item_option : item_option_group.items) {
-                if (item_option.id == *id)
-                    item_option.option_element->set_selected(true);
-            }
-        }
-    }
+    if (*id < m_picker_options.size())
+        m_picker_options[*id]->set_selected(true);
 
     clone_selected_option_into_select_button();
     send_select_update_notifications();
