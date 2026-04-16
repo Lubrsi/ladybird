@@ -49,7 +49,7 @@ public:
     void set_number(WebIDL::Double number_value);
     void set_string(String string_value);
     void set_boolean(bool boolean_value);
-    void set_node_set(Vector<GC::Ptr<DOM::Node>> node_set, unsigned short type);
+    void set_node_set(GC::RootVector<GC::Ptr<DOM::Node>>&& node_set, unsigned short type);
 
 private:
     WebIDL::UnsignedShort m_result_type { 0 };
