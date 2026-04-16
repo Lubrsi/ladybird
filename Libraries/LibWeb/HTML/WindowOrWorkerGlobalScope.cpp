@@ -12,6 +12,8 @@
 #include <AK/Utf8View.h>
 #include <AK/Vector.h>
 #include <LibGC/Function.h>
+#include <LibGC/RootHashTable.h>
+#include <LibGC/RootVector.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/ScalingMode.h>
@@ -882,7 +884,9 @@ void WindowOrWorkerGlobalScopeMixin::queue_the_performance_observer_task()
         m_performance_observer_task_queued = false;
 
         // 2. Let notifyList be a copy of relevantGlobal's list of registered performance observer objects.
-        auto notify_list = m_registered_performance_observer_objects;
+        GC::OrderedRootHashTable<GC::Ref<PerformanceTimeline::PerformanceObserver>> notify_list { realm.heap() };
+        for (auto& observer : m_registered_performance_observer_objects)
+            notify_list.set(observer);
 
         // 3. For each registered performance observer object registeredObserver in notifyList, run these steps:
         for (auto& registered_observer : notify_list) {
@@ -896,7 +900,7 @@ void WindowOrWorkerGlobalScopeMixin::queue_the_performance_observer_task()
             if (entries.is_empty())
                 continue;
 
-            Vector<GC::Ref<PerformanceTimeline::PerformanceEntry>> entries_as_gc_ptrs;
+            GC::RootVector<GC::Ref<PerformanceTimeline::PerformanceEntry>> entries_as_gc_ptrs { realm.heap() };
             for (auto& entry : entries)
                 entries_as_gc_ptrs.append(*entry);
 
@@ -997,7 +1001,7 @@ bool WindowOrWorkerGlobalScopeMixin::can_add_resource_timing_entry()
 size_t WindowOrWorkerGlobalScopeMixin::resource_timing_buffer_current_size()
 {
     // A resource timing buffer current size which is initially 0.
-    auto resource_timing_tuple = relevant_performance_entry_tuple(PerformanceTimeline::EntryTypes::resource);
+    auto& resource_timing_tuple = relevant_performance_entry_tuple(PerformanceTimeline::EntryTypes::resource);
     return resource_timing_tuple.performance_entry_buffer.size();
 }
 

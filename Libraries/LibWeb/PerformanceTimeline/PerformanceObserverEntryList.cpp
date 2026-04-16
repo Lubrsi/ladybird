@@ -15,9 +15,9 @@ namespace Web::PerformanceTimeline {
 
 GC_DEFINE_ALLOCATOR(PerformanceObserverEntryList);
 
-PerformanceObserverEntryList::PerformanceObserverEntryList(JS::Realm& realm, Vector<GC::Ref<PerformanceTimeline::PerformanceEntry>>&& entry_list)
+PerformanceObserverEntryList::PerformanceObserverEntryList(JS::Realm& realm, GC::RootVector<GC::Ref<PerformanceTimeline::PerformanceEntry>>&& entry_list)
     : Bindings::PlatformObject(realm)
-    , m_entry_list(move(entry_list))
+    , m_entry_list(GC::adopt_root_vector(move(entry_list)))
 {
 }
 

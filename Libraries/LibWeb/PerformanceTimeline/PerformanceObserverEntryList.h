@@ -23,7 +23,7 @@ public:
     WebIDL::ExceptionOr<Vector<GC::Root<PerformanceTimeline::PerformanceEntry>>> get_entries_by_name(String const& name, Optional<String> type) const;
 
 private:
-    PerformanceObserverEntryList(JS::Realm&, Vector<GC::Ref<PerformanceTimeline::PerformanceEntry>>&&);
+    PerformanceObserverEntryList(JS::Realm&, GC::RootVector<GC::Ref<PerformanceTimeline::PerformanceEntry>>&&);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
