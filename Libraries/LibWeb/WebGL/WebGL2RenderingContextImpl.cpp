@@ -1128,7 +1128,7 @@ JS::Value WebGL2RenderingContextImpl::get_active_uniforms(GC::Root<WebGLProgram>
     Span<GLint> params_span(reinterpret_cast<GLint*>(params.data()), uniform_indices.size());
     glGetActiveUniformsiv(program_handle, uniform_indices.size(), uniform_indices.data(), pname, params_span.data());
 
-    Vector<JS::Value> params_as_values;
+    GC::RootVector<JS::Value> params_as_values { realm().heap() };
     params_as_values.ensure_capacity(params.size());
     for (GLint param : params_span) {
         switch (pname) {
