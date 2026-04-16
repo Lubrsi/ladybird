@@ -80,7 +80,7 @@ WebIDL::ExceptionOr<GC::Ref<NormalizedAlgorithmAndParameter>> normalize_an_algor
     if (algorithm.has<String>()) {
         // Return the result of running the normalize an algorithm algorithm,
         // with the alg set to a new Algorithm dictionary whose name attribute is alg, and with the op set to op.
-        auto dictionary = GC::make_root(JS::Object::create(realm, realm.intrinsics().object_prototype()));
+        auto dictionary = JS::Object::create(realm, realm.intrinsics().object_prototype());
         TRY(dictionary->create_data_property("name"_utf16_fly_string, JS::PrimitiveString::create(vm, algorithm.get<String>())));
 
         return normalize_an_algorithm(realm, dictionary, operation);
@@ -98,7 +98,7 @@ WebIDL::ExceptionOr<GC::Ref<NormalizedAlgorithmAndParameter>> normalize_an_algor
     // 3. If an error occurred, return the error and terminate this algorithm.
     // Note: We're not going to bother creating an Algorithm object, all we want is the name attribute so that we can
     //       fetch the actual algorithm factory from the registeredAlgorithms map.
-    auto initial_algorithm = TRY(algorithm.get<GC::Root<JS::Object>>()->get("name"_utf16_fly_string));
+    auto initial_algorithm = TRY(algorithm.get<GC::Ref<JS::Object>>()->get("name"_utf16_fly_string));
 
     if (initial_algorithm.is_undefined()) {
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "Algorithm");
@@ -130,7 +130,7 @@ WebIDL::ExceptionOr<GC::Ref<NormalizedAlgorithmAndParameter>> normalize_an_algor
     // 12. For each dictionary dictionary in dictionaries:
     //    Note: All of these steps are handled by the create_methods and parameter_from_value methods.
     auto methods = desired_type.create_methods(realm);
-    auto parameter = TRY(desired_type.parameter_from_value(vm, algorithm.get<GC::Root<JS::Object>>()));
+    auto parameter = TRY(desired_type.parameter_from_value(vm, algorithm.get<GC::Ref<JS::Object>>()));
 
     // 9. Set the name attribute of normalizedAlgorithm to algName.
     VERIFY(parameter->name.is_empty());
