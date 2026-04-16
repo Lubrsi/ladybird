@@ -87,7 +87,7 @@ GC::Ptr<MimeType> Plugin::item(u32 index) const
 {
     // 1. Let mimeTypes be this's relevant global object's PDF viewer mime type objects.
     auto& window = as<HTML::Window>(HTML::relevant_global_object(*this));
-    auto mime_types = window.pdf_viewer_mime_type_objects();
+    auto const& mime_types = window.pdf_viewer_mime_type_objects();
 
     // 2. If index < mimeTypes's size, then return mimeTypes[index].
     if (index < mime_types.size())
@@ -101,7 +101,7 @@ GC::Ptr<MimeType> Plugin::named_item(FlyString const& name) const
 {
     // 1. For each MimeType mimeType of this's relevant global object's PDF viewer mime type objects: if mimeType's type is name, then return mimeType.
     auto& window = as<HTML::Window>(HTML::relevant_global_object(*this));
-    auto mime_types = window.pdf_viewer_mime_type_objects();
+    auto const& mime_types = window.pdf_viewer_mime_type_objects();
 
     for (auto& mime_type : mime_types) {
         if (mime_type->type() == name)
