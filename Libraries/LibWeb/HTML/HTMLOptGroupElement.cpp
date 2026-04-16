@@ -7,6 +7,7 @@
 #include <LibWeb/Bindings/HTMLOptGroupElement.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/HTML/HTMLOptGroupElement.h>
+#include <LibWeb/HTML/HTMLOptionElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 
 namespace Web::HTML {

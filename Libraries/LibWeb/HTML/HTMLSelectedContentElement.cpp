@@ -6,6 +6,7 @@
 
 #include <LibWeb/Bindings/HTMLSelectedContentElement.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/HTML/HTMLOptionElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLSelectedContentElement.h>
 
