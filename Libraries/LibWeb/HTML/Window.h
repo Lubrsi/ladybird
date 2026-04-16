@@ -156,8 +156,8 @@ public:
 
     WebIDL::ExceptionOr<void> initialize_web_interfaces(Badge<WindowEnvironmentSettingsObject>);
 
-    Vector<GC::Ref<Plugin>> pdf_viewer_plugin_objects();
-    Vector<GC::Ref<MimeType>> pdf_viewer_mime_type_objects();
+    Vector<GC::Ref<Plugin>> const& pdf_viewer_plugin_objects();
+    Vector<GC::Ref<MimeType>> const& pdf_viewer_mime_type_objects();
 
     CrossOriginPropertyDescriptorMap const& cross_origin_property_descriptor_map() const { return m_cross_origin_property_descriptor_map; }
     CrossOriginPropertyDescriptorMap& cross_origin_property_descriptor_map() { return m_cross_origin_property_descriptor_map; }

@@ -723,7 +723,7 @@ GC::Ptr<Navigable> Window::navigable() const
 }
 
 // https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewer-plugin-objects
-Vector<GC::Ref<Plugin>> Window::pdf_viewer_plugin_objects()
+Vector<GC::Ref<Plugin>> const& Window::pdf_viewer_plugin_objects()
 {
     // Each Window object has a PDF viewer plugin objects list. If the user agent's PDF viewer supported is false, then it is the empty list.
     // Otherwise, it is a list containing five Plugin objects, whose names are, respectively:
@@ -734,7 +734,7 @@ Vector<GC::Ref<Plugin>> Window::pdf_viewer_plugin_objects()
     // 4.   "WebKit built-in PDF"
     // The values of the above list form the PDF viewer plugin names list. https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewer-plugin-names
     if (!page().pdf_viewer_supported())
-        return {};
+        return m_pdf_viewer_plugin_objects;
 
     if (m_pdf_viewer_plugin_objects.is_empty()) {
         // FIXME: Propagate errors.
@@ -749,7 +749,7 @@ Vector<GC::Ref<Plugin>> Window::pdf_viewer_plugin_objects()
 }
 
 // https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewer-mime-type-objects
-Vector<GC::Ref<MimeType>> Window::pdf_viewer_mime_type_objects()
+Vector<GC::Ref<MimeType>> const& Window::pdf_viewer_mime_type_objects()
 {
     // Each Window object has a PDF viewer mime type objects list. If the user agent's PDF viewer supported is false, then it is the empty list.
     // Otherwise, it is a list containing two MimeType objects, whose types are, respectively:
@@ -757,7 +757,7 @@ Vector<GC::Ref<MimeType>> Window::pdf_viewer_mime_type_objects()
     // 1.   "text/pdf"
     // The values of the above list form the PDF viewer mime types list. https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewer-mime-types
     if (!page().pdf_viewer_supported())
-        return {};
+        return m_pdf_viewer_mime_type_objects;
 
     if (m_pdf_viewer_mime_type_objects.is_empty()) {
         m_pdf_viewer_mime_type_objects.append(realm().create<MimeType>(realm(), "application/pdf"_string));
