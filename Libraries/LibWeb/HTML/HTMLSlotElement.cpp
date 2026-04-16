@@ -103,7 +103,7 @@ void HTMLSlotElement::assign(Vector<SlottableHandle> nodes)
     }
 
     // 2. Let nodesSet be a new ordered set.
-    Vector<DOM::Slottable> nodes_set;
+    GC::ConservativeVector<DOM::Slottable> nodes_set { heap() };
 
     // 3. For each node of nodes:
     for (auto& node_handle : nodes) {
@@ -125,7 +125,7 @@ void HTMLSlotElement::assign(Vector<SlottableHandle> nodes)
     }
 
     // 4. Set this's manually assigned nodes to nodesSet.
-    m_manually_assigned_nodes = move(nodes_set);
+    m_manually_assigned_nodes = GC::adopt_conservative_vector(move(nodes_set));
 
     // 5. Run assign slottables for a tree for this's root.
     assign_slottables_for_a_tree(root());
