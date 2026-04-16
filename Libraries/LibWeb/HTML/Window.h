@@ -21,6 +21,7 @@
 #include <LibWeb/HTML/CrossOrigin/CrossOriginPropertyDescriptorMap.h>
 #include <LibWeb/HTML/GlobalEventHandlers.h>
 #include <LibWeb/HTML/MimeType.h>
+#include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Plugin.h>
 #include <LibWeb/HTML/ScrollOptions.h>
 #include <LibWeb/HTML/StructuredSerializeOptions.h>
@@ -271,7 +272,7 @@ public:
     static void set_internals_object_exposed(bool);
     static bool is_internals_object_exposed();
 
-    [[nodiscard]] OrderedHashMap<FlyString, GC::Ref<Navigable>> document_tree_child_navigable_target_name_property_set();
+    [[nodiscard]] GC::OrderedRootHashMap<FlyString, GC::Ref<Navigable>> document_tree_child_navigable_target_name_property_set();
 
     [[nodiscard]] Vector<FlyString> supported_property_names() const override;
     [[nodiscard]] JS::Value named_item_value(FlyString const&) const override;
@@ -299,8 +300,14 @@ private:
     void invoke_idle_callbacks();
 
     struct [[nodiscard]] NamedObjects {
-        Vector<GC::Ref<Navigable>> navigables;
-        Vector<GC::Ref<DOM::Element>> elements;
+        explicit NamedObjects(GC::Heap& heap)
+            : navigables(heap)
+            , elements(heap)
+        {
+        }
+
+        GC::RootVector<GC::Ref<Navigable>> navigables;
+        GC::RootVector<GC::Ref<DOM::Element>> elements;
     };
     NamedObjects named_objects(StringView name);
 
