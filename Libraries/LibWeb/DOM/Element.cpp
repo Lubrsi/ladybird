@@ -2843,7 +2843,7 @@ static GC::Ref<WebIDL::Promise> scroll_an_element_into_view(Element& target, Bin
     // 2. For each ancestor element or viewport that establishes a scrolling box scrolling box, in order of innermost
     //    to outermost scrolling box, run these substeps:
     auto* ancestor = target.parent();
-    GC::RootVector<Node&> scrolling_boxes { target.heap() };
+    GC::RootVector<GC::Ref<Node>> scrolling_boxes { target.heap() };
     while (ancestor) {
         if (ancestor->paintable_box() && ancestor->paintable_box()->has_scrollable_overflow())
             scrolling_boxes.append(*ancestor);
@@ -2853,27 +2853,27 @@ static GC::Ref<WebIDL::Promise> scroll_an_element_into_view(Element& target, Bin
     for (auto& scrolling_box : scrolling_boxes) {
         // 1. If the Document associated with target is not same origin with the Document associated with the element
         //    or viewport associated with scrolling box, abort any remaining iteration of this loop.
-        if (target.document().origin() != scrolling_box.document().origin())
+        if (target.document().origin() != scrolling_box->document().origin())
             break;
 
         // 2. Let position be the scroll position resulting from running the steps to determine the scroll-into-view
         //    position of target with behavior as the scroll behavior, block as the block flow position, inline as the
         //    inline base direction position and scrolling box as the scrolling box.
         // FIXME: Pass in behavior.
-        auto position = determine_the_scroll_into_view_position(target, block, inline_, scrolling_box);
+        auto position = determine_the_scroll_into_view_position(target, block, inline_, *scrolling_box);
 
         // 3. If position is not the same as scrolling box’s current scroll position, or scrolling box has an ongoing
         //    smooth scroll,
         // FIXME: Actually check this condition.
         if (true) {
             // -> If scrolling box is associated with an element
-            if (scrolling_box.is_element()) {
+            if (scrolling_box->is_element()) {
                 // FIXME: Perform a scroll of the element’s scrolling box to position, with the element as the associated element and behavior as the scroll behavior.
             }
             // -> If scrolling box is associated with a viewport
-            else if (scrolling_box.is_document()) {
+            else if (scrolling_box->is_document()) {
                 // 1. Let document be the viewport’s associated Document.
-                auto& document = static_cast<Document&>(scrolling_box);
+                auto& document = static_cast<Document&>(*scrolling_box);
 
                 // FIXME: 2. Let root element be document’s root element, if there is one, or null otherwise.
                 // FIXME: 3. Perform a scroll of the viewport to position, with root element as the associated element and behavior as the scroll behavior.
@@ -2892,7 +2892,7 @@ static GC::Ref<WebIDL::Promise> scroll_an_element_into_view(Element& target, Bin
         //    or is a viewport whose document is a shadow-including inclusive ancestor of container, abort any
         //    remaining iteration of this loop.
         // NB: Our viewports *are* Documents in the DOM, so both checks are equivalent.
-        if (container != nullptr && scrolling_box.is_shadow_including_inclusive_ancestor_of(*container))
+        if (container != nullptr && scrolling_box->is_shadow_including_inclusive_ancestor_of(*container))
             break;
     }
 
