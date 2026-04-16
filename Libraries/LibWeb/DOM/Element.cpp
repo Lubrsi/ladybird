@@ -884,7 +884,7 @@ static CSS::RequiredInvalidationAfterStyleChange compute_required_invalidation(C
 
         // NB: We only propagate content to computed values for relevant elements so if the old layout node doesn't
         //     have a value for content we know it isn't a relevant element and invalidation isn't required.
-        if (old_content.has_value() && old_content->counter_style_dependencies != new_style.content(abstract_element, 0).content_data.counter_style_dependencies) {
+        if (old_content && old_content->counter_style_dependencies != new_style.content(abstract_element, 0).content_data->counter_style_dependencies) {
             invalidation.rebuild_layout_tree = true;
             invalidation.relayout = true;
             invalidation.repaint = true;
