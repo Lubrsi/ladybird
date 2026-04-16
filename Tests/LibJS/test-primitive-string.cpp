@@ -6,6 +6,7 @@
 
 #include <AK/StringView.h>
 #include <AK/Try.h>
+#include <LibGC/Cell.h>
 #include <LibGC/Root.h>
 #include <LibJS/Runtime/PrimitiveString.h>
 #include <LibJS/Runtime/Realm.h>
@@ -16,6 +17,9 @@ using namespace JS;
 
 namespace {
 
+// Holds the VM singleton (safe: root of gather_roots) and a transient
+// OwnPtr<ExecutionContext> (section-4 bucket A; pending JS::RootedExecutionContext).
+// Each test-local `IGNORE_GC TestVM` annotation inherits this rationale.
 struct TestVM {
     TestVM()
         : vm(VM::create())
@@ -58,7 +62,7 @@ NEVER_INLINE static void clobber_stack()
 
 TEST_CASE(primitive_string_substring_supports_nested_ranges)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     auto string = PrimitiveString::create(*test_vm.vm, "abcdef"_string);
     auto substring = PrimitiveString::create(*test_vm.vm, *string, 1, 4);
@@ -72,7 +76,7 @@ TEST_CASE(primitive_string_substring_supports_nested_ranges)
 
 TEST_CASE(primitive_string_substring_materializes_rope_ranges)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     auto rope = PrimitiveString::create(*test_vm.vm,
         *PrimitiveString::create(*test_vm.vm, "ab"_string),
@@ -85,7 +89,7 @@ TEST_CASE(primitive_string_substring_materializes_rope_ranges)
 
 TEST_CASE(primitive_string_substring_reuses_cached_single_ascii_strings)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     GC::Root<PrimitiveString> cached_b = PrimitiveString::create(*test_vm.vm, "b"_string);
     auto string = PrimitiveString::create(*test_vm.vm, "abcd"_string);
@@ -96,7 +100,7 @@ TEST_CASE(primitive_string_substring_reuses_cached_single_ascii_strings)
 
 TEST_CASE(primitive_string_substring_handles_surrogate_boundaries)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     auto string = PrimitiveString::create(*test_vm.vm, "😀x"_string);
     auto leading_surrogate = PrimitiveString::create(*test_vm.vm, *string, 0, 1);
@@ -112,7 +116,7 @@ TEST_CASE(primitive_string_substring_handles_surrogate_boundaries)
 
 TEST_CASE(primitive_string_substring_utf16_views_stay_deferred)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     auto string = PrimitiveString::create(*test_vm.vm, Utf16View { u"abcd", 4 });
     auto substring = PrimitiveString::create(*test_vm.vm, *string, 1, 2);
@@ -130,7 +134,7 @@ TEST_CASE(primitive_string_substring_utf16_views_stay_deferred)
 
 TEST_CASE(primitive_string_substring_equality_uses_utf16_code_units)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     char16_t const source_code_units[] = { u'x', u'x', u'x', 0xd800, 0xdc00, 0xdc00, u'x', u'x' };
     char16_t const substring_code_units[] = { 0xd800, 0xdc00, 0xdc00 };
@@ -144,7 +148,7 @@ TEST_CASE(primitive_string_substring_equality_uses_utf16_code_units)
 
 TEST_CASE(deferred_primitive_strings_do_not_evict_cached_strings)
 {
-    TestVM test_vm;
+    IGNORE_GC TestVM test_vm;
 
     GC::Root<PrimitiveString> cached_foo = PrimitiveString::create(*test_vm.vm, "foo"_string);
 
