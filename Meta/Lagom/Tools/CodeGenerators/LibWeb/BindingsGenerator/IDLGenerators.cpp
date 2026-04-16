@@ -2047,7 +2047,14 @@ static void generate_arguments(SourceGenerator& generator, Vector<IDL::Parameter
             // list, so we move() it into the parameter list.
             parameter_names.append(ByteString::formatted("move({})", parameter_name));
         } else {
-            parameter_names.append(move(parameter_name));
+            if (parameter.type->name().is_one_of("sequence"sv, "FrozenArray"sv)) {
+                // Sequence parameters are emitted as locally-declared containers populated
+                // in-place; implementations may take them by rvalue reference, so move() the
+                // local in.
+                parameter_names.append(ByteString::formatted("move({})", parameter_name));
+            } else {
+                parameter_names.append(move(parameter_name));
+            }
 
             arguments_generator.set("argument.index", ByteString::number(argument_index));
 
