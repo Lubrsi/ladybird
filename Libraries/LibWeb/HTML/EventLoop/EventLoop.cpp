@@ -7,6 +7,7 @@
 
 #include <AK/TemporaryChange.h>
 #include <LibCore/EventLoop.h>
+#include <LibGC/RootHashMap.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/CSS/FontComputer.h>
@@ -688,10 +689,10 @@ void EventLoop::ensure_documents_sorted() const
         return;
     m_documents_sort_dirty = false;
 
-    HashMap<DOM::Document*, size_t> doc_to_index;
+    GC::RootHashMap<GC::Ref<DOM::Document>, size_t> doc_to_index { heap() };
     doc_to_index.ensure_capacity(m_documents.size());
     for (size_t i = 0; i < m_documents.size(); ++i)
-        doc_to_index.set(m_documents[i].ptr(), i);
+        doc_to_index.set(*m_documents[i], i);
 
     Vector<bool> visited;
     visited.resize(m_documents.size());
@@ -704,7 +705,7 @@ void EventLoop::ensure_documents_sorted() const
         visited[idx] = true;
         if (auto navigable = m_documents[idx]->navigable()) {
             if (auto container_doc = navigable->container_document()) {
-                if (auto container_idx = doc_to_index.get(container_doc.ptr()); container_idx.has_value())
+                if (auto container_idx = doc_to_index.get(*container_doc); container_idx.has_value())
                     self(self, *container_idx);
             }
         }
