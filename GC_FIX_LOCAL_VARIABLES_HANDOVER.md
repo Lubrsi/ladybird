@@ -161,6 +161,47 @@ This section tracks work since commit #13 above. Run `git log --oneline 094e4bac
 | `9806e92902` | LibWeb/DOM: Root `scrolling_boxes` in `scroll_an_element_into_view`. |
 | `fca31f95ca` | LibWeb/DOM: Root touch target list in `EventDispatcher::dispatch`. |
 | `01cb088340` | LibWeb/DOM: Avoid copying PaintableFragment list in `Range::get_client_rects`. |
+| `45597c04f4` | LibWeb/Bindings: Use Vector storage for GC::Root sequences (generator storage_type change that caused the PointerEvent slicing regression). |
+| `2168d5f8cf` | WebContent: Root the dump-all-resolved-styles BFS traversal. |
+| `3237c53692` | WebWorker: Annotate realm execution context local with IGNORE_GC. |
+| `e0c7b803f7` | LibWeb/Page: Include `LibJS/Runtime/Value.h` directly (avoid relying on a transitive include broken by the SelectItem refactor). |
+| `9d3ba87586` | LibWeb/HTML: Drop `SelectItemOption::option_element` (replaced with the 0-based `m_picker_options` side table on `HTMLSelectElement`). |
+| `2cc3417a0c` | Tests/LibJS: Annotate TestVM fixture locals with `IGNORE_GC`. |
+| `bd0e5a7e6c` | LibWeb/ViewTransition: Root `captureElements` with `GC::RootVector`. |
+
+Session `2026-04-16` batch (post-rebase, continued in the same branch):
+
+| Commit | Summary |
+|---|---|
+| `f4385c472b` | LibWeb/DOM: Use `GC::Ptr` access in content invalidation check (rebase leftover from the `ContentData` Cell promotion). |
+| `3bc59d7b89` | LibWeb/HTML: Include `HTMLOptionElement.h` at users of the type (transitive include broken by the `SelectItem` refactor). |
+| `537b2c61b3` | LibWeb/Crypto: Use the `GC::Ref` alternative of `AlgorithmIdentifier` (adapt callers to the `Ref`-flavoured Variant in `CryptoAlgorithms.h`). |
+| `93052b289d` | LibWeb/Bindings: Emit `GC::Ref<JS::Object>` for the IDL `object` type (union expansion now matches the hand-written `AlgorithmIdentifier`). |
+| `45f13da46f` | LibWeb/Bindings: Pass sequence parameters by value (generator-side `move()` + `CSSTransformValue::construct_impl` / `Clipboard::write` destinations updated to `Vector<GC::Root<T>>`). |
+| `8d72bd6114` | LibWeb/Geometry: Root the `DOMRectList::create` transient vector via `GC::RootVector`. |
+| `5420044d12` | LibWeb/HTML: Root the `disposedNHEs` local in `Navigation`. |
+| `2ee226b77d` | LibWeb/HTML: Return `pdf_viewer_{plugin,mime_type}_objects` by reference. |
+| `c76b246de4` | LibWeb/DOM: Root transient `Slottable` lists via `GC::ConservativeVector` (`find_slottables`, `find_flattened_slottables`, `Slot::set_assigned_nodes`, `HTMLSlotElement::assign`). |
+| `b02e07eeed` | LibWeb/HTML: Adopt `GC::WeakHashSet` for the BCG group set. |
+| `5afc4f7336` | LibWeb/DOM: Port `Text::split_text` to the `WeakHashSet` iterator shape (missed in `b8ba96d602`). |
+| `0df12535b4` | LibWeb/DOM: Root the `whole_text` contiguous-nodes list. |
+| `e5b65137c9` | LibWeb/DOM: Store scrolling boxes as `GC::Ref<Node>` in scroll-into-view. |
+| `0c1f4f928e` | LibGC: Add `WeakHashMap` (cell-typed key/value slots stored as `Weak<T>`). |
+| `26b50eb587` | LibWeb/DOM: Adopt `GC::WeakHashMap` for the node directory. |
+| `d133f5fee5` / `d0d84047d4` / `acc12db37b` / `b3af725b16` | Handover: note `WeakHashMap` iterator / prune-on-read / JS `WeakMap` semantic difference / commit-restructure before PR. |
+| `fc0cd418c8` | LibWeb/HTML: Root the `popover_positions` map in `topmost_popover_ancestor`. |
+| `fc00c0bc1d` | LibWeb/HTML: Root the document index map in `EventLoop` sort. |
+| `9d52d0adf4` | LibWeb/HTML: Adopt `GC::WeakHashSet` for `NavigableContainer::all_instances` (Document.cpp iteration syntax adapted in the same commit). |
+| `8d0d2f3904` | LibWeb/HTML: Include `StructuredSerializeOptions.h` in `DedicatedWorkerGlobalScope`. |
+| `b8e02ce0da` | LibWeb/HTML: Root the Window named-property-set collections (`OrderedRootHashMap` return type + `NamedObjects(Heap&)` constructor; forces `Navigable.h` into `Window.h`). |
+| `dcf91b16af` | LibWeb/HTML: Bind `pdf_viewer_mime_type_objects` result by reference in `Plugin`. |
+| `bd9c1f817b` | LibWeb/XPath: Root the `XPathResult` node-set transient via `RootVector`. |
+| `31323fa7fc` | LibWeb/IndexedDB: Root transient transaction-list locals (`block_on_conflicting_transactions` + `IDBTransaction::create` scope). |
+| `63d5969c6a` | LibWeb/HTML: Root `StructuredSerialize` Map/Set `copied_list` transients. |
+| `d4c749f5a9` | LibWeb/WebGL: Root the `getActiveUniforms` `params_as_values` local. |
+| `76504adfca` | LibWeb/IndexedDB: Root seen list in `convert_a_value_to_a_key` (split into two overloads; the 3-arg impl takes `GC::RootVector<JS::Value>&`). |
+| `bff32c105b` | LibWeb/HTML: Adopt `GC::WeakHashSet` for the top-level traversable set (silently drops insertion order — see Deferred). |
+| `371c936fc5` | LibWeb/HTML: Root performance-observer notify list + entry copies (`OrderedRootHashTable` populated by loop; `PerformanceObserverEntryList` constructor takes `RootVector&&` + adopts). |
 
 Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
 
@@ -192,6 +233,9 @@ Roughly in priority order, the next things to land are:
 
 ### Deferred (not in the task list, tracked here for the next session)
 
+- **`SVGList<GC::Ref<T>>` base-class adopt pattern**: `SVGNumberList::SVGNumberList` would like to take a `GC::RootVector<GC::Ref<SVGNumber>>&&` and call `SVGList(realm, GC::adopt_root_vector(move(items)), read_only)`, but the plugin rejects `adopt_root_vector` when the target slot is a base-class constructor argument (the adopt receiver is `SVGList::m_items`, which is transitively traced via `SVGList::visit_edges`, but the direct call site is the base-class initializer of `SVGNumberList` — not a member init or direct traced-member assignment). The common path for fixing `SVGComponentTransferFunctionElement::table_values`, `SVGLengthList`, and `SVGTransformList` is either (a) teach the plugin to treat a base-class constructor argument whose target is a traced member as an allowed adopt site, or (b) push the `RootVector`/adopt all the way down to `SVGList`'s constructor so the adopt happens in `SVGList`'s own member init list. (b) is the safer refactor.
+- **Index/ObjectStore record-deletion transients in IndexedDB** (`Internal/Index.cpp:remove_records_with_value_in_range`, `Internal/ObjectStore.cpp:remove_records_in_range`): the `Vector<IndexRecord>` / `Vector<ObjectStoreRecord>` locals are passed by value into `MutationLog::note_*_records_deleted` and then moved into a `Variant` alternative inside `MutationLog::m_entries`. Switching the local to `GC::ConservativeVector<...>` would require either threading the `ConservativeVector` all the way into the variant-storage struct (which would need a heap for default construction, forcing construction-site changes throughout) or adopting across the `note_*` call boundary (rejected by the plugin — adopt must land at a traced member). Leaving as a violation for now; the clean fix is to make the `IndexRecordsDeleted` / `RecordsDeleted` variant alternatives hold a `GC::ConservativeVector` directly, threading `Heap&` through the construction sites.
+- **`SimilarOriginWindowAgent` as a `NonnullOwnPtr`** (`HTML/Scripting/SimilarOriginWindowAgent.cpp:20`): the agent owns GC containers (`pending_mutation_observers`, `signal_slots`) but is itself not a `Cell`. Same shape as the section-4 bucket-B issues. Either promote the agent to a `Cell` or rework the ownership so the GC containers live on a traced owner.
 - **Refactor `resolve_export` recursion accumulator** so the deferred plugin parameter check can be re-enabled. See "Plugin extension attempted and reverted" below for context.
 - **Re-enable the deferred plugin parameter check** after the `resolve_export` refactor. The compile-time slicing block already covers the most common case (a RootVector being passed by value), but a parameter check would still catch plain `Vector<GC::Ref<T>>` parameters that aren't fed from a Root container at any call site.
 - **Possible bug: minimum Cell size not enforced at compile time** — see the section below.
@@ -669,6 +713,17 @@ Tests call `gather_roots()` / `for_each_possible_value()` / `visit_edges()` dire
 ### Remaining Violations (LibWeb)
 
 After the in-flight DOM/CSS/Crypto-follow-up work (uncommitted at time of writing), a keep-going build (`./Meta/ladybird.py build -- -k0`) surfaces **105** `error: Variable with type ... not a GC root` entries plus 1 `call to deleted constructor` entry.
+
+Session `2026-04-16` reduced this to roughly the 60s with the following work (see `git log --oneline` on the branch for exact commits):
+
+- **Small transient locals rooted** via `GC::RootVector` / `GC::ConservativeVector`: `DOMRectList::create`, `Navigation::disposedNHEs`, `Element::scrolling_boxes` (also switched to `GC::Ref<Node>`), `Text::whole_text` contiguous-nodes list, `Slottable::find_slottables` / `find_flattened_slottables`, `HTMLElement::topmost_popover_ancestor` map, `EventLoop::doc_to_index`, `Window::named_objects` (via `NamedObjects(Heap&)` ctor), `Window::document_tree_child_navigable_target_name_property_set`, `XPath` node-set handoff, IndexedDB transaction scope + blocking list + `convert_a_value_to_a_key` seen, StructuredSerialize map/set `copied_list`, WebGL `params_as_values`, `WindowOrWorkerGlobalScope` performance-observer notify list + entry handoff, Node directory (now `GC::WeakHashMap`).
+- **Global registries converted to `GC::WeakHashSet`**: `BrowsingContextGroup::user_agent_browsing_context_group_set`, `NavigableContainer::all_instances`, `TraversableNavigable::user_agent_top_level_traversable_set` (dropped `Ordered` — see note in Deferred).
+- **Return-by-const-reference instead of unrooted copy**: `Window::pdf_viewer_{plugin,mime_type}_objects` (callers in `MimeType` / `MimeTypeArray` / `PluginArray` / `Plugin` updated to `auto const&`).
+- **New container**: `GC::WeakHashMap<K, V>` in `Libraries/LibGC/WeakHashMap.h`, with the four test cases in `Tests/LibGC/TestGCContainers.cpp` (non-cell key + cell value, cell key + non-cell value, both cell, and collection-clears-entry). Applied to the `node_directory` in `LibWeb/DOM/Node.cpp`.
+- **Generator-side fallout** carried over from the prior session: `IDLGenerators.cpp` now emits `GC::Ref<JS::Object>` for the IDL `object` type and moves sequence arguments into by-value destinations; hand-written destinations (`CSSTransformValue::construct_impl`, `Clipboard::write`) updated accordingly.
+- **Include/iterator repairs** unrelated to rooting: `StructuredSerializeOptions` include in `DedicatedWorkerGlobalScope.cpp`, `HTMLOptionElement` direct includes in `SelectorEngine.cpp` / `HTMLOptGroupElement.cpp` / `HTMLSelectedContentElement.cpp`, `Text::split_text` ported to `WeakHashSet::Iterator::operator*` returning `Range&` rather than `Range*`.
+
+The remaining failures fall almost entirely into the big deferred clusters (Layout `OwnPtr<FormattingContext>` / `LayoutState`, `NonnullOwnPtr<JS::ExecutionContext>`, SVGList `Vector<GC::Ref<Number>>` needing the base-class-adopt pattern). See the per-directory notes below and the `Future work` section for the remaining categories.
 
 Biggest remaining subsystems:
 
