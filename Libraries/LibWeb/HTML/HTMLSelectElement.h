@@ -160,6 +160,7 @@ private:
     GC::Ptr<DOM::HTMLCollection> m_selected_options;
     bool m_is_open { false };
     Vector<SelectItem> m_select_items;
+    Vector<GC::Ref<HTMLOptionElement>> m_picker_options;
     GC::Ptr<DOM::Element> m_inner_text_element;
     GC::Ptr<DOM::Element> m_chevron_icon_element;
 
