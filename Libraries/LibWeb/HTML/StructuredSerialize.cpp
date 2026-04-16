@@ -480,7 +480,7 @@ public:
             // 1. If value has a [[MapData]] internal slot, then:
             if (auto const* map = as_if<JS::Map>(object)) {
                 // 1. Let copiedList be a new empty List.
-                Vector<JS::Value> copied_list;
+                GC::RootVector<JS::Value> copied_list { m_vm.heap() };
                 copied_list.ensure_capacity(map->map_size() * 2);
 
                 // 2. For each Record { [[Key]], [[Value]] } entry of value.[[MapData]]:
@@ -507,7 +507,7 @@ public:
             // 2. Otherwise, if value has a [[SetData]] internal slot, then:
             else if (auto const* set = as_if<JS::Set>(object)) {
                 // 1. Let copiedList be a new empty List.
-                Vector<JS::Value> copied_list;
+                GC::RootVector<JS::Value> copied_list { m_vm.heap() };
                 copied_list.ensure_capacity(set->set_size());
 
                 // 2. For each entry of value.[[SetData]]:
