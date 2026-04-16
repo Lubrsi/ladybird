@@ -1858,7 +1858,7 @@ GC::Ref<CustomElementRegistry> Window::custom_elements()
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#document-tree-child-navigable-target-name-property-set
-OrderedHashMap<FlyString, GC::Ref<Navigable>> Window::document_tree_child_navigable_target_name_property_set()
+GC::OrderedRootHashMap<FlyString, GC::Ref<Navigable>> Window::document_tree_child_navigable_target_name_property_set()
 {
     // The document-tree child navigable target name property set of a Window object window is the return value of running these steps:
 
@@ -1866,7 +1866,7 @@ OrderedHashMap<FlyString, GC::Ref<Navigable>> Window::document_tree_child_naviga
     auto children = associated_document().document_tree_child_navigables();
 
     // 2. Let firstNamedChildren be an empty ordered set.
-    OrderedHashMap<FlyString, GC::Ref<Navigable>> first_named_children;
+    GC::OrderedRootHashMap<FlyString, GC::Ref<Navigable>> first_named_children { heap() };
 
     // 3. For each navigable of children:
     for (auto const& navigable : children) {
@@ -1886,7 +1886,7 @@ OrderedHashMap<FlyString, GC::Ref<Navigable>> Window::document_tree_child_naviga
     }
 
     // 4. Let names be an empty ordered set.
-    OrderedHashMap<FlyString, GC::Ref<Navigable>> names;
+    GC::OrderedRootHashMap<FlyString, GC::Ref<Navigable>> names { heap() };
 
     // 5. For each navigable of firstNamedChildren:
     for (auto const& [name, navigable] : first_named_children) {
@@ -1983,7 +1983,7 @@ Window::NamedObjects Window::named_objects(StringView name)
     //       follow the rules for named properties objects rather than legacy platform objects.
 
     // Named objects of Window object window with the name name, for the purposes of the above algorithm, consist of the following:
-    NamedObjects objects;
+    NamedObjects objects { heap() };
 
     // document-tree child navigables of window's associated Document whose target name is name;
     auto children = associated_document().document_tree_child_navigables();
