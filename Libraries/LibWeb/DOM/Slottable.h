@@ -8,6 +8,7 @@
 
 #include <AK/FlyString.h>
 #include <AK/Variant.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Ptr.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/Export.h>
@@ -59,8 +60,8 @@ GC::Ptr<HTML::HTMLSlotElement> assigned_slot_for_node(GC::Ref<Node>);
 bool is_an_assigned_slottable(GC::Ref<Node>);
 
 GC::Ptr<HTML::HTMLSlotElement> find_a_slot(Slottable const&, OpenFlag = OpenFlag::Unset);
-Vector<Slottable> find_slottables(GC::Ref<HTML::HTMLSlotElement>);
-Vector<Slottable> find_flattened_slottables(GC::Ref<HTML::HTMLSlotElement>);
+GC::ConservativeVector<Slottable> find_slottables(GC::Ref<HTML::HTMLSlotElement>);
+GC::ConservativeVector<Slottable> find_flattened_slottables(GC::Ref<HTML::HTMLSlotElement>);
 void assign_slottables(GC::Ref<HTML::HTMLSlotElement>);
 void assign_slottables_for_a_tree(GC::Ref<Node>);
 void assign_a_slot(Slottable const&);
