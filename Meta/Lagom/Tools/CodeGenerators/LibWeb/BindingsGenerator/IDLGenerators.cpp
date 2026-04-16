@@ -233,7 +233,7 @@ CppType idl_type_name_to_cpp_type(Type const& type, Context const& context)
         return { .name = "Empty", .sequence_storage_type = SequenceStorageType::RootVector };
 
     if (type.name() == "object")
-        return { .name = "GC::Root<JS::Object>", .sequence_storage_type = SequenceStorageType::Vector };
+        return { .name = "GC::Ref<JS::Object>", .sequence_storage_type = SequenceStorageType::RootVector };
 
     if (type.name() == "BufferSource")
         return { .name = "GC::Root<WebIDL::BufferSource>", .sequence_storage_type = SequenceStorageType::Vector };
@@ -926,27 +926,27 @@ static void generate_object_to_cpp(SourceGenerator& scoped_generator, IDL::Type 
     // 2. Return the IDL object value that is a reference to the same object as V.
     if (type.is_nullable()) {
         scoped_generator.append(R"~~~(
-    Optional<GC::Root<JS::Object>> @cpp_name@;
+    GC::Ptr<JS::Object> @cpp_name@;
     if (!@js_name@@js_suffix@.is_null() && !@js_name@@js_suffix@.is_undefined()) {
         if (!@js_name@@js_suffix@.is_object())
             return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);
-        @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());
+        @cpp_name@ = @js_name@@js_suffix@.as_object();
     }
 )~~~");
     } else if (optional) {
         scoped_generator.append(R"~~~(
-    Optional<GC::Root<JS::Object>> @cpp_name@;
+    GC::Ptr<JS::Object> @cpp_name@;
     if (!@js_name@@js_suffix@.is_undefined()) {
         if (!@js_name@@js_suffix@.is_object())
             return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);
-        @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());
+        @cpp_name@ = @js_name@@js_suffix@.as_object();
     }
 )~~~");
     } else {
         scoped_generator.append(R"~~~(
     if (!@js_name@@js_suffix@.is_object())
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);
-    auto @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());
+    auto @cpp_name@ = GC::Ref { @js_name@@js_suffix@.as_object() };
 )~~~");
     }
 }
@@ -1525,7 +1525,7 @@ static void generate_union_to_cpp(SourceGenerator& scoped_generator, ParameterTy
         //    2. If types includes object, then return the IDL value that is a reference to the object V.
         if (includes_object) {
             union_generator.append(R"~~~(
-                return GC::make_root(@js_name@@js_suffix@_object);
+                return @js_name@@js_suffix@_object;
 )~~~");
         }
 
@@ -1557,20 +1557,30 @@ static void generate_union_to_cpp(SourceGenerator& scoped_generator, ParameterTy
     // 6. If Type(V) is Object and V has an [[ArrayBufferData]] internal slot, then
     //    1. If types includes ArrayBuffer, then return the result of converting V to ArrayBuffer.
     //    2. If types includes object, then return the IDL value that is a reference to the object V.
-    if (any_of(types, [](auto const& type) { return type->name() == "ArrayBuffer"; }) || includes_object) {
+    if (any_of(types, [](auto const& type) { return type->name() == "ArrayBuffer"; })) {
         union_generator.append(R"~~~(
             if (is<JS::ArrayBuffer>(@js_name@@js_suffix@_object))
                 return GC::make_root(@js_name@@js_suffix@_object);
+)~~~");
+    } else if (includes_object) {
+        union_generator.append(R"~~~(
+            if (is<JS::ArrayBuffer>(@js_name@@js_suffix@_object))
+                return @js_name@@js_suffix@_object;
 )~~~");
     }
 
     // 7. If Type(V) is Object and V has a [[DataView]] internal slot, then:
     //    1. If types includes DataView, then return the result of converting V to DataView.
     //    2. If types includes object, then return the IDL value that is a reference to the object V.
-    if (any_of(types, [](auto const& type) { return type->name() == "DataView"; }) || includes_object) {
+    if (any_of(types, [](auto const& type) { return type->name() == "DataView"; })) {
         union_generator.append(R"~~~(
             if (is<JS::DataView>(@js_name@@js_suffix@_object))
                 return GC::make_root(@js_name@@js_suffix@_object);
+)~~~");
+    } else if (includes_object) {
+        union_generator.append(R"~~~(
+            if (is<JS::DataView>(@js_name@@js_suffix@_object))
+                return @js_name@@js_suffix@_object;
 )~~~");
     }
 
@@ -1590,7 +1600,7 @@ static void generate_union_to_cpp(SourceGenerator& scoped_generator, ParameterTy
     } else if (includes_object) {
         union_generator.append(R"~~~(
             if (is<JS::TypedArrayBase>(@js_name@@js_suffix@_object))
-                return GC::make_root(@js_name@@js_suffix@_object);
+                return @js_name@@js_suffix@_object;
 )~~~");
     }
 
