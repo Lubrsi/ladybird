@@ -14,6 +14,7 @@
 #include <AK/Variant.h>
 #include <LibGC/Root.h>
 #include <LibGC/Weak.h>
+#include <LibJS/Runtime/Value.h>
 #include <LibGfx/Cursor.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Palette.h>
