@@ -17,15 +17,15 @@ GC_DEFINE_ALLOCATOR(DOMRectList);
 
 GC::Ref<DOMRectList> DOMRectList::create(JS::Realm& realm, Vector<GC::Root<DOMRect>> rect_handles)
 {
-    Vector<GC::Ref<DOMRect>> rects;
+    GC::RootVector<GC::Ref<DOMRect>> rects { realm.heap() };
     for (auto& rect : rect_handles)
         rects.append(*rect);
     return realm.create<DOMRectList>(realm, move(rects));
 }
 
-DOMRectList::DOMRectList(JS::Realm& realm, Vector<GC::Ref<DOMRect>> rects)
+DOMRectList::DOMRectList(JS::Realm& realm, GC::RootVector<GC::Ref<DOMRect>>&& rects)
     : Bindings::PlatformObject(realm)
-    , m_rects(move(rects))
+    , m_rects(GC::adopt_root_vector(move(rects)))
 {
     m_legacy_platform_object_flags = LegacyPlatformObjectFlags { .supports_indexed_properties = 1 };
 }

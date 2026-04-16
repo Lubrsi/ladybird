@@ -29,7 +29,7 @@ public:
     virtual Optional<JS::Value> item_value(size_t index) const override;
 
 private:
-    DOMRectList(JS::Realm&, Vector<GC::Ref<DOMRect>>);
+    DOMRectList(JS::Realm&, GC::RootVector<GC::Ref<DOMRect>>&&);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
