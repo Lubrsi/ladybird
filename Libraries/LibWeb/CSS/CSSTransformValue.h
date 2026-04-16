@@ -18,7 +18,7 @@ class CSSTransformValue final : public CSSStyleValue {
 
 public:
     [[nodiscard]] static GC::Ref<CSSTransformValue> create(JS::Realm&, GC::RootVector<GC::Ref<CSSTransformComponent>>&&);
-    static WebIDL::ExceptionOr<GC::Ref<CSSTransformValue>> construct_impl(JS::Realm&, GC::RootVector<GC::Root<CSSTransformComponent>>);
+    static WebIDL::ExceptionOr<GC::Ref<CSSTransformValue>> construct_impl(JS::Realm&, Vector<GC::Root<CSSTransformComponent>>);
 
     virtual ~CSSTransformValue() override;
 
