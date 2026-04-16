@@ -16,6 +16,13 @@ It also adds missing GC container types needed to fix the violations (`RootHashT
 
 ## Branch State
 
+> **All commit SHAs below are stale.** The branch has been rebased onto master
+> multiple times since these tables were last written, so the 7-character SHAs
+> here will not resolve against the current tree. When you need the actual
+> commit, search by the commit subject line (each entry has one) and get the
+> new SHA from `git log --oneline` on the branch. Do not spend time mechanically
+> updating SHAs in this doc — it is temporary and will be deleted before PR.
+
 ```
 git log --oneline 094e4bacf8..HEAD
 ```
@@ -715,7 +722,7 @@ Tests call `gather_roots()` / `for_each_possible_value()` / `visit_edges()` dire
 
 After the in-flight DOM/CSS/Crypto-follow-up work (uncommitted at time of writing), a keep-going build (`./Meta/ladybird.py build -- -k0`) surfaces **105** `error: Variable with type ... not a GC root` entries plus 1 `call to deleted constructor` entry.
 
-Session `2026-04-16` reduced this to roughly the 60s with the following work (see `git log --oneline` on the branch for exact commits):
+Session `2026-04-16` reduced this to **61** violations. Breakdown of the remainder (see the "Session closing state" sub-section below for the file/type breakdown) is dominated by the Layout cluster (~46) and four other small deferred categories. Work done this session:
 
 - **Small transient locals rooted** via `GC::RootVector` / `GC::ConservativeVector`: `DOMRectList::create`, `Navigation::disposedNHEs`, `Element::scrolling_boxes` (also switched to `GC::Ref<Node>`), `Text::whole_text` contiguous-nodes list, `Slottable::find_slottables` / `find_flattened_slottables`, `HTMLElement::topmost_popover_ancestor` map, `EventLoop::doc_to_index`, `Window::named_objects` (via `NamedObjects(Heap&)` ctor), `Window::document_tree_child_navigable_target_name_property_set`, `XPath` node-set handoff, IndexedDB transaction scope + blocking list + `convert_a_value_to_a_key` seen, StructuredSerialize map/set `copied_list`, WebGL `params_as_values`, `WindowOrWorkerGlobalScope` performance-observer notify list + entry handoff, Node directory (now `GC::WeakHashMap`).
 - **Global registries converted to `GC::WeakHashSet`**: `BrowsingContextGroup::user_agent_browsing_context_group_set`, `NavigableContainer::all_instances`, `TraversableNavigable::user_agent_top_level_traversable_set` (dropped `Ordered` — see note in Deferred).
@@ -726,7 +733,26 @@ Session `2026-04-16` reduced this to roughly the 60s with the following work (se
 
 The remaining failures fall almost entirely into the big deferred clusters (Layout `OwnPtr<FormattingContext>` / `LayoutState`, `NonnullOwnPtr<JS::ExecutionContext>`, SVGList `Vector<GC::Ref<Number>>` needing the base-class-adopt pattern). See the per-directory notes below and the `Future work` section for the remaining categories.
 
-Biggest remaining subsystems:
+#### Session closing state (2026-04-16, post-rebase)
+
+`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **61**.
+
+Directory breakdown:
+
+| Directory | Count |
+|---|---|
+| LibWeb/Layout | 46 |
+| LibWeb/DOM (`Document.cpp` only) | 5 |
+| LibWeb/HTML | 3 (2× `NonnullOwnPtr<JS::ExecutionContext>`, 1× `NonnullOwnPtr<SimilarOriginWindowAgent>`) |
+| LibWeb/IndexedDB (Index/ObjectStore MutationLog transients) | 2 |
+| LibWeb/Painting | 2 |
+| LibWeb/SVG / WebIDL / XHR | 1 each |
+
+Type breakdown for Layout (the only remaining large cluster): `OwnPtr<FormattingContext>` / `NonnullOwnPtr<FormattingContext>` / `LayoutState` / `NonnullOwnPtr<ComputedValues>` / small per-struct sites (`InlineLevelIterator`, `BorderConflictFinder`, `UsedValues`, `Vector<Cell>` / `Vector<Row>` in `TableGrid`). All of these are known and discussed in the per-directory notes.
+
+#### Historical (pre-session) subsystem counts
+
+These were the counts documented before session `2026-04-16`; kept for context so a reviewer can see the trajectory. Live counts are in the "Session closing state" block above.
 
 | Directory | Count |
 |---|---|
@@ -737,9 +763,9 @@ Biggest remaining subsystems:
 | LibWeb/Painting | 2 |
 | LibWeb/Geometry / SVG / XPath / XHR / WebIDL / WebGL / ViewTransition | 1 each |
 
-CSS/Bindings/Crypto are at zero. The Crypto cluster was closed by `7391fabfce` + the in-flight visit_edges/allocator follow-up.
+CSS/Bindings/Crypto are at zero. The Crypto cluster was closed by `7391fabfce` (SHA stale — commit subject is *LibWeb/Crypto: Promote AlgorithmMethods/AlgorithmParams to GC::Cell*) plus the in-flight visit_edges/allocator follow-up.
 
-Violation counts by type (top entries):
+Historical type breakdown (pre-session):
 
 | Type | Count |
 |---|---|
