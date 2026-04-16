@@ -41,7 +41,7 @@ class IDBTransaction : public DOM::EventTarget {
 public:
     virtual ~IDBTransaction() override;
 
-    [[nodiscard]] static GC::Ref<IDBTransaction> create(JS::Realm&, GC::Ref<IDBDatabase>, Bindings::IDBTransactionMode, Bindings::IDBTransactionDurability, Vector<GC::Ref<ObjectStore>>);
+    [[nodiscard]] static GC::Ref<IDBTransaction> create(JS::Realm&, GC::Ref<IDBDatabase>, Bindings::IDBTransactionMode, Bindings::IDBTransactionDurability, GC::RootVector<GC::Ref<ObjectStore>>&&);
     [[nodiscard]] Bindings::IDBTransactionMode mode() const { return m_mode; }
     [[nodiscard]] TransactionState state() const { return m_state; }
     [[nodiscard]] GC::Ptr<WebIDL::DOMException> error() const { return m_error; }
@@ -109,7 +109,7 @@ public:
     WebIDL::CallbackType* onerror();
 
 protected:
-    explicit IDBTransaction(JS::Realm&, GC::Ref<IDBDatabase>, Bindings::IDBTransactionMode, Bindings::IDBTransactionDurability, Vector<GC::Ref<ObjectStore>>);
+    explicit IDBTransaction(JS::Realm&, GC::Ref<IDBDatabase>, Bindings::IDBTransactionMode, Bindings::IDBTransactionDurability, GC::RootVector<GC::Ref<ObjectStore>>&&);
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Visitor& visitor) override;
     virtual EventTarget* get_parent(DOM::Event const&) override;

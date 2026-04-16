@@ -20,18 +20,18 @@ GC_DEFINE_ALLOCATOR(IDBTransaction);
 
 IDBTransaction::~IDBTransaction() = default;
 
-IDBTransaction::IDBTransaction(JS::Realm& realm, GC::Ref<IDBDatabase> connection, Bindings::IDBTransactionMode mode, Bindings::IDBTransactionDurability durability, Vector<GC::Ref<ObjectStore>> scopes)
+IDBTransaction::IDBTransaction(JS::Realm& realm, GC::Ref<IDBDatabase> connection, Bindings::IDBTransactionMode mode, Bindings::IDBTransactionDurability durability, GC::RootVector<GC::Ref<ObjectStore>>&& scopes)
     : EventTarget(realm)
     , m_connection(connection)
     , m_mode(mode)
     , m_durability(durability)
-    , m_scope(move(scopes))
+    , m_scope(GC::adopt_root_vector(move(scopes)))
     , m_uuid(Crypto::generate_random_uuid())
 {
     connection->add_transaction(*this);
 }
 
-GC::Ref<IDBTransaction> IDBTransaction::create(JS::Realm& realm, GC::Ref<IDBDatabase> connection, Bindings::IDBTransactionMode mode, Bindings::IDBTransactionDurability durability = Bindings::IDBTransactionDurability::Default, Vector<GC::Ref<ObjectStore>> scopes = {})
+GC::Ref<IDBTransaction> IDBTransaction::create(JS::Realm& realm, GC::Ref<IDBDatabase> connection, Bindings::IDBTransactionMode mode, Bindings::IDBTransactionDurability durability, GC::RootVector<GC::Ref<ObjectStore>>&& scopes)
 {
     return realm.create<IDBTransaction>(realm, connection, mode, durability, move(scopes));
 }
