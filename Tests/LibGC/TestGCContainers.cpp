@@ -17,6 +17,7 @@
 #include <LibGC/RootHashMap.h>
 #include <LibGC/RootHashTable.h>
 #include <LibGC/RootVector.h>
+#include <LibGC/WeakHashMap.h>
 #include <LibTest/TestCase.h>
 
 class TestCell : public GC::Cell {
@@ -699,4 +700,63 @@ TEST_CASE(adopt_conservative_hash_table_moves_storage)
 
     EXPECT_EQ(source.size(), 0u);
     EXPECT(!possible_values_contain(source, cell.ptr()));
+}
+
+TEST_CASE(weak_hash_map_non_cell_key_cell_value)
+{
+    auto& heap = test_heap();
+    GC::WeakHashMap<int, TestCell> map;
+
+    auto cell = heap.allocate<TestCell>();
+    map.set(42, *cell);
+
+    EXPECT(map.contains(42));
+    EXPECT_EQ(map.get(42), cell.ptr());
+
+    EXPECT(map.remove(42));
+    EXPECT(!map.contains(42));
+    EXPECT_EQ(map.get(42), static_cast<TestCell*>(nullptr));
+}
+
+TEST_CASE(weak_hash_map_cell_key_non_cell_value)
+{
+    auto& heap = test_heap();
+    GC::WeakHashMap<TestCell, int> map;
+
+    auto cell = heap.allocate<TestCell>();
+    map.set(*cell, 7);
+
+    EXPECT(map.contains(*cell));
+    EXPECT_EQ(map.get(*cell).value(), 7);
+
+    EXPECT(map.remove(*cell));
+    EXPECT(!map.contains(*cell));
+}
+
+TEST_CASE(weak_hash_map_cell_key_and_cell_value)
+{
+    auto& heap = test_heap();
+    GC::WeakHashMap<TestCell, TestCell> map;
+
+    auto key = heap.allocate<TestCell>();
+    auto value = heap.allocate<TestCell>();
+    map.set(*key, *value);
+
+    EXPECT(map.contains(*key));
+    EXPECT_EQ(map.get(*key), value.ptr());
+}
+
+TEST_CASE(weak_hash_map_value_collection_clears_entry)
+{
+    auto& heap = test_heap();
+    GC::WeakHashMap<int, TestCell> map;
+
+    {
+        auto cell = heap.allocate<TestCell>();
+        map.set(1, *cell);
+    }
+
+    heap.collect_garbage(GC::Heap::CollectionType::CollectEverything);
+
+    EXPECT_EQ(map.get(1), static_cast<TestCell*>(nullptr));
 }
