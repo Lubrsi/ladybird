@@ -212,6 +212,24 @@ Session `2026-04-16` batch (post-rebase, continued in the same branch):
 
 Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
 
+## Session summaries
+
+One paragraph per working session, newest first. The per-commit table above is the raw log; these summaries are the "what shifted" narrative and exist so a future session can pick up without replaying every commit. Each entry should close with the violation count at end of session so the trajectory is legible.
+
+### 2026-04-16 — Post-rebase DOM/HTML/IndexedDB batch + `GC::WeakHashMap`
+
+Resolved post-rebase fallout (three files): `Element.cpp` content-invalidation access, transitive-include repairs broken by the earlier `SelectItem` refactor, and a generator/`AlgorithmIdentifier` mismatch.
+
+Rooted ~19 transient locals across `LibWeb/DOM`, `LibWeb/HTML`, `LibWeb/Geometry`, `LibWeb/XPath`, `LibWeb/IndexedDB`, `LibWeb/WebGL`, and `LibWeb/PerformanceTimeline`. Switched three global cell registries (`BrowsingContextGroup` BCG set, `NavigableContainer::all_instances`, `TraversableNavigable` top-level set) from raw `HashTable<T*>` / `OrderedHashTable<GC::Ref<T>>` to `GC::WeakHashSet<T>`, matching the existing `MessagePort` / `Window` / `Range` pattern. Returned two `pdf_viewer_*` lists by `const&` instead of by value so callers stop copying traced vectors into unrooted locals.
+
+Built and shipped **`GC::WeakHashMap<K, V>`** alongside four unit tests in `TestGCContainers.cpp`. It handles the three cell/non-cell mixes (non-cell key + cell value, cell key + non-cell value, both cell) and verifies entry eviction on `collect_garbage`. Applied it to `Node::s_node_directory`, eliminating an `IGNORE_GC` workaround.
+
+Completed the (b)+(c) generator cleanup from the previous session: IDL `object` now emits `GC::Ref<JS::Object>`, sequence arguments move into by-value destinations, and `CSSTransformValue` / `Clipboard` destinations accept `Vector<GC::Root<T>>` directly.
+
+Added to the handover: the commit-structure-rewrite-before-PR TODO, the "handover doc is temporary and should be deleted before PR" warning at the top, the `WeakHashMap` vs JS `WeakMap` semantic difference (not an ephemeron map), the prune-on-read trade-off, the `user_agent_top_level_traversable_set` losing its `Ordered` marker, and five new deferred items (SVGList base-class adopt, IndexedDB `MutationLog` transients, `SimilarOriginWindowAgent` ownership, generator-facing `Vector<Variant<cell,...>>` returns, missing `WeakHashMap` iterator).
+
+**Closing violation count: 80 → 61** (Layout cluster now the only large remainder; everything else is in deferred buckets).
+
 ## Outstanding Tasks
 
 Live task list (mirrored from the in-session TaskList tool, lowest ID first):
