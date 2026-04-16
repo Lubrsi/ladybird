@@ -55,14 +55,14 @@ void XPathResult::set_boolean(bool boolean_value)
     m_boolean_value = boolean_value;
 }
 
-void XPathResult::set_node_set(Vector<GC::Ptr<DOM::Node>> node_set, unsigned short type)
+void XPathResult::set_node_set(GC::RootVector<GC::Ptr<DOM::Node>>&& node_set, unsigned short type)
 {
     if (type >= XPathResult::UNORDERED_NODE_ITERATOR_TYPE && type <= XPathResult::FIRST_ORDERED_NODE_TYPE)
         m_result_type = type;
     else
         m_result_type = UNORDERED_NODE_ITERATOR_TYPE; // Default if the caller does not explicity ask for anything else
 
-    m_node_set = move(node_set);
+    m_node_set = GC::adopt_root_vector(move(node_set));
     m_node_set_iter = m_node_set.begin();
 }
 

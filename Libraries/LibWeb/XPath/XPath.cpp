@@ -125,7 +125,7 @@ static void convert_xpath_result(xmlXPathObjectPtr xpath_result, XPath::XPathRes
     case XPATH_UNDEFINED:
         break;
     case XPATH_NODESET: {
-        Vector<GC::Ptr<DOM::Node>> node_list;
+        GC::RootVector<GC::Ptr<DOM::Node>> node_list { result->heap() };
 
         if (xpath_result->nodesetval && xpath_result->nodesetval->nodeNr > 0) {
             node_list.ensure_capacity(xpath_result->nodesetval->nodeNr);
