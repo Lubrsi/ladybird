@@ -7,6 +7,7 @@
  */
 
 #include <AK/QuickSort.h>
+#include <LibGC/WeakHashSet.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/SkiaBackendContext.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
@@ -54,9 +55,9 @@ void TraversableNavigable::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_paused_apply_history_step_state);
 }
 
-static OrderedHashTable<TraversableNavigable*>& user_agent_top_level_traversable_set()
+static GC::WeakHashSet<TraversableNavigable>& user_agent_top_level_traversable_set()
 {
-    static OrderedHashTable<TraversableNavigable*> set;
+    static GC::WeakHashSet<TraversableNavigable> set;
     return set;
 }
 
@@ -125,7 +126,7 @@ GC::Ref<TraversableNavigable> TraversableNavigable::create_a_new_top_level_trave
     // FIXME: 10. If opener is non-null, then legacy-clone a traversable storage shed given opener's top-level traversable and traversable. [STORAGE]
 
     // 11. Append traversable to the user agent's top-level traversable set.
-    user_agent_top_level_traversable_set().set(traversable);
+    user_agent_top_level_traversable_set().set(*traversable);
 
     // 12. Return traversable.
     return traversable;
@@ -1661,7 +1662,7 @@ void TraversableNavigable::destroy_top_level_traversable()
     page().client().page_did_close_top_level_traversable();
 
     // 5. Remove traversable from the user agent's top-level traversable set.
-    user_agent_top_level_traversable_set().remove(this);
+    user_agent_top_level_traversable_set().remove(*this);
 
     // FIXME: 6. Invoke WebDriver BiDi navigable destroyed with traversable.
 

@@ -26,16 +26,16 @@
 
 namespace Web::HTML {
 
-HashTable<NavigableContainer*>& NavigableContainer::all_instances()
+GC::WeakHashSet<NavigableContainer>& NavigableContainer::all_instances()
 {
-    static HashTable<NavigableContainer*> set;
+    static GC::WeakHashSet<NavigableContainer> set;
     return set;
 }
 
 NavigableContainer::NavigableContainer(DOM::Document& document, DOM::QualifiedName qualified_name)
     : HTMLElement(document, move(qualified_name))
 {
-    all_instances().set(this);
+    all_instances().set(*this);
 }
 
 NavigableContainer::~NavigableContainer() = default;
@@ -43,7 +43,7 @@ NavigableContainer::~NavigableContainer() = default;
 void NavigableContainer::finalize()
 {
     Base::finalize();
-    all_instances().remove(this);
+    all_instances().remove(*this);
 }
 
 void NavigableContainer::visit_edges(Cell::Visitor& visitor)
@@ -54,8 +54,8 @@ void NavigableContainer::visit_edges(Cell::Visitor& visitor)
 
 GC::Ptr<NavigableContainer> NavigableContainer::navigable_container_with_content_navigable(GC::Ref<Navigable> navigable)
 {
-    for (auto* navigable_container : all_instances()) {
-        if (navigable_container->content_navigable() == navigable)
+    for (auto& navigable_container : all_instances()) {
+        if (navigable_container.content_navigable() == navigable)
             return navigable_container;
     }
     return nullptr;

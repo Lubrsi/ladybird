@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/WeakHashSet.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
@@ -14,9 +15,9 @@ namespace Web::HTML {
 GC_DEFINE_ALLOCATOR(BrowsingContextGroup);
 
 // https://html.spec.whatwg.org/multipage/browsers.html#browsing-context-group-set
-static HashTable<GC::Ref<BrowsingContextGroup>>& user_agent_browsing_context_group_set()
+static GC::WeakHashSet<BrowsingContextGroup>& user_agent_browsing_context_group_set()
 {
-    static HashTable<GC::Ref<BrowsingContextGroup>> set;
+    static GC::WeakHashSet<BrowsingContextGroup> set;
     return set;
 }
 
