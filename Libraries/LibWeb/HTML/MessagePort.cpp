@@ -230,13 +230,14 @@ void MessagePort::entangle_with(MessagePort& remote_port)
 }
 
 // https://html.spec.whatwg.org/multipage/web-messaging.html#dom-messageport-postmessage-options
-WebIDL::ExceptionOr<void> MessagePort::post_message(JS::Value message, Vector<GC::Root<JS::Object>> const& transfer)
+WebIDL::ExceptionOr<void> MessagePort::post_message(JS::Value message, GC::RootVector<GC::Ref<JS::Object>> const& transfer)
 {
     // 1. Let targetPort be the port with which this MessagePort is entangled, if any; otherwise let it be null.
     GC::Ptr<MessagePort> target_port = m_remote_port;
 
     // 2. Let options be «[ "transfer" → transfer ]».
-    auto options = StructuredSerializeOptions { transfer };
+    StructuredSerializeOptions options { heap() };
+    options.transfer = transfer;
 
     // 3. Run the message port post message steps providing this, targetPort, message and options.
     return message_port_post_message_steps(target_port, message, options);

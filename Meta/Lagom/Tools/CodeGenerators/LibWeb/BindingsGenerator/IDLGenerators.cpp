@@ -719,11 +719,40 @@ static void generate_dictionary_to_cpp(SourceGenerator& generator, Context const
     auto const* current_dictionary = &dictionary;
     auto current_dictionary_name = move(dictionary_name);
 
+    // Members stored as RootVector (sequences of GC-managed elements) need a
+    // GC::Heap& to construct, so the dictionary must be initialized with one.
+    auto dictionary_member_requires_heap = [&](DictionaryMember const& member) {
+        if (!member.type->name().is_one_of("sequence"sv, "FrozenArray"sv))
+            return false;
+        auto const& element_type = as<ParameterizedType>(*member.type).parameters().first();
+        return idl_type_name_to_cpp_type(element_type, context).sequence_storage_type == SequenceStorageType::RootVector;
+    };
+    bool needs_heap = false;
+    for (auto const* dict = current_dictionary; dict;) {
+        if (any_of(dict->members, dictionary_member_requires_heap)) {
+            needs_heap = true;
+            break;
+        }
+        if (auto partials = context.partial_dictionaries.find(dict->parent_name); partials != context.partial_dictionaries.end()) {
+            for (auto const& partial : partials->value) {
+                if (any_of(partial.members, dictionary_member_requires_heap)) {
+                    needs_heap = true;
+                    break;
+                }
+            }
+        }
+        if (needs_heap || dict->parent_name.is_empty())
+            break;
+        auto parent_it = context.dictionaries.find(dict->parent_name);
+        dict = parent_it != context.dictionaries.end() ? &parent_it->value : nullptr;
+    }
+
+    generator.set("dictionary.init_args", needs_heap ? "{ vm.heap() }" : "{}");
     generator.append(R"~~~(
     if (!@js_name@@js_suffix@.is_nullish() && !@js_name@@js_suffix@.is_object())
         return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");
 
-    @parameter.type.name.normalized@ @cpp_name@ {};
+    @parameter.type.name.normalized@ @cpp_name@ @dictionary.init_args@;
 )~~~");
     // FIXME: This (i) is a hack to make sure we don't generate duplicate variable names.
     static auto i = 0;

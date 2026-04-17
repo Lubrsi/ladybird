@@ -6,14 +6,19 @@
 
 #pragma once
 
-#include <AK/Vector.h>
+#include <LibGC/RootVector.h>
 #include <LibJS/Runtime/Object.h>
 
 namespace Web::HTML {
 
 // https://html.spec.whatwg.org/multipage/web-messaging.html#structuredserializeoptions
 struct StructuredSerializeOptions {
-    Vector<GC::Root<JS::Object>> transfer;
+    explicit StructuredSerializeOptions(GC::Heap& heap)
+        : transfer(heap)
+    {
+    }
+
+    GC::RootVector<GC::Ref<JS::Object>> transfer;
 };
 
 }
