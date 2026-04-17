@@ -1196,7 +1196,7 @@ static void wrap_in_anonymous(Vector<GC::Root<Node>>& sequence, Node* nearest_si
     auto& parent = *sequence.first()->parent();
     auto computed_values = parent.computed_values().clone_inherited_values();
     static_cast<CSS::MutableComputedValues&>(*computed_values).set_display(display);
-    auto wrapper = parent.heap().template allocate<WrapperBoxType>(parent.document(), nullptr, move(computed_values));
+    auto wrapper = parent.heap().template allocate<WrapperBoxType>(parent.document(), nullptr, computed_values);
     for (auto& child : sequence) {
         parent.remove_child(*child);
         wrapper->append_child(*child);
@@ -1316,11 +1316,11 @@ Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
 
         if (parent.is_table_wrapper()) {
             auto& existing_wrapper = static_cast<TableWrapper&>(parent);
-            existing_wrapper.set_computed_values(move(wrapper_computed_values));
+            existing_wrapper.set_computed_values(wrapper_computed_values);
             continue;
         }
 
-        auto wrapper = parent.heap().allocate<TableWrapper>(parent.document(), nullptr, move(wrapper_computed_values));
+        auto wrapper = parent.heap().allocate<TableWrapper>(parent.document(), nullptr, wrapper_computed_values);
 
         parent.remove_child(*table_box);
         wrapper->append_child(*table_box);
@@ -1347,7 +1347,7 @@ static void fixup_row(Box& row_box, TableGrid const& table_grid, size_t row_inde
         mutable_computed_values.set_display(Web::CSS::Display { CSS::DisplayInternal::TableCell });
         // Ensure that the cell (with zero content height) will have the same height as the row by setting vertical-align to middle.
         mutable_computed_values.set_vertical_align(CSS::VerticalAlign::Middle);
-        auto cell_box = row_box.heap().template allocate<BlockContainer>(row_box.document(), nullptr, move(computed_values));
+        auto cell_box = row_box.heap().template allocate<BlockContainer>(row_box.document(), nullptr, computed_values);
         row_box.append_child(cell_box);
     }
 }

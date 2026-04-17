@@ -578,16 +578,16 @@ bool Node::is_sticky_position() const
 
 NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedProperties> computed_style)
     : Node(document, node)
-    , m_computed_values(make<CSS::ComputedValues>())
+    , m_computed_values(document.heap().allocate<CSS::ComputedValues>())
 {
     m_has_style = true;
     m_is_body = node && node == document.body();
     apply_style(computed_style);
 }
 
-NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, NonnullOwnPtr<CSS::ComputedValues> computed_values)
+NodeWithStyle::NodeWithStyle(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedValues> computed_values)
     : Node(document, node)
-    , m_computed_values(move(computed_values))
+    , m_computed_values(computed_values)
 {
     m_has_style = true;
     m_is_body = node && node == document.body();
@@ -666,7 +666,7 @@ void NodeWithStyle::visit_edges(Visitor& visitor)
     if (m_list_style_image)
         m_list_style_image->visit_edges(visitor);
 
-    m_computed_values->visit_edges(visitor);
+    visitor.visit(m_computed_values);
 
     for (auto const& image_observer : m_image_observers)
         image_observer->visit_edges(visitor);
@@ -1200,9 +1200,9 @@ GC::Ref<NodeWithStyle> NodeWithStyle::create_anonymous_wrapper() const
     return *wrapper;
 }
 
-void NodeWithStyle::set_computed_values(NonnullOwnPtr<CSS::ComputedValues> computed_values)
+void NodeWithStyle::set_computed_values(GC::Ref<CSS::ComputedValues> computed_values)
 {
-    m_computed_values = move(computed_values);
+    m_computed_values = computed_values;
 }
 
 void NodeWithStyle::reset_table_box_computed_values_used_by_wrapper_to_init_values()

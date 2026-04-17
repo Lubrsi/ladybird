@@ -300,14 +300,14 @@ public:
 
     virtual void visit_edges(Cell::Visitor& visitor) override;
 
-    void set_computed_values(NonnullOwnPtr<CSS::ComputedValues>);
+    void set_computed_values(GC::Ref<CSS::ComputedValues>);
 
     u32 layout_index() const { return m_layout_index; }
     void set_layout_index(u32 index) { m_layout_index = index; }
 
 protected:
     NodeWithStyle(DOM::Document&, DOM::Node*, GC::Ref<CSS::ComputedProperties>);
-    NodeWithStyle(DOM::Document&, DOM::Node*, NonnullOwnPtr<CSS::ComputedValues>);
+    NodeWithStyle(DOM::Document&, DOM::Node*, GC::Ref<CSS::ComputedValues>);
 
 private:
     virtual bool is_node_with_style() const final { return true; }
@@ -318,7 +318,7 @@ private:
 
     void rebuild_image_observers();
 
-    NonnullOwnPtr<CSS::ComputedValues> m_computed_values;
+    GC::Ref<CSS::ComputedValues> m_computed_values;
     RefPtr<CSS::AbstractImageStyleValue const> m_list_style_image;
     Vector<NonnullOwnPtr<ImageObserver>> m_image_observers;
     u32 m_layout_index { 0 };
@@ -346,8 +346,8 @@ protected:
     {
     }
 
-    NodeWithStyleAndBoxModelMetrics(DOM::Document& document, DOM::Node* node, NonnullOwnPtr<CSS::ComputedValues> computed_values)
-        : NodeWithStyle(document, node, move(computed_values))
+    NodeWithStyleAndBoxModelMetrics(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedValues> computed_values)
+        : NodeWithStyle(document, node, computed_values)
     {
     }
 
