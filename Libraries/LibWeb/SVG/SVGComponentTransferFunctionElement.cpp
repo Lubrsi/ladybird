@@ -86,7 +86,7 @@ GC::Ref<SVGAnimatedNumberList> SVGComponentTransferFunctionElement::table_values
     if (!m_table_values) {
         auto numbers = AttributeParser::parse_table_values(get_attribute_value(AttributeNames::tableValues));
 
-        Vector<GC::Ref<SVGNumber>> items;
+        GC::RootVector<GC::Ref<SVGNumber>> items { heap() };
         items.ensure_capacity(numbers.size());
         for (auto number : numbers)
             items.unchecked_append(SVGNumber::create(realm(), number, SVGNumber::ReadOnly::Yes));

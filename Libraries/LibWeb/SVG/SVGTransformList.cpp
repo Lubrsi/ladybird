@@ -13,7 +13,7 @@ namespace Web::SVG {
 
 GC_DEFINE_ALLOCATOR(SVGTransformList);
 
-GC::Ref<SVGTransformList> SVGTransformList::create(JS::Realm& realm, Vector<GC::Ref<SVGTransform>> items, ReadOnlyList read_only)
+GC::Ref<SVGTransformList> SVGTransformList::create(JS::Realm& realm, GC::RootVector<GC::Ref<SVGTransform>>&& items, ReadOnlyList read_only)
 {
     return realm.create<SVGTransformList>(realm, move(items), read_only);
 }
@@ -23,7 +23,7 @@ GC::Ref<SVGTransformList> SVGTransformList::create(JS::Realm& realm, ReadOnlyLis
     return realm.create<SVGTransformList>(realm, read_only);
 }
 
-SVGTransformList::SVGTransformList(JS::Realm& realm, Vector<GC::Ref<SVGTransform>> items, ReadOnlyList read_only)
+SVGTransformList::SVGTransformList(JS::Realm& realm, GC::RootVector<GC::Ref<SVGTransform>>&& items, ReadOnlyList read_only)
     : Bindings::PlatformObject(realm)
     , SVGList(realm, move(items), read_only)
 {
