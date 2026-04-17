@@ -223,11 +223,123 @@ Session `2026-04-17` batch (continues on the same branch):
 | `6f85b10fff` | LibWeb/Layout: Root `seen_content_elements` in `TreeBuilder`'s SVG-pattern recursion guard. |
 | `6b30e81b9e` | LibWeb/Layout: Root paint-tree rebuild inline/text/paintable sets in `LayoutState::commit` (three `HashTable<T*>` → `GC::RootHashTable<GC::Ptr<T>>`). |
 
+Session `2026-04-18` batch (Layout cluster Cell-promotion):
+
+| Commit | Summary |
+|---|---|
+| `dd7cb757ad` | LibWeb/Painting: Include `HTMLElement.h` in `PaintableWithLines.cpp` (pre-existing latent missing include surfaced by header reshuffling). |
+| `e43f3e5fb0` | LibWeb/SVG: Include `EventNames.h` in `SVGImageElement.cpp` (same category). |
+| `aab894d8b7` | LibWeb/HTML: Move form data entry list when creating `FormData` (pre-existing lvalue→rvalue mismatch; `construct_impl` wants `&&`). |
+| `2e70fce45f` | LibWeb/Layout: Promote `LayoutState` to a `GC::Cell`. `FormattingContext::m_state` becomes `GC::Ref<LayoutState>`; `UsedValues` / `PagedStore` / `LineBox` / `LineBoxFragment` each own their own `visit_edges` (encapsulation pattern). |
+| `51ff7b92e1` | LibWeb/Layout: Promote `FormattingContext` hierarchy to `GC::Cell` — base + 7 header subclasses + the two anon-namespace `InternalReplaced` / `InternalDummy` shims. `OwnPtr<FormattingContext>` / `NonnullOwnPtr<FormattingContext>` → `GC::Ptr<FormattingContext>` / `GC::Ref<FormattingContext>`. `FlexItem` / `GridItem` / `TableGrid::Cell` / `TableGrid::Row` / `BFC::FloatingBox` each got their own `visit_edges`. BFC's destructor moved to `finalize()` + `OVERRIDES_FINALIZE = true`. |
+| `2ae1cca093` | LibWeb/CSS: Promote `ComputedValues` to a `GC::Cell`. `MutableComputedValues` / `ImmutableComputedValues` subclasses get their own allocators; `clone_inherited_values()` allocates via `heap()` (no arg — inherits from the Cell base). `Layout::NodeWithStyle::m_computed_values` becomes `GC::Ref<CSS::ComputedValues>`; constructors across ~6 Layout subclasses updated from `NonnullOwnPtr<ComputedValues>` to `GC::Ref<ComputedValues>`. Created `ComputedValues.cpp` (was header-only) for the three `GC_DEFINE_ALLOCATOR` lines + out-of-line `visit_edges` and `clone_inherited_values`. |
+| `8ad7f8e326` | LibWeb/Layout: Bind BFC root state by reference in multi-column check (was copying `UsedValues` into a local; reference closes a one-off violation). |
+| `3f87464baa` | LibWeb/Layout: Promote `BorderConflictFinder` to a `GC::Cell`. Name-collision fix: `Cell` inside the nested class now refers to `GC::Cell` via inheritance, so signatures explicitly spell `TableGrid::Cell`. `RowGroupInfo` gets its own `visit_edges`. |
+| `cca6c6fca2` | LibWeb/Layout: Promote `InlineLevelIterator` to a `GC::Cell`. `InlineLevelIterator::Item` gets its own `visit_edges`. `InlineFormattingContext::run` heap-allocates the iterator via `heap().allocate<InlineLevelIterator>(...)`. |
+
+### Plugin behavior cheat-sheet (documented this session, from source read)
+
+The clang plugin at `Meta/Lagom/ClangPlugins/LibJSGCPluginAction.cpp`:
+- Short-circuits on `ParmVarDecl` — **function parameters are never checked**. `Foo const&` / `Foo*` parameters where `Foo` is a Cell pass silently.
+- Short-circuits on reference-typed **local** variables. `auto& x = get_cell()` is fine.
+- **Flags** owning containers (`NonnullOwnPtr<Cell>`, `Vector<Cell*>`, `HashMap<K, Cell*>`, etc.) when used as locals/globals.
+- **Flags** member fields of type raw `Cell&` / `Cell*` on `GC::Cell` subclasses — these must be wrapped in `GC::Ref` / `GC::Ptr` (or explicitly opted out via `GC::RawRef` / `GC::RawPtr`).
+
+Implication: when promoting a type to `GC::Cell`, most function signatures that take the type by reference can stay unchanged. Only owning-by-value (`NonnullOwnPtr<T>` / `Vector<T>` locals) and member fields need to change to `GC::Ref` / `GC::Ptr`. Applied throughout the Layout cluster promotion to minimise cascade.
+
+### Encapsulation pattern for non-Cell structs that hold GC pointers
+
+When a struct is a member of a `GC::Cell` but not a Cell itself (e.g. `FlexItem`, `GridItem`, `TableGrid::Cell`, `BFC::FloatingBox`, `LayoutState::UsedValues`, `LineBox`, `LineBoxFragment`, `InlineLevelIterator::Item`, `BorderConflictFinder::RowGroupInfo`), the struct gets its own non-virtual `visit_edges(GC::Cell::Visitor&)` method. The owning Cell's `visit_edges` iterates and calls `entry.visit_edges(visitor)` rather than reaching into the struct's members directly. This keeps the visit list next to the data definition so future members can't silently escape tracing.
+
+For container types holding these structs, the pattern extends one more layer: `PagedStore<T>::visit_edges` calls `entry.visit_edges(visitor)` so the owning cell just does `m_used_values_store.visit_edges(visitor)`.
+
 Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
 
 ## Session summaries
 
 One paragraph per working session, newest first. The per-commit table above is the raw log; these summaries are the "what shifted" narrative and exist so a future session can pick up without replaying every commit. Each entry should close with the violation count at end of session so the trajectory is legible.
+
+### 2026-04-18 — Layout cluster Cell-promotion (LayoutState + FormattingContext + ComputedValues)
+
+Closed the big deferred Layout cluster via three back-to-back Cell
+promotions plus per-struct cleanups, in the order the plan dictated
+(`LayoutState` first because `FormattingContext::m_state` needed to
+become `GC::Ref<LayoutState>`; then the `FormattingContext` hierarchy;
+then `ComputedValues`).
+
+`LayoutState` became a `GC::Cell` with `visit_edges` that iterates its
+`PagedStore<UsedValues>` and delegates per-entry. Rather than reaching
+into `UsedValues` directly, `UsedValues`/`PagedStore`/`LineBox`/
+`LineBoxFragment` each got their own `visit_edges` — this is the
+encapsulation pattern we settled on this session for non-Cell structs
+that hold GC pointers, so future edits to the struct's GC members can't
+silently escape tracing. The initial commit missed that `UsedValues::
+line_boxes` contained `LineBoxFragment::m_layout_node` (a `GC::Ref<Node
+const>`) and would have left those refs silently unrooted — that fix
+was squashed into the LayoutState commit so the tree builds cleanly at
+every point in the series.
+
+`FormattingContext` and all nine subclasses (7 header + 2
+anon-namespace shims) became Cells. Per-struct `visit_edges` on
+`FlexItem`, `GridItem`, `TableGrid::Cell`, `TableGrid::Row`, and
+`BFC::FloatingBox`. `OwnPtr<FormattingContext>` / `NonnullOwnPtr` →
+`GC::Ptr` / `GC::Ref` throughout. BFC's destructor (which calls a
+pseudo-virtual as a late-hook) moved to `finalize()` with
+`OVERRIDES_FINALIZE = true` per the plugin's Cell-destructor rule.
+During the same commit, `FormattingContext::m_state` switched to
+`GC::Ref<LayoutState>` — the user pointed out this made the ownership
+explicit and matched how `m_context_box` was already held, which
+prompted renaming 163 `m_state.` accesses across 8 files to
+`m_state->`. `LayoutState&` function parameters became
+`GC::Ref<LayoutState>`.
+
+`ComputedValues` became a Cell, along with `MutableComputedValues` and
+`ImmutableComputedValues` (each needs its own `GC_DEFINE_ALLOCATOR`).
+Created `Libraries/LibWeb/CSS/ComputedValues.cpp` (was header-only) for
+the three allocator definitions + out-of-line `visit_edges` and
+`clone_inherited_values`. The `IGNORE_GC` / FIXME on
+`clone_inherited_values` dropped — it returns `GC::Ref<ComputedValues>`
+now and allocates via `heap()` (no arg; inherited from the Cell base).
+All four call sites updated (`TreeBuilder.cpp:1164,1281,1312` +
+`Node.cpp:1121`); the `static_cast<MutableComputedValues&>(*clone)
+.set_foo()` mutation idiom continues to work after promotion because
+the subclasses are still `final : public ComputedValues`. The
+refactor stayed minimal-cascade thanks to the plugin-behaviour
+cheat-sheet (see above): accessor returns (`computed_values() const&`,
+`mutable_computed_values() &`) stay unchanged because the plugin
+exempts references; only owning sites (the `m_computed_values` member
+and the handful of constructors taking `NonnullOwnPtr<ComputedValues>`)
+needed to change.
+
+Three per-struct cleanups landed after the big promotions:
+`BlockFormattingContext.cpp:118` switched a `UsedValues` value-copy to
+a `const&` (trivial one-liner); `BorderConflictFinder` became a Cell
+with `RowGroupInfo` owning its own `visit_edges`; `InlineLevelIterator`
+became a Cell with `InlineLevelIterator::Item` owning its own
+`visit_edges`. The `BorderConflictFinder` promotion hit a name-
+collision wrinkle: the nested class's `public GC::Cell` inheritance
+shadows the enclosing `using Cell = TableGrid::Cell;` alias inside the
+nested-class scope, so signatures on BorderConflictFinder methods had
+to explicitly spell `TableGrid::Cell` (worth remembering for future
+cell-promotion of any nested type that uses a similarly-named alias).
+
+Three pre-existing build breakages showed up under the new header
+include graph and were committed as separate small commits before the
+Cell-promotion batch: `SVGImageElement.cpp` needed `EventNames.h`,
+`PaintableWithLines.cpp` needed `HTMLElement.h`, and `Navigation.cpp`
+needed a `move()` around `release_value()` since `FormData::
+construct_impl` takes an rvalue (the Navigation call site was missed
+when `construct_impl`'s signature changed on this branch).
+
+**Closing violation count: 19 → 13** (session started at 19 after
+Steps 1–2, closed 3 `ComputedValues` + 3 per-struct = 6). Remaining 13
+are all still in the deferred buckets:
+`NonnullOwnPtr<JS::ExecutionContext>` (3), IndexedDB MutationLog
+transients (2), nested-container indirection (5: Flex/Grid nested
+`HashMap<int, Vector<T>>`, `ContainedBoxesMap`, Viewport
+TextPosition/TextBlock), `Vector<Variant<cell,...>>` returns (2:
+WebIDL OverloadResolution, XHR FormData), and `Document.cpp:1537`
+`Layout::TreeBuilder` local (a small Cell promotion, deferrable).
 
 ### 2026-04-17 — SVG base-class adopt + Painting/Layout one-offs
 
@@ -800,6 +912,22 @@ Session `2026-04-16` reduced this to **61** violations. Breakdown of the remaind
 - **Include/iterator repairs** unrelated to rooting: `StructuredSerializeOptions` include in `DedicatedWorkerGlobalScope.cpp`, `HTMLOptionElement` direct includes in `SelectorEngine.cpp` / `HTMLOptGroupElement.cpp` / `HTMLSelectedContentElement.cpp`, `Text::split_text` ported to `WeakHashSet::Iterator::operator*` returning `Range&` rather than `Range*`.
 
 The remaining failures fall almost entirely into the big deferred clusters (Layout `OwnPtr<FormattingContext>` / `LayoutState`, `NonnullOwnPtr<JS::ExecutionContext>`, SVGList `Vector<GC::Ref<Number>>` needing the base-class-adopt pattern). See the per-directory notes below and the `Future work` section for the remaining categories.
+
+#### Session closing state (2026-04-18)
+
+`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **13**.
+
+Directory breakdown:
+
+| Directory | Count |
+|---|---|
+| LibWeb/DOM (`Document.cpp`: 1× `NonnullOwnPtr<JS::ExecutionContext>`, 1× `Layout::TreeBuilder`) | 2 |
+| LibWeb/HTML | 3 (1× `NonnullOwnPtr<JS::ExecutionContext>` in `BrowsingContext`, 1× `NonnullOwnPtr<SimilarOriginWindowAgent>`, plus `Document.cpp`'s ExecutionContext) |
+| LibWeb/IndexedDB (Index/ObjectStore MutationLog transients) | 2 |
+| LibWeb/Layout (nested `HashMap<int, Vector<T>>` in Flex/Grid, `ContainedBoxesMap`, `Viewport::update_text_blocks`) | 5 |
+| LibWeb/WebIDL / XHR | 1 each (both are `Vector<Variant<cell,...>>` returns — deferred category) |
+
+All 13 remaining violations are in the originally-deferred buckets — every one still blocked on a wider refactor (`JS::RootedExecutionContext` wrapper, `SimilarOriginWindowAgent` Cell promotion, MutationLog Variant alternative, nested-container plugin extension per section 7, bindings generator extension for `Vector<Variant<cell,...>>` returns, and a small `Layout::TreeBuilder` Cell promotion that can happen any time).
 
 #### Session closing state (2026-04-17)
 
