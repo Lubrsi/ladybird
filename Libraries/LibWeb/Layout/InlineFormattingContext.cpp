@@ -358,7 +358,7 @@ void InlineFormattingContext::generate_line_boxes()
     CSSPixels leading_border_from_collapsible_whitespace = 0;
     CSSPixels leading_padding_from_collapsible_whitespace = 0;
 
-    Vector<Box const*> absolute_boxes;
+    GC::RootVector<GC::Ref<Box const>> absolute_boxes { m_context_box->heap() };
 
     for (;;) {
         auto item_opt = iterator.next();
@@ -415,7 +415,7 @@ void InlineFormattingContext::generate_line_boxes()
         case InlineLevelIterator::Item::Type::AbsolutelyPositionedElement:
             if (auto const* box = as_if<Box>(*item.node)) {
                 // Calculation of static position for absolute boxes is delayed until trailing whitespaces are removed.
-                absolute_boxes.append(box);
+                absolute_boxes.append(*box);
             }
             break;
 
@@ -506,7 +506,7 @@ void InlineFormattingContext::generate_line_boxes()
     line_builder.update_last_line();
 
     if (m_layout_mode == LayoutMode::Normal) {
-        for (auto* box : absolute_boxes) {
+        for (auto& box : absolute_boxes) {
             auto& box_state = m_state.get_mutable(*box);
             box_state.set_static_position_rect(calculate_static_position_rect(*box));
         }
