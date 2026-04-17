@@ -1403,7 +1403,7 @@ TableFormattingContext::ConflictingEdge const& TableFormattingContext::winning_c
 void TableFormattingContext::border_conflict_resolution()
 {
     // Implements border conflict resolution, as described in https://www.w3.org/TR/CSS22/tables.html#border-conflict-resolution.
-    BorderConflictFinder finder(this);
+    auto finder = heap().allocate<BorderConflictFinder>(this);
     for (auto& cell : m_cells) {
         auto& cell_state = m_state->get_mutable(cell.box);
         cell_state.set_table_cell_coordinates(
@@ -1423,7 +1423,7 @@ void TableFormattingContext::border_conflict_resolution()
             .row = cell.row_index,
             .column = cell.column_index,
         };
-        for (auto const& conflicting_edge : finder.conflicting_edges(cell, ConflictingSide::Left)) {
+        for (auto const& conflicting_edge : finder->conflicting_edges(cell, ConflictingSide::Left)) {
             winning_edge_left = winning_conflicting_edge(winning_edge_left, conflicting_edge);
         }
         override_borders_data.left = border_data_with_element_kind_from_conflicting_edge(winning_edge_left);
@@ -1435,7 +1435,7 @@ void TableFormattingContext::border_conflict_resolution()
             .row = cell.row_index,
             .column = cell.column_index,
         };
-        for (auto const& conflicting_edge : finder.conflicting_edges(cell, ConflictingSide::Right)) {
+        for (auto const& conflicting_edge : finder->conflicting_edges(cell, ConflictingSide::Right)) {
             winning_edge_right = winning_conflicting_edge(winning_edge_right, conflicting_edge);
         }
         override_borders_data.right = border_data_with_element_kind_from_conflicting_edge(winning_edge_right);
@@ -1447,7 +1447,7 @@ void TableFormattingContext::border_conflict_resolution()
             .row = cell.row_index,
             .column = cell.column_index,
         };
-        for (auto const& conflicting_edge : finder.conflicting_edges(cell, ConflictingSide::Top)) {
+        for (auto const& conflicting_edge : finder->conflicting_edges(cell, ConflictingSide::Top)) {
             winning_edge_top = winning_conflicting_edge(winning_edge_top, conflicting_edge);
         }
         override_borders_data.top = border_data_with_element_kind_from_conflicting_edge(winning_edge_top);
@@ -1459,7 +1459,7 @@ void TableFormattingContext::border_conflict_resolution()
             .row = cell.row_index,
             .column = cell.column_index,
         };
-        for (auto const& conflicting_edge : finder.conflicting_edges(cell, ConflictingSide::Bottom)) {
+        for (auto const& conflicting_edge : finder->conflicting_edges(cell, ConflictingSide::Bottom)) {
             winning_edge_bottom = winning_conflicting_edge(winning_edge_bottom, conflicting_edge);
         }
         override_borders_data.bottom = border_data_with_element_kind_from_conflicting_edge(winning_edge_bottom);
@@ -1500,6 +1500,19 @@ CSSPixels TableFormattingContext::compute_row_content_height(Cell const& cell) c
     // FIXME: Account for visibility.
     span_height += (cell.row_span - 1) * border_spacing_vertical();
     return span_height;
+}
+
+GC_DEFINE_ALLOCATOR(TableFormattingContext::BorderConflictFinder);
+
+void TableFormattingContext::BorderConflictFinder::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_context);
+    visitor.visit(m_col_elements_by_index);
+    for (auto& row_group : m_row_group_elements_by_index) {
+        if (row_group.has_value())
+            row_group->visit_edges(visitor);
+    }
 }
 
 TableFormattingContext::BorderConflictFinder::BorderConflictFinder(TableFormattingContext const* context)
@@ -1550,7 +1563,7 @@ void TableFormattingContext::BorderConflictFinder::collect_conflicting_row_group
     });
 }
 
-void TableFormattingContext::BorderConflictFinder::collect_cell_conflicting_edges(Vector<ConflictingEdge>& result, Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+void TableFormattingContext::BorderConflictFinder::collect_cell_conflicting_edges(Vector<ConflictingEdge>& result, TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     // Right edge of the cell to the left.
     if (cell.column_index >= cell.column_span && edge == ConflictingSide::Left) {
@@ -1586,7 +1599,7 @@ void TableFormattingContext::BorderConflictFinder::collect_cell_conflicting_edge
     }
 }
 
-void TableFormattingContext::BorderConflictFinder::collect_row_conflicting_edges(Vector<ConflictingEdge>& result, Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+void TableFormattingContext::BorderConflictFinder::collect_row_conflicting_edges(Vector<ConflictingEdge>& result, TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     // Top edge of the row.
     if (edge == ConflictingSide::Top) {
@@ -1608,7 +1621,7 @@ void TableFormattingContext::BorderConflictFinder::collect_row_conflicting_edges
     }
 }
 
-void TableFormattingContext::BorderConflictFinder::collect_row_group_conflicting_edges(Vector<ConflictingEdge>& result, Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+void TableFormattingContext::BorderConflictFinder::collect_row_group_conflicting_edges(Vector<ConflictingEdge>& result, TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     auto const& maybe_row_group = m_row_group_elements_by_index[cell.row_index];
     // Top edge of the row group.
@@ -1635,7 +1648,7 @@ void TableFormattingContext::BorderConflictFinder::collect_row_group_conflicting
     }
 }
 
-void TableFormattingContext::BorderConflictFinder::collect_column_group_conflicting_edges(Vector<ConflictingEdge>& result, Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+void TableFormattingContext::BorderConflictFinder::collect_column_group_conflicting_edges(Vector<ConflictingEdge>& result, TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     // Left edge of the column group.
     if (auto col_element = get_col_element(cell.column_index); col_element && edge == ConflictingSide::Left) {
@@ -1655,7 +1668,7 @@ void TableFormattingContext::BorderConflictFinder::collect_column_group_conflict
     }
 }
 
-void TableFormattingContext::BorderConflictFinder::collect_table_box_conflicting_edges(Vector<ConflictingEdge>& result, Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+void TableFormattingContext::BorderConflictFinder::collect_table_box_conflicting_edges(Vector<ConflictingEdge>& result, TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     // Top edge from column group or table. Left and right edges of the column group are handled in collect_column_group_conflicting_edges.
     if (cell.row_index == 0 && edge == ConflictingSide::Top) {
@@ -1690,7 +1703,7 @@ void TableFormattingContext::BorderConflictFinder::collect_table_box_conflicting
 }
 
 GC::ConservativeVector<TableFormattingContext::ConflictingEdge> TableFormattingContext::BorderConflictFinder::conflicting_edges(
-    Cell const& cell, TableFormattingContext::ConflictingSide edge) const
+    TableGrid::Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
     GC::ConservativeVector<ConflictingEdge> result { m_context->context_box().heap() };
     collect_cell_conflicting_edges(result, cell, edge);

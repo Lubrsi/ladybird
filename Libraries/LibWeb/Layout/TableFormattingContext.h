@@ -163,20 +163,26 @@ private:
     static CSS::BorderData const& border_data_conflicting_edge(ConflictingEdge const& conflicting_edge);
     static Painting::PaintableBox::BorderDataWithElementKind const border_data_with_element_kind_from_conflicting_edge(ConflictingEdge const& conflicting_edge);
 
-    class BorderConflictFinder {
+    class BorderConflictFinder final : public GC::Cell {
+        GC_CELL(BorderConflictFinder, GC::Cell);
+        GC_DECLARE_ALLOCATOR(BorderConflictFinder);
+
     public:
-        BorderConflictFinder(TableFormattingContext const* context);
-        GC::ConservativeVector<ConflictingEdge> conflicting_edges(Cell const&, ConflictingSide) const;
+        GC::ConservativeVector<ConflictingEdge> conflicting_edges(TableGrid::Cell const&, ConflictingSide) const;
+
+        virtual void visit_edges(Visitor&) override;
 
     private:
+        explicit BorderConflictFinder(TableFormattingContext const* context);
+
         void collect_conflicting_col_elements();
         void collect_conflicting_row_group_elements();
 
-        void collect_cell_conflicting_edges(Vector<ConflictingEdge>&, Cell const&, ConflictingSide) const;
-        void collect_row_conflicting_edges(Vector<ConflictingEdge>&, Cell const&, ConflictingSide) const;
-        void collect_row_group_conflicting_edges(Vector<ConflictingEdge>&, Cell const&, ConflictingSide) const;
-        void collect_column_group_conflicting_edges(Vector<ConflictingEdge>&, Cell const&, ConflictingSide) const;
-        void collect_table_box_conflicting_edges(Vector<ConflictingEdge>&, Cell const&, ConflictingSide) const;
+        void collect_cell_conflicting_edges(Vector<ConflictingEdge>&, TableGrid::Cell const&, ConflictingSide) const;
+        void collect_row_conflicting_edges(Vector<ConflictingEdge>&, TableGrid::Cell const&, ConflictingSide) const;
+        void collect_row_group_conflicting_edges(Vector<ConflictingEdge>&, TableGrid::Cell const&, ConflictingSide) const;
+        void collect_column_group_conflicting_edges(Vector<ConflictingEdge>&, TableGrid::Cell const&, ConflictingSide) const;
+        void collect_table_box_conflicting_edges(Vector<ConflictingEdge>&, TableGrid::Cell const&, ConflictingSide) const;
 
         GC::Ptr<Node const> get_col_element(size_t index) const
         {
@@ -189,6 +195,11 @@ private:
             GC::Ptr<Node const> row_group;
             size_t start_index;
             size_t row_count;
+
+            void visit_edges(GC::Cell::Visitor& visitor)
+            {
+                visitor.visit(row_group);
+            }
         };
 
         Vector<GC::Ptr<Node const>> m_col_elements_by_index;
