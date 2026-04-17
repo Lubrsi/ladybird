@@ -16,9 +16,9 @@ namespace Web::Layout {
 // This class iterates over all the inline-level objects within an inline formatting context.
 // By repeatedly calling next() with the remaining available width on the current line,
 // it returns an "Item" representing the next piece of inline-level content to be placed on the line.
-class InlineLevelIterator {
-    AK_MAKE_NONCOPYABLE(InlineLevelIterator);
-    AK_MAKE_NONMOVABLE(InlineLevelIterator);
+class InlineLevelIterator final : public GC::Cell {
+    GC_CELL(InlineLevelIterator, GC::Cell);
+    GC_DECLARE_ALLOCATOR(InlineLevelIterator);
 
 public:
     struct Item {
@@ -48,14 +48,21 @@ public:
         {
             return border_start + padding_start + width + padding_end + border_end;
         }
-    };
 
-    InlineLevelIterator(Layout::InlineFormattingContext&, GC::Ref<LayoutState>, Layout::BlockContainer const& containing_block, LayoutState::UsedValues const& containing_block_used_values, LayoutMode);
+        void visit_edges(GC::Cell::Visitor& visitor)
+        {
+            visitor.visit(node);
+        }
+    };
 
     Optional<Item> next();
     CSSPixels next_non_whitespace_sequence_width();
 
+    virtual void visit_edges(Visitor&) override;
+
 private:
+    InlineLevelIterator(Layout::InlineFormattingContext&, GC::Ref<LayoutState>, Layout::BlockContainer const& containing_block, LayoutState::UsedValues const& containing_block_used_values, LayoutMode);
+
     void generate_all_items();
     Optional<Item> generate_next_item();
     Gfx::GlyphRun::TextType resolve_text_direction_from_context();
