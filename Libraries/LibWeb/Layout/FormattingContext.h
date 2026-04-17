@@ -125,8 +125,8 @@ public:
     CSSPixels compute_width_for_replaced_element(Box const&, AvailableSpace const&) const;
     CSSPixels compute_height_for_replaced_element(Box const&, AvailableSpace const&) const;
 
-    OwnPtr<FormattingContext> create_independent_formatting_context_if_needed(LayoutState&, LayoutMode, Box const& child_box);
-    NonnullOwnPtr<FormattingContext> create_independent_formatting_context(LayoutState&, LayoutMode, Box const& child_box);
+    OwnPtr<FormattingContext> create_independent_formatting_context_if_needed(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
+    NonnullOwnPtr<FormattingContext> create_independent_formatting_context(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
 
     virtual void parent_context_did_dimension_child_root_box() { }
 
@@ -160,7 +160,7 @@ public:
     void compute_inset(NodeWithStyleAndBoxModelMetrics const&, CSSPixelSize containing_block_size);
 
 protected:
-    FormattingContext(Type, LayoutMode, LayoutState&, Box const&, FormattingContext* parent = nullptr);
+    FormattingContext(Type, LayoutMode, GC::Ref<LayoutState>, Box const&, FormattingContext* parent = nullptr);
 
     [[nodiscard]] bool should_treat_width_as_auto(Box const&, AvailableSpace const&) const;
     [[nodiscard]] bool should_treat_height_as_auto(Box const&, AvailableSpace const&) const;
@@ -232,7 +232,7 @@ protected:
     FormattingContext* m_parent { nullptr };
     GC::Ref<Box const> m_context_box;
 
-    LayoutState& m_state;
+    GC::Ref<LayoutState> m_state;
 };
 
 #if FORMATTING_CONTEXT_TRACE_DEBUG

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibGC/Cell.h>
 #include <LibGC/Ptr.h>
 #include <LibGfx/Rect.h>
 #include <LibGfx/TextLayout.h>
@@ -59,6 +60,11 @@ public:
 
     bool is_fully_truncated() const { return m_is_fully_truncated; }
     void set_fully_truncated(bool value) { m_is_fully_truncated = value; }
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        visitor.visit(m_layout_node);
+    }
 
 private:
     CSS::Direction resolve_glyph_run_direction(Gfx::GlyphRun::TextType) const;

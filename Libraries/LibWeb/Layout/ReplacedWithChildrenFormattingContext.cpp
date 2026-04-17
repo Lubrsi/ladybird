@@ -9,14 +9,14 @@
 
 namespace Web::Layout {
 
-ReplacedWithChildrenFormattingContext::ReplacedWithChildrenFormattingContext(LayoutState& state, LayoutMode layout_mode, Box const& box, FormattingContext* parent)
+ReplacedWithChildrenFormattingContext::ReplacedWithChildrenFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& box, FormattingContext* parent)
     : FormattingContext(Type::ReplacedWithChildren, layout_mode, state, box, parent)
 {
 }
 
 void ReplacedWithChildrenFormattingContext::run(AvailableSpace const& available_space)
 {
-    auto& root_state = m_state.get_mutable(context_box());
+    auto& root_state = m_state->get_mutable(context_box());
     auto content_width = root_state.content_width();
 
     // Mark the replaced element as having definite dimensions when the parent FC has
@@ -43,7 +43,7 @@ void ReplacedWithChildrenFormattingContext::run(AvailableSpace const& available_
     if (!wrapper)
         return;
 
-    auto& wrapper_state = m_state.get_mutable(*wrapper);
+    auto& wrapper_state = m_state->get_mutable(*wrapper);
     wrapper_state.set_content_width(content_width);
     wrapper_state.set_content_offset({ 0, 0 });
 

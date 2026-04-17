@@ -12,7 +12,7 @@ namespace Web::Layout {
 
 class ReplacedWithChildrenFormattingContext final : public FormattingContext {
 public:
-    explicit ReplacedWithChildrenFormattingContext(LayoutState&, LayoutMode, Box const&, FormattingContext* parent);
+    explicit ReplacedWithChildrenFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent);
 
     virtual void run(AvailableSpace const&) override;
     virtual CSSPixels automatic_content_width() const override;

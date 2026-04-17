@@ -14,7 +14,7 @@
 
 namespace Web::Layout {
 
-TableFormattingContext::TableFormattingContext(LayoutState& state, LayoutMode layout_mode, Box const& root, FormattingContext* parent)
+TableFormattingContext::TableFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& root, FormattingContext* parent)
     : FormattingContext(Type::Table, layout_mode, state, root, parent)
 {
 }
@@ -23,7 +23,7 @@ TableFormattingContext::~TableFormattingContext() = default;
 
 CSSPixels TableFormattingContext::table_wrapper_containing_block_width() const
 {
-    auto const* containing_block_used_values = m_state.try_get(*table_wrapper().containing_block());
+    auto const* containing_block_used_values = m_state->try_get(*table_wrapper().containing_block());
     if (!containing_block_used_values)
         return 0;
     return containing_block_used_values->content_width();
@@ -31,7 +31,7 @@ CSSPixels TableFormattingContext::table_wrapper_containing_block_width() const
 
 CSSPixels TableFormattingContext::table_wrapper_containing_block_height() const
 {
-    auto const* containing_block_used_values = m_state.try_get(*table_wrapper().containing_block());
+    auto const* containing_block_used_values = m_state->try_get(*table_wrapper().containing_block());
     if (!containing_block_used_values)
         return 0;
     return containing_block_used_values->content_height();
@@ -64,13 +64,13 @@ CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase, Ava
                 auto available_width = caption_available_space.width.to_px_or_zero();
                 block_context->resolve_vertical_box_model_metrics(child_box, available_width);
                 block_context->compute_width(child_box, caption_available_space);
-                inner_available_space = m_state.get(child_box).available_inner_space_or_constraints_from(caption_available_space);
+                inner_available_space = m_state->get(child_box).available_inner_space_or_constraints_from(caption_available_space);
             }
 
             caption_context->run(inner_available_space);
 
             if (block_context) {
-                auto& caption_state = m_state.get_mutable(child_box);
+                auto& caption_state = m_state->get_mutable(child_box);
 
                 // Adjust x offset so border-box aligns with the table wrapper.
                 caption_state.set_content_x(caption_state.offset.x() + caption_state.border_left + caption_state.padding_left);
@@ -82,12 +82,12 @@ CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase, Ava
             }
         }
 
-        auto const& caption_state = m_state.get(child_box);
+        auto const& caption_state = m_state->get(child_box);
         if (phase == CSS::CaptionSide::Top) {
-            m_state.get_mutable(table_box()).set_content_y(caption_state.content_height() + caption_state.margin_box_bottom());
+            m_state->get_mutable(table_box()).set_content_y(caption_state.content_height() + caption_state.margin_box_bottom());
         } else {
-            m_state.get_mutable(child_box).set_content_y(
-                m_state.get(table_box()).margin_box_height() + caption_state.margin_box_top());
+            m_state->get_mutable(child_box).set_content_y(
+                m_state->get(table_box()).margin_box_height() + caption_state.margin_box_top());
         }
         caption_height += caption_state.margin_box_height();
     }
@@ -146,7 +146,7 @@ void TableFormattingContext::compute_cell_measures()
         CSSPixels padding_left = computed_values.padding().left().to_px_or_zero(cell.box, containing_block_width);
         CSSPixels padding_right = computed_values.padding().right().to_px_or_zero(cell.box, containing_block_width);
 
-        auto const& cell_state = m_state.get(cell.box);
+        auto const& cell_state = m_state->get(cell.box);
         auto use_collapsing_borders_model = cell_state.override_borders_data().has_value();
         // Implement the collapsing border model https://www.w3.org/TR/CSS22/tables.html#collapsing-borders.
         CSSPixels border_top = use_collapsing_borders_model ? round(cell_state.border_top / 2) : computed_values.border_top().width;
@@ -520,7 +520,7 @@ void TableFormattingContext::compute_table_width()
 {
     // https://drafts.csswg.org/css-tables-3/#computing-the-table-width
 
-    auto& table_box_state = m_state.get_mutable(table_box());
+    auto& table_box_state = m_state->get_mutable(table_box());
 
     auto& computed_values = table_box().computed_values();
 
@@ -560,7 +560,7 @@ void TableFormattingContext::compute_table_width()
         used_width = grid_min;
     } else if (m_available_space->width.is_max_content()) {
         used_width = grid_max;
-    } else if (width_is_auto_or_indefinite_percentage(computed_values.width(), m_state.try_get(*table_wrapper().containing_block()))) {
+    } else if (width_is_auto_or_indefinite_percentage(computed_values.width(), m_state->try_get(*table_wrapper().containing_block()))) {
         // If the table-root has 'width: auto', the used width is the greater of
         // min(GRIDMAX, the table’s containing block width), the used min-width of the table.
         if (width_of_table_containing_block.is_definite())
@@ -599,7 +599,7 @@ void TableFormattingContext::compute_table_width()
     }
 
     table_box_state.set_content_width(used_width);
-    auto& table_wrapper_box_state = m_state.get_mutable(table_wrapper());
+    auto& table_wrapper_box_state = m_state->get_mutable(table_wrapper());
     table_wrapper_box_state.set_content_width(table_box_state.border_box_width());
 }
 
@@ -719,7 +719,7 @@ void TableFormattingContext::distribute_width_to_columns()
 
     // The assignable table width is the used width of the table minus the total horizontal border spacing (if any).
     // This is the width that we will be able to allocate to the columns.
-    CSSPixels const available_width = m_state.get(table_box()).content_width() - total_horizontal_border_spacing;
+    CSSPixels const available_width = m_state->get(table_box()).content_width() - total_horizontal_border_spacing;
 
     Vector<CSSPixels> candidate_widths;
     candidate_widths.resize(m_columns.size());
@@ -914,7 +914,7 @@ void TableFormattingContext::compute_table_height()
         }
         auto row_computed_height = row.box->computed_values().height();
         if (row_computed_height.is_length()) {
-            auto height_of_containing_block = m_state.get(*row.box->containing_block()).content_height();
+            auto height_of_containing_block = m_state->get(*row.box->containing_block()).content_height();
             auto row_used_height = row_computed_height.to_px(row.box, height_of_containing_block);
             row.base_height = max(row.base_height, row_used_height);
         }
@@ -923,7 +923,7 @@ void TableFormattingContext::compute_table_height()
     // First pass of cells layout:
     for (auto& cell : m_cells) {
         auto& row = m_rows[cell.row_index];
-        auto& cell_state = m_state.get_mutable(cell.box);
+        auto& cell_state = m_state->get_mutable(cell.box);
 
         CSSPixels span_width = 0;
         for (size_t i = 0; i < cell.column_span; ++i)
@@ -997,7 +997,7 @@ void TableFormattingContext::compute_table_height()
         CSSPixels height_of_table_containing_block = table_wrapper_containing_block_height();
         auto specified_table_height = table_box().computed_values().height().to_px(table_box(), height_of_table_containing_block);
         if (table_box().computed_values().box_sizing() == CSS::BoxSizing::BorderBox) {
-            auto const& table_state = m_state.get(table_box());
+            auto const& table_state = m_state->get(table_box());
             specified_table_height -= table_state.border_box_top() + table_state.border_box_bottom();
         }
         m_table_height = max(m_table_height, specified_table_height);
@@ -1035,7 +1035,7 @@ void TableFormattingContext::compute_table_height()
     // At this point, percentage cell height can be resolved because the final table height is calculated.
     for (auto& cell : m_cells) {
         auto& row = m_rows[cell.row_index];
-        auto& cell_state = m_state.get_mutable(cell.box);
+        auto& cell_state = m_state->get_mutable(cell.box);
 
         CSSPixels span_width = 0;
         for (size_t i = 0; i < cell.column_span; ++i)
@@ -1133,13 +1133,13 @@ void TableFormattingContext::distribute_height_to_rows()
 
 void TableFormattingContext::position_row_boxes()
 {
-    auto const& table_state = m_state.get(table_box());
+    auto const& table_state = m_state->get(table_box());
 
     CSSPixels row_top_offset = table_state.offset.y() + border_spacing_vertical();
     CSSPixels row_left_offset = table_state.border_left + table_state.padding_left + border_spacing_horizontal();
     for (size_t y = 0; y < m_rows.size(); y++) {
         auto& row = m_rows[y];
-        auto& row_state = m_state.get_mutable(row.box);
+        auto& row_state = m_state->get_mutable(row.box);
         CSSPixels row_width = 0;
         for (auto& column : m_columns) {
             row_width += column.used_width;
@@ -1161,13 +1161,13 @@ void TableFormattingContext::position_row_boxes()
         CSSPixels row_group_height = 0;
         CSSPixels row_group_width = 0;
 
-        auto& row_group_box_state = m_state.get_mutable(row_group_box);
+        auto& row_group_box_state = m_state->get_mutable(row_group_box);
         row_group_box_state.set_content_x(row_group_left_offset);
         row_group_box_state.set_content_y(row_group_top_offset);
 
         int num_rows = 0;
         TableGrid::for_each_child_box_matching(row_group_box, TableGrid::is_table_row, [&](auto& row) {
-            auto const& row_state = m_state.get(row);
+            auto const& row_state = m_state->get(row);
             row_group_height += row_state.border_box_height();
             row_group_width = max(row_group_width, row_state.border_box_width());
             num_rows += 1;
@@ -1207,8 +1207,8 @@ void TableFormattingContext::position_cell_boxes()
     };
 
     for (auto& cell : m_cells) {
-        auto& cell_state = m_state.get_mutable(cell.box);
-        auto& row_state = m_state.get(m_rows[cell.row_index].box);
+        auto& cell_state = m_state->get_mutable(cell.box);
+        auto& row_state = m_state->get(m_rows[cell.row_index].box);
         auto const row_content_height = compute_row_content_height(cell);
         auto const& vertical_align = cell.box->computed_values().vertical_align();
         // The following image shows various alignment lines of a row:
@@ -1392,7 +1392,7 @@ void TableFormattingContext::border_conflict_resolution()
     // Implements border conflict resolution, as described in https://www.w3.org/TR/CSS22/tables.html#border-conflict-resolution.
     BorderConflictFinder finder(this);
     for (auto& cell : m_cells) {
-        auto& cell_state = m_state.get_mutable(cell.box);
+        auto& cell_state = m_state->get_mutable(cell.box);
         cell_state.set_table_cell_coordinates(
             Painting::PaintableBox::TableCellCoordinates {
                 .row_index = cell.row_index,
@@ -1457,7 +1457,7 @@ void TableFormattingContext::border_conflict_resolution()
 
 CSSPixels TableFormattingContext::compute_row_content_height(Cell const& cell) const
 {
-    auto& row_state = m_state.get(m_rows[cell.row_index].box);
+    auto& row_state = m_state->get(m_rows[cell.row_index].box);
     if (cell.row_span == 1) {
         return row_state.content_height();
     }
@@ -1470,7 +1470,7 @@ CSSPixels TableFormattingContext::compute_row_content_height(Cell const& cell) c
     // height (no top and bottom borders) of the row.
     CSSPixels span_height = 0;
     for (size_t i = 0; i < cell.row_span; ++i) {
-        auto const& row_state = m_state.get(m_rows[cell.row_index + i].box);
+        auto const& row_state = m_state->get(m_rows[cell.row_index + i].box);
         if (i == 0) {
             span_height += row_state.content_height() + row_state.border_box_bottom();
         } else if (i == cell.row_span - 1) {
@@ -1737,7 +1737,7 @@ void TableFormattingContext::parent_context_did_dimension_child_root_box()
             // FIXME: calculate_static_position_rect() is not aware of how to correctly calculate static position for
             //        a box nested inside a table, but we need to set some value, so layout_absolutely_positioned_element()
             //        won't crash trying to access it.
-            m_state.get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
+            m_state->get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
         }
 
         if (formatting_context_type_created_by_box(box).has_value()) {
@@ -1761,7 +1761,7 @@ void TableFormattingContext::run(AvailableSpace const& available_space)
         return;
     }
 
-    auto const& table_state = m_state.get(table_box());
+    auto const& table_state = m_state->get(table_box());
     auto caption_available_space = AvailableSpace(
         AvailableSize::make_definite(clamp_to_max_dimension_value(table_state.border_box_width())),
         available_space.height);
@@ -1778,21 +1778,21 @@ void TableFormattingContext::run(AvailableSpace const& available_space)
     position_row_boxes();
     position_cell_boxes();
 
-    m_state.get_mutable(table_box()).set_content_height(m_table_height);
+    m_state->get_mutable(table_box()).set_content_height(m_table_height);
 
     total_captions_height += run_caption_layout(CSS::CaptionSide::Bottom, caption_available_space);
 
     // Table captions are positioned between the table margins and its borders (outside the grid box borders) as described in
     // https://www.w3.org/TR/css-tables-3/#bounding-box-assignment
     // A visual representation of this model can be found at https://www.w3.org/TR/css-tables-3/images/table_container.png
-    m_state.get_mutable(table_box()).margin_bottom += total_captions_height;
+    m_state->get_mutable(table_box()).margin_bottom += total_captions_height;
 
     m_automatic_content_height = m_table_height;
 }
 
 CSSPixels TableFormattingContext::automatic_content_width() const
 {
-    return m_state.get(table_box()).content_width();
+    return m_state->get(table_box()).content_width();
 }
 
 CSSPixels TableFormattingContext::automatic_content_height() const

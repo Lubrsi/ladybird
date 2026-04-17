@@ -981,7 +981,7 @@ class Viewport;
 
 enum class LayoutMode;
 
-struct LayoutState;
+class LayoutState;
 
 }
 

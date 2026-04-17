@@ -24,13 +24,28 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(LayoutState);
+
 LayoutState::LayoutState(NodeWithStyle const& subtree_root)
     : m_subtree_root(&subtree_root)
 {
 }
 
-LayoutState::~LayoutState()
+LayoutState::~LayoutState() = default;
+
+void LayoutState::visit_edges(Visitor& visitor)
 {
+    Base::visit_edges(visitor);
+    visitor.visit(m_subtree_root);
+    m_used_values_store.visit_edges(visitor);
+}
+
+void LayoutState::UsedValues::visit_edges(GC::Cell::Visitor& visitor)
+{
+    visitor.visit(m_node);
+    visitor.visit(m_floating_descendants);
+    for (auto& line_box : line_boxes)
+        line_box.visit_edges(visitor);
 }
 
 void LayoutState::ensure_capacity(u32 node_count)
@@ -61,14 +76,14 @@ LayoutState::UsedValues& LayoutState::populate_from_paintable(NodeWithStyle cons
     return used_values;
 }
 
-LayoutState::UsedValues& LayoutState::populate_node_from(LayoutState const& source, NodeWithStyle const& node)
+LayoutState::UsedValues& LayoutState::populate_node_from(GC::Ref<LayoutState const> source, NodeWithStyle const& node)
 {
     VERIFY(m_subtree_root);
     auto index = node.layout_index();
     VERIFY(!m_used_values_store.get(index));
 
     auto& values = m_used_values_store.allocate(index);
-    values = source.get(node);
+    values = source->get(node);
     values.m_containing_block_used_values = nullptr;
     return values;
 }

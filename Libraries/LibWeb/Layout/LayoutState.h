@@ -7,6 +7,9 @@
 #pragma once
 
 #include <AK/HashTable.h>
+#include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
+#include <LibGC/Ptr.h>
 #include <LibGfx/Path.h>
 #include <LibGfx/Point.h>
 #include <LibWeb/Layout/Box.h>
@@ -115,11 +118,22 @@ public:
         }
     }
 
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        for_each([&](T& entry) {
+            entry.visit_edges(visitor);
+        });
+    }
+
 private:
     Vector<OwnPtr<Page>> m_pages;
 };
 
-struct LayoutState {
+class LayoutState final : public GC::Cell {
+    GC_CELL(LayoutState, GC::Cell);
+    GC_DECLARE_ALLOCATOR(LayoutState);
+
+public:
     struct UsedValues {
         NodeWithStyle const& node() const { return *m_node; }
         NodeWithStyle& node() { return const_cast<NodeWithStyle&>(*m_node); }
@@ -244,8 +258,10 @@ struct LayoutState {
             return m_static_position_rect->aligned_position_for_box_with_size({ margin_box_width(), margin_box_height() });
         }
 
+        void visit_edges(GC::Cell::Visitor&);
+
     private:
-        friend struct LayoutState;
+        friend class LayoutState;
 
         AvailableSize available_width_inside() const;
         AvailableSize available_height_inside() const;
@@ -281,9 +297,7 @@ struct LayoutState {
         Optional<StaticPositionRect> m_static_position_rect;
     };
 
-    LayoutState() = default;
-    explicit LayoutState(NodeWithStyle const& subtree_root);
-    ~LayoutState();
+    virtual ~LayoutState() override;
 
     // Commits the used values produced by layout and builds a paintable tree.
     void commit(Box& root);
@@ -294,13 +308,18 @@ struct LayoutState {
     UsedValues const& get(NodeWithStyle const&) const;
 
     UsedValues& populate_from_paintable(NodeWithStyle const&, Painting::PaintableBox const&);
-    UsedValues& populate_node_from(LayoutState const& source, NodeWithStyle const& node);
+    UsedValues& populate_node_from(GC::Ref<LayoutState const> source, NodeWithStyle const& node);
 
     UsedValues const* try_get(NodeWithStyle const&) const;
     UsedValues* try_get_mutable(NodeWithStyle const&);
     UsedValues const* try_get(Node const&) const;
 
+    virtual void visit_edges(Visitor&) override;
+
 private:
+    LayoutState() = default;
+    explicit LayoutState(NodeWithStyle const& subtree_root);
+
     UsedValues& ensure_used_values_for(NodeWithStyle const&);
     void resolve_relative_positions();
 

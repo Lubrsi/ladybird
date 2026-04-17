@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Vector.h>
+#include <LibWeb/Layout/AvailableSpace.h>
 #include <LibWeb/Layout/LineBoxFragment.h>
 
 namespace Web::Layout {
@@ -39,6 +40,12 @@ public:
     bool is_empty() const { return m_fragments.is_empty() && !m_has_break; }
 
     AvailableSize original_available_width() const { return m_original_available_width; }
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        for (auto& fragment : m_fragments)
+            fragment.visit_edges(visitor);
+    }
 
 private:
     friend class BlockContainer;

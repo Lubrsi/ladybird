@@ -19,7 +19,7 @@ class LineBuilder;
 // https://www.w3.org/TR/css-display/#block-formatting-context
 class BlockFormattingContext : public FormattingContext {
 public:
-    explicit BlockFormattingContext(LayoutState&, LayoutMode layout_mode, BlockContainer const&, FormattingContext* parent);
+    explicit BlockFormattingContext(GC::Ref<LayoutState>, LayoutMode layout_mode, BlockContainer const&, FormattingContext* parent);
     ~BlockFormattingContext();
 
     virtual void run(AvailableSpace const&) override;

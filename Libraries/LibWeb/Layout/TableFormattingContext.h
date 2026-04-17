@@ -21,7 +21,7 @@ enum class TableDimension {
 
 class TableFormattingContext final : public FormattingContext {
 public:
-    explicit TableFormattingContext(LayoutState&, LayoutMode, Box const&, FormattingContext* parent);
+    explicit TableFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent);
     ~TableFormattingContext();
 
     void run_until_width_calculation(AvailableSpace const& available_space);

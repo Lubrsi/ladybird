@@ -1393,17 +1393,17 @@ void Document::mark_svg_root_as_needing_relayout(Layout::SVGSVGBox& svg_root)
 
 static void relayout_svg_root(Layout::SVGSVGBox& svg_root)
 {
-    Layout::LayoutState layout_state(svg_root);
+    auto layout_state = svg_root.heap().allocate<Layout::LayoutState>(svg_root);
 
     // Pre-populate the svg_root itself.
     if (auto const* paintable = svg_root.paintable_box())
-        layout_state.populate_from_paintable(svg_root, *paintable);
+        layout_state->populate_from_paintable(svg_root, *paintable);
 
     // Pre-populate SVGGraphicsBox ancestors (up to outer SVG) for get_parent_svg_transform().
     for (auto* ancestor = svg_root.parent(); ancestor; ancestor = ancestor->parent()) {
         if (auto const* svg_graphics_ancestor = as_if<Layout::SVGGraphicsBox>(*ancestor)) {
             if (auto const* paintable = svg_graphics_ancestor->paintable_box())
-                layout_state.populate_from_paintable(*svg_graphics_ancestor, *paintable);
+                layout_state->populate_from_paintable(*svg_graphics_ancestor, *paintable);
         }
         if (is<Layout::SVGSVGBox>(*ancestor))
             break;
@@ -1412,15 +1412,15 @@ static void relayout_svg_root(Layout::SVGSVGBox& svg_root)
     // Pre-populate the viewport for position:fixed elements inside <foreignObject>.
     auto& viewport = svg_root.root();
     if (auto const* paintable = viewport.paintable_box())
-        layout_state.populate_from_paintable(viewport, *paintable);
+        layout_state->populate_from_paintable(viewport, *paintable);
 
-    auto const& svg_state = layout_state.get(svg_root);
+    auto const& svg_state = layout_state->get(svg_root);
     auto content_width = svg_state.content_width();
     auto content_height = svg_state.content_height();
 
     Layout::SVGFormattingContext svg_context(layout_state, Layout::LayoutMode::Normal, svg_root, nullptr);
     svg_context.run(Layout::AvailableSpace(Layout::AvailableSize::make_definite(content_width), Layout::AvailableSize::make_definite(content_height)));
-    layout_state.commit(svg_root);
+    layout_state->commit(svg_root);
 
     svg_root.for_each_in_inclusive_subtree([](auto& node) {
         node.reset_needs_layout_update();
@@ -1599,18 +1599,18 @@ void Document::update_layout(UpdateLayoutReason reason)
         return TraversalDecision::Continue;
     });
 
-    Layout::LayoutState layout_state;
-    layout_state.ensure_capacity(layout_index_counter);
+    auto layout_state = heap().allocate<Layout::LayoutState>();
+    layout_state->ensure_capacity(layout_index_counter);
 
     {
         auto& viewport = static_cast<Layout::Viewport&>(*m_layout_root);
-        auto& viewport_state = layout_state.get_mutable(viewport);
+        auto& viewport_state = layout_state->get_mutable(viewport);
         viewport_state.set_content_width(viewport_rect.width());
         viewport_state.set_content_height(viewport_rect.height());
 
         // NB: Called during layout update.
         if (document_element && document_element->unsafe_layout_node()) {
-            auto& icb_state = layout_state.get_mutable(as<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->unsafe_layout_node()));
+            auto& icb_state = layout_state->get_mutable(as<Layout::NodeWithStyleAndBoxModelMetrics>(*document_element->unsafe_layout_node()));
             icb_state.set_content_width(viewport_rect.width());
         }
 
@@ -1623,8 +1623,8 @@ void Document::update_layout(UpdateLayoutReason reason)
             //       The root <svg> container gets the same size as the viewport,
             //       and we call directly into the SVG layout code from here.
             auto const& svg_root = as<Layout::SVGSVGBox>(*m_layout_root->first_child());
-            auto content_height = layout_state.get(*svg_root.containing_block()).content_height();
-            layout_state.get_mutable(svg_root).set_content_height(content_height);
+            auto content_height = layout_state->get(*svg_root.containing_block()).content_height();
+            layout_state->get_mutable(svg_root).set_content_height(content_height);
             Layout::SVGFormattingContext svg_formatting_context(layout_state, Layout::LayoutMode::Normal, svg_root, nullptr);
             svg_formatting_context.run(available_space);
         } else {
@@ -1633,7 +1633,7 @@ void Document::update_layout(UpdateLayoutReason reason)
         }
     }
 
-    layout_state.commit(*m_layout_root);
+    layout_state->commit(*m_layout_root);
 
     // Broadcast the current viewport rect to any new paintables, so they know whether they're visible or not.
     inform_all_viewport_clients_about_the_current_viewport_rect();
