@@ -7,6 +7,8 @@
 #include <AK/HashMap.h>
 #include <AK/QuickSort.h>
 #include <AK/Traits.h>
+#include <LibGC/RootHashMap.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/Layout/TableFormattingContext.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
 #include <LibWeb/Painting/PaintableBox.h>
@@ -33,7 +35,7 @@ struct Traits<CellCoordinates> : public DefaultTraits<CellCoordinates> {
 
 namespace Web::Painting {
 
-static void collect_cell_boxes(Vector<PaintableBox const&>& cell_boxes, PaintableBox const& table_paintable)
+static void collect_cell_boxes(GC::RootVector<GC::Ref<PaintableBox const>>& cell_boxes, PaintableBox const& table_paintable)
 {
     table_paintable.for_each_child_of_type<PaintableBox>([&](auto& child) {
         if (child.display().is_table_cell()) {
@@ -297,7 +299,7 @@ static void paint_collected_edges(DisplayListRecordingContext& context, Vector<B
     }
 }
 
-static HashMap<CellCoordinates, DevicePixelRect> snap_cells_to_device_coordinates(HashMap<CellCoordinates, PaintableBox const*> const& cell_coordinates_to_box, size_t row_count, size_t column_count, DisplayListRecordingContext const& context)
+static HashMap<CellCoordinates, DevicePixelRect> snap_cells_to_device_coordinates(GC::RootHashMap<CellCoordinates, GC::Ptr<PaintableBox const>> const& cell_coordinates_to_box, size_t row_count, size_t column_count, DisplayListRecordingContext const& context)
 {
     Vector<DevicePixels> y_line_start_coordinates;
     Vector<DevicePixels> y_line_end_coordinates;
@@ -361,22 +363,23 @@ void paint_table_borders(DisplayListRecordingContext& context, PaintableBox cons
 {
     // Partial implementation of painting according to the collapsing border model:
     // https://www.w3.org/TR/CSS22/tables.html#collapsing-borders
-    Vector<PaintableBox const&> cell_boxes;
+    GC::RootVector<GC::Ref<PaintableBox const>> cell_boxes { table_paintable.heap() };
     collect_cell_boxes(cell_boxes, table_paintable);
     Vector<BorderEdgePaintingInfo> border_edge_painting_info_list;
-    HashMap<CellCoordinates, PaintableBox const*> cell_coordinates_to_box;
+    GC::RootHashMap<CellCoordinates, GC::Ptr<PaintableBox const>> cell_coordinates_to_box { table_paintable.heap() };
     size_t row_count = 0;
     size_t column_count = 0;
     for (auto const& cell_box : cell_boxes) {
         cell_coordinates_to_box.set(CellCoordinates {
-                                        .row_index = cell_box.table_cell_coordinates()->row_index,
-                                        .column_index = cell_box.table_cell_coordinates()->column_index },
-            &cell_box);
-        row_count = max(row_count, cell_box.table_cell_coordinates()->row_index + cell_box.table_cell_coordinates()->row_span);
-        column_count = max(column_count, cell_box.table_cell_coordinates()->column_index + cell_box.table_cell_coordinates()->column_span);
+                                        .row_index = cell_box->table_cell_coordinates()->row_index,
+                                        .column_index = cell_box->table_cell_coordinates()->column_index },
+            cell_box);
+        row_count = max(row_count, cell_box->table_cell_coordinates()->row_index + cell_box->table_cell_coordinates()->row_span);
+        column_count = max(column_count, cell_box->table_cell_coordinates()->column_index + cell_box->table_cell_coordinates()->column_span);
     }
     auto cell_coordinates_to_device_rect = snap_cells_to_device_coordinates(cell_coordinates_to_box, row_count, column_count, context);
-    for (auto const& cell_box : cell_boxes) {
+    for (auto const& cell_box_ref : cell_boxes) {
+        auto const& cell_box = *cell_box_ref;
         if (table_paintable.computed_values().border_collapse() == CSS::BorderCollapse::Separate) {
             if (cell_box.computed_values().empty_cells() == CSS::EmptyCells::Hide && !cell_box.has_children())
                 continue;
@@ -426,7 +429,8 @@ void paint_table_borders(DisplayListRecordingContext& context, PaintableBox cons
 
     paint_collected_edges(context, border_edge_painting_info_list);
 
-    for (auto const& cell_box : cell_boxes) {
+    for (auto const& cell_box_ref : cell_boxes) {
+        auto const& cell_box = *cell_box_ref;
         auto const& border_radii_data = cell_box.normalized_border_radii_data();
         auto top_left = border_radii_data.top_left.as_corner(context.device_pixel_converter());
         auto top_right = border_radii_data.top_right.as_corner(context.device_pixel_converter());
