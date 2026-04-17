@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/Layout/FormattingContext.h>
 #include <LibWeb/Layout/TableGrid.h>
 #include <LibWeb/Layout/TableWrapper.h>
@@ -159,7 +160,7 @@ private:
     class BorderConflictFinder {
     public:
         BorderConflictFinder(TableFormattingContext const* context);
-        Vector<ConflictingEdge> conflicting_edges(Cell const&, ConflictingSide) const;
+        GC::ConservativeVector<ConflictingEdge> conflicting_edges(Cell const&, ConflictingSide) const;
 
     private:
         void collect_conflicting_col_elements();
