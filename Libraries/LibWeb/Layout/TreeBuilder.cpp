@@ -43,7 +43,16 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(TreeBuilder);
+
 TreeBuilder::TreeBuilder() = default;
+
+void TreeBuilder::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_layout_root);
+    visitor.visit(m_ancestor_stack);
+}
 
 static bool has_inline_or_in_flow_block_children(Layout::Node const& layout_node)
 {
