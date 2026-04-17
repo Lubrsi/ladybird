@@ -460,6 +460,9 @@ public:
     Vector<ValueComparingRefPtr<CounterStyle const>> counter_style_dependencies;
     Optional<String> alt_text {};
 
+private:
+    ContentData() = default;
+
     virtual void visit_edges(Visitor& visitor) override
     {
         Base::visit_edges(visitor);
@@ -469,9 +472,6 @@ public:
             }
         }
     }
-
-private:
-    ContentData() = default;
 };
 
 struct CounterData {
@@ -514,18 +514,12 @@ inline Gfx::ScalingMode to_gfx_scaling_mode(ImageRendering css_value, Gfx::IntSi
     VERIFY_NOT_REACHED();
 }
 
-class ComputedValues {
-    AK_MAKE_NONCOPYABLE(ComputedValues);
-    AK_MAKE_NONMOVABLE(ComputedValues);
+class ComputedValues : public GC::Cell {
+    GC_CELL(ComputedValues, GC::Cell);
+    GC_DECLARE_ALLOCATOR(ComputedValues);
 
 public:
-    ComputedValues() = default;
-    ~ComputedValues() = default;
-
-    void visit_edges(GC::Cell::Visitor& visitor)
-    {
-        m_noninherited.visit_edges(visitor);
-    }
+    virtual ~ComputedValues() override = default;
 
     AspectRatio aspect_ratio() const { return m_noninherited.aspect_ratio; }
     Float float_() const { return m_noninherited.float_; }
@@ -752,15 +746,11 @@ public:
     Resize resize() const { return m_noninherited.resize; }
     WillChange const& will_change() const { return m_noninherited.will_change; }
 
-    NonnullOwnPtr<ComputedValues> clone_inherited_values() const
-    {
-        // FIXME: ComputedValues should be GC-allocated so this is properly rooted.
-        IGNORE_GC auto clone = make<ComputedValues>();
-        clone->m_inherited = m_inherited;
-        return clone;
-    }
+    GC::Ref<ComputedValues> clone_inherited_values() const;
 
 protected:
+    ComputedValues() = default;
+
     struct InheritedValues {
         Color caret_color { InitialValues::caret_color() };
         CSSPixels font_size { InitialValues::font_size() };
@@ -972,12 +962,19 @@ protected:
     };
 
     NonInheritedValues m_noninherited;
+
+    virtual void visit_edges(Visitor&) override;
 };
 
 class ImmutableComputedValues final : public ComputedValues {
+    GC_CELL(ImmutableComputedValues, ComputedValues);
+    GC_DECLARE_ALLOCATOR(ImmutableComputedValues);
 };
 
 class MutableComputedValues final : public ComputedValues {
+    GC_CELL(MutableComputedValues, ComputedValues);
+    GC_DECLARE_ALLOCATOR(MutableComputedValues);
+
 public:
     void inherit_from(ComputedValues const& other)
     {

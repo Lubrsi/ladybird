@@ -15,8 +15,8 @@ TableWrapper::TableWrapper(DOM::Document& document, DOM::Node* node, GC::Ref<CSS
 {
 }
 
-TableWrapper::TableWrapper(DOM::Document& document, DOM::Node* node, NonnullOwnPtr<CSS::ComputedValues> computed_values)
-    : BlockContainer(document, node, move(computed_values))
+TableWrapper::TableWrapper(DOM::Document& document, DOM::Node* node, GC::Ref<CSS::ComputedValues> computed_values)
+    : BlockContainer(document, node, computed_values)
 {
 }
 
