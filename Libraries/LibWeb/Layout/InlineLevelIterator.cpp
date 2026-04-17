@@ -15,6 +15,21 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(InlineLevelIterator);
+
+void InlineLevelIterator::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_inline_formatting_context);
+    visitor.visit(m_layout_state);
+    visitor.visit(m_containing_block);
+    visitor.visit(m_current_node);
+    visitor.visit(m_next_node);
+    visitor.visit(m_box_model_node_stack);
+    for (auto& item : m_items)
+        item.visit_edges(visitor);
+}
+
 InlineLevelIterator::InlineLevelIterator(Layout::InlineFormattingContext& inline_formatting_context, GC::Ref<Layout::LayoutState> layout_state, Layout::BlockContainer const& containing_block, LayoutState::UsedValues const& containing_block_used_values, LayoutMode layout_mode)
     : m_inline_formatting_context(inline_formatting_context)
     , m_layout_state(layout_state)

@@ -350,7 +350,7 @@ void InlineFormattingContext::generate_line_boxes()
     auto direction = m_context_box->computed_values().direction();
     auto writing_mode = m_context_box->computed_values().writing_mode();
 
-    InlineLevelIterator iterator(*this, m_state, containing_block(), m_containing_block_used_values, m_layout_mode);
+    auto iterator = heap().allocate<InlineLevelIterator>(*this, m_state, containing_block(), m_containing_block_used_values, m_layout_mode);
     LineBuilder line_builder(*this, m_state, m_containing_block_used_values, direction, writing_mode);
 
     // NOTE: When we ignore collapsible whitespace chunks at the start of a line,
@@ -363,7 +363,7 @@ void InlineFormattingContext::generate_line_boxes()
     GC::RootVector<GC::Ref<Box const>> absolute_boxes { m_context_box->heap() };
 
     for (;;) {
-        auto item_opt = iterator.next();
+        auto item_opt = iterator->next();
         if (!item_opt.has_value())
             break;
         auto& item = item_opt.value();
@@ -371,7 +371,7 @@ void InlineFormattingContext::generate_line_boxes()
         // Ignore collapsible whitespace chunks at the start of line, and if the last fragment already ends in whitespace.
         if (item.is_collapsible_whitespace && (line_boxes.is_empty() || line_boxes.last().is_empty_or_ends_in_whitespace())) {
             if (item.node->computed_values().text_wrap_mode() == CSS::TextWrapMode::Wrap) {
-                auto next_width = iterator.next_non_whitespace_sequence_width();
+                auto next_width = iterator->next_non_whitespace_sequence_width();
                 if (next_width > 0)
                     line_builder.break_if_needed(next_width);
             }
@@ -439,13 +439,13 @@ void InlineFormattingContext::generate_line_boxes()
                 // If we're in a whitespace-collapsing context, we can simply check the flag.
                 if (item.is_collapsible_whitespace) {
                     is_whitespace = true;
-                    next_width = iterator.next_non_whitespace_sequence_width();
+                    next_width = iterator->next_non_whitespace_sequence_width();
                 } else {
                     // In whitespace-preserving contexts (white-space: pre*), we have to check manually.
                     auto view = text_node.text_for_rendering().substring_view(item.offset_in_node, item.length_in_node);
                     is_whitespace = view.is_ascii_whitespace();
                     if (is_whitespace)
-                        next_width = iterator.next_non_whitespace_sequence_width();
+                        next_width = iterator->next_non_whitespace_sequence_width();
                 }
 
                 // If whitespace caused us to break, don't put it on the next line.
