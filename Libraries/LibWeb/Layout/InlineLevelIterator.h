@@ -71,7 +71,7 @@ private:
 
     Layout::Node const* next_inline_node_in_pre_order(Layout::Node const& current, Layout::Node const* stay_within);
 
-    Layout::InlineFormattingContext& m_inline_formatting_context;
+    GC::Ref<Layout::InlineFormattingContext> m_inline_formatting_context;
     GC::Ref<Layout::LayoutState> m_layout_state;
     GC::Ref<BlockContainer const> m_containing_block;
     LayoutState::UsedValues const& m_containing_block_used_values;

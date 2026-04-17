@@ -18,9 +18,16 @@ class LineBuilder;
 
 // https://www.w3.org/TR/css-display/#block-formatting-context
 class BlockFormattingContext : public FormattingContext {
+    GC_CELL(BlockFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(BlockFormattingContext);
+
 public:
-    explicit BlockFormattingContext(GC::Ref<LayoutState>, LayoutMode layout_mode, BlockContainer const&, FormattingContext* parent);
-    ~BlockFormattingContext();
+    static constexpr bool OVERRIDES_FINALIZE = true;
+
+    virtual ~BlockFormattingContext() override = default;
+
+    virtual void finalize() override;
+    virtual void visit_edges(Visitor&) override;
 
     virtual void run(AvailableSpace const&) override;
     virtual CSSPixels automatic_content_width() const override;
@@ -91,11 +98,18 @@ public:
         CSSPixels bottom_margin_edge { 0 };
 
         CSSPixelRect margin_box_rect_in_root_coordinate_space;
+
+        void visit_edges(GC::Cell::Visitor& visitor)
+        {
+            visitor.visit(box);
+        }
     };
 
     Optional<FloatingBox&> last_inserted_float() { return m_last_inserted_float; }
 
 private:
+    BlockFormattingContext(GC::Ref<LayoutState>, LayoutMode layout_mode, BlockContainer const&, FormattingContext* parent);
+
     CSSPixels compute_auto_height_for_block_level_element(Box const&, AvailableSpace const&);
 
     void compute_width_for_floating_box(Box const&, AvailableSpace const&);

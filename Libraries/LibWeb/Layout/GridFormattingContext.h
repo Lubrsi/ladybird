@@ -114,6 +114,11 @@ struct GridItem {
         auto available_height = used_values.has_definite_height() ? AvailableSize::make_definite(used_values.content_height()) : AvailableSize::make_indefinite();
         return { available_width, available_height };
     }
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        visitor.visit(box);
+    }
 };
 
 enum class FoundUnoccupiedPlace {
@@ -164,9 +169,13 @@ private:
 };
 
 class GridFormattingContext final : public FormattingContext {
+    GC_CELL(GridFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(GridFormattingContext);
+
 public:
-    explicit GridFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const& grid_container, FormattingContext* parent);
-    ~GridFormattingContext();
+    virtual ~GridFormattingContext() override;
+
+    virtual void visit_edges(Visitor&) override;
 
     virtual bool inhibits_floating() const override { return true; }
 
@@ -178,6 +187,8 @@ public:
     Box const& grid_container() const { return context_box(); }
 
 private:
+    GridFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const& grid_container, FormattingContext* parent);
+
     Alignment alignment_for_item(Box const& box, GridDimension dimension) const;
 
     void resolve_items_box_metrics(GridDimension dimension);

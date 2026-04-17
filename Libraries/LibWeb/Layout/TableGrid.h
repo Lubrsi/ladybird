@@ -32,6 +32,11 @@ public:
         double intrinsic_percentage { 0 };
         // Store whether the row is constrained: https://www.w3.org/TR/css-tables-3/#constrainedness
         bool is_constrained { false };
+
+        void visit_edges(GC::Cell::Visitor& visitor)
+        {
+            visitor.visit(box);
+        }
     };
 
     struct Cell {
@@ -45,6 +50,11 @@ public:
         CSSPixels outer_max_width { 0 };
         CSSPixels outer_min_height { 0 };
         CSSPixels outer_max_height { 0 };
+
+        void visit_edges(GC::Cell::Visitor& visitor)
+        {
+            visitor.visit(box);
+        }
     };
 
     // Calculate and return the grid and also rows and cells as output parameters.

@@ -77,7 +77,7 @@ void InlineLevelIterator::enter_node_with_box_model_metrics(Layout::NodeWithStyl
     m_extra_leading_metrics->padding += used_values.padding_left;
 
     // Now's our chance to resolve the inset properties for this node.
-    m_inline_formatting_context.compute_inset(node, m_inline_formatting_context.content_box_rect(m_containing_block_used_values).size());
+    m_inline_formatting_context->compute_inset(node, m_inline_formatting_context->content_box_rect(m_containing_block_used_values).size());
 
     m_box_model_node_stack.append(node);
 }
@@ -394,7 +394,7 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
 
     auto const& box = as<Layout::Box>(*m_current_node);
     auto const& box_state = m_layout_state->get(box);
-    m_inline_formatting_context.dimension_box_on_line(box, m_layout_mode);
+    m_inline_formatting_context->dimension_box_on_line(box, m_layout_mode);
 
     auto item = Item {
         .type = Item::Type::Element,

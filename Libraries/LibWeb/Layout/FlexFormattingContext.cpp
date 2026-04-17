@@ -35,11 +35,20 @@ CSSPixels FlexFormattingContext::get_pixel_height(FlexItem const& item, CSS::Siz
     return calculate_inner_height(item.box, m_available_space.value(), size);
 }
 
+GC_DEFINE_ALLOCATOR(FlexFormattingContext);
+
 FlexFormattingContext::FlexFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& flex_container, FormattingContext* parent)
     : FormattingContext(Type::Flex, layout_mode, state, flex_container, parent)
     , m_flex_container_state(m_state->get_mutable(flex_container))
     , m_flex_direction(flex_container.computed_values().flex_direction())
 {
+}
+
+void FlexFormattingContext::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    for (auto& item : m_flex_items)
+        item.visit_edges(visitor);
 }
 
 FlexFormattingContext::~FlexFormattingContext() = default;

@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ScopeGuard.h>
 #include <AK/TemporaryChange.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Length.h>
@@ -31,19 +32,28 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(BlockFormattingContext);
+
 BlockFormattingContext::BlockFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, BlockContainer const& root, FormattingContext* parent)
     : FormattingContext(Type::Block, layout_mode, state, root, parent)
 {
 }
 
-BlockFormattingContext::~BlockFormattingContext()
+void BlockFormattingContext::visit_edges(Visitor& visitor)
 {
-    if (!m_was_notified_after_parent_dimensioned_my_root_box) {
-        // HACK: The parent formatting context never notified us after assigning dimensions to our root box.
-        //       Pretend that it did anyway, to make sure absolutely positioned children get laid out.
-        // FIXME: Get rid of this hack once parent contexts behave properly.
-        parent_context_did_dimension_child_root_box();
-    }
+    Base::visit_edges(visitor);
+    auto visit_floats = [&](FloatSideData& side) {
+        for (auto& floating_box : side.all_boxes)
+            floating_box->visit_edges(visitor);
+    };
+    visit_floats(m_left_floats);
+    visit_floats(m_right_floats);
+}
+
+void BlockFormattingContext::finalize()
+{
+    Base::finalize();
+    VERIFY(m_was_notified_after_parent_dimensioned_my_root_box);
 }
 
 CSSPixels BlockFormattingContext::automatic_content_width() const
@@ -134,10 +144,16 @@ void BlockFormattingContext::run(AvailableSpace const& available_space)
             break;
         }
     }
+
+    // Root formatting contexts have no parent to notify them.
+    if (!parent())
+        parent_context_did_dimension_child_root_box();
 }
 
 void BlockFormattingContext::parent_context_did_dimension_child_root_box()
 {
+    if (m_was_notified_after_parent_dimensioned_my_root_box)
+        return;
     m_was_notified_after_parent_dimensioned_my_root_box = true;
 
     // Left-side floats: offset_from_edge is from left edge (0) to left content edge of floating_box.
@@ -601,13 +617,13 @@ void BlockFormattingContext::layout_inline_children(BlockContainer const& block_
 
     auto& block_container_state = m_state->get_mutable(block_container);
 
-    InlineFormattingContext context(m_state, m_layout_mode, block_container, block_container_state, *this);
-    context.run(available_space);
+    auto context = heap().allocate<InlineFormattingContext>(m_state, m_layout_mode, block_container, block_container_state, *this);
+    context->run(available_space);
 
     if (!block_container_state.has_definite_width()) {
         // NOTE: min-width or max-width for boxes with inline children can only be applied after inside layout
         //       is done and width of box content is known
-        auto used_width_px = context.automatic_content_width();
+        auto used_width_px = context->automatic_content_width();
         // https://www.w3.org/TR/css-sizing-3/#sizing-values
         // Percentages are resolved against the width/height, as appropriate, of the box’s containing block.
         CSSPixels containing_block_width = 0;
@@ -639,7 +655,7 @@ void BlockFormattingContext::layout_inline_children(BlockContainer const& block_
                 used_width_px = min_width_px;
         }
         block_container_state.set_content_width(used_width_px);
-        block_container_state.set_content_height(context.automatic_content_height());
+        block_container_state.set_content_height(context->automatic_content_height());
     }
 }
 
@@ -919,6 +935,7 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
             }
 
             auto measuring_context = create_independent_formatting_context_if_needed(throwaway_state, m_layout_mode, box);
+            ScopeGuard notify_guard { [&] { measuring_context->parent_context_did_dimension_child_root_box(); } };
             measuring_context->run(inner_available_space);
             auto content_height = measuring_context->automatic_content_height();
             auto min_height = calculate_inner_height(box, available_space, box.computed_values().min_height());
