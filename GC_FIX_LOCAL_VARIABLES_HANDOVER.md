@@ -292,9 +292,9 @@ Live task list (mirrored from the in-session TaskList tool, lowest ID first):
 | #6 | pending | Fix LibWeb/Layout violations (47 — biggest remaining cluster; mostly `OwnPtr<FormattingContext>` + `LayoutState`) |
 | #7 | pending | Fix LibWeb/HTML violations (32 — Window/NamedObjects, Plugin+MimeType, Select, Scripting, StructuredSerialize) |
 | #8 | pending | Fix LibWeb/DOM violations (12 — Slottable, Document, Node, Text) |
-| #9 | pending | Fix LibWeb/SVG violations (1 — `SVGComponentTransferFunctionElement::table_values`) |
+| #9 | completed | Fix LibWeb/SVG violations (done — `SVGList`-family ctors now take `GC::RootVector&&` and adopt in `SVGList` member init) |
 | #10 | completed | Fix LibWeb/CSS violations (done — StyleScope and StyleComputer closed out in the in-flight changes) |
-| #11 | in_progress | Fix remaining LibWeb violations (Crypto done; IndexedDB=5, Painting=2, Geometry=1, XHR/XPath/WebIDL/WebGL/ViewTransition=1 each) |
+| #11 | in_progress | Fix remaining LibWeb violations (Crypto/Painting/XHR-slicing/Geometry done; MutationLog=2, WebIDL/XHR-Variant returns=2 remain as deferred categories) |
 | #12 | pending | Reorder commits to put plugin enforcement at the end of the branch |
 | #13 | completed | Add compile-time block for GC container downgrades |
 | #14 | completed | Polish adopt pattern: doc comments, runtime tests, plugin cleanup |
@@ -309,7 +309,6 @@ Roughly in priority order, the next things to land are:
 
 ### Deferred (not in the task list, tracked here for the next session)
 
-- **`SVGList<GC::Ref<T>>` base-class adopt pattern**: `SVGNumberList::SVGNumberList` would like to take a `GC::RootVector<GC::Ref<SVGNumber>>&&` and call `SVGList(realm, GC::adopt_root_vector(move(items)), read_only)`, but the plugin rejects `adopt_root_vector` when the target slot is a base-class constructor argument (the adopt receiver is `SVGList::m_items`, which is transitively traced via `SVGList::visit_edges`, but the direct call site is the base-class initializer of `SVGNumberList` — not a member init or direct traced-member assignment). The common path for fixing `SVGComponentTransferFunctionElement::table_values`, `SVGLengthList`, and `SVGTransformList` is either (a) teach the plugin to treat a base-class constructor argument whose target is a traced member as an allowed adopt site, or (b) push the `RootVector`/adopt all the way down to `SVGList`'s constructor so the adopt happens in `SVGList`'s own member init list. (b) is the safer refactor.
 - **Index/ObjectStore record-deletion transients in IndexedDB** (`Internal/Index.cpp:remove_records_with_value_in_range`, `Internal/ObjectStore.cpp:remove_records_in_range`): the `Vector<IndexRecord>` / `Vector<ObjectStoreRecord>` locals are passed by value into `MutationLog::note_*_records_deleted` and then moved into a `Variant` alternative inside `MutationLog::m_entries`. Switching the local to `GC::ConservativeVector<...>` would require either threading the `ConservativeVector` all the way into the variant-storage struct (which would need a heap for default construction, forcing construction-site changes throughout) or adopting across the `note_*` call boundary (rejected by the plugin — adopt must land at a traced member). Leaving as a violation for now; the clean fix is to make the `IndexRecordsDeleted` / `RecordsDeleted` variant alternatives hold a `GC::ConservativeVector` directly, threading `Heap&` through the construction sites.
 - **`Vector<Variant<...>>` returns with a cell inside the Variant**: two concrete sites — `WebIDL::resolve_overload` returning `ResolvedOverload::arguments` (`Vector<Variant<JS::Value, Missing>>`) and `XHR::FormData::get_all` returning `Vector<FormDataEntryValue>` (`Vector<Variant<GC::Ref<FileAPI::File>, String>>`). The natural fix is to make both returns a `GC::ConservativeVector`, but the callers are generated bindings that pass the result to the IDL-to-JS conversion layer — that layer currently expects a plain `Vector`. Unblocking it cleanly requires either (a) extending the bindings generator so a `GC::ConservativeVector<...>` return is accepted the same way a `Vector<...>` is, or (b) reshaping each caller to take a `Heap&` out-parameter. Leaving both with the plugin violation for now; the wider refactor belongs with the other generator-facing return-type work.
 - **`SimilarOriginWindowAgent` as a `NonnullOwnPtr`** (`HTML/Scripting/SimilarOriginWindowAgent.cpp:20`): the agent owns GC containers (`pending_mutation_observers`, `signal_slots`) but is itself not a `Cell`. Same shape as the section-4 bucket-B issues. Either promote the agent to a `Cell` or rework the ownership so the GC containers live on a traced owner.
@@ -801,6 +800,30 @@ Session `2026-04-16` reduced this to **61** violations. Breakdown of the remaind
 - **Include/iterator repairs** unrelated to rooting: `StructuredSerializeOptions` include in `DedicatedWorkerGlobalScope.cpp`, `HTMLOptionElement` direct includes in `SelectorEngine.cpp` / `HTMLOptGroupElement.cpp` / `HTMLSelectedContentElement.cpp`, `Text::split_text` ported to `WeakHashSet::Iterator::operator*` returning `Range&` rather than `Range*`.
 
 The remaining failures fall almost entirely into the big deferred clusters (Layout `OwnPtr<FormattingContext>` / `LayoutState`, `NonnullOwnPtr<JS::ExecutionContext>`, SVGList `Vector<GC::Ref<Number>>` needing the base-class-adopt pattern). See the per-directory notes below and the `Future work` section for the remaining categories.
+
+#### Session closing state (2026-04-17)
+
+`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **50**.
+
+Directory breakdown:
+
+| Directory | Count |
+|---|---|
+| LibWeb/Layout | 35 |
+| LibWeb/DOM (`Document.cpp` only) | 5 |
+| LibWeb/HTML | 3 (2× `NonnullOwnPtr<JS::ExecutionContext>`, 1× `NonnullOwnPtr<SimilarOriginWindowAgent>`) |
+| LibWeb/IndexedDB (Index/ObjectStore MutationLog transients) | 2 |
+| LibWeb/WebIDL / XHR | 1 each (both are `Vector<Variant<cell,...>>` returns — deferred category) |
+
+Layout breakdown (all known, covered by the big deferred cluster):
+`OwnPtr<FormattingContext>` / `NonnullOwnPtr<FormattingContext>` /
+`LayoutState` / `NonnullOwnPtr<ComputedValues>` / `BorderConflictFinder`
+/ `InlineLevelIterator` / `UsedValues` / `ContainedBoxesMap` (nested
+indirection — section 7) / `HashMap<int, Vector<FlexItem>>` and
+`HashMap<int, Vector<GC::Ref<Box const>>>` (same nested-container
+issue) / `Vector<TextPosition>` + `Vector<TextBlock>` in
+`Viewport::update_text_blocks` (needs `TextBlock` redefinition to
+adopt).
 
 #### Session closing state (2026-04-16, post-rebase)
 
