@@ -1068,7 +1068,7 @@ bool Navigation::inner_navigate_event_firing_algorithm(
     // 24. If formDataEntryList is not null, then initialize event's formData to a new FormData created in navigation's relevant realm,
     //     associated to formDataEntryList. Otherwise, initialize it to null.
     if (form_data_entry_list.has_value()) {
-        event_init.form_data = MUST(XHR::FormData::construct_impl(realm, form_data_entry_list.release_value()));
+        event_init.form_data = MUST(XHR::FormData::construct_impl(realm, move(form_data_entry_list.release_value())));
     } else {
         event_init.form_data = nullptr;
     }
