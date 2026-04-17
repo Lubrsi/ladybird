@@ -1551,8 +1551,8 @@ void Document::update_layout(UpdateLayoutReason reason)
     auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
 
     if (needs_layout_tree_rebuild) {
-        Layout::TreeBuilder tree_builder;
-        m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
+        auto tree_builder = heap().allocate<Layout::TreeBuilder>();
+        m_layout_root = as<Layout::Viewport>(*tree_builder->build(*this));
 
         // NB: Called during layout update.
         if (document_element && document_element->unsafe_layout_node()) {

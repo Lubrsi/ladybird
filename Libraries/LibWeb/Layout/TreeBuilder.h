@@ -6,18 +6,25 @@
 
 #pragma once
 
+#include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
 #include <LibGC/Ptr.h>
 #include <LibWeb/Forward.h>
 
 namespace Web::Layout {
 
-class TreeBuilder {
-public:
-    TreeBuilder();
+class TreeBuilder final : public GC::Cell {
+    GC_CELL(TreeBuilder, GC::Cell);
+    GC_DECLARE_ALLOCATOR(TreeBuilder);
 
+public:
     GC::Ptr<Layout::Node> build(DOM::Node&);
 
+    virtual void visit_edges(Visitor&) override;
+
 private:
+    TreeBuilder();
+
     struct Context {
         bool has_svg_root = false;
         bool layout_top_layer = false;
