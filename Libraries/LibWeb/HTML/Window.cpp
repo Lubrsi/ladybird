@@ -1330,11 +1330,14 @@ WebIDL::ExceptionOr<void> Window::post_message(JS::Value message, WindowPostMess
 }
 
 // https://html.spec.whatwg.org/multipage/web-messaging.html#dom-window-postmessage
-WebIDL::ExceptionOr<void> Window::post_message(JS::Value message, String const& target_origin, Vector<GC::Root<JS::Object>> const& transfer)
+WebIDL::ExceptionOr<void> Window::post_message(JS::Value message, String const& target_origin, GC::RootVector<GC::Ref<JS::Object>> const& transfer)
 {
     // The Window interface's postMessage(message, targetOrigin, transfer) method steps are to run the window post message
     // steps given this, message, and «[ "targetOrigin" → targetOrigin, "transfer" → transfer ]».
-    return window_post_message_steps(message, WindowPostMessageOptions { { .transfer = transfer }, target_origin });
+    WindowPostMessageOptions options { heap() };
+    options.transfer = transfer;
+    options.target_origin = target_origin;
+    return window_post_message_steps(message, options);
 }
 
 // https://dom.spec.whatwg.org/#dom-window-event

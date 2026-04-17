@@ -489,7 +489,9 @@ WebIDL::ExceptionOr<void> ReadableStream::transfer_steps(HTML::TransferDataEncod
     WebIDL::mark_promise_as_handled(promise);
 
     // 9. Set dataHolder.[[port]] to ! StructuredSerializeWithTransfer(port2, « port2 »).
-    auto result = MUST(HTML::structured_serialize_with_transfer(vm, port2, { { GC::Root { port2 } } }));
+    GC::RootVector<GC::Ref<JS::Object>> transfer_list { vm.heap() };
+    transfer_list.append(port2);
+    auto result = MUST(HTML::structured_serialize_with_transfer(vm, port2, transfer_list));
     data_holder.extend(move(result.transfer_data_holders));
 
     return {};

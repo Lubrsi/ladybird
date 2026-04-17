@@ -208,11 +208,15 @@ WebIDL::ExceptionOr<void> TransformStream::transfer_steps(HTML::TransferDataEnco
         return WebIDL::DataCloneError::create(realm, "Cannot transfer locked WritableStream"_utf16);
 
     // 5. Set dataHolder.[[readable]] to ! StructuredSerializeWithTransfer(readable, « readable »).
-    auto readable_result = MUST(HTML::structured_serialize_with_transfer(vm, readable, { { GC::Root { readable } } }));
+    GC::RootVector<GC::Ref<JS::Object>> readable_transfer_list { vm.heap() };
+    readable_transfer_list.append(readable);
+    auto readable_result = MUST(HTML::structured_serialize_with_transfer(vm, readable, readable_transfer_list));
     data_holder.extend(move(readable_result.transfer_data_holders));
 
     // 6. Set dataHolder.[[writable]] to ! StructuredSerializeWithTransfer(writable, « writable »).
-    auto writable_result = MUST(HTML::structured_serialize_with_transfer(vm, writable, { { GC::Root { writable } } }));
+    GC::RootVector<GC::Ref<JS::Object>> writable_transfer_list { vm.heap() };
+    writable_transfer_list.append(writable);
+    auto writable_result = MUST(HTML::structured_serialize_with_transfer(vm, writable, writable_transfer_list));
     data_holder.extend(move(writable_result.transfer_data_holders));
 
     return {};

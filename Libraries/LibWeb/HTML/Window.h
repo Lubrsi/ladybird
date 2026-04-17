@@ -44,6 +44,8 @@ struct ScrollToOptions : public ScrollOptions {
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#windowpostmessageoptions
 struct WindowPostMessageOptions : public StructuredSerializeOptions {
+    using StructuredSerializeOptions::StructuredSerializeOptions;
+
     String target_origin { "/"_string };
 };
 
@@ -207,7 +209,7 @@ public:
     bool confirm(Optional<String> const& message);
     Optional<String> prompt(Optional<String> const& message, Optional<String> const& default_);
 
-    WebIDL::ExceptionOr<void> post_message(JS::Value message, String const&, Vector<GC::Root<JS::Object>> const&);
+    WebIDL::ExceptionOr<void> post_message(JS::Value message, String const&, GC::RootVector<GC::Ref<JS::Object>> const&);
     WebIDL::ExceptionOr<void> post_message(JS::Value message, WindowPostMessageOptions const&);
 
     Variant<GC::Root<DOM::Event>, Empty> event() const;
