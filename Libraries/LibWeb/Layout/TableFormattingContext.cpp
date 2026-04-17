@@ -1676,10 +1676,10 @@ void TableFormattingContext::BorderConflictFinder::collect_table_box_conflicting
     }
 }
 
-Vector<TableFormattingContext::ConflictingEdge> TableFormattingContext::BorderConflictFinder::conflicting_edges(
+GC::ConservativeVector<TableFormattingContext::ConflictingEdge> TableFormattingContext::BorderConflictFinder::conflicting_edges(
     Cell const& cell, TableFormattingContext::ConflictingSide edge) const
 {
-    Vector<ConflictingEdge> result = {};
+    GC::ConservativeVector<ConflictingEdge> result { m_context->context_box().heap() };
     collect_cell_conflicting_edges(result, cell, edge);
     collect_row_conflicting_edges(result, cell, edge);
     collect_row_group_conflicting_edges(result, cell, edge);
