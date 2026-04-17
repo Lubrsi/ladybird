@@ -17,7 +17,7 @@ namespace Web::Layout {
 
 class SVGFormattingContext final : public FormattingContext {
 public:
-    explicit SVGFormattingContext(LayoutState&, LayoutMode, Box const&, FormattingContext* parent, Gfx::AffineTransform parent_viewbox_transform = {});
+    explicit SVGFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent, Gfx::AffineTransform parent_viewbox_transform = {});
     ~SVGFormattingContext();
 
     virtual void run(AvailableSpace const&) override;

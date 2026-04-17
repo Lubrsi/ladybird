@@ -165,7 +165,7 @@ private:
 
 class GridFormattingContext final : public FormattingContext {
 public:
-    explicit GridFormattingContext(LayoutState&, LayoutMode, Box const& grid_container, FormattingContext* parent);
+    explicit GridFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const& grid_container, FormattingContext* parent);
     ~GridFormattingContext();
 
     virtual bool inhibits_floating() const override { return true; }

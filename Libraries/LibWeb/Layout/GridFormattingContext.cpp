@@ -190,9 +190,9 @@ GridFormattingContext::GridTrack GridFormattingContext::GridTrack::create_gap(CS
     };
 }
 
-GridFormattingContext::GridFormattingContext(LayoutState& state, LayoutMode layout_mode, Box const& grid_container, FormattingContext* parent)
+GridFormattingContext::GridFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& grid_container, FormattingContext* parent)
     : FormattingContext(Type::Grid, layout_mode, state, grid_container, parent)
-    , m_grid_container_used_values(state.get_mutable(grid_container))
+    , m_grid_container_used_values(state->get_mutable(grid_container))
 {
 }
 
@@ -386,7 +386,7 @@ void GridFormattingContext::place_item_with_row_and_column_position(Box const& c
 
     record_grid_placement(GridItem {
         .box = child_box,
-        .used_values = m_state.get_mutable(child_box),
+        .used_values = m_state->get_mutable(child_box),
         .row = row_start,
         .row_span = row_span,
         .column = column_start,
@@ -416,7 +416,7 @@ void GridFormattingContext::place_item_with_row_position(Box const& child_box)
 
     record_grid_placement(GridItem {
         .box = child_box,
-        .used_values = m_state.get_mutable(child_box),
+        .used_values = m_state->get_mutable(child_box),
         .row = row_start,
         .row_span = row_span,
         .column = column_start,
@@ -441,7 +441,7 @@ void GridFormattingContext::place_item_with_column_position(Box const& child_box
 
     record_grid_placement(GridItem {
         .box = child_box,
-        .used_values = m_state.get_mutable(child_box),
+        .used_values = m_state->get_mutable(child_box),
         .row = auto_placement_cursor_row,
         .row_span = row_span,
         .column = column_start,
@@ -517,7 +517,7 @@ void GridFormattingContext::place_item_with_no_declared_position(Box const& chil
 
     record_grid_placement(GridItem {
         .box = child_box,
-        .used_values = m_state.get_mutable(child_box),
+        .used_values = m_state->get_mutable(child_box),
         .row = row_start,
         .row_span = row_span,
         .column = column_start,
@@ -2187,7 +2187,7 @@ void GridFormattingContext::run(AvailableSpace const& available_space)
 // https://www.w3.org/TR/css-grid-2/#abspos-items
 AbsposContainingBlockInfo GridFormattingContext::resolve_abspos_containing_block_info(Box const& box)
 {
-    auto& abspos_box_state = m_state.get_mutable(box);
+    auto& abspos_box_state = m_state->get_mutable(box);
     auto containing_block_info = FormattingContext::resolve_abspos_containing_block_info(box);
 
     auto grid_area_rect = [&] -> CSSPixelRect {
@@ -2299,7 +2299,7 @@ void GridFormattingContext::parent_context_did_dimension_child_root_box()
 
     grid_container().for_each_child_of_type<Box>([&](Layout::Box& box) {
         if (box.is_absolutely_positioned()) {
-            m_state.get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
+            m_state->get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
         }
         return IterationDecision::Continue;
     });
@@ -2844,7 +2844,7 @@ StaticPositionRect GridFormattingContext::calculate_static_position_rect(Box con
     // If the containing block is a grid container then static position is a grid area rect and
     // layout_absolutely_positioned_element() defined for GFC knows how to handle this case.
     StaticPositionRect static_position;
-    auto const& box_state = m_state.get(box);
+    auto const& box_state = m_state->get(box);
     static_position.rect = { { 0, 0 }, { box_state.content_width(), box_state.content_height() } };
     return static_position;
 }

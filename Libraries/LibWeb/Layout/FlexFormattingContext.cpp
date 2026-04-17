@@ -35,9 +35,9 @@ CSSPixels FlexFormattingContext::get_pixel_height(FlexItem const& item, CSS::Siz
     return calculate_inner_height(item.box, m_available_space.value(), size);
 }
 
-FlexFormattingContext::FlexFormattingContext(LayoutState& state, LayoutMode layout_mode, Box const& flex_container, FormattingContext* parent)
+FlexFormattingContext::FlexFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& flex_container, FormattingContext* parent)
     : FormattingContext(Type::Flex, layout_mode, state, flex_container, parent)
-    , m_flex_container_state(m_state.get_mutable(flex_container))
+    , m_flex_container_state(m_state->get_mutable(flex_container))
     , m_flex_direction(flex_container.computed_values().flex_direction())
 {
 }
@@ -248,7 +248,7 @@ void FlexFormattingContext::parent_context_did_dimension_child_root_box()
 
     flex_container().for_each_child_of_type<Box>([&](Layout::Box& box) {
         if (box.is_absolutely_positioned()) {
-            m_state.get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
+            m_state->get_mutable(box).set_static_position_rect(calculate_static_position_rect(box));
         }
         return IterationDecision::Continue;
     });
@@ -366,7 +366,7 @@ void FlexFormattingContext::generate_anonymous_flex_items()
             return IterationDecision::Continue;
 
         child_box.set_flex_item(true);
-        FlexItem item = { child_box, m_state.get_mutable(child_box) };
+        FlexItem item = { child_box, m_state->get_mutable(child_box) };
         populate_specified_margins(item, m_flex_direction);
 
         auto& order_bucket = order_item_bucket.ensure(child_box.computed_values().order());
@@ -503,17 +503,17 @@ void FlexFormattingContext::set_has_definite_cross_size(FlexItem& item)
 void FlexFormattingContext::set_main_size(Box const& box, CSSPixels size)
 {
     if (main_axis_is_horizontal())
-        m_state.get_mutable(box).set_content_width(size);
+        m_state->get_mutable(box).set_content_width(size);
     else
-        m_state.get_mutable(box).set_content_height(size);
+        m_state->get_mutable(box).set_content_height(size);
 }
 
 void FlexFormattingContext::set_cross_size(Box const& box, CSSPixels size)
 {
     if (cross_axis_is_horizontal())
-        m_state.get_mutable(box).set_content_width(size);
+        m_state->get_mutable(box).set_content_width(size);
     else
-        m_state.get_mutable(box).set_content_height(size);
+        m_state->get_mutable(box).set_content_height(size);
 }
 
 void FlexFormattingContext::set_main_size(FlexItem& item, CSSPixels size)
