@@ -210,11 +210,62 @@ Session `2026-04-16` batch (post-rebase, continued in the same branch):
 | `bff32c105b` | LibWeb/HTML: Adopt `GC::WeakHashSet` for the top-level traversable set (silently drops insertion order — see Deferred). |
 | `371c936fc5` | LibWeb/HTML: Root performance-observer notify list + entry copies (`OrderedRootHashTable` populated by loop; `PerformanceObserverEntryList` constructor takes `RootVector&&` + adopts). |
 
+Session `2026-04-17` batch (continues on the same branch):
+
+| Commit | Summary |
+|---|---|
+| `4e225d3a80` | LibWeb/XHR: Adopt `GC::ConservativeVector` in `FormData` construction (fixes the `call to deleted constructor` compile error from the slicing block). |
+| `87038481a7` | LibWeb/Painting: Root `cell_boxes` list and `cell_coordinates_to_box` map in `paint_table_borders` (`GC::RootVector<GC::Ref<PaintableBox const>>` + `GC::RootHashMap<CellCoordinates, GC::Ptr<PaintableBox const>>`). |
+| `0990cdd88a` | LibWeb/SVG: Take `GC::RootVector<T>&&` in `SVGList` / `SVGNumberList` / `SVGLengthList` / `SVGTransformList` constructors and adopt in `SVGList`'s own member init list (closes the deferred base-class adopt pattern from the previous session). |
+| `d82803839b` | LibWeb/Layout: Root the `absolute_boxes` list in `InlineFormattingContext::run`. |
+| `854e7f77ac` | LibWeb/Layout: Root the throwaway cells/rows locals in the 2-arg `TableGrid::calculate_row_column_grid` overload. |
+| `0f889f38c0` | LibWeb/Layout: Return `GC::ConservativeVector<ConflictingEdge>` from `BorderConflictFinder::conflicting_edges`. |
+| `6f85b10fff` | LibWeb/Layout: Root `seen_content_elements` in `TreeBuilder`'s SVG-pattern recursion guard. |
+| `6b30e81b9e` | LibWeb/Layout: Root paint-tree rebuild inline/text/paintable sets in `LayoutState::commit` (three `HashTable<T*>` → `GC::RootHashTable<GC::Ptr<T>>`). |
+
 Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
 
 ## Session summaries
 
 One paragraph per working session, newest first. The per-commit table above is the raw log; these summaries are the "what shifted" narrative and exist so a future session can pick up without replaying every commit. Each entry should close with the violation count at end of session so the trajectory is legible.
+
+### 2026-04-17 — SVG base-class adopt + Painting/Layout one-offs
+
+Picked off the tractable loose ends that didn't need the bigger Layout /
+`RootedExecutionContext` / Cell-promotion refactors.
+
+Fixed the `FormData` `call to deleted constructor` site: switched the
+`construct_impl` / `create` / ctor signatures to take
+`GC::ConservativeVector<FormDataEntry>&&` and adopted in the member init
+list. Implemented the **SVGList base-class adopt pattern** that the
+previous session had filed as deferred — `SVGList<T>::SVGList` now
+takes `GC::RootVector<T>&&` and adopts in its own member init, so the
+three `SVGNumberList`/`SVGLengthList`/`SVGTransformList` subclass ctors
+just forward the rvalue reference without invoking adopt from a
+derived-class context (which the plugin rejects).
+
+Rooted 8 more transient locals: `absolute_boxes` in inline layout,
+TableGrid's throwaway cells/rows locals, `BorderConflictFinder`'s result
+vector (return type flipped to `GC::ConservativeVector`), TreeBuilder's
+SVG-pattern recursion guard, LayoutState's paint-tree rebuild
+inline/text/paintable sets, and `TableBordersPainting`'s
+`Vector<PaintableBox const&>` + `HashMap<CellCoordinates, PaintableBox
+const*>` (the latter switched to `GC::RootVector<GC::Ref<...>>` and
+`GC::RootHashMap<CellCoordinates, GC::Ptr<...>>`; the inner loops had
+to move from `cell_box.method()` to `cell_box->method()` since the
+iterator now yields `GC::Ref<PaintableBox const>`).
+
+Deferred items unchanged: `ContainedBoxesMap` (nested-container
+indirection — needs section-7 plugin extension), `Vector<TextBlock>` in
+`Viewport::update_text_blocks` (struct-nested `Vector<TextPosition>` would
+need TextBlock redefinition to adopt), FlexFormattingContext and
+GridFormattingContext `HashMap<int, Vector<T>>` (same nested-container
+issue).
+
+**Closing violation count: 62 → 50** (all remaining are Layout cluster,
+`ExecutionContext`, `SimilarOriginWindowAgent`, `MutationLog` transients,
+and the `Vector<Variant<cell,...>>` return-type category — every one
+still blocked on a wider refactor).
 
 ### 2026-04-16 — Post-rebase DOM/HTML/IndexedDB batch + `GC::WeakHashMap`
 
