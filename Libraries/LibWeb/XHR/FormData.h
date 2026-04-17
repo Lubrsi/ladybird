@@ -25,10 +25,10 @@ public:
     virtual ~FormData() override;
 
     static WebIDL::ExceptionOr<GC::Ref<FormData>> construct_impl(JS::Realm&, GC::Ptr<HTML::HTMLFormElement> form = {}, GC::Ptr<HTML::HTMLElement> submitter = nullptr);
-    static WebIDL::ExceptionOr<GC::Ref<FormData>> construct_impl(JS::Realm&, GC::ConservativeVector<FormDataEntry> entry_list);
+    static WebIDL::ExceptionOr<GC::Ref<FormData>> construct_impl(JS::Realm&, GC::ConservativeVector<FormDataEntry>&& entry_list);
 
     static WebIDL::ExceptionOr<GC::Ref<FormData>> create(JS::Realm&, Vector<DOMURL::QueryParam> entry_list);
-    static WebIDL::ExceptionOr<GC::Ref<FormData>> create(JS::Realm&, GC::ConservativeVector<FormDataEntry> entry_list);
+    static WebIDL::ExceptionOr<GC::Ref<FormData>> create(JS::Realm&, GC::ConservativeVector<FormDataEntry>&& entry_list);
 
     WebIDL::ExceptionOr<void> append(String const& name, String const& value);
     WebIDL::ExceptionOr<void> append(String const& name, GC::Ref<FileAPI::Blob> const& blob_value, Optional<String> const& filename = {});
@@ -47,7 +47,7 @@ public:
 private:
     friend class FormDataIterator;
 
-    explicit FormData(JS::Realm&, GC::ConservativeVector<FormDataEntry> entry_list);
+    explicit FormData(JS::Realm&, GC::ConservativeVector<FormDataEntry>&& entry_list);
 
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;

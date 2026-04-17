@@ -55,7 +55,7 @@ WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::construct_impl(JS::Realm& realm
     return construct_impl(realm, move(list));
 }
 
-WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::construct_impl(JS::Realm& realm, GC::ConservativeVector<FormDataEntry> entry_list)
+WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::construct_impl(JS::Realm& realm, GC::ConservativeVector<FormDataEntry>&& entry_list)
 {
     return realm.create<FormData>(realm, move(entry_list));
 }
@@ -70,14 +70,14 @@ WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::create(JS::Realm& realm, Vector
     return construct_impl(realm, move(list));
 }
 
-WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::create(JS::Realm& realm, GC::ConservativeVector<FormDataEntry> entry_list)
+WebIDL::ExceptionOr<GC::Ref<FormData>> FormData::create(JS::Realm& realm, GC::ConservativeVector<FormDataEntry>&& entry_list)
 {
     return construct_impl(realm, move(entry_list));
 }
 
-FormData::FormData(JS::Realm& realm, GC::ConservativeVector<FormDataEntry> entry_list)
+FormData::FormData(JS::Realm& realm, GC::ConservativeVector<FormDataEntry>&& entry_list)
     : PlatformObject(realm)
-    , m_entry_list(entry_list)
+    , m_entry_list(GC::adopt_conservative_vector(move(entry_list)))
 {
 }
 
