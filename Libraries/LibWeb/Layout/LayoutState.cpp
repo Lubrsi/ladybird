@@ -10,6 +10,8 @@
 #include <AK/HashMap.h>
 #include <AK/Tuple.h>
 #include <LibGC/RootHashMap.h>
+#include <LibGC/RootHashTable.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/Layout/AvailableSpace.h>
@@ -113,7 +115,7 @@ LayoutState::UsedValues const* LayoutState::try_get(Node const& node) const
 }
 
 // https://drafts.csswg.org/css-overflow-3/#scrollable-overflow-region
-using ContainedBoxesMap = HashMap<Box const*, Vector<Box const*>>;
+using ContainedBoxesMap = GC::RootHashMap<Box const*, GC::RootVector<Box const*>>;
 
 struct PhysicalOverflowDirections {
     bool x_positive { true };
@@ -393,7 +395,7 @@ void LayoutState::commit(Box& root)
 
     // After this point, we should have a clean slate to build the new paint tree.
 
-    HashTable<Layout::InlineNode*> inline_nodes;
+    GC::RootHashTable<GC::Ptr<Layout::InlineNode>> inline_nodes { root.document().heap() };
 
     root.for_each_in_inclusive_subtree([&](Node& node) {
         if (auto* dom_node = node.dom_node())
@@ -409,8 +411,8 @@ void LayoutState::commit(Box& root)
         return TraversalDecision::Continue;
     });
 
-    HashTable<Layout::TextNode*> text_nodes;
-    HashTable<Painting::PaintableWithLines*> inline_node_paintables;
+    GC::RootHashTable<GC::Ptr<Layout::TextNode>> text_nodes { root.document().heap() };
+    GC::RootHashTable<GC::Ptr<Painting::PaintableWithLines>> inline_node_paintables { root.document().heap() };
 
     auto transfer_box_model_metrics = [](Painting::BoxModelMetrics& box_model, UsedValues const& used_values) {
         box_model.inset = { used_values.inset_top, used_values.inset_right, used_values.inset_bottom, used_values.inset_left };
@@ -551,7 +553,7 @@ void LayoutState::commit(Box& root)
         paintable.set_offset(offset);
     });
 
-    for (auto* text_node : text_nodes)
+    for (auto text_node : text_nodes)
         text_node->add_paintable(text_node->create_paintable());
 
     build_paint_tree(root, parent_paintable);
@@ -559,7 +561,7 @@ void LayoutState::commit(Box& root)
     resolve_relative_positions();
 
     // Measure size of paintables created for inline nodes.
-    for (auto* paintable_with_lines : inline_node_paintables) {
+    for (auto paintable_with_lines : inline_node_paintables) {
         if (!is<InlineNode>(paintable_with_lines->layout_node()))
             continue;
 
@@ -609,13 +611,15 @@ void LayoutState::commit(Box& root)
     }
 
     // Build a map from each containing block to the boxes it contains.
-    ContainedBoxesMap contained_boxes_map;
+    ContainedBoxesMap contained_boxes_map(heap());
     m_used_values_store.for_each([&](UsedValues& used_values) {
         auto const* box = as_if<Box>(used_values.node());
         if (!box || !box->paintable_box())
             return;
-        if (auto containing_block = box->containing_block())
-            contained_boxes_map.ensure(containing_block.ptr()).append(box);
+        if (auto containing_block = box->containing_block()) {
+            auto& bucket = contained_boxes_map.ensure(containing_block.ptr(), [this] { return GC::RootVector<Box const*>(heap()); });
+            bucket.append(box);
+        }
     });
 
     // Measure overflow in scroll containers.

@@ -11,6 +11,7 @@
 
 #include <AK/Optional.h>
 #include <AK/TemporaryChange.h>
+#include <LibGC/RootHashTable.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/ComputedValues.h>
@@ -936,14 +937,14 @@ void TreeBuilder::update_layout_tree_after_children(DOM::Node& dom_node, GC::Ref
         if (auto clip_path = graphics_element.clip_path())
             layout_mask_or_clip_path(clip_path);
 
-        HashTable<SVG::SVGPatternElement const*> seen_content_elements;
+        GC::RootHashTable<GC::Ptr<SVG::SVGPatternElement const>> seen_content_elements { layout_node->heap() };
         auto layout_pattern = [&](GC::Ptr<SVG::SVGPatternElement const> pattern) {
             if (!pattern)
                 return;
             auto content_element = pattern->pattern_content_element();
             if (!content_element)
                 return;
-            if (seen_content_elements.set(content_element.ptr()) != AK::HashSetResult::InsertedNewEntry)
+            if (seen_content_elements.set(content_element) != AK::HashSetResult::InsertedNewEntry)
                 return;
             TemporaryChange<bool> layout_flag(context.layout_svg_pattern, true);
             push_parent(as<NodeWithStyle>(*layout_node));

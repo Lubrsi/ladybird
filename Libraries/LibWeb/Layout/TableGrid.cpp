@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/HTML/HTMLTableCellElement.h>
 #include <LibWeb/HTML/HTMLTableColElement.h>
 #include <LibWeb/Layout/TableGrid.h>
@@ -166,8 +167,8 @@ TableGrid TableGrid::calculate_row_column_grid(Box const& box, Vector<Cell>& cel
 
 TableGrid TableGrid::calculate_row_column_grid(Box const& box)
 {
-    Vector<Cell> cells;
-    Vector<Row> rows;
+    GC::ConservativeVector<Cell> cells { box.heap() };
+    GC::ConservativeVector<Row> rows { box.heap() };
     return calculate_row_column_grid(box, cells, rows);
 }
 
