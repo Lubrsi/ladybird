@@ -56,7 +56,7 @@ private:
 
     LineBox& ensure_last_line_box();
 
-    InlineFormattingContext& m_context;
+    GC::Ref<InlineFormattingContext> m_context;
     GC::Ref<LayoutState> m_layout_state;
     LayoutState::UsedValues& m_containing_block_used_values;
     AvailableSize m_available_width_for_current_line { AvailableSize::make_indefinite() };

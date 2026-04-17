@@ -16,6 +16,8 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(InlineFormattingContext);
+
 InlineFormattingContext::InlineFormattingContext(
     GC::Ref<LayoutState> state,
     LayoutMode layout_mode,

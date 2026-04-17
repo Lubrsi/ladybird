@@ -14,9 +14,11 @@
 namespace Web::Layout {
 
 class InlineFormattingContext final : public FormattingContext {
+    GC_CELL(InlineFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(InlineFormattingContext);
+
 public:
-    InlineFormattingContext(GC::Ref<LayoutState>, LayoutMode, BlockContainer const& containing_block, LayoutState::UsedValues& containing_block_used_values, BlockFormattingContext& parent);
-    ~InlineFormattingContext();
+    virtual ~InlineFormattingContext() override;
 
     BlockFormattingContext& parent();
     BlockFormattingContext const& parent() const;
@@ -39,6 +41,8 @@ public:
     void set_vertical_float_clearance(CSSPixels);
 
 private:
+    InlineFormattingContext(GC::Ref<LayoutState>, LayoutMode, BlockContainer const& containing_block, LayoutState::UsedValues& containing_block_used_values, BlockFormattingContext& parent);
+
     void generate_line_boxes();
     void apply_text_overflow_ellipsis(Vector<LineBox>&);
     void apply_justification_to_fragments(CSS::TextJustify, LineBox&, bool is_last_line);

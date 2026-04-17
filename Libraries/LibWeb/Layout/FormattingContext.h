@@ -6,7 +6,9 @@
 
 #pragma once
 
-#include <AK/OwnPtr.h>
+#include <LibGC/Cell.h>
+#include <LibGC/CellAllocator.h>
+#include <LibGC/Ptr.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Layout/AvailableSpace.h>
 #include <LibWeb/Layout/LayoutState.h>
@@ -55,13 +57,17 @@ struct AbsposContainingBlockInfo {
     Optional<Alignment> vertical_alignment;
 };
 
-class FormattingContext {
+class FormattingContext : public GC::Cell {
+    GC_CELL(FormattingContext, GC::Cell);
+
 #if FORMATTING_CONTEXT_TRACE_DEBUG
     friend class FormattingContextTracer;
 #endif
 
 public:
-    virtual ~FormattingContext();
+    virtual ~FormattingContext() override;
+
+    virtual void visit_edges(Visitor&) override;
 
     enum class Type {
         Block,
@@ -111,6 +117,8 @@ public:
     FormattingContext* parent() { return m_parent; }
     FormattingContext const* parent() const { return m_parent; }
 
+    GC::Heap& heap() const { return m_context_box->heap(); }
+
     Type type() const { return m_type; }
 
     virtual bool inhibits_floating() const { return false; }
@@ -125,8 +133,8 @@ public:
     CSSPixels compute_width_for_replaced_element(Box const&, AvailableSpace const&) const;
     CSSPixels compute_height_for_replaced_element(Box const&, AvailableSpace const&) const;
 
-    OwnPtr<FormattingContext> create_independent_formatting_context_if_needed(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
-    NonnullOwnPtr<FormattingContext> create_independent_formatting_context(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
+    GC::Ptr<FormattingContext> create_independent_formatting_context_if_needed(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
+    GC::Ref<FormattingContext> create_independent_formatting_context(GC::Ref<LayoutState>, LayoutMode, Box const& child_box);
 
     virtual void parent_context_did_dimension_child_root_box() { }
 
@@ -170,7 +178,7 @@ protected:
 
     [[nodiscard]] bool box_is_sized_as_replaced_element(Box const&, AvailableSpace const&) const;
 
-    OwnPtr<FormattingContext> layout_inside(Box const&, LayoutMode, AvailableSpace const&);
+    GC::Ptr<FormattingContext> layout_inside(Box const&, LayoutMode, AvailableSpace const&);
 
     struct SpaceUsedByFloats {
         CSSPixels left { 0 };
@@ -229,7 +237,7 @@ protected:
     Type m_type {};
     LayoutMode m_layout_mode;
 
-    FormattingContext* m_parent { nullptr };
+    GC::Ptr<FormattingContext> m_parent;
     GC::Ref<Box const> m_context_box;
 
     GC::Ref<LayoutState> m_state;

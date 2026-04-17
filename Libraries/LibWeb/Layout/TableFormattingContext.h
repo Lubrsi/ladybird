@@ -20,9 +20,13 @@ enum class TableDimension {
 };
 
 class TableFormattingContext final : public FormattingContext {
+    GC_CELL(TableFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(TableFormattingContext);
+
 public:
-    explicit TableFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent);
-    ~TableFormattingContext();
+    virtual ~TableFormattingContext() override;
+
+    virtual void visit_edges(Visitor&) override;
 
     void run_until_width_calculation(AvailableSpace const& available_space);
 
@@ -42,6 +46,8 @@ public:
     virtual void parent_context_did_dimension_child_root_box() override;
 
 private:
+    TableFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent);
+
     CSSPixels run_caption_layout(CSS::CaptionSide, AvailableSpace const&);
     CSSPixels compute_capmin();
     void compute_constrainedness();
@@ -187,7 +193,7 @@ private:
 
         Vector<GC::Ptr<Node const>> m_col_elements_by_index;
         Vector<Optional<RowGroupInfo>> m_row_group_elements_by_index;
-        TableFormattingContext const* m_context;
+        GC::Ptr<TableFormattingContext const> m_context;
     };
 
     Vector<Cell> m_cells;

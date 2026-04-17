@@ -12,9 +12,13 @@
 namespace Web::Layout {
 
 class FlexFormattingContext final : public FormattingContext {
+    GC_CELL(FlexFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(FlexFormattingContext);
+
 public:
-    FlexFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const& flex_container, FormattingContext* parent);
-    ~FlexFormattingContext();
+    virtual ~FlexFormattingContext() override;
+
+    virtual void visit_edges(Visitor&) override;
 
     virtual bool inhibits_floating() const override { return true; }
 
@@ -27,6 +31,8 @@ public:
     StaticPositionRect calculate_static_position_rect(Box const&) const;
 
 private:
+    FlexFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const& flex_container, FormattingContext* parent);
+
     [[nodiscard]] bool should_treat_main_size_as_auto(Box const&) const;
     [[nodiscard]] bool should_treat_cross_size_as_auto(Box const&) const;
 
@@ -106,6 +112,11 @@ private:
         CSSPixels add_cross_margin_box_sizes(CSSPixels content_size) const
         {
             return content_size + margins.cross_before + margins.cross_after + borders.cross_before + borders.cross_after + padding.cross_before + padding.cross_after;
+        }
+
+        void visit_edges(GC::Cell::Visitor& visitor)
+        {
+            visitor.visit(box);
         }
     };
 

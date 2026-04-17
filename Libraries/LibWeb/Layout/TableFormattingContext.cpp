@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ScopeGuard.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLTableColElement.h>
@@ -14,12 +15,23 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(TableFormattingContext);
+
 TableFormattingContext::TableFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& root, FormattingContext* parent)
     : FormattingContext(Type::Table, layout_mode, state, root, parent)
 {
 }
 
 TableFormattingContext::~TableFormattingContext() = default;
+
+void TableFormattingContext::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    for (auto& cell : m_cells)
+        cell.visit_edges(visitor);
+    for (auto& row : m_rows)
+        row.visit_edges(visitor);
+}
 
 CSSPixels TableFormattingContext::table_wrapper_containing_block_width() const
 {
@@ -58,6 +70,7 @@ CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase, Ava
         // The caption boxes are principal block-level boxes that retain their own content, padding, margin, and border areas,
         // and are rendered as normal block boxes inside the table wrapper box, as described in https://www.w3.org/TR/CSS22/tables.html#model
         if (auto caption_context = create_independent_formatting_context_if_needed(m_state, m_layout_mode, child_box)) {
+            ScopeGuard notify_guard { [&] { caption_context->parent_context_did_dimension_child_root_box(); } };
             auto inner_available_space = caption_available_space;
             auto* block_context = as_if<BlockFormattingContext>(caption_context.ptr());
             if (block_context) {

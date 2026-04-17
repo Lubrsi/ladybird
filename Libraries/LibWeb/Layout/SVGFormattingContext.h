@@ -16,15 +16,19 @@
 namespace Web::Layout {
 
 class SVGFormattingContext final : public FormattingContext {
+    GC_CELL(SVGFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(SVGFormattingContext);
+
 public:
-    explicit SVGFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent, Gfx::AffineTransform parent_viewbox_transform = {});
-    ~SVGFormattingContext();
+    virtual ~SVGFormattingContext() override;
 
     virtual void run(AvailableSpace const&) override;
     virtual CSSPixels automatic_content_width() const override;
     virtual CSSPixels automatic_content_height() const override;
 
 private:
+    SVGFormattingContext(GC::Ref<LayoutState>, LayoutMode, Box const&, FormattingContext* parent, Gfx::AffineTransform parent_viewbox_transform = {});
+
     void layout_svg_element(Box const&);
     void layout_nested_viewport(Box const&);
     void layout_container_element(SVGBox const&);

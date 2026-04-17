@@ -9,6 +9,8 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(ReplacedWithChildrenFormattingContext);
+
 ReplacedWithChildrenFormattingContext::ReplacedWithChildrenFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& box, FormattingContext* parent)
     : FormattingContext(Type::ReplacedWithChildren, layout_mode, state, box, parent)
 {
@@ -47,7 +49,7 @@ void ReplacedWithChildrenFormattingContext::run(AvailableSpace const& available_
     wrapper_state.set_content_width(content_width);
     wrapper_state.set_content_offset({ 0, 0 });
 
-    auto bfc = make<BlockFormattingContext>(m_state, m_layout_mode, *wrapper, this);
+    auto bfc = heap().allocate<BlockFormattingContext>(m_state, m_layout_mode, *wrapper, this);
     bfc->run(child_available_space);
 
     m_automatic_content_width = content_width;

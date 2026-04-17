@@ -17,8 +17,8 @@ LineBuilder::LineBuilder(InlineFormattingContext& context, GC::Ref<LayoutState> 
     , m_direction(direction)
     , m_writing_mode(writing_mode)
 {
-    auto text_indent = m_context.containing_block().computed_values().text_indent();
-    m_text_indent = text_indent.length_percentage.to_px(m_context.containing_block(), m_containing_block_used_values.content_width());
+    auto text_indent = m_context->containing_block().computed_values().text_indent();
+    m_text_indent = text_indent.length_percentage.to_px(m_context->containing_block(), m_containing_block_used_values.content_width());
     m_text_indent_each_line = text_indent.each_line;
     m_text_indent_hanging = text_indent.hanging;
     begin_new_line(false);
@@ -41,9 +41,9 @@ void LineBuilder::break_line(ForcedBreak forced_break, Optional<CSSPixels> next_
         m_containing_block_used_values.line_boxes.append(LineBox(m_direction, m_writing_mode));
         begin_new_line(true, break_count == 0, forced_break);
         break_count++;
-        floats_intrude_at_current_y = m_context.any_floats_intrude_at_block_offset(m_current_block_offset);
+        floats_intrude_at_current_y = m_context->any_floats_intrude_at_block_offset(m_current_block_offset);
     } while (floats_intrude_at_current_y
-        && (!m_context.can_fit_new_line_at_block_offset(m_current_block_offset)
+        && (!m_context->can_fit_new_line_at_block_offset(m_current_block_offset)
             || (next_item_width.value_or(0) > m_available_width_for_current_line)));
 }
 
@@ -52,7 +52,7 @@ void LineBuilder::begin_new_line(bool increment_y, bool is_first_break_in_sequen
     if (increment_y) {
         if (is_first_break_in_sequence) {
             // First break is simple, just go to the start of the next line.
-            m_current_block_offset += max(m_max_height_on_current_line, m_context.containing_block().computed_values().line_height());
+            m_current_block_offset += max(m_max_height_on_current_line, m_context->containing_block().computed_values().line_height());
         } else {
             // We're doing more than one break in a row.
             // This means we're trying to squeeze past intruding floats.
@@ -60,7 +60,7 @@ void LineBuilder::begin_new_line(bool increment_y, bool is_first_break_in_sequen
             // FIXME: This is super dumb and inefficient.
             CSSPixels candidate_block_offset = m_current_block_offset + 1;
             while (true) {
-                if (m_context.can_fit_new_line_at_block_offset(candidate_block_offset))
+                if (m_context->can_fit_new_line_at_block_offset(candidate_block_offset))
                     break;
                 ++candidate_block_offset;
             }
@@ -133,11 +133,11 @@ CSSPixels LineBuilder::y_for_float_to_be_inserted_here(Box const& box)
         candidate_block_offset += current_line.height();
 
     // Then, look for the next Y position where we can fit the new float.
-    auto box_in_root_rect = m_context.parent().content_box_rect_in_ancestor_coordinate_space(box_state, m_context.parent().root());
+    auto box_in_root_rect = m_context->parent().content_box_rect_in_ancestor_coordinate_space(box_state, m_context->parent().root());
 
     // New floats will always be placed vertically at or below the lowest float.
     // This applies to all floats, so the last inserted float will always be the lowest.
-    auto last_float = m_context.parent().last_inserted_float();
+    auto last_float = m_context->parent().last_inserted_float();
     if (last_float.has_value()) {
         auto float_box_top = last_float->margin_box_rect_in_root_coordinate_space.top() - box_in_root_rect.y();
         candidate_block_offset = max(candidate_block_offset, float_box_top);
@@ -148,7 +148,7 @@ CSSPixels LineBuilder::y_for_float_to_be_inserted_here(Box const& box)
         Optional<CSSPixels> highest_intersection_bottom;
         auto candidate_block_bottom = candidate_block_offset + height;
 
-        m_context.parent().for_each_floating_box([&](auto const& float_box) {
+        m_context->parent().for_each_floating_box([&](auto const& float_box) {
             auto float_box_top = float_box.margin_box_rect_in_root_coordinate_space.top() - box_in_root_rect.y();
             auto float_box_bottom = float_box.margin_box_rect_in_root_coordinate_space.bottom() - box_in_root_rect.y();
             if (float_box_bottom <= candidate_block_offset)
@@ -158,7 +158,7 @@ CSSPixels LineBuilder::y_for_float_to_be_inserted_here(Box const& box)
                 if (y_coordinate < top || y_coordinate > bottom)
                     return;
                 auto available_space = available_space_cache.ensure(y_coordinate, [&]() {
-                    return m_context.available_space_for_line(y_coordinate);
+                    return m_context->available_space_for_line(y_coordinate);
                 });
                 if (width > available_space)
                     highest_intersection_bottom = min(highest_intersection_bottom.value_or(float_box_bottom), float_box_bottom);
@@ -176,7 +176,7 @@ CSSPixels LineBuilder::y_for_float_to_be_inserted_here(Box const& box)
         candidate_block_offset = highest_intersection_bottom.value();
     }
 
-    return max(candidate_block_offset, m_context.vertical_float_clearance());
+    return max(candidate_block_offset, m_context->vertical_float_clearance());
 }
 
 bool LineBuilder::should_break(CSSPixels next_item_width)
@@ -188,9 +188,9 @@ bool LineBuilder::should_break(CSSPixels next_item_width)
     if (line_boxes.is_empty() || line_boxes.last().is_empty()) {
         // If we don't have a single line box yet *and* there are no floats intruding
         // at this Y coordinate, we don't need to break before inserting anything.
-        if (!m_context.any_floats_intrude_at_block_offset(m_current_block_offset))
+        if (!m_context->any_floats_intrude_at_block_offset(m_current_block_offset))
             return false;
-        if (!m_context.any_floats_intrude_at_block_offset(m_current_block_offset + m_context.containing_block().computed_values().line_height()))
+        if (!m_context->any_floats_intrude_at_block_offset(m_current_block_offset + m_context->containing_block().computed_values().line_height()))
             return false;
     }
     auto current_line_width = ensure_last_line_box().width();
@@ -209,12 +209,12 @@ void LineBuilder::update_last_line()
 
     auto& line_box = line_boxes.last();
 
-    auto text_align = m_context.containing_block().computed_values().text_align();
-    auto direction = m_context.containing_block().computed_values().direction();
+    auto text_align = m_context->containing_block().computed_values().text_align();
+    auto direction = m_context->containing_block().computed_values().direction();
 
-    auto current_line_height = max(m_max_height_on_current_line, m_context.containing_block().computed_values().line_height());
-    CSSPixels inline_offset_top = m_context.leftmost_inline_offset_at(m_current_block_offset);
-    CSSPixels inline_offset_bottom = m_context.leftmost_inline_offset_at(m_current_block_offset + current_line_height - 1);
+    auto current_line_height = max(m_max_height_on_current_line, m_context->containing_block().computed_values().line_height());
+    CSSPixels inline_offset_top = m_context->leftmost_inline_offset_at(m_current_block_offset);
+    CSSPixels inline_offset_bottom = m_context->leftmost_inline_offset_at(m_current_block_offset + current_line_height - 1);
     CSSPixels inline_offset = max(inline_offset_top, inline_offset_bottom);
     CSSPixels block_offset = 0;
 
@@ -258,8 +258,8 @@ void LineBuilder::update_last_line()
     }
 
     auto strut_baseline = [&] {
-        auto& font = m_context.containing_block().first_available_font();
-        auto const line_height = m_context.containing_block().computed_values().line_height();
+        auto& font = m_context->containing_block().first_available_font();
+        auto const line_height = m_context->containing_block().computed_values().line_height();
         auto const font_metrics = font.pixel_metrics();
         auto const typographic_height = CSSPixels::nearest_value_for(font_metrics.ascent + font_metrics.descent);
         auto const leading = line_height - typographic_height;
@@ -284,7 +284,7 @@ void LineBuilder::update_last_line()
                 fragment_baseline = CSSPixels::nearest_value_for(font_metrics.ascent) + half_leading;
             } else {
                 auto const& box = as<Layout::Box>(fragment.layout_node());
-                fragment_baseline = m_context.box_baseline(box);
+                fragment_baseline = m_context->box_baseline(box);
             }
 
             // Remember the baseline used for this fragment. This will be used when painting the fragment.
@@ -303,7 +303,7 @@ void LineBuilder::update_last_line()
 
     // Start with the "strut", an imaginary zero-width box at the start of each line box.
     auto strut_top = m_current_block_offset;
-    auto strut_bottom = m_current_block_offset + m_context.containing_block().computed_values().line_height();
+    auto strut_bottom = m_current_block_offset + m_context->containing_block().computed_values().line_height();
 
     CSSPixels uppermost_box_top = strut_top;
     CSSPixels lowermost_box_bottom = strut_bottom;
@@ -331,7 +331,7 @@ void LineBuilder::update_last_line()
             case CSS::VerticalAlign::Middle: {
                 // Align the vertical midpoint of the box with the baseline of the parent box
                 // plus half the x-height of the parent.
-                auto const x_height = CSSPixels::nearest_value_for(m_context.containing_block().first_available_font().pixel_metrics().x_height);
+                auto const x_height = CSSPixels::nearest_value_for(m_context->containing_block().first_available_font().pixel_metrics().x_height);
                 return m_current_block_offset + line_box_baseline + ((effective_box_top_offset - effective_box_bottom_offset - x_height - fragment.height()) / 2);
             }
             case CSS::VerticalAlign::Sub:
@@ -339,13 +339,13 @@ void LineBuilder::update_last_line()
                 // Lower by the offset appropriate for subscripts of the parent’s box.
                 // The UA may use the parent’s font metrics to find this offset; otherwise it defaults to dropping by one fifth of the parent’s used font-size.
                 // FIXME: Use font metrics to find a more appropriate offset, if possible
-                return alphabetic_baseline + m_context.containing_block().computed_values().font_size() / 5;
+                return alphabetic_baseline + m_context->containing_block().computed_values().font_size() / 5;
             case CSS::VerticalAlign::Super:
                 // https://drafts.csswg.org/css-inline/#valdef-baseline-shift-super
                 // Raise by the offset appropriate for superscripts of the parent’s box.
                 // The UA may use the parent’s font metrics to find this offset; otherwise it defaults to raising by one third of the parent’s used font-size.
                 // FIXME: Use font metrics to find a more appropriate offset, if possible
-                return alphabetic_baseline - m_context.containing_block().computed_values().font_size() / 3;
+                return alphabetic_baseline - m_context->containing_block().computed_values().font_size() / 3;
             case CSS::VerticalAlign::Bottom:
             case CSS::VerticalAlign::TextBottom:
             case CSS::VerticalAlign::TextTop:
@@ -412,9 +412,9 @@ void LineBuilder::remove_last_line_if_empty()
 
 void LineBuilder::recalculate_available_space()
 {
-    auto current_line_height = max(m_max_height_on_current_line, m_context.containing_block().computed_values().line_height());
-    auto available_at_top_of_line_box = m_context.available_space_for_line(m_current_block_offset);
-    auto available_at_bottom_of_line_box = m_context.available_space_for_line(m_current_block_offset + current_line_height - 1);
+    auto current_line_height = max(m_max_height_on_current_line, m_context->containing_block().computed_values().line_height());
+    auto available_at_top_of_line_box = m_context->available_space_for_line(m_current_block_offset);
+    auto available_at_bottom_of_line_box = m_context->available_space_for_line(m_current_block_offset + current_line_height - 1);
     m_available_width_for_current_line = min(available_at_bottom_of_line_box, available_at_top_of_line_box);
     if (!m_containing_block_used_values.line_boxes.is_empty())
         m_containing_block_used_values.line_boxes.last().m_original_available_width = m_available_width_for_current_line;

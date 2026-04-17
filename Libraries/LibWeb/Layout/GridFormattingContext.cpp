@@ -191,6 +191,8 @@ GridFormattingContext::GridTrack GridFormattingContext::GridTrack::create_gap(CS
     };
 }
 
+GC_DEFINE_ALLOCATOR(GridFormattingContext);
+
 GridFormattingContext::GridFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& grid_container, FormattingContext* parent)
     : FormattingContext(Type::Grid, layout_mode, state, grid_container, parent)
     , m_grid_container_used_values(state->get_mutable(grid_container))
@@ -198,6 +200,13 @@ GridFormattingContext::GridFormattingContext(GC::Ref<LayoutState> state, LayoutM
 }
 
 GridFormattingContext::~GridFormattingContext() = default;
+
+void GridFormattingContext::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    for (auto& item : m_grid_items)
+        item.visit_edges(visitor);
+}
 
 CSSPixels GridFormattingContext::resolve_definite_track_size(CSS::GridSize const& grid_size, AvailableSpace const& available_space) const
 {

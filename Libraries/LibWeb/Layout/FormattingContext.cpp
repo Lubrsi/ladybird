@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ScopeGuard.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/AnchorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
@@ -39,6 +40,14 @@ FormattingContext::FormattingContext(Type type, LayoutMode layout_mode, GC::Ref<
 }
 
 FormattingContext::~FormattingContext() = default;
+
+void FormattingContext::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_parent);
+    visitor.visit(m_context_box);
+    visitor.visit(m_state);
+}
 
 // https://developer.mozilla.org/en-US/docs/Web/Guide/CSS/Block_formatting_context
 bool FormattingContext::creates_block_formatting_context(Box const& box)
@@ -198,28 +207,44 @@ Optional<FormattingContext::Type> FormattingContext::formatting_context_type_cre
 }
 
 // FIXME: This is a hack. Get rid of it.
-struct ReplacedFormattingContext : public FormattingContext {
+class ReplacedFormattingContext final : public FormattingContext {
+    GC_CELL(ReplacedFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(ReplacedFormattingContext);
+
+public:
+    virtual CSSPixels automatic_content_width() const override { return 0; }
+    virtual CSSPixels automatic_content_height() const override { return 0; }
+    virtual void run(AvailableSpace const&) override { }
+
+private:
     ReplacedFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& box)
         : FormattingContext(Type::InternalReplaced, layout_mode, state, box)
     {
     }
+};
+
+GC_DEFINE_ALLOCATOR(ReplacedFormattingContext);
+
+// FIXME: This is a hack. Get rid of it.
+class DummyFormattingContext final : public FormattingContext {
+    GC_CELL(DummyFormattingContext, FormattingContext);
+    GC_DECLARE_ALLOCATOR(DummyFormattingContext);
+
+public:
     virtual CSSPixels automatic_content_width() const override { return 0; }
     virtual CSSPixels automatic_content_height() const override { return 0; }
     virtual void run(AvailableSpace const&) override { }
-};
 
-// FIXME: This is a hack. Get rid of it.
-struct DummyFormattingContext : public FormattingContext {
+private:
     DummyFormattingContext(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& box)
         : FormattingContext(Type::InternalDummy, layout_mode, state, box)
     {
     }
-    virtual CSSPixels automatic_content_width() const override { return 0; }
-    virtual CSSPixels automatic_content_height() const override { return 0; }
-    virtual void run(AvailableSpace const&) override { }
 };
 
-OwnPtr<FormattingContext> FormattingContext::create_independent_formatting_context_if_needed(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& child_box)
+GC_DEFINE_ALLOCATOR(DummyFormattingContext);
+
+GC::Ptr<FormattingContext> FormattingContext::create_independent_formatting_context_if_needed(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& child_box)
 {
     auto type = formatting_context_type_created_by_box(child_box);
     if (!type.has_value())
@@ -227,21 +252,21 @@ OwnPtr<FormattingContext> FormattingContext::create_independent_formatting_conte
 
     switch (type.value()) {
     case Type::Block:
-        return make<BlockFormattingContext>(state, layout_mode, as<BlockContainer>(child_box), this);
+        return heap().allocate<BlockFormattingContext>(state, layout_mode, as<BlockContainer>(child_box), this);
     case Type::SVG:
-        return make<SVGFormattingContext>(state, layout_mode, child_box, this);
+        return heap().allocate<SVGFormattingContext>(state, layout_mode, child_box, this);
     case Type::Flex:
-        return make<FlexFormattingContext>(state, layout_mode, child_box, this);
+        return heap().allocate<FlexFormattingContext>(state, layout_mode, child_box, this);
     case Type::Grid:
-        return make<GridFormattingContext>(state, layout_mode, child_box, this);
+        return heap().allocate<GridFormattingContext>(state, layout_mode, child_box, this);
     case Type::Table:
-        return make<TableFormattingContext>(state, layout_mode, child_box, this);
+        return heap().allocate<TableFormattingContext>(state, layout_mode, child_box, this);
     case Type::ReplacedWithChildren:
-        return make<ReplacedWithChildrenFormattingContext>(state, layout_mode, child_box, this);
+        return heap().allocate<ReplacedWithChildrenFormattingContext>(state, layout_mode, child_box, this);
     case Type::InternalReplaced:
-        return make<ReplacedFormattingContext>(state, layout_mode, child_box);
+        return heap().allocate<ReplacedFormattingContext>(state, layout_mode, child_box);
     case Type::InternalDummy:
-        return make<DummyFormattingContext>(state, layout_mode, child_box);
+        return heap().allocate<DummyFormattingContext>(state, layout_mode, child_box);
     case Type::Inline:
         // IFC should always be created by a parent BFC directly.
         VERIFY_NOT_REACHED();
@@ -251,20 +276,20 @@ OwnPtr<FormattingContext> FormattingContext::create_independent_formatting_conte
     }
 }
 
-NonnullOwnPtr<FormattingContext> FormattingContext::create_independent_formatting_context(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& child_box)
+GC::Ref<FormattingContext> FormattingContext::create_independent_formatting_context(GC::Ref<LayoutState> state, LayoutMode layout_mode, Box const& child_box)
 {
     if (auto context = create_independent_formatting_context_if_needed(state, layout_mode, child_box))
-        return context.release_nonnull();
+        return *context;
 
     if (auto child_block_container = as_if<BlockContainer>(child_box))
-        return make<BlockFormattingContext>(state, layout_mode, *child_block_container, nullptr);
+        return heap().allocate<BlockFormattingContext>(state, layout_mode, *child_block_container, nullptr);
 
     // HACK: Instead of crashing in scenarios that assume the formatting context can be created, create a dummy formatting context that does nothing.
     dbgln("FIXME: An independent formatting context was requested from a Box that does not have a formatting context type. A dummy formatting context will be created instead.");
-    return make<DummyFormattingContext>(state, layout_mode, child_box);
+    return heap().allocate<DummyFormattingContext>(state, layout_mode, child_box);
 }
 
-OwnPtr<FormattingContext> FormattingContext::layout_inside(Box const& child_box, LayoutMode layout_mode, AvailableSpace const& available_space)
+GC::Ptr<FormattingContext> FormattingContext::layout_inside(Box const& child_box, LayoutMode layout_mode, AvailableSpace const& available_space)
 {
     {
         // OPTIMIZATION: If we're doing intrinsic sizing and `child_box` has definite size in both axes,
@@ -495,7 +520,7 @@ CSSPixels FormattingContext::compute_table_box_width_inside_table_wrapper(Box co
     table_box_state.padding_left = table_box_computed_values.padding().left().to_px_or_zero(*table_box, width_of_containing_block);
     table_box_state.padding_right = table_box_computed_values.padding().right().to_px_or_zero(*table_box, width_of_containing_block);
 
-    auto context = make<TableFormattingContext>(throwaway_state, LayoutMode::IntrinsicSizing, *table_box, this);
+    auto context = heap().allocate<TableFormattingContext>(throwaway_state, LayoutMode::IntrinsicSizing, *table_box, this);
     context->run_until_width_calculation(m_state->get(*table_box).available_inner_space_or_constraints_from(available_space));
 
     auto table_used_width = throwaway_state->get(*table_box).border_box_width();
@@ -525,6 +550,7 @@ CSSPixels FormattingContext::compute_table_box_height_inside_table_wrapper(Box c
 
     auto context = create_independent_formatting_context_if_needed(throwaway_state, LayoutMode::IntrinsicSizing, box);
     VERIFY(context);
+    ScopeGuard notify_guard { [&] { context->parent_context_did_dimension_child_root_box(); } };
     context->run(m_state->get(box).available_inner_space_or_constraints_from(available_space));
 
     Optional<Box const&> table_box;
@@ -1942,6 +1968,7 @@ CSSPixels FormattingContext::calculate_min_content_width(Layout::Box const& box)
     box_state.set_indefinite_content_width();
 
     auto context = const_cast<FormattingContext*>(this)->create_independent_formatting_context(throwaway_state, LayoutMode::IntrinsicSizing, box);
+    ScopeGuard notify_guard { [&] { context->parent_context_did_dimension_child_root_box(); } };
 
     auto available_width = AvailableSize::make_min_content();
     auto available_height = box_state.has_definite_height()
@@ -1985,6 +2012,7 @@ CSSPixels FormattingContext::calculate_max_content_width(Layout::Box const& box)
     box_state.padding_right = actual_box_state.padding_right;
 
     auto context = const_cast<FormattingContext*>(this)->create_independent_formatting_context(throwaway_state, LayoutMode::IntrinsicSizing, box);
+    ScopeGuard notify_guard { [&] { context->parent_context_did_dimension_child_root_box(); } };
 
     auto available_width = AvailableSize::make_max_content();
     auto available_height = box_state.has_definite_height()
@@ -2028,6 +2056,7 @@ CSSPixels FormattingContext::calculate_min_content_height(Layout::Box const& box
     box_state.set_content_width(width);
 
     auto context = const_cast<FormattingContext*>(this)->create_independent_formatting_context(throwaway_state, LayoutMode::IntrinsicSizing, box);
+    ScopeGuard notify_guard { [&] { context->parent_context_did_dimension_child_root_box(); } };
 
     context->run(AvailableSpace(AvailableSize::make_definite(width), AvailableSize::make_min_content()));
 
@@ -2061,6 +2090,7 @@ CSSPixels FormattingContext::calculate_max_content_height(Layout::Box const& box
     box_state.set_content_width(width);
 
     auto context = const_cast<FormattingContext*>(this)->create_independent_formatting_context(throwaway_state, LayoutMode::IntrinsicSizing, box);
+    ScopeGuard notify_guard { [&] { context->parent_context_did_dimension_child_root_box(); } };
 
     context->run(AvailableSpace(AvailableSize::make_definite(width), AvailableSize::make_max_content()));
 
