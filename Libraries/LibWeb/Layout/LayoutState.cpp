@@ -10,6 +10,7 @@
 #include <AK/HashMap.h>
 #include <AK/Tuple.h>
 #include <LibGC/RootHashMap.h>
+#include <LibGC/RootHashTable.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/Layout/AvailableSpace.h>
@@ -393,7 +394,7 @@ void LayoutState::commit(Box& root)
 
     // After this point, we should have a clean slate to build the new paint tree.
 
-    HashTable<Layout::InlineNode*> inline_nodes;
+    GC::RootHashTable<GC::Ptr<Layout::InlineNode>> inline_nodes { root.document().heap() };
 
     root.for_each_in_inclusive_subtree([&](Node& node) {
         if (auto* dom_node = node.dom_node())
@@ -409,8 +410,8 @@ void LayoutState::commit(Box& root)
         return TraversalDecision::Continue;
     });
 
-    HashTable<Layout::TextNode*> text_nodes;
-    HashTable<Painting::PaintableWithLines*> inline_node_paintables;
+    GC::RootHashTable<GC::Ptr<Layout::TextNode>> text_nodes { root.document().heap() };
+    GC::RootHashTable<GC::Ptr<Painting::PaintableWithLines>> inline_node_paintables { root.document().heap() };
 
     auto transfer_box_model_metrics = [](Painting::BoxModelMetrics& box_model, UsedValues const& used_values) {
         box_model.inset = { used_values.inset_top, used_values.inset_right, used_values.inset_bottom, used_values.inset_left };
@@ -551,7 +552,7 @@ void LayoutState::commit(Box& root)
         paintable.set_offset(offset);
     });
 
-    for (auto* text_node : text_nodes)
+    for (auto text_node : text_nodes)
         text_node->add_paintable(text_node->create_paintable());
 
     build_paint_tree(root, parent_paintable);
@@ -559,7 +560,7 @@ void LayoutState::commit(Box& root)
     resolve_relative_positions();
 
     // Measure size of paintables created for inline nodes.
-    for (auto* paintable_with_lines : inline_node_paintables) {
+    for (auto paintable_with_lines : inline_node_paintables) {
         if (!is<InlineNode>(paintable_with_lines->layout_node()))
             continue;
 
