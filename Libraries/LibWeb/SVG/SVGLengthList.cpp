@@ -12,7 +12,7 @@ namespace Web::SVG {
 
 GC_DEFINE_ALLOCATOR(SVGLengthList);
 
-GC::Ref<SVGLengthList> SVGLengthList::create(JS::Realm& realm, Vector<GC::Ref<SVGLength>> items, ReadOnlyList read_only)
+GC::Ref<SVGLengthList> SVGLengthList::create(JS::Realm& realm, GC::RootVector<GC::Ref<SVGLength>>&& items, ReadOnlyList read_only)
 {
     return realm.create<SVGLengthList>(realm, move(items), read_only);
 }
@@ -22,7 +22,7 @@ GC::Ref<SVGLengthList> SVGLengthList::create(JS::Realm& realm, ReadOnlyList read
     return realm.create<SVGLengthList>(realm, read_only);
 }
 
-SVGLengthList::SVGLengthList(JS::Realm& realm, Vector<GC::Ref<SVGLength>> items, ReadOnlyList read_only)
+SVGLengthList::SVGLengthList(JS::Realm& realm, GC::RootVector<GC::Ref<SVGLength>>&& items, ReadOnlyList read_only)
     : Bindings::PlatformObject(realm)
     , SVGList(realm, move(items), read_only)
 {

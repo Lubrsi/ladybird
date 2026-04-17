@@ -8,6 +8,7 @@
 
 #include <AK/Vector.h>
 #include <LibGC/Cell.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/WebIDL/Types.h>
 
@@ -38,7 +39,7 @@ public:
     ReadonlySpan<T> items() { return m_items; }
 
 protected:
-    SVGList(JS::Realm&, Vector<T>, ReadOnlyList);
+    SVGList(JS::Realm&, GC::RootVector<T>&&, ReadOnlyList);
     SVGList(JS::Realm&, ReadOnlyList);
 
     void visit_edges(GC::Cell::Visitor& visitor);

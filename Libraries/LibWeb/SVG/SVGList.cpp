@@ -12,9 +12,9 @@
 namespace Web::SVG {
 
 template<typename T>
-SVGList<T>::SVGList(JS::Realm& realm, Vector<T> items, ReadOnlyList read_only)
+SVGList<T>::SVGList(JS::Realm& realm, GC::RootVector<T>&& items, ReadOnlyList read_only)
     : m_realm(realm)
-    , m_items(move(items))
+    , m_items(GC::adopt_root_vector(move(items)))
     , m_read_only(read_only)
 {
 }

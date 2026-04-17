@@ -20,12 +20,12 @@ class SVGTransformList final
     GC_DECLARE_ALLOCATOR(SVGTransformList);
 
 public:
-    [[nodiscard]] static GC::Ref<SVGTransformList> create(JS::Realm& realm, Vector<GC::Ref<SVGTransform>>, ReadOnlyList);
+    [[nodiscard]] static GC::Ref<SVGTransformList> create(JS::Realm& realm, GC::RootVector<GC::Ref<SVGTransform>>&&, ReadOnlyList);
     [[nodiscard]] static GC::Ref<SVGTransformList> create(JS::Realm& realm, ReadOnlyList);
     virtual ~SVGTransformList() override = default;
 
 private:
-    SVGTransformList(JS::Realm&, Vector<GC::Ref<SVGTransform>>, ReadOnlyList);
+    SVGTransformList(JS::Realm&, GC::RootVector<GC::Ref<SVGTransform>>&&, ReadOnlyList);
     SVGTransformList(JS::Realm&, ReadOnlyList);
 
     virtual void initialize(JS::Realm&) override;

@@ -106,7 +106,9 @@ GC::Ref<SVGAnimatedLengthList> SVGTextPositioningElement::ensure_length_list(GC:
             value = maybe_number_percentage.release_value().value();
 
         auto length = SVGLength::create(realm(), SVGLength::SVG_LENGTHTYPE_NUMBER, value, SVGLength::ReadOnly::Yes);
-        auto length_list = SVGLengthList::create(realm(), { length }, ReadOnlyList::Yes);
+        GC::RootVector<GC::Ref<SVGLength>> items { heap() };
+        items.append(length);
+        auto length_list = SVGLengthList::create(realm(), move(items), ReadOnlyList::Yes);
         list = SVGAnimatedLengthList::create(realm(), length_list);
     }
     return *list;
@@ -147,7 +149,9 @@ GC::Ref<SVGAnimatedNumberList> SVGTextPositioningElement::rotate()
             value = maybe_number_percentage.release_value().value();
 
         auto number = SVGNumber::create(realm(), value, SVGNumber::ReadOnly::Yes);
-        auto number_list = SVGNumberList::create(realm(), { number }, ReadOnlyList::Yes);
+        GC::RootVector<GC::Ref<SVGNumber>> items { heap() };
+        items.append(number);
+        auto number_list = SVGNumberList::create(realm(), move(items), ReadOnlyList::Yes);
         m_rotate = SVGAnimatedNumberList::create(realm(), number_list);
     }
     return *m_rotate;

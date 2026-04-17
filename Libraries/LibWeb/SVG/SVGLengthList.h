@@ -19,12 +19,12 @@ class SVGLengthList final
     GC_DECLARE_ALLOCATOR(SVGLengthList);
 
 public:
-    [[nodiscard]] static GC::Ref<SVGLengthList> create(JS::Realm& realm, Vector<GC::Ref<SVGLength>>, ReadOnlyList);
+    [[nodiscard]] static GC::Ref<SVGLengthList> create(JS::Realm& realm, GC::RootVector<GC::Ref<SVGLength>>&&, ReadOnlyList);
     [[nodiscard]] static GC::Ref<SVGLengthList> create(JS::Realm& realm, ReadOnlyList);
     virtual ~SVGLengthList() override = default;
 
 private:
-    SVGLengthList(JS::Realm&, Vector<GC::Ref<SVGLength>>, ReadOnlyList);
+    SVGLengthList(JS::Realm&, GC::RootVector<GC::Ref<SVGLength>>&&, ReadOnlyList);
     SVGLengthList(JS::Realm&, ReadOnlyList);
 
     virtual void initialize(JS::Realm&) override;

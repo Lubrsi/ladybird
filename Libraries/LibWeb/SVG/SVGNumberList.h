@@ -20,12 +20,12 @@ class SVGNumberList final
     GC_DECLARE_ALLOCATOR(SVGNumberList);
 
 public:
-    [[nodiscard]] static GC::Ref<SVGNumberList> create(JS::Realm&, Vector<GC::Ref<SVGNumber>>, ReadOnlyList);
+    [[nodiscard]] static GC::Ref<SVGNumberList> create(JS::Realm&, GC::RootVector<GC::Ref<SVGNumber>>&&, ReadOnlyList);
     [[nodiscard]] static GC::Ref<SVGNumberList> create(JS::Realm&, ReadOnlyList);
     virtual ~SVGNumberList() override = default;
 
 private:
-    SVGNumberList(JS::Realm&, Vector<GC::Ref<SVGNumber>>, ReadOnlyList);
+    SVGNumberList(JS::Realm&, GC::RootVector<GC::Ref<SVGNumber>>&&, ReadOnlyList);
     SVGNumberList(JS::Realm&, ReadOnlyList);
 
     virtual void initialize(JS::Realm&) override;
