@@ -15,8 +15,8 @@ namespace Web::HTML {
 
 GC_DEFINE_ALLOCATOR(WindowEnvironmentSettingsObject);
 
-WindowEnvironmentSettingsObject::WindowEnvironmentSettingsObject(Window& window, NonnullOwnPtr<JS::ExecutionContext> execution_context)
-    : EnvironmentSettingsObject(move(execution_context))
+WindowEnvironmentSettingsObject::WindowEnvironmentSettingsObject(Window& window, JS::RootedExecutionContext&& execution_context)
+    : EnvironmentSettingsObject(execution_context.release())
     , m_window(window)
 {
 }
@@ -30,7 +30,7 @@ void WindowEnvironmentSettingsObject::visit_edges(JS::Cell::Visitor& visitor)
 }
 
 // https://html.spec.whatwg.org/multipage/window-object.html#set-up-a-window-environment-settings-object
-void WindowEnvironmentSettingsObject::setup(Page& page, URL::URL const& creation_url, NonnullOwnPtr<JS::ExecutionContext> execution_context, GC::Ptr<Environment> reserved_environment, URL::URL top_level_creation_url, URL::Origin top_level_origin)
+void WindowEnvironmentSettingsObject::setup(Page& page, URL::URL const& creation_url, JS::RootedExecutionContext&& execution_context, GC::Ptr<Environment> reserved_environment, URL::URL top_level_creation_url, URL::Origin top_level_origin)
 {
     // 1. Let realm be the value of execution context's Realm component.
     auto realm = execution_context->realm;

@@ -170,20 +170,22 @@ BrowsingContext::BrowsingContextAndDocument BrowsingContext::create_a_new_browsi
     GC::Ptr<Window> window;
 
     // 10. Let realm execution context be the result of creating a new JavaScript realm given agent and the following customizations:
-    auto realm_execution_context = Bindings::create_a_new_javascript_realm(
+    JS::RootedExecutionContext realm_execution_context(
         Bindings::main_thread_vm(),
-        [&](JS::Realm& realm) -> JS::Object* {
-            auto window_proxy = realm.create<WindowProxy>(realm);
-            browsing_context->set_window_proxy(window_proxy);
+        Bindings::create_a_new_javascript_realm(
+            Bindings::main_thread_vm(),
+            [&](JS::Realm& realm) -> JS::Object* {
+                auto window_proxy = realm.create<WindowProxy>(realm);
+                browsing_context->set_window_proxy(window_proxy);
 
-            // - For the global object, create a new Window object.
-            window = Window::create(realm);
-            return window.ptr();
-        },
-        [&](JS::Realm&) -> JS::Object* {
-            // - For the global this binding, use browsingContext's WindowProxy object.
-            return browsing_context->window_proxy();
-        });
+                // - For the global object, create a new Window object.
+                window = Window::create(realm);
+                return window.ptr();
+            },
+            [&](JS::Realm&) -> JS::Object* {
+                // - For the global this binding, use browsingContext's WindowProxy object.
+                return browsing_context->window_proxy();
+            }));
 
     auto& realm = window->realm();
 

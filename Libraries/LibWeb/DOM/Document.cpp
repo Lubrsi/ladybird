@@ -334,17 +334,19 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
         // FIXME: 4. Let agent be the result of obtaining a similar-origin window agent given navigationParams's origin, browsingContext's group, and requestsOAC.
 
         // 5. Let realm execution context be the result of creating a new JavaScript realm given agent and the following customizations:
-        auto realm_execution_context = Bindings::create_a_new_javascript_realm(
+        JS::RootedExecutionContext realm_execution_context(
             Bindings::main_thread_vm(),
-            [&](JS::Realm& realm) -> JS::Object* {
-                // - For the global object, create a new Window object.
-                window = HTML::Window::create(realm);
-                return window;
-            },
-            [&](JS::Realm&) -> JS::Object* {
-                // - For the global this binding, use browsingContext's WindowProxy object.
-                return browsing_context->window_proxy();
-            });
+            Bindings::create_a_new_javascript_realm(
+                Bindings::main_thread_vm(),
+                [&](JS::Realm& realm) -> JS::Object* {
+                    // - For the global object, create a new Window object.
+                    window = HTML::Window::create(realm);
+                    return window;
+                },
+                [&](JS::Realm&) -> JS::Object* {
+                    // - For the global this binding, use browsingContext's WindowProxy object.
+                    return browsing_context->window_proxy();
+                }));
 
         // 6. Set window to the global object of realmExecutionContext's Realm component.
         window = as<HTML::Window>(realm_execution_context->realm->global_object());
