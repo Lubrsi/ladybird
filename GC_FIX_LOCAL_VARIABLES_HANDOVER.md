@@ -237,13 +237,17 @@ Session `2026-04-18` batch (Layout cluster Cell-promotion):
 | `3f87464baa` | LibWeb/Layout: Promote `BorderConflictFinder` to a `GC::Cell`. Name-collision fix: `Cell` inside the nested class now refers to `GC::Cell` via inheritance, so signatures explicitly spell `TableGrid::Cell`. `RowGroupInfo` gets its own `visit_edges`. |
 | `cca6c6fca2` | LibWeb/Layout: Promote `InlineLevelIterator` to a `GC::Cell`. `InlineLevelIterator::Item` gets its own `visit_edges`. `InlineFormattingContext::run` heap-allocates the iterator via `heap().allocate<InlineLevelIterator>(...)`. |
 
-Session `2026-04-19` batch (post-rebase conflict cleanup + TreeBuilder/Agent Cell-promotion):
+Session `2026-04-19` batch (post-rebase conflict cleanup + TreeBuilder/Agent + IndexedDB Cell-promotion + three fixup groups):
+
+Note: hashes below are from before the session-closing autosquash rebase that folded three `--fixup=` commits into their origin commits. After that rebase, every commit from `790b401929` onwards got a new hash. Use `git log --grep=` / the subject to locate a commit on the live branch.
 
 | Commit | Summary |
 |---|---|
-| `ad719c4d0d` | LibWeb/Layout: Promote `TreeBuilder` to a `GC::Cell`. One-site promotion at `Document.cpp:1537`; `visit_edges` traces `m_layout_root` and `m_ancestor_stack`. |
-| `888cddb486` | LibWeb/HTML: Store the structured-transfer list in a `GC::RootVector`. Aligned `StructuredSerializeOptions::transfer` and every `post_message` / `structured_serialize_with_transfer` signature on `GC::RootVector<GC::Ref<JS::Object>>`, and taught the dictionary generator to emit `{ vm.heap() }` init when any member's sequence-storage is `RootVector`. |
-| `b34fb4de9a` | LibJS+LibWeb: Promote `Agent` to a `GC::Cell`. `JS::Agent` + `Web::HTML::Agent` + `SimilarOriginWindowAgent` + `WorkerAgent`. `VM::m_agent` switches to `GC::Ptr<Agent>` rooted via `gather_roots`. The flagged `HashMap` key (`GC::Ref<JS::FunctionObject>`) is now traced through the owner's `visit_edges`; value simplified from `GC::Root` to `GC::Ref`. |
+| `30626e5bdc` (was `ad719c4d0d`) | LibWeb/Layout: Promote `TreeBuilder` to a `GC::Cell`. One-site promotion at `Document.cpp:1537`; `visit_edges` traces `m_layout_root` and `m_ancestor_stack`. |
+| `cd01770e48` (was `888cddb486`) | LibWeb/HTML: Store the structured-transfer list in a `GC::RootVector`. Aligned `StructuredSerializeOptions::transfer` and every `post_message` / `structured_serialize_with_transfer` signature on `GC::RootVector<GC::Ref<JS::Object>>`, and taught the dictionary generator to emit `{ vm.heap() }` init when any member's sequence-storage is `RootVector`. **Fixup folded in:** `Streams/AbstractOperations.cpp` `{ .transfer = {} }` → `{ realm.heap() }`. |
+| `8352b0820d` (was `b34fb4de9a`) | LibJS+LibWeb: Promote `Agent` to a `GC::Cell`. `JS::Agent` + `Web::HTML::Agent` + `SimilarOriginWindowAgent` + `WorkerAgent`. `VM::m_agent` switches to `GC::Ptr<Agent>` rooted via `gather_roots`. The flagged `HashMap` key (`GC::Ref<JS::FunctionObject>`) is now traced through the owner's `visit_edges`; value simplified from `GC::Root` to `GC::Ref`. **Fixup folded in:** generator dropped the stale `registry_for_constructor->is_null()` check. |
+| `264ce33012` | LibWeb/IndexedDB: Root MutationLog record-deletion transients. `RecordsDeleted` / `IndexRecordsDeleted` variant alternatives hold `GC::ConservativeVector<T>`; the four `Index` / `ObjectStore` call sites construct with `heap()` from the start. |
+| Fixup into `790b401929` (object → `GC::Ref`) | `WebAssembly::instantiate` / `instantiate_streaming` / `Instance::construct_impl` take `GC::Ptr<JS::Object>` directly, matching the generator's nullable-`object?` emission. |
 
 ### Plugin behavior cheat-sheet (documented this session, from source read)
 
@@ -313,6 +317,46 @@ into the map's `GC::Ref` value.
 originally-deferred buckets: `NonnullOwnPtr<JS::ExecutionContext>` (2),
 MutationLog transients (2), nested-container indirection (5), and
 `Vector<Variant<cell,...>>` returns (2).
+
+Continuation of the same date: closed the IndexedDB MutationLog
+transients. `RecordsDeleted` and `IndexRecordsDeleted` variant
+alternatives now hold `GC::ConservativeVector<T>` directly; the
+four call sites in `Index::{clear_records, remove_records_with_value_in_range}`
+and `ObjectStore::{remove_records_in_range, clear_records}` construct a
+`GC::ConservativeVector` with `heap()` from the start. This is the
+clean-fix shape the previous deferred note described — the variant
+field carries the heap registration itself via move-construction, no
+`adopt_conservative_vector` needed.
+
+A full rebuild that exercised previously-cached generated files
+surfaced three latent build breakages from earlier branch commits,
+each folded back into its origin via `--fixup` + autosquash:
+
+- `--fixup=b34fb4de9a` (Agent → Cell): the HTML-constructor generator
+  template in `IDLGenerators.cpp` still called
+  `registry_for_constructor->is_null()` on the map value, but
+  promoting `SimilarOriginWindowAgent` changed the map from
+  `HashMap<..., GC::Root<Registry>>` to
+  `HashMap<..., GC::Ref<Registry>>` — `GC::Ref` has no `is_null()`.
+  Dropped the check (existence in the map now guarantees non-null).
+- `--fixup=888cddb486` (StructuredSerializeOptions → `GC::RootVector`):
+  `Streams/AbstractOperations.cpp:129` used designated-init
+  `{ .transfer = {} }`, which stopped compiling once the struct got a
+  non-trivial constructor. Rewrote as `{ realm.heap() }`.
+- `--fixup=790b401929` (bindings `object` → `GC::Ref<JS::Object>`):
+  nullable `object?` started emitting `GC::Ptr<JS::Object>` at that
+  commit, but the WebAssembly C++ signatures still took
+  `Optional<GC::Root<JS::Object>>&`. The mismatch was masked by ccache.
+  Updated `WebAssembly::instantiate` (two overloads),
+  `WebAssembly::instantiate_streaming`, and
+  `Instance::construct_impl` to take `GC::Ptr<JS::Object>` directly —
+  the old conversion block inside each callee becomes a no-op.
+
+**Updated closing violation count: 11 → 9**. Remaining 9: ExecutionContext
+(2), nested-container indirection (5), `Vector<Variant<cell,...>>` returns
+(2). All in deferred buckets that need either the `JS::RootedExecutionContext`
+wrapper, the plugin's nested-container extension (section 7), or the
+bindings-generator extension for Variant returns.
 
 ### 2026-04-18 — Layout cluster Cell-promotion (LayoutState + FormattingContext + ComputedValues)
 
@@ -476,7 +520,6 @@ Roughly in priority order, the next things to land are:
 
 ### Deferred (not in the task list, tracked here for the next session)
 
-- **Index/ObjectStore record-deletion transients in IndexedDB** (`Internal/Index.cpp:remove_records_with_value_in_range`, `Internal/ObjectStore.cpp:remove_records_in_range`): the `Vector<IndexRecord>` / `Vector<ObjectStoreRecord>` locals are passed by value into `MutationLog::note_*_records_deleted` and then moved into a `Variant` alternative inside `MutationLog::m_entries`. Switching the local to `GC::ConservativeVector<...>` would require either threading the `ConservativeVector` all the way into the variant-storage struct (which would need a heap for default construction, forcing construction-site changes throughout) or adopting across the `note_*` call boundary (rejected by the plugin — adopt must land at a traced member). Leaving as a violation for now; the clean fix is to make the `IndexRecordsDeleted` / `RecordsDeleted` variant alternatives hold a `GC::ConservativeVector` directly, threading `Heap&` through the construction sites.
 - **`Vector<Variant<...>>` returns with a cell inside the Variant**: two concrete sites — `WebIDL::resolve_overload` returning `ResolvedOverload::arguments` (`Vector<Variant<JS::Value, Missing>>`) and `XHR::FormData::get_all` returning `Vector<FormDataEntryValue>` (`Vector<Variant<GC::Ref<FileAPI::File>, String>>`). The natural fix is to make both returns a `GC::ConservativeVector`, but the callers are generated bindings that pass the result to the IDL-to-JS conversion layer — that layer currently expects a plain `Vector`. Unblocking it cleanly requires either (a) extending the bindings generator so a `GC::ConservativeVector<...>` return is accepted the same way a `Vector<...>` is, or (b) reshaping each caller to take a `Heap&` out-parameter. Leaving both with the plugin violation for now; the wider refactor belongs with the other generator-facing return-type work.
 - **Refactor `resolve_export` recursion accumulator** so the deferred plugin parameter check can be re-enabled. See "Plugin extension attempted and reverted" below for context.
 - **Re-enable the deferred plugin parameter check** after the `resolve_export` refactor. The compile-time slicing block already covers the most common case (a RootVector being passed by value), but a parameter check would still catch plain `Vector<GC::Ref<T>>` parameters that aren't fed from a Root container at any call site.
@@ -969,7 +1012,7 @@ The remaining failures fall almost entirely into the big deferred clusters (Layo
 
 #### Session closing state (2026-04-19)
 
-`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **11**.
+`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **9**.
 
 Directory breakdown:
 
@@ -977,11 +1020,10 @@ Directory breakdown:
 |---|---|
 | LibWeb/DOM (`Document.cpp` ExecutionContext) | 1 |
 | LibWeb/HTML (`BrowsingContext.cpp` ExecutionContext) | 1 |
-| LibWeb/IndexedDB (Index/ObjectStore MutationLog transients) | 2 |
 | LibWeb/Layout (nested `HashMap<int, Vector<T>>` in Flex/Grid, `ContainedBoxesMap`, `Viewport::update_text_blocks`) | 5 |
 | LibWeb/WebIDL / XHR | 1 each (both are `Vector<Variant<cell,...>>` returns — deferred category) |
 
-All 11 remaining violations are in the originally-deferred buckets — every one still blocked on a wider refactor (`JS::RootedExecutionContext` wrapper, MutationLog Variant alternative, nested-container plugin extension per section 7, and bindings generator extension for `Vector<Variant<cell,...>>` returns).
+All 9 remaining violations are in the originally-deferred buckets — every one still blocked on a wider refactor (`JS::RootedExecutionContext` wrapper, nested-container plugin extension per section 7, and bindings generator extension for `Vector<Variant<cell,...>>` returns).
 
 #### Session closing state (2026-04-18)
 
