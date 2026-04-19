@@ -127,6 +127,7 @@ static ContainsGCPtrResult record_contains_gc_ptr(clang::CXXRecordDecl const* re
         "GC::ConservativeHashTable",
         "GC::ConservativeHashTableBase",
         "GC::HeapHashMap",
+        "JS::RootedExecutionContext",
     };
     if (gc_infrastructure_types.contains(qualified_name)) {
         s_contains_gc_ptr_cache[record] = ContainsGCPtrResult::No;
@@ -911,6 +912,12 @@ static bool type_has_unrooted_gc_container(clang::QualType type, std::set<clang:
         if (template_name.starts_with("GC::"))
             return false;
 
+        // Non-template rooting wrappers that live alongside LibJS (e.g. RootedExecutionContext)
+        // register with their owning VM in the ctor and unregister on destruction, so the
+        // fields they own stay reachable via gather_roots for their entire lifetime.
+        if (template_name == "JS::RootedExecutionContext")
+            return false;
+
         // Types that allocate storage invisible to the GC (heap-backed containers, smart pointers, etc.)
         static std::set<std::string> types_with_gc_invisible_storage {
             "AK::Vector",
@@ -952,7 +959,10 @@ static bool type_has_unrooted_gc_container(clang::QualType type, std::set<clang:
             return false;
         if (record_inherits_from_cell(*record))
             return false;
-        if (record->getQualifiedNameAsString().starts_with("GC::"))
+        auto qualified_name = record->getQualifiedNameAsString();
+        if (qualified_name.starts_with("GC::"))
+            return false;
+        if (qualified_name == "JS::RootedExecutionContext")
             return false;
         if (!visited.insert(record).second)
             return false;

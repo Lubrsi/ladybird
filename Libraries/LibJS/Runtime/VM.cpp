@@ -324,6 +324,13 @@ void VM::gather_roots(HashMap<GC::Cell*, GC::HeapRoot>& roots)
     for (auto const& saved_stack : m_saved_execution_context_stacks)
         gather_roots_from_execution_context_stack(saved_stack.stack, saved_stack.previous_running_contexts, saved_stack.running_execution_context);
 
+    for (auto& rooted : m_rooted_execution_contexts) {
+        IGNORE_GC ExecutionContextRootsCollector visitor;
+        rooted.visit_edges(visitor);
+        for (auto cell : visitor.roots)
+            roots.set(cell, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
+    }
+
     for (auto& job : m_promise_jobs)
         roots.set(job, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
 }

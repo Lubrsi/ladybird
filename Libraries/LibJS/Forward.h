@@ -207,6 +207,7 @@ class PropertyDescriptor;
 class PropertyKey;
 class Realm;
 class Reference;
+class RootedExecutionContext;
 class Script;
 class Shape;
 class SharedFunctionInstanceData;

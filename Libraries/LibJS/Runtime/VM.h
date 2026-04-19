@@ -34,6 +34,7 @@
 #include <LibJS/Runtime/ErrorTypes.h>
 #include <LibJS/Runtime/ExecutionContext.h>
 #include <LibJS/Runtime/InterpreterStack.h>
+#include <LibJS/Runtime/RootedExecutionContext.h>
 #include <LibJS/Runtime/Promise.h>
 #include <LibJS/Runtime/Value.h>
 
@@ -240,6 +241,16 @@ public:
         context->caller_is_construct = false;
         m_running_execution_context = m_execution_context_stack_previous_running_contexts.take_last();
         return context;
+    }
+
+    void did_create_rooted_execution_context(Badge<RootedExecutionContext>, RootedExecutionContext& rooted)
+    {
+        m_rooted_execution_contexts.append(rooted);
+    }
+
+    void did_destroy_rooted_execution_context(Badge<RootedExecutionContext>, RootedExecutionContext& rooted)
+    {
+        m_rooted_execution_contexts.remove(rooted);
     }
 
     // https://tc39.es/ecma262/#running-execution-context
@@ -532,6 +543,8 @@ private:
     ExecutionContext* m_running_execution_context { nullptr };
 
     Vector<SavedExecutionContextStack> m_saved_execution_context_stacks;
+
+    RootedExecutionContext::List m_rooted_execution_contexts;
 
     StackInfo m_stack_info;
 
