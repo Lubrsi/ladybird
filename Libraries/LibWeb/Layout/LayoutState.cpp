@@ -11,6 +11,7 @@
 #include <AK/Tuple.h>
 #include <LibGC/RootHashMap.h>
 #include <LibGC/RootHashTable.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/Layout/AvailableSpace.h>
@@ -129,7 +130,7 @@ LayoutState::UsedValues const* LayoutState::try_get(Node const& node) const
 }
 
 // https://drafts.csswg.org/css-overflow-3/#scrollable-overflow-region
-using ContainedBoxesMap = HashMap<Box const*, Vector<Box const*>>;
+using ContainedBoxesMap = GC::RootHashMap<Box const*, GC::RootVector<Box const*>>;
 
 struct PhysicalOverflowDirections {
     bool x_positive { true };
@@ -625,13 +626,15 @@ void LayoutState::commit(Box& root)
     }
 
     // Build a map from each containing block to the boxes it contains.
-    ContainedBoxesMap contained_boxes_map;
+    ContainedBoxesMap contained_boxes_map(heap());
     m_used_values_store.for_each([&](UsedValues& used_values) {
         auto const* box = as_if<Box>(used_values.node());
         if (!box || !box->paintable_box())
             return;
-        if (auto containing_block = box->containing_block())
-            contained_boxes_map.ensure(containing_block.ptr()).append(box);
+        if (auto containing_block = box->containing_block()) {
+            auto& bucket = contained_boxes_map.ensure(containing_block.ptr(), [this] { return GC::RootVector<Box const*>(heap()); });
+            bucket.append(box);
+        }
     });
 
     // Measure overflow in scroll containers.
