@@ -8,6 +8,7 @@
 
 #include <AK/Variant.h>
 #include <AK/Vector.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Ptr.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/IndexedDB/IDBRecord.h>
@@ -46,13 +47,13 @@ public:
     void note_key_generator_changed(u64 old_value);
 
     // Record that records were deleted from the object store, saving them for re-insertion on revert.
-    void note_records_deleted(Vector<ObjectStoreRecord>);
+    void note_records_deleted(GC::ConservativeVector<ObjectStoreRecord>);
 
     // Record that a new record was stored in the object store, saving the key for deletion on revert.
     void note_record_stored(GC::Ref<Key> key);
 
     // Record that records were deleted from an index, saving them for re-insertion on revert.
-    void note_index_records_deleted(GC::Ref<Index>, Vector<IndexRecord>);
+    void note_index_records_deleted(GC::Ref<Index>, GC::ConservativeVector<IndexRecord>);
 
     // Record that a new record was stored in an index, saving it for deletion on revert.
     void note_index_record_stored(GC::Ref<Index>, IndexRecord);
@@ -101,7 +102,7 @@ private:
     };
 
     struct RecordsDeleted {
-        Vector<ObjectStoreRecord> records;
+        GC::ConservativeVector<ObjectStoreRecord> records;
     };
 
     struct RecordStored {
@@ -110,7 +111,7 @@ private:
 
     struct IndexRecordsDeleted {
         GC::Ref<Index> index;
-        Vector<IndexRecord> records;
+        GC::ConservativeVector<IndexRecord> records;
     };
 
     struct IndexRecordStored {
