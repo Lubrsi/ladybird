@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibJS/Heap/Cell.h>
+#include <LibJS/Runtime/RootedExecutionContext.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 
 namespace Web::HTML {
@@ -16,7 +17,7 @@ class WindowEnvironmentSettingsObject final : public EnvironmentSettingsObject {
     GC_DECLARE_ALLOCATOR(WindowEnvironmentSettingsObject);
 
 public:
-    static void setup(Page&, URL::URL const& creation_url, NonnullOwnPtr<JS::ExecutionContext>, GC::Ptr<Environment>, URL::URL top_level_creation_url, URL::Origin top_level_origin);
+    static void setup(Page&, URL::URL const& creation_url, JS::RootedExecutionContext&&, GC::Ptr<Environment>, URL::URL top_level_creation_url, URL::Origin top_level_origin);
 
     virtual ~WindowEnvironmentSettingsObject() override;
 
@@ -29,7 +30,7 @@ public:
     virtual double time_origin() const override;
 
 private:
-    WindowEnvironmentSettingsObject(Window&, NonnullOwnPtr<JS::ExecutionContext>);
+    WindowEnvironmentSettingsObject(Window&, JS::RootedExecutionContext&&);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
