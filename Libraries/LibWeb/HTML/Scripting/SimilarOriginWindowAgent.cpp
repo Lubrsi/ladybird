@@ -7,6 +7,7 @@
 
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/MutationObserver.h>
+#include <LibWeb/HTML/CustomElements/CustomElementRegistry.h>
 #include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/SimilarOriginWindowAgent.h>
@@ -14,10 +15,12 @@
 
 namespace Web::HTML {
 
-NonnullOwnPtr<SimilarOriginWindowAgent> SimilarOriginWindowAgent::create(GC::Heap& heap)
+GC_DEFINE_ALLOCATOR(SimilarOriginWindowAgent);
+
+GC::Ref<SimilarOriginWindowAgent> SimilarOriginWindowAgent::create(GC::Heap& heap)
 {
     // See 'creating an agent' step in: https://html.spec.whatwg.org/multipage/webappapis.html#obtain-similar-origin-window-agent
-    auto agent = adopt_own(*new SimilarOriginWindowAgent(heap, CanBlock::No));
+    auto agent = heap.allocate<SimilarOriginWindowAgent>(CanBlock::No);
     agent->event_loop = heap.allocate<HTML::EventLoop>(HTML::EventLoop::Type::Window);
     return agent;
 }
@@ -30,11 +33,17 @@ SimilarOriginWindowAgent& relevant_similar_origin_window_agent(JS::Object const&
     return as<SimilarOriginWindowAgent>(*relevant_realm(object).vm().agent());
 }
 
-SimilarOriginWindowAgent::SimilarOriginWindowAgent(GC::Heap& heap, CanBlock can_block)
+SimilarOriginWindowAgent::SimilarOriginWindowAgent(CanBlock can_block)
     : Agent(can_block)
-    , pending_mutation_observers(heap)
-    , signal_slots(heap)
 {
+}
+
+void SimilarOriginWindowAgent::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(pending_mutation_observers);
+    visitor.visit(signal_slots);
+    visitor.visit(active_custom_element_constructor_map);
 }
 
 }

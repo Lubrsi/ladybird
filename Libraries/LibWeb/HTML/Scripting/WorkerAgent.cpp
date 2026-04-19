@@ -9,9 +9,11 @@
 
 namespace Web::HTML {
 
-NonnullOwnPtr<WorkerAgent> WorkerAgent::create(GC::Heap& heap, CanBlock can_block)
+GC_DEFINE_ALLOCATOR(WorkerAgent);
+
+GC::Ref<WorkerAgent> WorkerAgent::create(GC::Heap& heap, CanBlock can_block)
 {
-    auto agent = adopt_own(*new WorkerAgent(can_block));
+    auto agent = heap.allocate<WorkerAgent>(can_block);
     agent->event_loop = heap.allocate<HTML::EventLoop>(HTML::EventLoop::Type::Worker);
     return agent;
 }

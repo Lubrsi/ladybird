@@ -274,6 +274,7 @@ struct ExecutionContextRootsCollector : public Cell::Visitor {
 
 void VM::gather_roots(HashMap<GC::Cell*, GC::HeapRoot>& roots)
 {
+    roots.set(m_agent, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
     roots.set(m_empty_string, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });
     for (auto string : m_single_ascii_character_strings)
         roots.set(string, GC::HeapRoot { .type = GC::HeapRoot::Type::VM });

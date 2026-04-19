@@ -690,7 +690,7 @@ WebIDL::ExceptionOr<GC::Ref<Element>> create_element(Document& document, FlyStri
 
             // 2. Set the surrounding agent’s active custom element constructor map[C] to registry.
             auto& active_custom_element_constructor_map = HTML::relevant_similar_origin_window_agent(document).active_custom_element_constructor_map;
-            active_custom_element_constructor_map.set(static_cast<JS::FunctionObject&>(*constructor.callback), registry);
+            active_custom_element_constructor_map.set(static_cast<JS::FunctionObject&>(*constructor.callback), *registry);
 
             // 3. Run these steps while catching any exceptions:
             auto synchronously_upgrade_custom_element = [&]() -> JS::ThrowCompletionOr<void> {

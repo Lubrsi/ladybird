@@ -691,6 +691,7 @@ struct DOMPointInit;
 
 namespace Web::HTML {
 
+class Agent;
 class AnimationFrameCallbackDriver;
 class AudioTrack;
 class AudioTrackList;
@@ -880,7 +881,6 @@ enum class AllowMultipleFiles;
 enum class RequireWellFormed;
 enum class SandboxingFlagSet;
 
-struct Agent;
 struct BroadcastChannelMessage;
 struct DeserializedTransferRecord;
 struct EmbedderPolicy;

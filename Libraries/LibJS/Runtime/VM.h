@@ -420,7 +420,7 @@ public:
     Function<void(Promise&)> on_promise_rejection_handled;
     Function<void(Object const&, PropertyKey const&)> on_unimplemented_property_access;
 
-    void set_agent(OwnPtr<Agent> agent) { m_agent = move(agent); }
+    void set_agent(GC::Ref<Agent> agent) { m_agent = agent; }
     Agent* agent() { return m_agent; }
     Agent const* agent() const { return m_agent; }
 
@@ -577,7 +577,7 @@ private:
 
     u32 m_execution_generation { 0 };
 
-    OwnPtr<Agent> m_agent;
+    GC::Ptr<Agent> m_agent;
 
     bool m_dynamic_imports_allowed { false };
 };

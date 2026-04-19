@@ -77,7 +77,7 @@ HTML::Script* active_script()
         });
 }
 
-static NonnullOwnPtr<JS::Agent> create_agent(GC::Heap& heap, AgentType type)
+static GC::Ref<JS::Agent> create_agent(GC::Heap& heap, AgentType type)
 {
     switch (type) {
     case AgentType::SimilarOriginWindow:

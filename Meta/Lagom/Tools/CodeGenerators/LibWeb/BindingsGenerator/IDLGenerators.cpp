@@ -3060,7 +3060,7 @@ static void generate_html_constructor(SourceGenerator& generator, IDL::Construct
 
     // 3. If the surrounding agent's active custom element constructor map[NewTarget] exists:
     auto& surrounding_agent = HTML::relevant_similar_origin_window_agent(window);
-    if (auto registry_for_constructor = surrounding_agent.active_custom_element_constructor_map.get(GC::Ref { new_target }); registry_for_constructor.has_value() && !registry_for_constructor->is_null()) {
+    if (auto registry_for_constructor = surrounding_agent.active_custom_element_constructor_map.get(GC::Ref { new_target }); registry_for_constructor.has_value()) {
         // 1. Set registry to the surrounding agent's active custom element constructor map[NewTarget].
         registry = registry_for_constructor.value();
 
