@@ -473,7 +473,7 @@ bool LibJSGCVisitor::VisitCallExpr(clang::CallExpr* call)
     auto call_context = find_adopt_container_call_context(m_context, *call);
     if (call_context.initializer && call_context.initializer->isMemberInitializer() && call_context.constructor) {
         auto const* record = call_context.constructor->getParent();
-        if (record && record_inherits_from_cell(*record))
+        if (record && (record_inherits_from_cell(*record) || type_has_visit_edges_method(record)))
             return true;
     }
     if (call_context.assigned_field && call_context.enclosing_method) {
@@ -484,7 +484,7 @@ bool LibJSGCVisitor::VisitCallExpr(clang::CallExpr* call)
 
     auto& diag_engine = m_context.getDiagnostics();
     auto diag_id = diag_engine.getCustomDiagID(clang::DiagnosticsEngine::Error,
-        "GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes or direct assignments to traced members");
+        "GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member");
     diag_engine.Report(call->getBeginLoc(), diag_id);
 
     return true;

@@ -43,7 +43,7 @@ class CellWithAdoptInBody : public GC::Cell {
 public:
     explicit CellWithAdoptInBody(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
     {
-        // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+        // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
         m_cells = GC::adopt_root_vector(move(cells));
     }
 
@@ -93,7 +93,7 @@ struct NonCellStorageWithVisitedMember {
 struct NonCellStorageWithoutVisitEdges {
     void replace(GC::ConservativeHashMap<int, GC::Ptr<GC::Cell>>&& cells)
     {
-        // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes or direct assignments to traced members}}
+        // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
         m_cells = GC::adopt_conservative_hash_map(move(cells));
     }
 
@@ -106,7 +106,7 @@ class CellWithAdoptInLambdaInitializer : public GC::Cell {
 public:
     explicit CellWithAdoptInLambdaInitializer(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
         : m_cells([&] {
-            // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+            // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
             return GC::adopt_root_vector(move(cells));
         }())
     {
@@ -160,7 +160,7 @@ class CellWithAdoptInBaseInitializer : public BaseWithVector {
 
 public:
     explicit CellWithAdoptInBaseInitializer(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
-        // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+        // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
         : BaseWithVector(GC::adopt_root_vector(move(cells)))
     {
     }
@@ -168,7 +168,7 @@ public:
 
 struct NonCellWithAdoptInInitializer {
     explicit NonCellWithAdoptInInitializer(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
-        // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+        // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
         : m_cells(GC::adopt_root_vector(move(cells)))
     {
     }
@@ -176,38 +176,52 @@ struct NonCellWithAdoptInInitializer {
     Vector<GC::Ptr<GC::Cell>> m_cells;
 };
 
+struct NonCellWithVisitEdgesAdoptInInitializer {
+    explicit NonCellWithVisitEdgesAdoptInInitializer(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
+        : m_cells(GC::adopt_root_vector(move(cells)))
+    {
+    }
+
+    void visit_edges(GC::Cell::Visitor& visitor)
+    {
+        visitor.visit(m_cells);
+    }
+
+    Vector<GC::Ptr<GC::Cell>> m_cells;
+};
+
 Vector<GC::Ptr<GC::Cell>> adopt_root_vector_in_helper(GC::RootVector<GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_root_vector(move(cells));
 }
 
 Vector<GC::Ptr<GC::Cell>> adopt_conservative_vector_in_helper(GC::ConservativeVector<GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_conservative_vector(move(cells));
 }
 
 HashMap<int, GC::Ptr<GC::Cell>> adopt_root_hash_map_in_helper(GC::RootHashMap<int, GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_root_hash_map(move(cells));
 }
 
 HashMap<int, GC::Ptr<GC::Cell>> adopt_conservative_hash_map_in_helper(GC::ConservativeHashMap<int, GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_conservative_hash_map(move(cells));
 }
 
 HashTable<GC::Ptr<GC::Cell>> adopt_root_hash_table_in_helper(GC::RootHashTable<GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_root_hash_table(move(cells));
 }
 
 HashTable<GC::Ptr<GC::Cell>> adopt_conservative_hash_table_in_helper(GC::ConservativeHashTable<GC::Ptr<GC::Cell>>&& cells)
 {
-    // expected-error@+1 {{GC container adopt functions may only be used in constructor member initializers of GC::Cell-derived classes}}
+    // expected-error@+1 {{GC container adopt functions may only be used in a member initializer list or a non-constructor assignment to a traced member}}
     return GC::adopt_conservative_hash_table(move(cells));
 }
