@@ -6,6 +6,7 @@
  */
 
 #include <AK/Bitmap.h>
+#include <LibGC/RootVector.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/Layout/Box.h>
@@ -1451,7 +1452,7 @@ void GridFormattingContext::place_grid_items()
     // flex items), which are then assigned to predefined areas in the grid. They can be explicitly
     // placed using coordinates through the grid-placement properties or implicitly placed into
     // empty areas using auto-placement.
-    HashMap<int, Vector<GC::Ref<Box const>>> order_item_bucket;
+    HashMap<int, GC::RootVector<GC::Ref<Box const>>> order_item_bucket;
     grid_container().for_each_child_of_type<Box>([&](Box& child_box) {
         if (can_skip_is_anonymous_text_run(child_box))
             return IterationDecision::Continue;
@@ -1461,7 +1462,9 @@ void GridFormattingContext::place_grid_items()
 
         child_box.set_grid_item(true);
 
-        auto& order_bucket = order_item_bucket.ensure(child_box.computed_values().order());
+        auto& order_bucket = order_item_bucket.ensure(
+            child_box.computed_values().order(),
+            [this] { return GC::RootVector<GC::Ref<Box const>>(heap()); });
         order_bucket.append(child_box);
 
         return IterationDecision::Continue;
