@@ -85,6 +85,7 @@ set(SOURCES
     Runtime/ErrorTypes.cpp
     Runtime/ExecutionContext.cpp
     Runtime/InterpreterStack.cpp
+    Runtime/RootedExecutionContext.cpp
     Runtime/FinalizationRegistry.cpp
     Runtime/FinalizationRegistryConstructor.cpp
     Runtime/FinalizationRegistryPrototype.cpp

@@ -125,6 +125,7 @@ static ContainsGCPtrResult record_contains_gc_ptr(clang::CXXRecordDecl const* re
         "GC::ConservativeHashTable",
         "GC::ConservativeHashTableBase",
         "GC::HeapHashMap",
+        "JS::RootedExecutionContext",
     };
     if (gc_infrastructure_types.contains(qualified_name)) {
         s_contains_gc_ptr_cache[record] = ContainsGCPtrResult::No;
