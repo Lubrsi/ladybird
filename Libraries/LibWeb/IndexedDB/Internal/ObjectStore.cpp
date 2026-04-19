@@ -99,7 +99,7 @@ void ObjectStore::remove_records_in_range(GC::Ref<IDBKeyRange> range)
 
     if (lo < hi) {
         if (m_mutation_log) {
-            Vector<ObjectStoreRecord> deleted;
+            GC::ConservativeVector<ObjectStoreRecord> deleted(heap());
             deleted.ensure_capacity(hi - lo);
             for (size_t i = lo; i < hi; ++i)
                 deleted.append(move(m_records[i]));
@@ -161,9 +161,15 @@ Optional<ObjectStoreRecord&> ObjectStore::first_in_range(GC::Ref<IDBKeyRange> ra
 
 void ObjectStore::clear_records()
 {
-    auto deleted_records = move(m_records);
-    if (m_mutation_log && !deleted_records.is_empty())
-        m_mutation_log->note_records_deleted(deleted_records);
+    if (m_records.is_empty())
+        return;
+    if (!m_mutation_log) {
+        m_records.clear();
+        return;
+    }
+    GC::ConservativeVector<ObjectStoreRecord> deleted_records(heap());
+    deleted_records.extend(move(m_records));
+    m_mutation_log->note_records_deleted(move(deleted_records));
 }
 
 // https://w3c.github.io/IndexedDB/#generate-a-key
