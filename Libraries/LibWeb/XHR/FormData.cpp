@@ -148,11 +148,11 @@ Variant<GC::Ref<FileAPI::File>, String, Empty> FormData::get(String const& name)
 }
 
 // https://xhr.spec.whatwg.org/#dom-formdata-getall
-WebIDL::ExceptionOr<Vector<FormDataEntryValue>> FormData::get_all(String const& name)
+WebIDL::ExceptionOr<GC::ConservativeVector<FormDataEntryValue>> FormData::get_all(String const& name)
 {
     // 1. If there is no entry whose name is name in this’s entry list, then return the empty list.
     // 2. Return the values of all entries whose name is name, in order, from this’s entry list.
-    Vector<FormDataEntryValue> values;
+    GC::ConservativeVector<FormDataEntryValue> values(realm().heap());
     for (auto const& entry : m_entry_list) {
         if (entry.name == name)
             TRY_OR_THROW_OOM(vm(), values.try_append(entry.value));
