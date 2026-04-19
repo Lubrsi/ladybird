@@ -248,6 +248,9 @@ Note: hashes below are from before the session-closing autosquash rebase that fo
 | `8352b0820d` (was `b34fb4de9a`) | LibJS+LibWeb: Promote `Agent` to a `GC::Cell`. `JS::Agent` + `Web::HTML::Agent` + `SimilarOriginWindowAgent` + `WorkerAgent`. `VM::m_agent` switches to `GC::Ptr<Agent>` rooted via `gather_roots`. The flagged `HashMap` key (`GC::Ref<JS::FunctionObject>`) is now traced through the owner's `visit_edges`; value simplified from `GC::Root` to `GC::Ref`. **Fixup folded in:** generator dropped the stale `registry_for_constructor->is_null()` check. |
 | `264ce33012` | LibWeb/IndexedDB: Root MutationLog record-deletion transients. `RecordsDeleted` / `IndexRecordsDeleted` variant alternatives hold `GC::ConservativeVector<T>`; the four `Index` / `ObjectStore` call sites construct with `heap()` from the start. |
 | Fixup into `790b401929` (object → `GC::Ref`) | `WebAssembly::instantiate` / `instantiate_streaming` / `Instance::construct_impl` take `GC::Ptr<JS::Object>` directly, matching the generator's nullable-`object?` emission. |
+| `b63fa3fd7c` | LibJS: Add `RootedExecutionContext` for rooting transient locals. New type + VM `m_rooted_execution_contexts` list walked in `gather_roots` + plugin allowlist entries in both `type_contains_gc_ptr` and `type_has_unrooted_gc_container` + `Tests/LibJS/test-rooted-execution-context.cpp`. |
+| `0d05ebe7a3` | LibWeb: Root realm execution context across Window setup. `WindowEnvironmentSettingsObject::setup` + ctor take `JS::RootedExecutionContext&&`; release lands in `EnvironmentSettingsObject`'s base member-init. Document/BrowsingContext construct the wrapper inline around `create_a_new_javascript_realm`. Closes 9 → 7 violations. |
+| `5338e75b36` | LibJS+LibWeb: Drop four `IGNORE_GC` ExecutionContext sites — `Realm::initialize_host_defined_realm`, `ECMAScriptFunctionObject` async_context copy, `MainThreadVM` dummy + script_execution_context. `WebEngineCustomJobCallbackData`'s ctor now takes `Optional<JS::RootedExecutionContext>&&` so the last one's release lands in the Cell's own member-init. |
 
 ### Plugin behavior cheat-sheet (documented this session, from source read)
 
@@ -265,7 +268,7 @@ When a struct is a member of a `GC::Cell` but not a Cell itself (e.g. `FlexItem`
 
 For container types holding these structs, the pattern extends one more layer: `PagedStore<T>::visit_edges` calls `entry.visit_edges(visitor)` so the owning cell just does `m_used_values_store.visit_edges(visitor)`.
 
-Section-4 bucket A (`script_execution_context` / `dummy_execution_context`) and the `JS::RootedExecutionContext` wrapper plan are still pending — only the bucket-C `CustomData` cell-promotion has landed. Plugin enforcement reorder (task #12) is still pending.
+Section-4 bucket A is now closed: `JS::RootedExecutionContext` landed this session (commits `b63fa3fd7c` / `0d05ebe7a3` / `5338e75b36`), replacing the five transient-local `IGNORE_GC` sites (`Realm`, `ECMAScriptFunctionObject`, `MainThreadVM` × 2) and the two Document/BrowsingContext flagged locals. Bucket-C `CustomData` cell-promotion landed previously. The only remaining §4 annotation is `ExecutionContext.cpp:108`'s in-body `IGNORE_GC`, left as-is because making `copy()` private would require migrating six external callers. Plugin enforcement reorder (task #12) is still pending.
 
 ## Session summaries
 
@@ -357,6 +360,64 @@ each folded back into its origin via `--fixup` + autosquash:
 (2). All in deferred buckets that need either the `JS::RootedExecutionContext`
 wrapper, the plugin's nested-container extension (section 7), or the
 bindings-generator extension for Variant returns.
+
+Continuation (same date): implemented the `JS::RootedExecutionContext`
+wrapper end-to-end per the §4 plan. Three atomic commits:
+
+- `JS::RootedExecutionContext` type + VM integration + plugin allowlist +
+  test: new files `Libraries/LibJS/Runtime/RootedExecutionContext.{h,cpp}`,
+  a `RootedExecutionContext::List m_rooted_execution_contexts` member on
+  `VM` walked inside the existing `gather_roots` next to the
+  `m_execution_context_stack` walk (same `ExecutionContextRootsCollector` +
+  `HeapRoot::Type::VM` plumbing), and a `Tests/LibJS/test-rooted-execution
+  -context.cpp` that exercises `gather_roots` directly. The plugin needed
+  two allowlist entries — one in `type_contains_gc_ptr`'s
+  `gc_infrastructure_types` (for member-field walks) and one in
+  `type_has_unrooted_gc_container`'s template + record paths (the codepath
+  `VisitVarDecl` actually uses). `GC::` types already go through the
+  record branch's `starts_with("GC::")` exemption; `JS::RootedExecutionContext`
+  needed an explicit entry alongside.
+- `WindowEnvironmentSettingsObject::setup` + ctor signatures now take
+  `JS::RootedExecutionContext&&`, with `release()` landing in the base
+  `EnvironmentSettingsObject`'s member-init (atomic against GC because
+  the ctor body runs inside `Heap::allocate`'s `defer_gc` bracket). Both
+  call sites (`Document.cpp:334`, `BrowsingContext.cpp:173`) construct
+  the wrapper locally and `move(...)` into `setup`. `EnvironmentSettingsObject`'s
+  base ctor stays as `NonnullOwnPtr<ExecutionContext>` so the `Worker`
+  path stays untouched. **Closes 9 → 7 violations.**
+- Dropped four `IGNORE_GC` annotations via wrapper adoption: `Realm.cpp:43`
+  (`new_context`), `ECMAScriptFunctionObject.cpp:428` (`async_context` —
+  copy-ctor variant), `MainThreadVM.cpp:293` (`dummy_execution_context` —
+  `Optional<RootedExecutionContext>`), and `MainThreadVM.cpp:353`
+  (`script_execution_context`). For the last site, extended
+  `WebEngineCustomJobCallbackData`'s ctor to take `Optional<RootedExecutionContext>&&`
+  so the release-and-store happens inside its ctor (same defer_gc
+  argument) — cleaner than wrapping the single caller in an explicit
+  `DeferGC` block.
+
+**Post-wrapper closing violation count: 9 → 7.** Remaining 7:
+nested-container indirection (5), `Vector<Variant<cell,...>>` returns (2).
+Both still blocked on infrastructure (section-7 plugin extension,
+bindings generator extension).
+
+API shape notes, in case a future session touches this:
+- `RootedExecutionContext::release()` is **not** rvalue-ref qualified —
+  matches AK convention (`OwnPtr::release_nonnull`, `NonnullOwnPtr::leak_ptr`)
+  and keeps call sites clean (`rc.release()` / `rc->release()` rather
+  than `move(rc).release()`). Misuse is caught by `VERIFY` on the
+  wrapper's accessors after release.
+- The wrapper is non-copyable and non-movable (the intrusive list node
+  pins the address), so handoff across function boundaries goes by
+  rvalue-ref parameter — never by value and never via a move ctor.
+- `AK::Optional<RootedExecutionContext>` works because `Optional::emplace`
+  uses `construct_at` with perfect forwarding and doesn't require the
+  payload to be movable.
+- `ExecutionContext::copy()` stays public and keeps its in-body
+  `IGNORE_GC auto copy = create(...)` annotation. Making it private
+  would require migrating six external callers (`IteratorHelper`,
+  `AsyncFunctionDriverWrapper`, `ECMAScriptFunctionObject` generator
+  path, `NativeJavaScriptBackedFunction`, etc.) — scope creep we
+  deliberately skipped.
 
 ### 2026-04-18 — Layout cluster Cell-promotion (LayoutState + FormattingContext + ComputedValues)
 
@@ -513,10 +574,13 @@ Live task list (mirrored from the in-session TaskList tool, lowest ID first):
 
 Roughly in priority order, the next things to land are:
 
-1. **Continue task #10 (CSS)** — see updated "CSS Progress" section below for what's done and what's still to do (StyleComputer, StyleScope; Parser is mostly closed out).
-2. **Continue tasks #6–#9 and #11** — fix the remaining LibWeb violation directories. Suggested order is by violation count (Layout → HTML → DOM → SVG → smaller dirs); they're independent and can be tackled in any order. The Crypto cluster has been fully resolved via Cell promotion (commit `7391fabfce`).
-3. **Implement the `JS::RootedExecutionContext` plan** (section 4 below, bucket A) — covers the `script_execution_context` / `dummy_execution_context` IGNORE_GC sites in `MainThreadVM.cpp` and similar transient-local hazards in LibJS. The bucket-C `CustomData` half is already done. A second small occurrence is now in `LibWeb/CSS/Parser/Helpers.cpp` (`execution_context` process-static; annotated with IGNORE_GC + rationale in commit `dea519a1d9`).
-4. **Task #12 (commit reordering)** — once everything builds, rebase to put the plugin-enforcement commit at the end of the branch so the history reads "fix all issues, then enforce".
+1. **Close the remaining 7 violations** — all deferred-bucket: nested-container indirection (5 sites: Flex/Grid `HashMap<int, Vector<T>>`, `ContainedBoxesMap`, Viewport `Vector<TextPosition>`/`Vector<TextBlock>`) and generator-facing `Vector<Variant<cell,…>>` returns (2 sites: WebIDL `OverloadResolution`, XHR `FormData`). Nested-container needs a section-7 plugin extension or per-struct redefinitions; Variant returns need a bindings-generator extension or caller reshape.
+2. **Task #12 (commit reordering)** — once everything builds, rebase to put the plugin-enforcement commit at the end of the branch so the history reads "fix all issues, then enforce".
+
+Landed this branch (status note):
+- `JS::RootedExecutionContext` — added + adopted across Document/BrowsingContext/Realm/ECMAScriptFunctionObject/MainThreadVM (see 2026-04-19 session). Section-4 bucket A is closed.
+- `JobCallback::CustomData` Cell-promotion — landed (bucket C).
+- `LibWeb/CSS/Parser/Helpers.cpp` `execution_context` process-static — intentionally kept as `IGNORE_GC` (one-time `HostDefined` factory helper, outlives the parser; refactoring it would need its own tiny Cell-promotion pass).
 
 ### Deferred (not in the task list, tracked here for the next session)
 
@@ -696,6 +760,8 @@ Cell-promotion is the default answer unless the hot-path cost is prohibitive. Fo
 So the branch keeps `ExecutionContext` as-is and introduces `JS::RootedExecutionContext` for the transient-local cluster. If profiling ever shows a reason to Cell-promote, the wrapper's `visit_edges` forwarder already describes the needed tracing contract and the migration is largely a find-and-replace.
 
 #### Implementation plan for option 1 (`JS::RootedExecutionContext`)
+
+**Status: landed (2026-04-19).** Commits `b63fa3fd7c` (type + wiring + test), `0d05ebe7a3` (Window setup migration — closes two violations), `5338e75b36` (four `IGNORE_GC` sites migrated). The live shape differs from the sketch below in two ways worth knowing: (a) `release()` is **not** rvalue-ref qualified (matches AK convention for `OwnPtr::release_nonnull` / `NonnullOwnPtr::leak_ptr`; call sites are `rc.release()` not `move(rc).release()`); (b) the `MainThreadVM` `script_execution_context` site pushes the release into `WebEngineCustomJobCallbackData`'s own ctor (ctor takes `Optional<JS::RootedExecutionContext>&&`, releases in member-init inside `Heap::allocate`'s defer_gc) rather than using an explicit `DeferGC` block at the caller — cleaner since there was a single construction site. The rest of the plan below is preserved for historical reference.
 
 Goal: an RAII wrapper that owns a `NonnullOwnPtr<ExecutionContext>`, registers with the heap on construction so the held context is traced via `ExecutionContext::visit_edges` from that point forward, and offers factory functions that collapse "allocate + register + populate" into one timing-window-free call. Declared variable type is `JS::RootedExecutionContext`, so the plugin sees nothing to flag.
 
@@ -1012,18 +1078,16 @@ The remaining failures fall almost entirely into the big deferred clusters (Layo
 
 #### Session closing state (2026-04-19)
 
-`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **9**.
+`ninja -k0 -C Build/release LibWeb 2>&1 | grep "not a GC root" | sort -u | wc -l` → **7**.
 
 Directory breakdown:
 
 | Directory | Count |
 |---|---|
-| LibWeb/DOM (`Document.cpp` ExecutionContext) | 1 |
-| LibWeb/HTML (`BrowsingContext.cpp` ExecutionContext) | 1 |
 | LibWeb/Layout (nested `HashMap<int, Vector<T>>` in Flex/Grid, `ContainedBoxesMap`, `Viewport::update_text_blocks`) | 5 |
 | LibWeb/WebIDL / XHR | 1 each (both are `Vector<Variant<cell,...>>` returns — deferred category) |
 
-All 9 remaining violations are in the originally-deferred buckets — every one still blocked on a wider refactor (`JS::RootedExecutionContext` wrapper, nested-container plugin extension per section 7, and bindings generator extension for `Vector<Variant<cell,...>>` returns).
+All 7 remaining violations are in the originally-deferred buckets: nested-container indirection (section 7 plugin extension) and generator-facing `Vector<Variant<cell,...>>` returns. The `JS::RootedExecutionContext` wrapper landed this session and closed both ExecutionContext sites.
 
 #### Session closing state (2026-04-18)
 
