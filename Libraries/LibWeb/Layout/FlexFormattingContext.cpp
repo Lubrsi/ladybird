@@ -8,6 +8,7 @@
 
 #include <AK/QuickSort.h>
 #include <AK/StdLibExtras.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/FlexFormattingContext.h>
 #include <LibWeb/Layout/ReplacedBox.h>
@@ -364,7 +365,7 @@ void FlexFormattingContext::generate_anonymous_flex_items()
     // calculations that could change that.
     // This is particularly important since we take references to the items stored in flex_items
     // later, whose addresses won't be stable if we added or removed any items.
-    HashMap<int, Vector<FlexItem>> order_item_bucket;
+    HashMap<int, GC::ConservativeVector<FlexItem>> order_item_bucket;
 
     flex_container().for_each_child_of_type<Box>([&](Box& child_box) {
         if (can_skip_is_anonymous_text_run(child_box))
@@ -378,7 +379,9 @@ void FlexFormattingContext::generate_anonymous_flex_items()
         FlexItem item = { child_box, m_state->get_mutable(child_box) };
         populate_specified_margins(item, m_flex_direction);
 
-        auto& order_bucket = order_item_bucket.ensure(child_box.computed_values().order());
+        auto& order_bucket = order_item_bucket.ensure(
+            child_box.computed_values().order(),
+            [this] { return GC::ConservativeVector<FlexItem>(heap()); });
         order_bucket.append(move(item));
 
         return IterationDecision::Continue;
