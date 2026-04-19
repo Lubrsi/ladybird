@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Utf16String.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/Layout/BlockContainer.h>
 
 namespace Web::Layout {
@@ -24,6 +25,14 @@ public:
         size_t start_offset { 0 };
     };
     struct TextBlock {
+        TextBlock(Utf16String text, GC::ConservativeVector<TextPosition> positions)
+            : text(move(text))
+            , positions(GC::adopt_conservative_vector(move(positions)))
+        {
+        }
+
+        void visit_edges(GC::Cell::Visitor&);
+
         Utf16String text;
         Vector<TextPosition> positions;
     };
