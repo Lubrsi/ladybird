@@ -11,6 +11,12 @@
 
 namespace Web::HTML {
 
+void Agent::visit_edges(Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(event_loop);
+}
+
 void Agent::spin_event_loop_until(GC::Root<GC::Function<bool()>> goal_condition)
 {
     Platform::EventLoopPlugin::the().spin_until(move(goal_condition));

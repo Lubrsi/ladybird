@@ -12,8 +12,12 @@ namespace Web::HTML {
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#dedicated-worker-agent
 // https://html.spec.whatwg.org/multipage/webappapis.html#shared-worker-agent
-struct WorkerAgent : public Agent {
-    static NonnullOwnPtr<WorkerAgent> create(GC::Heap&, CanBlock);
+class WorkerAgent final : public Agent {
+    GC_CELL(WorkerAgent, Agent);
+    GC_DECLARE_ALLOCATOR(WorkerAgent);
+
+public:
+    static GC::Ref<WorkerAgent> create(GC::Heap&, CanBlock);
 
 private:
     using Agent::Agent;

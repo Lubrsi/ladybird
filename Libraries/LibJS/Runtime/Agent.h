@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <LibGC/Cell.h>
 #include <LibGC/Function.h>
 #include <LibGC/Root.h>
 #include <LibJS/Export.h>
@@ -15,14 +16,16 @@
 namespace JS {
 
 // https://tc39.es/ecma262/#sec-agents
-class JS_API Agent {
+class JS_API Agent : public GC::Cell {
+    GC_CELL(Agent, GC::Cell);
+
 public:
     enum class CanBlock {
         Yes,
         No,
     };
 
-    virtual ~Agent();
+    virtual ~Agent() override;
 
     CanBlock can_block() const { return m_can_block; }
 

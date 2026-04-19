@@ -3381,7 +3381,7 @@ JS::ThrowCompletionOr<void> Element::upgrade_element(GC::Ref<HTML::CustomElement
 
     // 8. Set the surrounding agent's active custom element constructor map[C] to element's custom element registry.
     auto& surrounding_agent = HTML::relevant_similar_origin_window_agent(*this);
-    surrounding_agent.active_custom_element_constructor_map.set(static_cast<JS::FunctionObject&>(*constructor.callback), custom_element_registry());
+    surrounding_agent.active_custom_element_constructor_map.set(static_cast<JS::FunctionObject&>(*constructor.callback), *custom_element_registry());
 
     // 9. Run the following steps while catching any exceptions:
     auto attempt_to_construct_custom_element = [&]() -> JS::ThrowCompletionOr<void> {
