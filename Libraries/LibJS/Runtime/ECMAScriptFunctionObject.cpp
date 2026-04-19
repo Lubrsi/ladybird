@@ -424,8 +424,7 @@ void async_function_start(VM& vm, PromiseCapability const& promise_capability, T
     auto& running_context = vm.running_execution_context();
 
     // 2. Let asyncContext be a copy of runningContext.
-    // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
-    IGNORE_GC auto async_context = running_context.copy();
+    JS::RootedExecutionContext async_context(vm, running_context);
 
     // 3. NOTE: Copying the execution state is required for AsyncBlockStart to resume its execution. It is ill-defined to resume a currently executing context.
 
