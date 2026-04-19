@@ -9,6 +9,7 @@
 #include <AK/Optional.h>
 #include <AK/Span.h>
 #include <AK/Vector.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibIDL/Types.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Export.h>
@@ -21,7 +22,7 @@ struct ResolvedOverload {
     using Argument = Variant<JS::Value, Missing>;
 
     int callable_id;
-    Vector<Argument> arguments;
+    GC::ConservativeVector<Argument> arguments;
 };
 
 // https://webidl.spec.whatwg.org/#es-overloads

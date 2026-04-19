@@ -85,7 +85,7 @@ JS::ThrowCompletionOr<ResolvedOverload> resolve_overload(JS::VM& vm, IDL::Effect
         distinguishing_argument_index = overloads.distinguishing_argument_index();
 
     // 9. Initialize values to be an empty list, where each entry will be either an IDL value or the special value “missing”.
-    Vector<ResolvedOverload::Argument> values;
+    GC::ConservativeVector<ResolvedOverload::Argument> values(vm.heap());
 
     // 10. Initialize i to 0.
     auto i = 0;
