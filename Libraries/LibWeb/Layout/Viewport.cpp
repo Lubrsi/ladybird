@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/Dump.h>
@@ -40,10 +41,14 @@ void Viewport::visit_edges(Visitor& visitor)
     if (!m_text_blocks.has_value())
         return;
 
-    for (auto& text_block : *m_text_blocks) {
-        for (auto& text_position : text_block.positions)
-            visitor.visit(text_position.dom_node);
-    }
+    for (auto& text_block : *m_text_blocks)
+        text_block.visit_edges(visitor);
+}
+
+void Viewport::TextBlock::visit_edges(GC::Cell::Visitor& visitor)
+{
+    for (auto const& position : positions)
+        visitor.visit(position.dom_node);
 }
 
 Vector<Viewport::TextBlock> const& Viewport::text_blocks()
@@ -58,8 +63,9 @@ void Viewport::update_text_blocks()
 {
     StringBuilder builder(StringBuilder::Mode::UTF16);
     size_t current_start_position = 0;
-    Vector<TextPosition> text_positions;
-    Vector<TextBlock> text_blocks;
+    GC::ConservativeVector<TextPosition> text_positions(heap());
+    m_text_blocks.emplace();
+    auto& text_blocks = *m_text_blocks;
 
     for_each_in_inclusive_subtree([&](auto const& layout_node) {
         if (layout_node.display().is_none() || !layout_node.first_paintable() || !layout_node.first_paintable()->is_visible())
@@ -67,7 +73,7 @@ void Viewport::update_text_blocks()
 
         if (layout_node.is_box() || layout_node.is_generated_for_pseudo_element()) {
             if (!builder.is_empty()) {
-                text_blocks.append({ builder.to_utf16_string(), text_positions });
+                text_blocks.empend(builder.to_utf16_string(), text_positions);
                 current_start_position = 0;
                 text_positions.clear_with_capacity();
                 builder.clear();
@@ -96,9 +102,7 @@ void Viewport::update_text_blocks()
     });
 
     if (!builder.is_empty())
-        text_blocks.append({ builder.to_utf16_string(), text_positions });
-
-    m_text_blocks = move(text_blocks);
+        text_blocks.empend(builder.to_utf16_string(), move(text_positions));
 }
 
 }
