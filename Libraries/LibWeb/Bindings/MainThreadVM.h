@@ -9,6 +9,7 @@
 
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/JobCallback.h>
+#include <LibJS/Runtime/RootedExecutionContext.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/AgentType.h>
 #include <LibWeb/DOM/Element.h>
@@ -24,9 +25,9 @@ class WebEngineCustomJobCallbackData final : public JS::JobCallback::CustomData 
     GC_DECLARE_ALLOCATOR(WebEngineCustomJobCallbackData);
 
 public:
-    WebEngineCustomJobCallbackData(HTML::EnvironmentSettingsObject& incumbent_settings, OwnPtr<JS::ExecutionContext> active_script_context)
+    WebEngineCustomJobCallbackData(HTML::EnvironmentSettingsObject& incumbent_settings, Optional<JS::RootedExecutionContext>&& active_script_context)
         : incumbent_settings(incumbent_settings)
-        , active_script_context(move(active_script_context))
+        , active_script_context(active_script_context.has_value() ? OwnPtr<JS::ExecutionContext> { active_script_context->release() } : OwnPtr<JS::ExecutionContext> {})
     {
     }
 

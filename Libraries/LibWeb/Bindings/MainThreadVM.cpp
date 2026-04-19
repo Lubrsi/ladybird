@@ -289,8 +289,7 @@ void initialize_main_thread_vm(AgentType type)
         auto& heap = realm ? realm->heap() : vm.heap();
         HTML::queue_a_microtask(script ? script->settings_object().responsible_document().ptr() : nullptr, GC::create_function(heap, [&vm, job_settings, job = move(job), script_or_module = move(script_or_module)] {
             // The dummy execution context has to be kept up here to keep it alive for the duration of the function.
-            // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
-            IGNORE_GC OwnPtr<JS::ExecutionContext> dummy_execution_context;
+            Optional<JS::RootedExecutionContext> dummy_execution_context;
 
             if (job_settings) {
                 // 1. If job settings is not null, then prepare to run script with job settings.
@@ -308,9 +307,9 @@ void initialize_main_thread_vm(AgentType type)
                 // FIXME: We need to setup a dummy execution context in case a JS::NativeFunction is called when processing the job.
                 //        This is because JS::NativeFunction::call excepts something to be on the execution context stack to be able to get the caller context to initialize the environment.
                 //        Do note that the JS spec gives _no_ guarantee that the execution context stack has something on it if HostEnqueuePromiseJob was called with a null realm: https://tc39.es/ecma262/#job-preparedtoevaluatecode
-                dummy_execution_context = JS::ExecutionContext::create(0, ReadonlySpan<JS::Value> {}, 0);
-                dummy_execution_context->script_or_module = script_or_module;
-                vm.push_execution_context(*dummy_execution_context);
+                dummy_execution_context.emplace(vm, 0, ReadonlySpan<JS::Value> {}, 0);
+                (*dummy_execution_context)->script_or_module = script_or_module;
+                vm.push_execution_context(**dummy_execution_context);
             }
 
             // 2. Let result be job().
@@ -349,19 +348,19 @@ void initialize_main_thread_vm(AgentType type)
         auto* script = active_script();
 
         // 3. Let script execution context be null.
-        // FIXME: ExecutionContext should be GC-allocated so this is properly rooted.
-        IGNORE_GC OwnPtr<JS::ExecutionContext> script_execution_context;
+        Optional<JS::RootedExecutionContext> script_execution_context;
 
         // 4. If active script is not null, set script execution context to a new JavaScript execution context, with its Function field set to null,
         //    its Realm field set to active script's settings object's realm, and its ScriptOrModule set to active script's record.
         if (script) {
-            script_execution_context = JS::ExecutionContext::create(0, ReadonlySpan<JS::Value> {}, 0);
-            script_execution_context->function = nullptr;
-            script_execution_context->realm = &script->settings_object().realm();
+            auto& vm = *s_main_thread_vm;
+            script_execution_context.emplace(vm, 0, ReadonlySpan<JS::Value> {}, 0);
+            (*script_execution_context)->function = nullptr;
+            (*script_execution_context)->realm = &script->settings_object().realm();
             if (is<HTML::ClassicScript>(script)) {
-                script_execution_context->script_or_module = GC::Ref<JS::Script>(*as<HTML::ClassicScript>(script)->script_record());
+                (*script_execution_context)->script_or_module = GC::Ref<JS::Script>(*as<HTML::ClassicScript>(script)->script_record());
             } else if (is<HTML::ModuleScript>(script)) {
-                script_execution_context->script_or_module = as<HTML::ModuleScript>(script)->record().visit(
+                (*script_execution_context)->script_or_module = as<HTML::ModuleScript>(script)->record().visit(
                     [](Empty) -> JS::ScriptOrModule { return {}; },
                     [](auto& module) -> JS::ScriptOrModule { return GC::Ref<JS::Module> { module }; });
             } else {
