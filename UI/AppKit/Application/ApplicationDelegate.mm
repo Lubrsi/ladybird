@@ -5,6 +5,7 @@
  */
 
 #include <LibWebView/Application.h>
+#include <LibWebView/URL.h>
 
 #import <Application/ApplicationDelegate.h>
 #import <Interface/InfoBar.h>
@@ -94,6 +95,28 @@
     }
 
     return controller;
+}
+
+- (void)createNewTabs:(Vector<URL::URL> const&)urls
+{
+    Tab* tab = [self activeTab];
+    bool first = true;
+
+    for (auto const& url : urls) {
+        auto url_string = url.to_string();
+        auto sanitized_url = WebView::sanitize_url(url_string);
+        if (!sanitized_url.has_value())
+            continue;
+
+        auto activate_tab = first ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No;
+
+        auto* controller = [self createNewTab:url
+                                      fromTab:tab
+                                  activateTab:activate_tab];
+
+        tab = (Tab*)[controller window];
+        first = false;
+    }
 }
 
 - (nonnull TabController*)createChildTab:(Optional<URL::URL> const&)url
@@ -446,17 +469,23 @@
     if (browser_options.devtools_port.has_value())
         [self onDevtoolsEnabled];
 
-    Tab* tab = nil;
+    // Defer to the next runloop tick so application:openURLs: (which AppKit
+    // may dispatch either before or after this method on cold-launch URL
+    // handoff) can populate tabs first; if it did, skip the default new-tab.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([self.managed_tabs count] > 0)
+            return;
+        [self createNewTabs:WebView::Application::browser_options().urls];
+    });
+}
 
-    for (auto const& url : browser_options.urls) {
-        auto activate_tab = tab == nil ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No;
+- (void)application:(NSApplication*)application openURLs:(NSArray<NSURL*>*)urls
+{
+    Vector<URL::URL> converted_urls;
+    for (NSURL* url : urls)
+        converted_urls.append(Ladybird::ns_url_to_url(url));
 
-        auto* controller = [self createNewTab:url
-                                      fromTab:tab
-                                  activateTab:activate_tab];
-
-        tab = (Tab*)[controller window];
-    }
+    [self createNewTabs:converted_urls];
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification

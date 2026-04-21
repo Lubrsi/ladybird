@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Copyright 2025, the Ladybird developers. -->
 <component type="desktop-application">
-  <id>org.ladybird.Ladybird</id>
+  <id>@LADYBIRD_APP_ID@</id>
 
   <name>Ladybird</name>
   <summary>Truly independent web browser</summary>
@@ -37,7 +37,7 @@
     <mediatype>x-scheme-handler/https</mediatype>
   </provides>
 
-  <launchable type="desktop-id">org.ladybird.Ladybird.desktop</launchable>
+  <launchable type="desktop-id">@LADYBIRD_APP_ID@.desktop</launchable>
   <releases>
     <release version="@CMAKE_PROJECT_VERSION@-snapshot-@GIT_HASH@" type="snapshot" date="@DATE@">
       <description>

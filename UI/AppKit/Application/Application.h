@@ -31,6 +31,10 @@ private:
     virtual Vector<Web::Clipboard::SystemClipboardRepresentation> clipboard_entries() const override;
     virtual void insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresentation) override;
 
+    virtual bool platform_supports_default_browser_registration() const override { return true; }
+    virtual bool is_default_browser() const override;
+    virtual void set_as_default_browser(Function<void()> on_complete) override;
+
     virtual void rebuild_bookmarks_menu() const override;
     virtual void update_bookmarks_bar_display(bool) const override;
     virtual void show_bookmark_context_menu(Gfx::IntPoint, Optional<WebView::BookmarkItem const&>, Optional<String const&> target_folder_id) override;

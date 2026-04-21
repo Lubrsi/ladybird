@@ -1,15 +1,19 @@
 include(cmake/ResourceFiles.cmake)
 
 function(create_ladybird_bundle target_name)
+    configure_file("${LADYBIRD_SOURCE_DIR}/UI/Info.plist.in" "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
+
+    target_compile_definitions(${target_name} PRIVATE "LADYBIRD_APP_ID=\"${LADYBIRD_APP_ID}\"")
+
     set_target_properties(${target_name} PROPERTIES
         OUTPUT_NAME "Ladybird"
-        MACOSX_BUNDLE_GUI_IDENTIFIER org.ladybird.Ladybird
+        MACOSX_BUNDLE_GUI_IDENTIFIER ${LADYBIRD_APP_ID}
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
-        MACOSX_BUNDLE_INFO_PLIST "${LADYBIRD_SOURCE_DIR}/UI/Info.plist"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
         MACOSX_BUNDLE TRUE
         WIN32_EXECUTABLE TRUE
-        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER org.ladybird.Ladybird
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${LADYBIRD_APP_ID}
     )
 
     if (APPLE)

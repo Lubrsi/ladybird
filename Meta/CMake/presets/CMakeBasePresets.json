@@ -8,6 +8,7 @@
       "generator": "Ninja",
       "cacheVariables": {
         "LADYBIRD_CACHE_DIR": "$env{LADYBIRD_SOURCE_DIR}/Build/caches",
+        "LADYBIRD_PRESET": "${presetName}",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_INSTALL_OPTIONS": "--no-print-usage"
       },

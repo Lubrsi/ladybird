@@ -22,7 +22,9 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QProcess>
 #include <QStandardPaths>
+#include <QStringList>
 
 #if defined(AK_OS_WINDOWS)
 #    include <AK/Windows.h>
@@ -231,6 +233,43 @@ void Application::insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresen
 
     auto* clipboard = QGuiApplication::clipboard();
     clipboard->setMimeData(mime_data);
+}
+
+#if defined(AK_OS_LINUX) || (defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_MACOS))
+static constexpr auto LADYBIRD_DESKTOP_FILE = LADYBIRD_APP_ID ".desktop";
+#endif
+
+bool Application::platform_supports_default_browser_registration() const
+{
+#if defined(AK_OS_LINUX) || (defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_MACOS))
+    return !QStandardPaths::findExecutable("xdg-settings").isEmpty();
+#else
+    return false;
+#endif
+}
+
+bool Application::is_default_browser() const
+{
+#if defined(AK_OS_LINUX) || (defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_MACOS))
+    QProcess process;
+    process.start("xdg-settings", { "get", "default-web-browser" });
+    if (!process.waitForFinished(5000))
+        return false;
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+        return false;
+    return process.readAllStandardOutput().trimmed() == LADYBIRD_DESKTOP_FILE;
+#else
+    return false;
+#endif
+}
+
+void Application::set_as_default_browser(Function<void()> on_complete)
+{
+#if defined(AK_OS_LINUX) || (defined(AK_OS_BSD_GENERIC) && !defined(AK_OS_MACOS))
+    QProcess::execute("xdg-settings", { "set", "default-web-browser", LADYBIRD_DESKTOP_FILE });
+#endif
+    if (on_complete)
+        on_complete();
 }
 
 void Application::rebuild_bookmarks_menu() const

@@ -42,6 +42,9 @@ private:
     void set_global_privacy_control(JsonValue const&);
 
     void set_dns_settings(JsonValue const&);
+
+    void load_default_browser_status();
+    void set_as_default_browser();
 };
 
 }

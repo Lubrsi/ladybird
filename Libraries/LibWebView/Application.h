@@ -104,6 +104,14 @@ public:
     virtual void display_download_confirmation_dialog(StringView download_name, LexicalPath const& path) const;
     virtual void display_error_dialog(StringView error_message) const;
 
+    virtual bool platform_supports_default_browser_registration() const { return false; }
+    virtual bool is_default_browser() const { return false; }
+    virtual void set_as_default_browser(Function<void()> on_complete = {})
+    {
+        if (on_complete)
+            on_complete();
+    }
+
     // FIXME: We should implement UI-agnostic platform APIs to interact with the system clipboard.
     virtual Utf16String clipboard_text() const;
     virtual Vector<Web::Clipboard::SystemClipboardRepresentation> clipboard_entries() const;

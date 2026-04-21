@@ -81,6 +81,7 @@ list(TRANSFORM ABOUT_PAGES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/abo
 
 set(ABOUT_SETTINGS_RESOURCES
     browsing-behavior.js
+    default-browser.js
     default-zoom-level.js
     languages.js
     network.js

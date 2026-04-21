@@ -158,6 +158,42 @@ void Application::insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresen
                  forType:pasteboard_type];
 }
 
+bool Application::is_default_browser() const
+{
+    auto* workspace = [NSWorkspace sharedWorkspace];
+    auto* probe_url = [NSURL URLWithString:@"http:"];
+    auto* app_url = [workspace URLForApplicationToOpenURL:probe_url];
+    if (!app_url)
+        return false;
+
+    auto* bundle_identifier = [[NSBundle bundleWithURL:app_url] bundleIdentifier];
+    auto* self_identifier = [[NSBundle mainBundle] bundleIdentifier];
+    return [bundle_identifier caseInsensitiveCompare:self_identifier] == NSOrderedSame;
+}
+
+void Application::set_as_default_browser(Function<void()> on_complete)
+{
+    auto* self_bundle_url = [[NSBundle mainBundle] bundleURL];
+    auto* workspace = [NSWorkspace sharedWorkspace];
+
+    __block auto callback = move(on_complete);
+    __block size_t pending = 2;
+    auto handler = ^(NSError* error) {
+        (void)error;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (--pending == 0 && callback)
+                callback();
+        });
+    };
+
+    [workspace setDefaultApplicationAtURL:self_bundle_url
+                     toOpenURLsWithScheme:@"http"
+                        completionHandler:handler];
+    [workspace setDefaultApplicationAtURL:self_bundle_url
+                     toOpenURLsWithScheme:@"https"
+                        completionHandler:handler];
+}
+
 void Application::rebuild_bookmarks_menu() const
 {
     ApplicationDelegate* delegate = [NSApp delegate];

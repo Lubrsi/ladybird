@@ -79,6 +79,13 @@ void SettingsUI::register_interfaces()
     register_interface("setDNSSettings"sv, [this](auto const& data) {
         set_dns_settings(data);
     });
+
+    register_interface("loadDefaultBrowserStatus"sv, [this](auto const&) {
+        load_default_browser_status();
+    });
+    register_interface("setAsDefaultBrowser"sv, [this](auto const&) {
+        set_as_default_browser();
+    });
 }
 
 void SettingsUI::load_current_settings()
@@ -359,6 +366,24 @@ void SettingsUI::set_dns_settings(JsonValue const& dns_settings)
 {
     Application::settings().set_dns_settings(Settings::parse_dns_settings(dns_settings));
     load_current_settings();
+}
+
+void SettingsUI::load_default_browser_status()
+{
+    auto& application = Application::the();
+
+    JsonObject status;
+    status.set("supported"sv, application.platform_supports_default_browser_registration());
+    status.set("isDefault"sv, application.is_default_browser());
+
+    async_send_message("defaultBrowserStatus"sv, move(status));
+}
+
+void SettingsUI::set_as_default_browser()
+{
+    Application::the().set_as_default_browser([self = NonnullRefPtr { *this }]() {
+        self->load_default_browser_status();
+    });
 }
 
 }

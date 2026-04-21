@@ -119,24 +119,27 @@ if (ENABLE_INSTALL_FREEDESKTOP_FILES)
         OUTPUT_VARIABLE GIT_HASH
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    configure_file("${FREEDESKTOP_RESOURCE_DIR}/org.ladybird.Ladybird.metainfo.xml.in" "${CMAKE_CURRENT_BINARY_DIR}/org.ladybird.Ladybird.metainfo.xml" @ONLY)
+    configure_file("${FREEDESKTOP_RESOURCE_DIR}/Ladybird.desktop.in" "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.desktop" @ONLY)
+    configure_file("${FREEDESKTOP_RESOURCE_DIR}/Ladybird.service.in" "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.service" @ONLY)
+    configure_file("${FREEDESKTOP_RESOURCE_DIR}/Ladybird.metainfo.xml.in" "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.metainfo.xml" @ONLY)
     install(FILES
-        "${FREEDESKTOP_RESOURCE_DIR}/org.ladybird.Ladybird.svg"
+        "${FREEDESKTOP_RESOURCE_DIR}/Ladybird.svg"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps"
+        RENAME "${LADYBIRD_APP_ID}.svg"
         COMPONENT ladybird_Runtime
     )
     install(FILES
-        "${FREEDESKTOP_RESOURCE_DIR}/org.ladybird.Ladybird.desktop"
+        "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.desktop"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
         COMPONENT ladybird_Runtime
     )
     install(FILES
-        "${FREEDESKTOP_RESOURCE_DIR}/org.ladybird.Ladybird.service"
+        "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.service"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/dbus-1/services"
         COMPONENT ladybird_Runtime
     )
     install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/org.ladybird.Ladybird.metainfo.xml"
+        "${CMAKE_CURRENT_BINARY_DIR}/${LADYBIRD_APP_ID}.metainfo.xml"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/metainfo"
         COMPONENT ladybird_Runtime
     )

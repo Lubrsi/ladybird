@@ -380,6 +380,18 @@
                     </div>
                 </div>
             </div>
+
+            <h3 class="card-title">Default Browser</h3>
+            <div class="card">
+                <div class="card-body">
+                    <div class="card-group inline-container">
+                        <p id="default-browser-status" class="description" style="margin-bottom: 0">
+                            Checking default browser status&hellip;
+                        </p>
+                        <button id="default-browser-set" class="secondary-button hidden">Set as default</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="tab-panel" id="tab-search">
@@ -643,6 +655,7 @@
         </script>
 
         <script src="resource://ladybird/about-pages/settings/browsing-behavior.js" type="module"></script>
+        <script src="resource://ladybird/about-pages/settings/default-browser.js" type="module"></script>
         <script src="resource://ladybird/about-pages/settings/default-zoom-level.js" type="module"></script>
         <script src="resource://ladybird/about-pages/settings/languages.js" type="module"></script>
         <script src="resource://ladybird/about-pages/settings/network.js" type="module"></script>
@@ -689,6 +702,7 @@
 
             document.addEventListener("WebUILoaded", () => {
                 ladybird.sendMessage("loadCurrentSettings");
+                ladybird.sendMessage("loadDefaultBrowserStatus");
             });
         </script>
     </body>
