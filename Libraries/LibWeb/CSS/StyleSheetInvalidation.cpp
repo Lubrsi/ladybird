@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGC/RootVector.h>
 #include <LibWeb/CSS/CSSKeyframesRule.h>
 #include <LibWeb/CSS/CSSStyleRule.h>
 #include <LibWeb/CSS/CSSStyleSheet.h>
@@ -466,7 +467,7 @@ static ShadowRootStylesheetEffects determine_shadow_root_stylesheet_effects_for_
 {
     ShadowRootStylesheetEffects effects;
 
-    Vector<GC::Ptr<HTML::HTMLSlotElement const>> slots;
+    GC::RootVector<GC::Ptr<HTML::HTMLSlotElement const>> slots(shadow_root.heap());
     shadow_root.for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](HTML::HTMLSlotElement const& slot) {
         slots.append(slot);
         return TraversalDecision::Continue;
