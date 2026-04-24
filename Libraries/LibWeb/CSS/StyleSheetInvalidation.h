@@ -8,6 +8,7 @@
 
 #include <AK/RefPtr.h>
 #include <AK/Vector.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/Ptr.h>
 #include <LibWeb/CSS/Selector.h>
 #include <LibWeb/CSS/StyleInvalidationData.h>
@@ -20,6 +21,12 @@ namespace Web::CSS {
 // paths. Carries a primary invalidation set plus anchor-based rules for selectors whose rightmost compound is
 // pseudo-element-only or trailing-universal.
 struct StyleSheetInvalidationSet {
+    explicit StyleSheetInvalidationSet(GC::Heap& heap)
+        : pseudo_element_rules(heap)
+        , trailing_universal_rules(heap)
+    {
+    }
+
     InvalidationSet invalidation_set;
     bool may_match_shadow_host { false };
     bool may_match_light_dom_under_shadow_host { false };
@@ -35,8 +42,8 @@ struct StyleSheetInvalidationSet {
         Selector::Combinator combinator { Selector::Combinator::None };
         GC::Ptr<CSSStyleSheet const> style_sheet_for_rule;
     };
-    Vector<PseudoElementInvalidationRule> pseudo_element_rules;
-    Vector<TrailingUniversalInvalidationRule> trailing_universal_rules;
+    GC::ConservativeVector<PseudoElementInvalidationRule> pseudo_element_rules;
+    GC::ConservativeVector<TrailingUniversalInvalidationRule> trailing_universal_rules;
 };
 
 struct ShadowRootStylesheetEffects {
