@@ -363,7 +363,7 @@ void invalidate_root_for_style_sheet_change(DOM::Node& root, StyleSheetInvalidat
 
 void invalidate_owners_for_inserted_style_rule(CSSStyleSheet const& style_sheet, CSSStyleRule const& style_rule, DOM::StyleInvalidationReason reason)
 {
-    StyleSheetInvalidationSet invalidation_set;
+    StyleSheetInvalidationSet invalidation_set { style_sheet.heap() };
     extend_style_sheet_invalidation_set_with_style_rule(invalidation_set, style_rule);
 
     for (auto& document_or_shadow_root : style_sheet.owning_documents_or_shadow_roots()) {

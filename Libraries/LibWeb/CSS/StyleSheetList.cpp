@@ -89,7 +89,7 @@ GC::Ref<CSSStyleSheet> StyleSheetList::create_a_css_style_sheet(String const& cs
 
 static StyleSheetInvalidationSet build_invalidation_set_for_stylesheet(CSSStyleSheet const& sheet)
 {
-    StyleSheetInvalidationSet result;
+    StyleSheetInvalidationSet result { sheet.heap() };
 
     sheet.for_each_effective_style_producing_rule([&](CSSRule const& rule) {
         if (result.invalidation_set.needs_invalidate_whole_subtree())
