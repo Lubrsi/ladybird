@@ -5,6 +5,7 @@
  */
 
 #include <AK/Badge.h>
+#include <AK/Random.h>
 #include <LibGC/BlockAllocator.h>
 #include <LibGC/CellAllocator.h>
 #include <LibGC/Heap.h>
@@ -26,6 +27,23 @@ Cell* CellAllocator::allocate_cell(Heap& heap)
         heap.register_cell_allocator({}, *this);
 
     if (m_usable_blocks.is_empty()) {
+        // Avoid permanently stranding quarantined cells when the alternative is growing the
+        // heap. Reservoir-sample a random eligible full block so list order can't be groomed
+        // by an attacker into force-draining a specific block.
+        HeapBlock* drain_target = nullptr;
+        size_t eligible_count = 0;
+        for (auto& full_block : m_full_blocks) {
+            if (!full_block.has_quarantined_cells())
+                continue;
+            ++eligible_count;
+            if (get_random_uniform(eligible_count) == 0)
+                drain_target = &full_block;
+        }
+        if (drain_target) {
+            if (auto* cell = drain_target->drain_one_quarantined())
+                return cell;
+        }
+
         auto block = HeapBlock::create_with_cell_size(heap, *this, m_cell_size, m_overrides_must_survive_garbage_collection, m_overrides_finalize);
         auto block_ptr = reinterpret_cast<FlatPtr>(block.ptr());
         if (m_min_block_address > block_ptr)

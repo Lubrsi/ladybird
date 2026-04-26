@@ -49,8 +49,7 @@ void HeapBlock::deallocate(Cell* cell)
     cell->~Cell();
     auto* freelist_entry = new (cell) FreelistEntry();
     freelist_entry->set_state(Cell::State::Dead);
-    freelist_entry->next = encode_freelist_next(freelist_entry, m_freelist);
-    m_freelist = freelist_entry;
+    quarantine(freelist_entry);
 
     // Scrub the bytes past the FreelistEntry header so a dangling read of a freed cell
     // can't recover pointers or other state the destructor left behind.

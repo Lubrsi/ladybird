@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/CircularQueue.h>
 #include <AK/IntrusiveList.h>
 #include <AK/Platform.h>
 #include <AK/StringView.h>
@@ -31,6 +32,7 @@ public:
     size_t cell_size() const { return m_cell_size; }
     size_t cell_count() const { return (HeapBlock::BLOCK_SIZE - sizeof(HeapBlock)) / m_cell_size; }
     bool is_full() const { return !has_lazy_freelist() && !m_freelist; }
+    bool has_quarantined_cells() const { return !m_quarantine.is_empty(); }
 
     ALWAYS_INLINE Cell* allocate()
     {
@@ -48,6 +50,18 @@ public:
             ASAN_UNPOISON_MEMORY_REGION(allocated_cell, m_cell_size);
         }
         return allocated_cell;
+    }
+
+    // Pressure-escape path used by CellAllocator only when it would otherwise grow the heap.
+    // Quarantine intentionally does not contribute to `is_full()`, so this is the only way a
+    // quarantined cell can be reused before FIFO eviction pushes it onto the freelist.
+    Cell* drain_one_quarantined()
+    {
+        if (m_quarantine.is_empty())
+            return nullptr;
+        Cell* cell = m_quarantine.dequeue();
+        ASAN_UNPOISON_MEMORY_REGION(cell, m_cell_size);
+        return cell;
     }
 
     void deallocate(Cell*);
@@ -119,6 +133,19 @@ private:
         return encode_freelist_next(entry, encoded_next);
     }
 
+    void push_to_freelist(FreelistEntry* entry)
+    {
+        entry->next = encode_freelist_next(entry, m_freelist);
+        m_freelist = entry;
+    }
+
+    void quarantine(FreelistEntry* entry)
+    {
+        if (m_quarantine.size() == QUARANTINE_SIZE)
+            push_to_freelist(m_quarantine.dequeue());
+        m_quarantine.enqueue(entry);
+    }
+
     // Stricter than `is_valid_cell_pointer`: requires cell-start alignment and Dead state, so a
     // decoded freelist link can't pass validation by pointing into the middle of a cell or at a
     // live cell.
@@ -152,6 +179,15 @@ private:
 
     Ptr<FreelistEntry> m_freelist;
     FlatPtr m_freelist_secret { 0 };
+
+    // Recently freed cells are held here in a FIFO queue before joining the real freelist.
+    // Defeats the "free + immediately reallocate" pattern UAF exploits rely on. Quarantine
+    // does not make a block usable for normal allocation; a quarantined cell only becomes
+    // reusable when FIFO eviction pushes it onto the freelist or when CellAllocator would
+    // otherwise grow the heap (see `drain_one_quarantined`).
+    static constexpr size_t QUARANTINE_SIZE = 16;
+    CircularQueue<Ptr<FreelistEntry>, QUARANTINE_SIZE> m_quarantine;
+
     alignas(__BIGGEST_ALIGNMENT__) u8 m_storage[];
 
 public:
