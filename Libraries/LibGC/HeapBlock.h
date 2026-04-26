@@ -36,8 +36,10 @@ public:
     {
         Cell* allocated_cell = nullptr;
         if (m_freelist) {
-            VERIFY(is_valid_cell_pointer(m_freelist));
-            allocated_cell = exchange(m_freelist, m_freelist->next);
+            VERIFY(is_valid_freelist_entry(m_freelist));
+            auto* next = decode_freelist_next(m_freelist, m_freelist->next);
+            VERIFY(!next || is_valid_freelist_entry(next));
+            allocated_cell = exchange(m_freelist, next);
         } else if (has_lazy_freelist()) {
             allocated_cell = cell(m_next_lazy_freelist_index++);
         }
@@ -106,6 +108,36 @@ private:
         RawPtr<FreelistEntry> next;
     };
 
+    // Each freed cell's `next` pointer is XOR-encoded with a per-block secret and the entry's
+    // own address, so a partial overwrite of a freed cell cannot redirect future allocations.
+    ALWAYS_INLINE FreelistEntry* encode_freelist_next(FreelistEntry const* entry, FreelistEntry const* next) const
+    {
+        return reinterpret_cast<FreelistEntry*>(reinterpret_cast<FlatPtr>(next) ^ m_freelist_secret ^ reinterpret_cast<FlatPtr>(entry));
+    }
+    ALWAYS_INLINE FreelistEntry* decode_freelist_next(FreelistEntry const* entry, FreelistEntry const* encoded_next) const
+    {
+        return encode_freelist_next(entry, encoded_next);
+    }
+
+    // Stricter than `is_valid_cell_pointer`: requires cell-start alignment and Dead state, so a
+    // decoded freelist link can't pass validation by pointing into the middle of a cell or at a
+    // live cell.
+    bool is_valid_freelist_entry(FreelistEntry const* entry) const
+    {
+        auto entry_addr = reinterpret_cast<FlatPtr>(entry);
+        auto storage_addr = reinterpret_cast<FlatPtr>(m_storage);
+        if (entry_addr < storage_addr)
+            return false;
+        auto offset = entry_addr - storage_addr;
+        if (offset % m_cell_size != 0)
+            return false;
+        size_t cell_index = offset / m_cell_size;
+        auto end = has_lazy_freelist() ? m_next_lazy_freelist_index : cell_count();
+        if (cell_index >= end)
+            return false;
+        return entry->state() == Cell::State::Dead;
+    }
+
     Cell* cell(size_t index)
     {
         return reinterpret_cast<Cell*>(&m_storage[index * cell_size()]);
@@ -119,6 +151,7 @@ private:
     bool m_overrides_finalize { false };
 
     Ptr<FreelistEntry> m_freelist;
+    FlatPtr m_freelist_secret { 0 };
     alignas(__BIGGEST_ALIGNMENT__) u8 m_storage[];
 
 public:

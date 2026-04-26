@@ -7,6 +7,7 @@
 #include <AK/Assertions.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/Platform.h>
+#include <AK/Random.h>
 #include <LibGC/CellAllocator.h>
 #include <LibGC/Forward.h>
 #include <LibGC/HeapBlock.h>
@@ -31,6 +32,7 @@ HeapBlock::HeapBlock(Heap& heap, CellAllocator& cell_allocator, size_t cell_size
     , m_cell_size(cell_size)
     , m_overrides_must_survive_garbage_collection(overrides_must_survive_garbage_collection)
     , m_overrides_finalize(overrides_finalize)
+    , m_freelist_secret(get_random<FlatPtr>())
 {
     VERIFY(cell_size >= sizeof(FreelistEntry));
     ASAN_POISON_MEMORY_REGION(m_storage, BLOCK_SIZE - sizeof(HeapBlock));
@@ -39,14 +41,14 @@ HeapBlock::HeapBlock(Heap& heap, CellAllocator& cell_allocator, size_t cell_size
 void HeapBlock::deallocate(Cell* cell)
 {
     VERIFY(is_valid_cell_pointer(cell));
-    VERIFY(!m_freelist || is_valid_cell_pointer(m_freelist));
+    VERIFY(!m_freelist || is_valid_freelist_entry(m_freelist));
     VERIFY(cell->state() == Cell::State::Live);
     VERIFY(!cell->is_marked());
 
     cell->~Cell();
     auto* freelist_entry = new (cell) FreelistEntry();
     freelist_entry->set_state(Cell::State::Dead);
-    freelist_entry->next = m_freelist;
+    freelist_entry->next = encode_freelist_next(freelist_entry, m_freelist);
     m_freelist = freelist_entry;
 
 #ifdef HAS_ADDRESS_SANITIZER
