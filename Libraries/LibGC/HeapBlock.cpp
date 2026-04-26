@@ -5,6 +5,7 @@
  */
 
 #include <AK/Assertions.h>
+#include <AK/Memory.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/Platform.h>
 #include <AK/Random.h>
@@ -50,6 +51,10 @@ void HeapBlock::deallocate(Cell* cell)
     freelist_entry->set_state(Cell::State::Dead);
     freelist_entry->next = encode_freelist_next(freelist_entry, m_freelist);
     m_freelist = freelist_entry;
+
+    // Scrub the bytes past the FreelistEntry header so a dangling read of a freed cell
+    // can't recover pointers or other state the destructor left behind.
+    secure_zero(reinterpret_cast<u8*>(cell) + sizeof(FreelistEntry), m_cell_size - sizeof(FreelistEntry));
 
 #ifdef HAS_ADDRESS_SANITIZER
     auto dword_after_freelist = round_up_to_power_of_two(reinterpret_cast<uintptr_t>(freelist_entry) + sizeof(FreelistEntry), 8);
