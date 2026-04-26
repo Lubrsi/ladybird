@@ -6,6 +6,7 @@
  */
 
 #include <AK/Assertions.h>
+#include <AK/Memory.h>
 #include <AK/Platform.h>
 #include <AK/Random.h>
 #include <AK/Vector.h>
@@ -96,6 +97,8 @@ void* BlockAllocator::allocate_block([[maybe_unused]] char const* name)
 void BlockAllocator::deallocate_block(void* block)
 {
     VERIFY(block);
+
+    secure_zero(block, HeapBlock::BLOCK_SIZE);
 
 #if defined(AK_OS_WINDOWS)
     DWORD ret = DiscardVirtualMemory(block, HeapBlock::BLOCK_SIZE);
