@@ -2530,26 +2530,31 @@ CSSPixelRect FormattingContext::absolute_content_rect(Box const& box) const
     return rect;
 }
 
-Box const* FormattingContext::box_child_to_derive_baseline_from(Box const& box) const
+// https://drafts.csswg.org/css-align-3/#baseline-export
+// The first/last baseline set of a block container is taken from the first/last in-flow line box in the
+// block container or the first/last in-flow block-level child in the block container that contributes a
+// set of first/last baselines, whichever comes first/last.
+static Box const* child_to_derive_baseline_from(Box const& box, FormattingContext::BaselineDirection direction, LayoutState const& state, FormattingContext const& fc)
 {
     if (!box.has_children() || box.children_are_inline())
         return nullptr;
-    // Find the last in-flow child that has a baseline (either directly via line boxes, or via its descendants).
-    for (auto const* child = box.last_child(); child; child = child->previous_sibling()) {
+    auto const* start = direction == FormattingContext::BaselineDirection::First ? box.first_child() : box.last_child();
+    auto next = [direction](Node const* n) { return direction == FormattingContext::BaselineDirection::First ? n->next_sibling() : n->previous_sibling(); };
+    for (auto const* child = start; child; child = next(child)) {
         auto const* child_box = as_if<Box>(*child);
         if (!child_box)
             continue;
-        if (child_box->is_out_of_flow(*this))
+        if (child_box->is_out_of_flow(fc))
             continue;
-        if (!m_state.get(*child_box).line_boxes.is_empty())
+        if (!state.get(*child_box).line_boxes.is_empty())
             return child_box;
-        if (box_child_to_derive_baseline_from(*child_box))
+        if (child_to_derive_baseline_from(*child_box, direction, state, fc))
             return child_box;
     }
     return nullptr;
 }
 
-CSSPixels FormattingContext::box_baseline(Box const& box) const
+CSSPixels FormattingContext::box_baseline(Box const& box, BaselineDirection direction) const
 {
     auto const& box_state = m_state.get(box);
 
@@ -2592,9 +2597,9 @@ CSSPixels FormattingContext::box_baseline(Box const& box) const
     bool always_derive_from_content = is_flex_or_grid_container || has_visible_overflow;
 
     if (always_derive_from_content && !box_state.line_boxes.is_empty()) {
-        auto const& last_line_box = box_state.line_boxes.last();
-        auto last_line_box_top = last_line_box.bottom() - last_line_box.block_length();
-        return box_state.margin_box_top() + last_line_box_top + last_line_box.baseline();
+        auto const& line_box = direction == BaselineDirection::First ? box_state.line_boxes.first() : box_state.line_boxes.last();
+        auto line_box_top = line_box.bottom() - line_box.block_length();
+        return box_state.margin_box_top() + line_box_top + line_box.baseline();
     }
 
     // Derive baseline from block children if the box is flex/grid inside or has visible overflow.
@@ -2602,7 +2607,7 @@ CSSPixels FormattingContext::box_baseline(Box const& box) const
     //         `overflow: clip !important`, so CSS2 says to use bottom margin edge. However, the internal shadow tree
     //         baseline should determine the control's baseline for proper alignment with adjacent text.
     //         https://html.spec.whatwg.org/multipage/rendering.html#form-controls
-    if (auto const* child_box = box_child_to_derive_baseline_from(box)) {
+    if (auto const* child_box = child_to_derive_baseline_from(box, direction, m_state, *this)) {
         if (always_derive_from_content || is<HTML::HTMLInputElement>(box.dom_node())) {
             auto const& child_box_state = m_state.get(*child_box);
             auto child_offset_from_margin_edge = child_box_state.offset.y() - child_box_state.margin_box_top();
@@ -2615,14 +2620,16 @@ CSSPixels FormattingContext::box_baseline(Box const& box) const
             // first (last) grid item in row-major grid order.
             // FIXME: This does not yet select the spec-defined startmost/endmost flex item, or the first/last grid item
             //        in row-major grid order.
-            if (is_inline_flex_or_grid_container && !child_box_state.line_boxes.is_empty() && !child_box_state.line_boxes.first().is_empty()) {
-                auto const& first_line_box = child_box_state.line_boxes.first();
-                auto first_line_box_top = first_line_box.bottom() - first_line_box.block_length();
-                auto child_first_line_baseline = child_box_state.margin_box_top() + first_line_box_top + first_line_box.baseline();
-                return box_state.margin_box_top() + child_offset_from_margin_edge + child_first_line_baseline;
+            if (is_inline_flex_or_grid_container && !child_box_state.line_boxes.is_empty()) {
+                auto const& target_line_box = direction == BaselineDirection::First ? child_box_state.line_boxes.first() : child_box_state.line_boxes.last();
+                if (!target_line_box.is_empty()) {
+                    auto target_line_box_top = target_line_box.bottom() - target_line_box.block_length();
+                    auto child_line_baseline = child_box_state.margin_box_top() + target_line_box_top + target_line_box.baseline();
+                    return box_state.margin_box_top() + child_offset_from_margin_edge + child_line_baseline;
+                }
             }
 
-            return box_state.margin_box_top() + child_offset_from_margin_edge + box_baseline(*child_box);
+            return box_state.margin_box_top() + child_offset_from_margin_edge + box_baseline(*child_box, direction);
         }
     }
 

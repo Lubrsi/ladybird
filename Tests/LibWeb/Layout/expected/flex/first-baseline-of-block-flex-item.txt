@@ -1,0 +1,48 @@
+Viewport <#document> at [0,0] [0+0+0 800 0+0+0] [0+0+0 600 0+0+0] [BFC] children: not-inline
+  BlockContainer <html> at [0,0] [0+0+0 800 0+0+0] [0+0+0 52 0+0+0] [BFC] children: not-inline
+    BlockContainer <body> at [8,8] [8+0+0 784 0+0+8] [8+0+0 36 0+0+8] children: not-inline
+      Box <div.row> at [8,8] flex-container(row) [0+0+0 400 0+0+384] [0+0+0 36 0+0+0] [FFC] children: not-inline
+        BlockContainer <(anonymous)> (not painted) [BFC] children: inline
+          TextNode <#text> (not painted)
+        BlockContainer <span.date> at [8,8] flex-item [0+0+0 80 0+0+0] [0+0+0 18 0+0+0] [BFC] children: inline
+          frag 0 from TextNode start: 0, length: 4, rect: [8,8 32.78125x18] baseline: 13.796875
+              "date"
+          TextNode <#text> (not painted)
+        BlockContainer <(anonymous)> (not painted) [BFC] children: inline
+          TextNode <#text> (not painted)
+        BlockContainer <div.info> at [98,8] flex-item [0+0+0 63.5625 0+0+0] [0+0+0 36 0+0+0] [BFC] children: not-inline
+          BlockContainer <(anonymous)> at [98,8] [0+0+0 63.5625 0+0+0] [0+0+0 18 0+0+0] children: inline
+            TextNode <#text> (not painted)
+            InlineNode <a> at [98,8] [0+0+0 31.234375 0+0+0] [0+0+0 18 0+0+0]
+              frag 0 from TextNode start: 0, length: 5, rect: [98,8 31.234375x18] baseline: 13.796875
+                  "title"
+              TextNode <#text> (not painted)
+            TextNode <#text> (not painted)
+          BlockContainer <p> at [98,26] [0+0+0 63.5625 0+0+0] [0+0+0 18 0+0+0] children: inline
+            frag 0 from TextNode start: 0, length: 8, rect: [98,26 63.5625x18] baseline: 13.796875
+                "line two"
+            TextNode <#text> (not painted)
+          BlockContainer <(anonymous)> at [98,44] [0+0+0 63.5625 0+0+0] [0+0+0 0 0+0+0] children: inline
+            TextNode <#text> (not painted)
+        BlockContainer <(anonymous)> (not painted) [BFC] children: inline
+          TextNode <#text> (not painted)
+      BlockContainer <(anonymous)> at [8,44] [0+0+0 784 0+0+0] [0+0+0 0 0+0+0] children: inline
+        TextNode <#text> (not painted)
+
+ViewportPaintable (Viewport<#document>) [0,0 800x600]
+  PaintableWithLines (BlockContainer<HTML>) [0,0 800x52]
+    PaintableWithLines (BlockContainer<BODY>) [8,8 784x36]
+      PaintableBox (Box<DIV>.row) [8,8 400x36]
+        PaintableWithLines (BlockContainer<SPAN>.date) [8,8 80x18]
+          TextPaintable (TextNode<#text>)
+        PaintableWithLines (BlockContainer<DIV>.info) [98,8 63.5625x36]
+          PaintableWithLines (BlockContainer(anonymous)) [98,8 63.5625x18]
+            PaintableWithLines (InlineNode<A>) [98,8 31.234375x18]
+              TextPaintable (TextNode<#text>)
+          PaintableWithLines (BlockContainer<P>) [98,26 63.5625x18]
+            TextPaintable (TextNode<#text>)
+          PaintableWithLines (BlockContainer(anonymous)) [98,44 63.5625x0]
+      PaintableWithLines (BlockContainer(anonymous)) [8,44 784x0]
+
+SC for Viewport<#document> [0,0 800x600] [children: 1] (z-index: auto)
+ SC for BlockContainer<HTML> [0,0 800x52] [children: 0] (z-index: auto)

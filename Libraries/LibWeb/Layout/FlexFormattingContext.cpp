@@ -1705,14 +1705,14 @@ void FlexFormattingContext::resolve_baseline_aligned_items()
         CSSPixels max_baseline = 0;
         for (auto& item : flex_line.items) {
             if (alignment_for_item(item.box) == CSS::AlignItems::Baseline)
-                max_baseline = max(max_baseline, box_baseline(item.box));
+                max_baseline = max(max_baseline, box_baseline(item.box, BaselineDirection::First));
         }
 
         for (auto& item : flex_line.items) {
             if (alignment_for_item(item.box) != CSS::AlignItems::Baseline)
                 continue;
 
-            auto adjustment = max_baseline - box_baseline(item.box);
+            auto adjustment = max_baseline - box_baseline(item.box, BaselineDirection::First);
             if (main_axis_is_horizontal())
                 item.used_values.set_content_y(item.used_values.offset.y() + adjustment);
             else

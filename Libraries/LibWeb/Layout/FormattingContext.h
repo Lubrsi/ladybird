@@ -156,7 +156,13 @@ public:
     [[nodiscard]] CSSPixelRect content_box_rect(Box const&) const;
     [[nodiscard]] CSSPixelRect content_box_rect(LayoutState::UsedValues const&) const;
     [[nodiscard]] CSSPixelRect content_box_rect_in_ancestor_coordinate_space(LayoutState::UsedValues const&, Box const& ancestor_box) const;
-    [[nodiscard]] CSSPixels box_baseline(Box const&) const;
+
+    enum class BaselineDirection : u8 {
+        First,
+        Last,
+    };
+    [[nodiscard]] CSSPixels box_baseline(Box const&, BaselineDirection = BaselineDirection::Last) const;
+
     [[nodiscard]] CSSPixels containing_block_width_for(NodeWithStyleAndBoxModelMetrics const&) const;
 
     [[nodiscard]] CSSPixels calculate_stretch_fit_width(Box const&, AvailableSize const&) const;
@@ -232,8 +238,6 @@ protected:
     void compute_height_for_absolutely_positioned_replaced_element(Box const&, AvailableSpace const&, BeforeOrAfterInsideLayout);
 
     [[nodiscard]] Optional<CSSPixels> compute_auto_height_for_absolutely_positioned_element(Box const&, AvailableSpace const&, BeforeOrAfterInsideLayout) const;
-
-    [[nodiscard]] Box const* box_child_to_derive_baseline_from(Box const&) const;
 
     Type m_type {};
     LayoutMode m_layout_mode;

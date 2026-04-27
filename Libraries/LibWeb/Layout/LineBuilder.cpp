@@ -296,7 +296,11 @@ void LineBuilder::update_last_line()
                 fragment_baseline = CSSPixels::nearest_value_for(font_metrics.ascent) + half_leading;
             } else {
                 auto const& box = as<Layout::Box>(fragment.layout_node());
-                fragment_baseline = m_context.box_baseline(box);
+                // https://drafts.csswg.org/css-inline-3/#baseline-source
+                // baseline-source: auto specifies last-baseline alignment for inline-block, first-baseline alignment
+                // for everything else (e.g. inline-flex, inline-grid, inline-table).
+                auto direction = box.display().is_inline_block() ? FormattingContext::BaselineDirection::Last : FormattingContext::BaselineDirection::First;
+                fragment_baseline = m_context.box_baseline(box, direction);
             }
 
             // Remember the baseline used for this fragment. This will be used when painting the fragment.
