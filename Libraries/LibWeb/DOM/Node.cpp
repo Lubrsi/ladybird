@@ -11,6 +11,7 @@
 #include <AK/HashTable.h>
 #include <AK/JsonObjectSerializer.h>
 #include <AK/StringBuilder.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibGC/DeferGC.h>
 #include <LibGC/WeakHashMap.h>
 #include <LibIPC/Decoder.h>
@@ -602,7 +603,7 @@ void Node::invalidate_style(StyleInvalidationReason reason, Vector<CSS::Invalida
     //     that observe property changes on this element or its light-DOM children.
     //   - The document scope and any outer shadow root scopes when this element lives inside a shadow tree, for
     //     ::part(...:has(...)) rules in the outer document or containing shadow root.
-    Vector<GC::Ref<CSS::StyleScope>, 4> additional_scopes;
+    GC::ConservativeVector<GC::Ref<CSS::StyleScope>, 4> additional_scopes(heap());
     for_each_style_scope_which_may_observe_the_node([&](CSS::StyleScope& scope) {
         if (&scope == &style_scope)
             return;
