@@ -10,6 +10,7 @@
 #include <AK/HashMap.h>
 #include <AK/Optional.h>
 #include <AK/OwnPtr.h>
+#include <LibGC/ConservativeVector.h>
 #include <LibWeb/Animations/KeyframeEffect.h>
 #include <LibWeb/CSS/CSSFontFaceRule.h>
 #include <LibWeb/CSS/CSSKeyframesRule.h>
@@ -111,7 +112,7 @@ public:
         GC::Ptr<DOM::ShadowRoot const> shadow_root;
     };
 
-    [[nodiscard]] Vector<ScopedMatchingRule> collect_matching_rules(DOM::AbstractElement, CascadeOrigin, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name = {}) const;
+    [[nodiscard]] GC::ConservativeVector<ScopedMatchingRule> collect_matching_rules(DOM::AbstractElement, CascadeOrigin, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name = {}) const;
 
     NonnullRefPtr<InvalidationPlan> invalidation_plan_for_properties(Vector<InvalidationSet::Property> const&, StyleScope const&) const;
     Vector<HasInvalidationMetadata> const* has_invalidation_metadata_for_property(InvalidationSet::Property const&, StyleScope const&) const;
@@ -157,12 +158,18 @@ private:
 
     struct LayerMatchingRules {
         FlyString qualified_layer_name;
-        Vector<ScopedMatchingRule> rules;
+        GC::ConservativeVector<ScopedMatchingRule> rules;
     };
 
     struct MatchingRuleSet {
-        Vector<ScopedMatchingRule> user_agent_rules;
-        Vector<ScopedMatchingRule> user_rules;
+        explicit MatchingRuleSet(GC::Heap& heap)
+            : user_agent_rules(heap)
+            , user_rules(heap)
+        {
+        }
+
+        GC::ConservativeVector<ScopedMatchingRule> user_agent_rules;
+        GC::ConservativeVector<ScopedMatchingRule> user_rules;
         Vector<LayerMatchingRules> author_rules;
     };
 
@@ -182,7 +189,7 @@ private:
     void cascade_declarations(
         CascadedProperties&,
         DOM::AbstractElement,
-        Vector<ScopedMatchingRule> const&,
+        GC::ConservativeVector<ScopedMatchingRule> const&,
         CascadeOrigin,
         Important,
         Optional<FlyString> layer_name) const;

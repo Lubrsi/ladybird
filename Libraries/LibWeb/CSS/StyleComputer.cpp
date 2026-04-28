@@ -241,7 +241,7 @@ Vector<HasInvalidationMetadata> const* StyleComputer::has_invalidation_metadata_
     return nullptr;
 }
 
-Vector<StyleComputer::ScopedMatchingRule> StyleComputer::collect_matching_rules(DOM::AbstractElement abstract_element, CascadeOrigin cascade_origin, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name) const
+GC::ConservativeVector<StyleComputer::ScopedMatchingRule> StyleComputer::collect_matching_rules(DOM::AbstractElement abstract_element, CascadeOrigin cascade_origin, PseudoClassBitmap& attempted_pseudo_class_matches, Optional<FlyString const> qualified_layer_name) const
 {
     auto const& root_node = abstract_element.element().root();
     auto shadow_root = as_if<DOM::ShadowRoot>(root_node);
@@ -254,7 +254,7 @@ Vector<StyleComputer::ScopedMatchingRule> StyleComputer::collect_matching_rules(
     else if (shadow_root)
         shadow_host = shadow_root->host();
 
-    Vector<ScopedMatchingRule, 512> rules_to_run;
+    GC::ConservativeVector<ScopedMatchingRule, 512> rules_to_run(heap());
 
     auto add_rule_to_run = [&](MatchingRule const& rule_to_run, GC::Ptr<DOM::ShadowRoot const> rule_root) {
         // FIXME: This needs to be revised when adding support for the ::shadow selector, as it needs to cross shadow boundaries.
@@ -352,7 +352,7 @@ Vector<StyleComputer::ScopedMatchingRule> StyleComputer::collect_matching_rules(
         }
     }
 
-    Vector<ScopedMatchingRule> matching_rules;
+    GC::ConservativeVector<ScopedMatchingRule> matching_rules(heap());
     matching_rules.ensure_capacity(rules_to_run.size());
 
     for (auto const& rule_to_run : rules_to_run) {
@@ -414,7 +414,7 @@ Vector<StyleComputer::ScopedMatchingRule> StyleComputer::collect_matching_rules(
     return matching_rules;
 }
 
-static void sort_matching_rules(Vector<StyleComputer::ScopedMatchingRule>& matching_rules)
+static void sort_matching_rules(GC::ConservativeVector<StyleComputer::ScopedMatchingRule>& matching_rules)
 {
     quick_sort(matching_rules, [&](auto const& a, auto const& b) {
         auto const* a_rule = a.rule;
@@ -472,7 +472,7 @@ void StyleComputer::for_each_property_expanding_shorthands(PropertyID property_i
 void StyleComputer::cascade_declarations(
     CascadedProperties& cascaded_properties,
     DOM::AbstractElement abstract_element,
-    Vector<ScopedMatchingRule> const& matching_rules,
+    GC::ConservativeVector<ScopedMatchingRule> const& matching_rules,
     CascadeOrigin cascade_origin,
     Important important,
     Optional<FlyString> layer_name) const
@@ -552,7 +552,7 @@ void StyleComputer::cascade_declarations(
     }
 }
 
-static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vector<StyleComputer::ScopedMatchingRule> const& matching_rules, OrderedHashMap<FlyString, StyleProperty>& custom_properties)
+static void cascade_custom_properties(DOM::AbstractElement abstract_element, GC::ConservativeVector<StyleComputer::ScopedMatchingRule> const& matching_rules, OrderedHashMap<FlyString, StyleProperty>& custom_properties)
 {
     size_t needed_capacity = 0;
     for (auto const& matching_rule : matching_rules)
@@ -1252,7 +1252,7 @@ void StyleComputer::start_needed_transitions(ComputedProperties const& previous_
 StyleComputer::MatchingRuleSet StyleComputer::build_matching_rule_set(DOM::AbstractElement abstract_element, PseudoClassBitmap& attempted_pseudo_class_matches, bool& did_match_any_pseudo_element_rules, ComputeStyleMode mode, StyleScope const& style_scope) const
 {
     // First, we collect all the CSS rules whose selectors match `element`:
-    MatchingRuleSet matching_rule_set;
+    MatchingRuleSet matching_rule_set { heap() };
     matching_rule_set.user_agent_rules = collect_matching_rules(abstract_element, CascadeOrigin::UserAgent, attempted_pseudo_class_matches);
     sort_matching_rules(matching_rule_set.user_agent_rules);
     matching_rule_set.user_rules = collect_matching_rules(abstract_element, CascadeOrigin::User, attempted_pseudo_class_matches);
