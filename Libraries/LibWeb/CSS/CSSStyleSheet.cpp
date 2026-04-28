@@ -138,8 +138,7 @@ void CSSStyleSheet::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_namespace_rules);
     visitor.visit(m_import_rules);
     visitor.visit(m_owning_documents_or_shadow_roots);
-    if (m_shared_single_constructed_sheet_style_cache)
-        m_shared_single_constructed_sheet_style_cache->visit_edges(visitor);
+    visitor.visit(m_shared_single_constructed_sheet_style_cache);
     for (auto& subresource : m_critical_subresources)
         subresource.visit_edges(visitor);
 }
@@ -422,7 +421,7 @@ void CSSStyleSheet::for_each_owning_style_scope(Function<void(StyleScope&)> cons
     }
 }
 
-NonnullRefPtr<StyleCache> CSSStyleSheet::shared_single_constructed_sheet_style_cache(StyleScope& style_scope)
+GC::Ref<StyleCache> CSSStyleSheet::shared_single_constructed_sheet_style_cache(StyleScope& style_scope)
 {
     VERIFY(constructed());
     if (!m_shared_single_constructed_sheet_style_cache)
