@@ -28,6 +28,8 @@
 
 namespace Web::CSS {
 
+GC_DEFINE_ALLOCATOR(StyleCache);
+
 void RuleCaches::visit_edges(GC::Cell::Visitor& visitor)
 {
     main.visit_edges(visitor);
@@ -36,22 +38,26 @@ void RuleCaches::visit_edges(GC::Cell::Visitor& visitor)
     }
 }
 
-NonnullRefPtr<StyleCache> StyleCache::create()
+StyleCache::StyleCache()
 {
-    auto style_cache = adopt_ref(*new StyleCache);
-    style_cache->qualified_layer_names_in_order.append({});
-    return style_cache;
+    qualified_layer_names_in_order.append({});
 }
 
-NonnullRefPtr<StyleCache> StyleCache::create_for_style_scope(StyleScope& style_scope)
+GC::Ref<StyleCache> StyleCache::create(GC::Heap& heap)
 {
-    auto style_cache = StyleCache::create();
+    return heap.allocate<StyleCache>();
+}
+
+GC::Ref<StyleCache> StyleCache::create_for_style_scope(StyleScope& style_scope)
+{
+    auto style_cache = StyleCache::create(style_scope.node().heap());
     style_scope.populate_rule_cache(*style_cache);
     return style_cache;
 }
 
-void StyleCache::visit_edges(GC::Cell::Visitor& visitor)
+void StyleCache::visit_edges(Visitor& visitor)
 {
+    Base::visit_edges(visitor);
     for (auto& cache : pseudo_class_rule_cache) {
         if (cache)
             cache->visit_edges(visitor);
@@ -65,8 +71,7 @@ void StyleScope::visit_edges(GC::Cell::Visitor& visitor)
 {
     visitor.visit(m_node);
     visitor.visit(m_user_style_sheet);
-    if (m_rule_cache)
-        m_rule_cache->visit_edges(visitor);
+    visitor.visit(m_rule_cache);
     visitor.visit(m_pending_has_invalidations);
 }
 
@@ -125,7 +130,7 @@ void StyleScope::build_rule_cache()
         }
     }
 
-    m_rule_cache = StyleCache::create();
+    m_rule_cache = StyleCache::create(m_node->heap());
     populate_rule_cache(*m_rule_cache);
 }
 

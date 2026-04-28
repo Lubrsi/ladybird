@@ -26,7 +26,7 @@ namespace Web::CSS {
 class CSSImportRule;
 class StyleScope;
 struct ShadowRootStylesheetEffects;
-struct StyleCache;
+class StyleCache;
 
 struct CSSStyleSheetInit {
     Optional<String> base_url {};
@@ -101,7 +101,7 @@ public:
     GC::Ptr<DOM::Document> owning_document() const;
     virtual void set_disabled(bool) override;
     void for_each_owning_style_scope(Function<void(StyleScope&)> const&) const;
-    NonnullRefPtr<StyleCache> shared_single_constructed_sheet_style_cache(StyleScope&);
+    GC::Ref<StyleCache> shared_single_constructed_sheet_style_cache(StyleScope&);
 
     Optional<FlyString> default_namespace() const;
     GC::Ptr<CSSNamespaceRule> default_namespace_rule() const { return m_default_namespace_rule; }
@@ -161,7 +161,7 @@ private:
     bool m_constructed { false };
     bool m_disallow_modification { false };
     Optional<bool> m_did_match;
-    RefPtr<StyleCache> m_shared_single_constructed_sheet_style_cache;
+    GC::Ptr<StyleCache> m_shared_single_constructed_sheet_style_cache;
 
     Vector<Subresource&> m_critical_subresources;
 

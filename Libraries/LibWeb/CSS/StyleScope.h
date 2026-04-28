@@ -80,9 +80,15 @@ struct SelectorInsights {
     bool has_has_selectors_with_relative_selector_that_has_sibling_combinator { false };
 };
 
-struct StyleCache : public RefCounted<StyleCache> {
-    static NonnullRefPtr<StyleCache> create();
-    static NonnullRefPtr<StyleCache> create_for_style_scope(StyleScope&);
+class StyleCache final : public GC::Cell {
+    GC_CELL(StyleCache, GC::Cell);
+    GC_DECLARE_ALLOCATOR(StyleCache);
+
+public:
+    static GC::Ref<StyleCache> create(GC::Heap&);
+    static GC::Ref<StyleCache> create_for_style_scope(StyleScope&);
+
+    virtual ~StyleCache() override = default;
 
     Vector<FlyString> qualified_layer_names_in_order;
     SelectorInsights selector_insights;
@@ -92,7 +98,10 @@ struct StyleCache : public RefCounted<StyleCache> {
     RuleCaches user_rule_cache;
     RuleCaches user_agent_rule_cache;
 
-    void visit_edges(GC::Cell::Visitor&);
+    virtual void visit_edges(Visitor&) override;
+
+private:
+    StyleCache();
 };
 
 struct PendingHasInvalidationMutationFeatures {
@@ -154,7 +163,7 @@ public:
 
     void visit_edges(GC::Cell::Visitor&);
 
-    RefPtr<StyleCache> m_rule_cache;
+    GC::Ptr<StyleCache> m_rule_cache;
 
     GC::Ptr<CSSStyleSheet> m_user_style_sheet;
 
