@@ -45,6 +45,8 @@
 
 namespace Web::Layout {
 
+GC_DEFINE_ALLOCATOR(NodeWithStyle::ImageObserver);
+
 Node::Node(DOM::Document& document, DOM::Node* node)
     : m_dom_node(node ? *node : document)
     , m_anonymous(node == nullptr)
@@ -600,8 +602,9 @@ NodeWithStyle::ImageObserver::ImageObserver(NodeWithStyle& owner, NonnullRefPtr<
 {
 }
 
-NodeWithStyle::ImageObserver::~ImageObserver()
+void NodeWithStyle::ImageObserver::finalize()
 {
+    Base::finalize();
     image_style_value_finalize();
 }
 
@@ -626,14 +629,15 @@ void NodeWithStyle::ImageObserver::image_style_value_did_update(CSS::ImageStyleV
     }
 }
 
-void NodeWithStyle::ImageObserver::visit_edges(JS::Cell::Visitor& visitor) const
+void NodeWithStyle::ImageObserver::visit_edges(Visitor& visitor)
 {
+    Base::visit_edges(visitor);
     m_image->visit_edges(visitor);
 }
 
 void NodeWithStyle::rebuild_image_observers()
 {
-    auto add_observer_for = [&](CSS::AbstractImageStyleValue const* abstract_image, Vector<NonnullOwnPtr<ImageObserver>>& observers) {
+    auto add_observer_for = [&](CSS::AbstractImageStyleValue const* abstract_image, GC::RootVector<GC::Ref<ImageObserver>>& observers) {
         if (!abstract_image)
             return;
         CSS::ImageStyleValue const* image_to_observe = nullptr;
@@ -645,16 +649,16 @@ void NodeWithStyle::rebuild_image_observers()
         }
         if (!image_to_observe)
             return;
-        observers.append(make<ImageObserver>(*this, *image_to_observe));
+        observers.append(heap().allocate<ImageObserver>(*this, *image_to_observe));
     };
 
-    Vector<NonnullOwnPtr<ImageObserver>> new_observers;
+    GC::RootVector<GC::Ref<ImageObserver>> new_observers { heap() };
     for (auto const& layer : computed_values().background_layers())
         add_observer_for(layer.background_image.ptr(), new_observers);
     add_observer_for(m_list_style_image.ptr(), new_observers);
     add_observer_for(computed_values().mask_image().ptr(), new_observers);
 
-    m_image_observers = move(new_observers);
+    m_image_observers = adopt_root_vector(move(new_observers));
 }
 
 void NodeWithStyle::visit_edges(Visitor& visitor)
@@ -667,9 +671,7 @@ void NodeWithStyle::visit_edges(Visitor& visitor)
         m_list_style_image->visit_edges(visitor);
 
     visitor.visit(m_computed_values);
-
-    for (auto const& image_observer : m_image_observers)
-        image_observer->visit_edges(visitor);
+    visitor.visit(m_image_observers);
 }
 
 void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)

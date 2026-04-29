@@ -268,15 +268,25 @@ class WEB_API NodeWithStyle : public Node {
 public:
     virtual ~NodeWithStyle() override = default;
 
-    class ImageObserver final : public CSS::ImageStyleValue::Client {
+    class ImageObserver final
+        : public GC::Cell
+        , public CSS::ImageStyleValue::Client {
+        GC_CELL(ImageObserver, GC::Cell);
+        GC_DECLARE_ALLOCATOR(ImageObserver);
+
     public:
-        ImageObserver(NodeWithStyle&, NonnullRefPtr<CSS::ImageStyleValue const> image);
-        virtual ~ImageObserver() override;
+        static constexpr bool OVERRIDES_FINALIZE = true;
+
+        virtual ~ImageObserver() override = default;
 
         virtual void image_style_value_did_update(CSS::ImageStyleValue&) override;
-        void visit_edges(JS::Cell::Visitor&) const;
 
     private:
+        ImageObserver(NodeWithStyle&, NonnullRefPtr<CSS::ImageStyleValue const> image);
+
+        virtual void finalize() override;
+        virtual void visit_edges(Visitor&) override;
+
         GC::Weak<NodeWithStyle> m_owner;
         NonnullRefPtr<CSS::ImageStyleValue const> m_image;
     };
@@ -320,7 +330,7 @@ private:
 
     GC::Ref<CSS::ComputedValues> m_computed_values;
     RefPtr<CSS::AbstractImageStyleValue const> m_list_style_image;
-    Vector<NonnullOwnPtr<ImageObserver>> m_image_observers;
+    Vector<GC::Ref<ImageObserver>> m_image_observers;
     u32 m_layout_index { 0 };
 };
 
