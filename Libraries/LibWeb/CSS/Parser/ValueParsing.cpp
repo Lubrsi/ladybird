@@ -79,6 +79,7 @@
 #include <LibWeb/CSS/StyleValues/URLStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnicodeRangeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Dump.h>
 #include <LibWeb/Infra/CharacterTypes.h>
@@ -5570,17 +5571,17 @@ RefPtr<FontSourceStyleValue const> Parser::parse_font_source_value(TokenStream<C
     return FontSourceStyleValue::create(url.release_value(), move(format), move(tech));
 }
 
-NonnullRefPtr<StyleValue const> Parser::resolve_unresolved_style_value(ParsingParams const& context, DOM::AbstractElement abstract_element, PropertyNameAndID const& property, UnresolvedStyleValue const& unresolved, Optional<GuardedSubstitutionContexts&> existing_guarded_contexts)
+NonnullRefPtr<StyleValue const> Parser::resolve_unresolved_style_value(ParsingParams const& context, DOM::AbstractElement abstract_element, PropertyNameAndID const& property, UnresolvedStyleValue const& unresolved, Optional<GuardedSubstitutionContexts&> existing_guarded_contexts, CustomPropertyResolutionContext const& resolution_context)
 {
     auto parser = Parser::create(context, ""sv);
     if (existing_guarded_contexts.has_value())
-        return parser.resolve_unresolved_style_value(abstract_element, existing_guarded_contexts.value(), property, unresolved);
+        return parser.resolve_unresolved_style_value(abstract_element, existing_guarded_contexts.value(), property, unresolved, resolution_context);
     GuardedSubstitutionContexts guarded_contexts;
-    return parser.resolve_unresolved_style_value(abstract_element, guarded_contexts, property, unresolved);
+    return parser.resolve_unresolved_style_value(abstract_element, guarded_contexts, property, unresolved, resolution_context);
 }
 
 // https://drafts.csswg.org/css-values-5/#property-replacement
-NonnullRefPtr<StyleValue const> Parser::resolve_unresolved_style_value(DOM::AbstractElement element, GuardedSubstitutionContexts& guarded_contexts, PropertyNameAndID const& property, UnresolvedStyleValue const& unresolved)
+NonnullRefPtr<StyleValue const> Parser::resolve_unresolved_style_value(DOM::AbstractElement element, GuardedSubstitutionContexts& guarded_contexts, PropertyNameAndID const& property, UnresolvedStyleValue const& unresolved, CustomPropertyResolutionContext const& resolution_context)
 {
     // AD-HOC: Report that we might rely on custom properties.
     if (unresolved.includes_attr_function())
@@ -5596,18 +5597,18 @@ NonnullRefPtr<StyleValue const> Parser::resolve_unresolved_style_value(DOM::Abst
 
     // 1. Substitute arbitrary substitution functions in prop’s value, given «"property", prop’s name» as the
     //    substitution context. Let result be the returned component value sequence.
-    auto result = substitute_arbitrary_substitution_functions(element, guarded_contexts, unresolved.values(), SubstitutionContext { SubstitutionContext::DependencyType::Property, property.name().to_string() });
+    auto result = substitute_arbitrary_substitution_functions(element, guarded_contexts, unresolved.values(), SubstitutionContext { SubstitutionContext::DependencyType::Property, property.name().to_string() }, resolution_context);
 
     // 2. If result contains the guaranteed-invalid value, prop is invalid at computed-value time; return.
     if (contains_guaranteed_invalid_value(result))
         return GuaranteedInvalidStyleValue::create();
 
     // 3. Parse result according to prop’s grammar. If this returns failure, prop is invalid at computed-value time; return.
-    // NB: Custom properties have no grammar as such, so we skip this step for them.
-    // FIXME: Parse according to @property syntax once we support that.
+    // NB: For registered custom properties this parses against the @property syntax. Unregistered custom properties
+    //     have no grammar and the helper returns the raw token stream as-is.
     if (property.is_custom_property()) {
         auto contains_attr_tainted_values = result.first_matching([](auto const& component_value) { return component_value.contains_attr_tainted_value(); }).has_value();
-        return UnresolvedStyleValue::create(move(result), {}, {}, UnresolvedStyleValue::SourceTextMode::Trim, contains_attr_tainted_values);
+        return element.document().parse_registered_custom_property_value(property.name(), UnresolvedStyleValue::create(move(result), {}, {}, UnresolvedStyleValue::SourceTextMode::Trim, contains_attr_tainted_values));
     }
 
     auto expanded_value_tokens = TokenStream { result };

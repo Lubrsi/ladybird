@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 10deg;
+    inherits: false;
+}
+@keyframes spin {
+    from { --a: 50deg; }
+    to { --a: 50deg; }
+}
+.before {
+    animation: spin 1s linear -0.5s paused;
+    transform: rotate(var(--a));
+}
+.after {
+    transform: rotate(var(--a));
+}
+</style>
+<div id="box" class="before"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box = document.getElementById("box");
+    println(`#box (with animation) --a: ${getComputedStyle(box).getPropertyValue("--a")}`);
+    println(`#box (with animation) transform: ${getComputedStyle(box).getPropertyValue("transform")}`);
+
+    box.className = "after";
+    println(`#box (no animation) --a: ${getComputedStyle(box).getPropertyValue("--a")}`);
+    println(`#box (no animation) transform: ${getComputedStyle(box).getPropertyValue("transform")}`);
+});
+</script>

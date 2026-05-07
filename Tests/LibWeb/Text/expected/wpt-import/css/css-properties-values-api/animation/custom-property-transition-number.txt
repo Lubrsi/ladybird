@@ -1,0 +1,7 @@
+Harness status: OK
+
+Found 2 tests
+
+2 Fail
+Fail	A custom property of type <number> can yield a CSS Transition
+Fail	The to value of a custom property to a random floating-point number can yield a CSS Transition

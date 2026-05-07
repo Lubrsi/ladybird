@@ -1,0 +1,11 @@
+Harness status: OK
+
+Found 6 tests
+
+6 Fail
+Fail	Animating a custom property of type <transform-list> containing multiple values
+Fail	Animating a custom property of type <transform-list> containing multiple values with a single keyframe
+Fail	Animating a custom property of type <transform-list> containing multiple values with additivity
+Fail	Animating a custom property of type <transform-list> containing multiple values with a single keyframe and additivity
+Fail	Animating a custom property of type <transform-list> containing multiple values with iterationComposite
+Fail	Animating a custom property of type <transform-list> containing multiple values and with mismatching list lengths

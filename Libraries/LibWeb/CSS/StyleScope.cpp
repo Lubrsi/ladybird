@@ -456,6 +456,7 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
         sheet.for_each_effective_keyframes_at_rule([&](CSSKeyframesRule const& rule) {
             auto keyframe_set = adopt_ref(*new Animations::KeyframeEffect::KeyFrameSet);
             HashTable<PropertyID> animated_properties;
+            HashTable<FlyString> animated_custom_properties;
 
             // Forwards pass, resolve all the user-specified keyframe properties.
             for (auto const& keyframe_rule : *rule.css_rules()) {
@@ -502,9 +503,16 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
                     });
                 }
 
+                for (auto const& [name, style_property] : keyframe_style.custom_properties()) {
+                    animated_custom_properties.set(name);
+                    resolved_keyframe.custom_properties.set(name, NonnullRefPtr<StyleValue const> { style_property.value });
+                }
+
                 if (auto* existing_keyframe = keyframe_set->keyframes_by_key.find(key)) {
                     for (auto& [property_id, value] : resolved_keyframe.properties)
                         existing_keyframe->properties.set(property_id, move(value));
+                    for (auto& [name, value] : resolved_keyframe.custom_properties)
+                        existing_keyframe->custom_properties.set(name, move(value));
                     if (resolved_keyframe.composite != Bindings::CompositeOperationOrAuto::Auto)
                         existing_keyframe->composite = resolved_keyframe.composite;
                     if (!resolved_keyframe.easing.has<Empty>())
@@ -514,7 +522,7 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
                 }
             }
 
-            Animations::KeyframeEffect::generate_initial_and_final_frames(keyframe_set, animated_properties);
+            Animations::KeyframeEffect::generate_initial_and_final_frames(keyframe_set, animated_properties, animated_custom_properties);
 
             if constexpr (LIBWEB_CSS_DEBUG) {
                 dbgln("Resolved keyframe set '{}' into {} keyframes:", rule.name(), keyframe_set->keyframes_by_key.size());

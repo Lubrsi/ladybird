@@ -63,12 +63,13 @@ public:
             // These StyleValue properties can be unresolved, as they may be generated from a @keyframes rule, well
             // before they are applied to an element
             HashMap<CSS::PropertyID, Variant<UseInitial, NonnullRefPtr<CSS::StyleValue const>>> properties {};
+            HashMap<FlyString, Variant<UseInitial, NonnullRefPtr<CSS::StyleValue const>>> custom_properties {};
             Bindings::CompositeOperationOrAuto composite { Bindings::CompositeOperationOrAuto::Auto };
             Variant<Empty, CSS::EasingFunction, NonnullRefPtr<CSS::StyleValue const>> easing {};
         };
         RedBlackTree<u64, ResolvedKeyFrame> keyframes_by_key;
     };
-    static void generate_initial_and_final_frames(RefPtr<KeyFrameSet>, HashTable<CSS::PropertyID> const& animated_properties);
+    static void generate_initial_and_final_frames(RefPtr<KeyFrameSet>, HashTable<CSS::PropertyID> const& animated_properties, HashTable<FlyString> const& animated_custom_properties);
 
     static int composite_order(GC::Ref<KeyframeEffect>, GC::Ref<KeyframeEffect>);
 

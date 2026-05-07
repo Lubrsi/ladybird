@@ -1,0 +1,4 @@
+#box-inherit --i (universal, to: inherit → parent's value at 75%): parent-i-value
+#box-initial --i (universal, to: initial → registered initial at 75%): i-initial
+#box-unset --u (non-inheriting universal, to: unset → registered initial at 75%): u-initial
+#box-typed-inherit --a (typed angle, from: 0deg, to: inherit → 90deg, at 50% = 45deg): 45deg

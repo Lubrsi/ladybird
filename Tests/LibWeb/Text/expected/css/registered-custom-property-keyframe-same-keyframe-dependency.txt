@@ -1,0 +1,5 @@
+#box-longhand --x (50% of 0 → 100px): 50px
+#box-longhand width (must track keyframe's --x, not element's underlying): 50px
+#box-chain --a (50% of 0 → 90deg): 45deg
+#box-chain --b (var(--a) in same keyframe → matches --a): 45deg
+#box-chain transform (rotate(var(--b))): matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)

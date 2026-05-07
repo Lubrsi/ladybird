@@ -1,0 +1,5 @@
+#box-cycle-universal --cu-a (cyclic, universal → guaranteed-invalid): ""
+#box-cycle-universal --cu-b (cyclic, universal → guaranteed-invalid): ""
+#box-cycle-typed --ct-a (cyclic, typed → registered initial): 5deg
+#box-cycle-typed --ct-b (cyclic, typed → registered initial): 5deg
+#box-chain --c0 (10-deep chain to 90deg): 90deg

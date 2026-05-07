@@ -202,12 +202,44 @@ void ComputedProperties::remove_animated_property(PropertyID id)
     m_animated_property_values.remove(id);
 }
 
+RefPtr<StyleValue const> ComputedProperties::animated_custom_property(FlyString const& name) const
+{
+    auto it = m_animated_custom_property_values.find(name);
+    if (it == m_animated_custom_property_values.end())
+        return nullptr;
+    return it->value;
+}
+
+void ComputedProperties::set_animated_custom_property(FlyString name, NonnullRefPtr<StyleValue const> value)
+{
+    m_animated_custom_property_values.set(move(name), move(value));
+}
+
+void ComputedProperties::remove_animated_custom_property(FlyString const& name)
+{
+    m_animated_custom_property_values.remove(name);
+}
+
+void ComputedProperties::set_animated_substitutions(HashMap<PropertyID, AnimatedSubstitutionEntry> entries)
+{
+    m_animated_substitutions = move(entries);
+}
+
+void ComputedProperties::set_cascaded_important_custom_properties(HashTable<FlyString> names)
+{
+    m_cascaded_important_custom_properties = move(names);
+}
+
 void ComputedProperties::reset_non_inherited_animated_properties(Badge<Animations::KeyframeEffect>)
 {
     for (auto property_id : m_animated_property_values.keys()) {
         if (!is_animated_property_inherited(property_id))
             m_animated_property_values.remove(property_id);
     }
+
+    // Without this, an animation that stops contributing to a custom property would leave its last interpolated
+    // value live, and downstream var() consumers would keep substituting from it instead of the cascade-time value.
+    m_animated_custom_property_values.clear();
 }
 
 StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnimationsApplied return_animated_value) const

@@ -1,0 +1,10 @@
+Harness status: Error
+
+Found 5 tests
+
+5 Fail
+Fail	Animating a custom property of type <color>
+Fail	Animating a custom property of type <color> with a single keyframe
+Fail	Animating a custom property of type <color> with additivity
+Fail	Animating a custom property of type <color> with a single keyframe and additivity
+Fail	Animating a custom property of type <color> with iterationComposite

@@ -1,0 +1,10 @@
+Harness status: OK
+
+Found 5 tests
+
+5 Fail
+Fail	Animating a custom property of type <length>
+Fail	Animating a custom property of type <length> with a single keyframe
+Fail	Animating a custom property of type <length> with additivity
+Fail	Animating a custom property of type <length> with a single keyframe and additivity
+Fail	Animating a custom property of type <length> with iterationComposite

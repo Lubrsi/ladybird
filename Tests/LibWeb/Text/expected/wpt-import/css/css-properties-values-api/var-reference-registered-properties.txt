@@ -2,9 +2,9 @@ Harness status: OK
 
 Found 16 tests
 
-10 Pass
-6 Fail
-Fail	var() references work with registered properties
+11 Pass
+5 Fail
+Pass	var() references work with registered properties
 Pass	References to registered var()-properties work in registered lists
 Pass	References to mixed registered and unregistered var()-properties work in registered lists
 Pass	Registered lists may be concatenated

@@ -559,6 +559,8 @@ NonnullRefPtr<CalculationNode const> CalculationNode::from_style_value(NonnullRe
         return NumericCalculationNode::create(Number { Number::Type::Number, style_value->as_number().number() }, calculation_context);
     case StyleValue::Type::Percentage:
         return NumericCalculationNode::create(style_value->as_percentage().percentage(), calculation_context);
+    case StyleValue::Type::Resolution:
+        return NumericCalculationNode::create(style_value->as_resolution().resolution(), calculation_context);
     case StyleValue::Type::Time:
         return NumericCalculationNode::create(style_value->as_time().time(), calculation_context);
     case StyleValue::Type::Calculated:

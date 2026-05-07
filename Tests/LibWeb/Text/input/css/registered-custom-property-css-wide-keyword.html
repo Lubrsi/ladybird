@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<style>
+@property --x {
+    syntax: "*";
+    initial-value: foo;
+    inherits: false;
+}
+@keyframes anim {
+    from { --x: initial; }
+    to { --x: initial; }
+}
+#box {
+    animation: anim 1s linear -0.5s paused;
+    --x: initial;
+    transform: var(--x);
+}
+</style>
+<div id="box"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box = document.getElementById("box");
+    println(`#box transform: ${getComputedStyle(box).getPropertyValue("transform")}`);
+});
+</script>

@@ -1,0 +1,12 @@
+Harness status: OK
+
+Found 6 tests
+
+1 Pass
+5 Fail
+Fail	Animating a custom property of type <resolution>#
+Fail	Animating a custom property of type <resolution># with a single keyframe
+Fail	Animating a custom property of type <resolution># with additivity
+Fail	Animating a custom property of type <resolution># with a single keyframe and additivity
+Fail	Animating a custom property of type <resolution># with iterationComposite
+Pass	Animating a custom property of type <resolution># with different lengths is discrete

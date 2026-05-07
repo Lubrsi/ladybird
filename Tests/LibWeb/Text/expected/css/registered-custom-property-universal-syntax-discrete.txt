@@ -1,0 +1,2 @@
+#box-25 --u (25% progress, discrete holds 'foo'): foo
+#box-75 --u (75% progress, discrete flips to 'bar'): bar

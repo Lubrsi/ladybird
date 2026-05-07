@@ -20,6 +20,7 @@
 #include <LibWeb/CSS/MediaQuery.h>
 #include <LibWeb/CSS/PageSelector.h>
 #include <LibWeb/CSS/ParsedFontFace.h>
+#include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
 #include <LibWeb/CSS/Parser/ComponentValue.h>
 #include <LibWeb/CSS/Parser/GeneratedValueTypesParsing.h>
 #include <LibWeb/CSS/Parser/RuleContext.h>
@@ -156,7 +157,7 @@ public:
 
     Vector<ComponentValue> parse_as_list_of_component_values();
 
-    static NonnullRefPtr<StyleValue const> resolve_unresolved_style_value(ParsingParams const&, DOM::AbstractElement, PropertyNameAndID const&, UnresolvedStyleValue const&, Optional<GuardedSubstitutionContexts&> = {});
+    static NonnullRefPtr<StyleValue const> resolve_unresolved_style_value(ParsingParams const&, DOM::AbstractElement, PropertyNameAndID const&, UnresolvedStyleValue const&, Optional<GuardedSubstitutionContexts&> = {}, CustomPropertyResolutionContext const& = {});
 
     [[nodiscard]] NonnullRefPtr<StyleValue const> parse_as_sizes_attribute(DOM::Element const& element, HTML::HTMLImageElement const* img = nullptr);
 
@@ -616,7 +617,7 @@ private:
     OwnPtr<BooleanExpression> parse_container_query_feature(TokenStream<ComponentValue>&);
     RefPtr<ContainerQuery> parse_container_query(TokenStream<ComponentValue>&);
 
-    NonnullRefPtr<StyleValue const> resolve_unresolved_style_value(DOM::AbstractElement, GuardedSubstitutionContexts&, PropertyNameAndID const&, UnresolvedStyleValue const&);
+    NonnullRefPtr<StyleValue const> resolve_unresolved_style_value(DOM::AbstractElement, GuardedSubstitutionContexts&, PropertyNameAndID const&, UnresolvedStyleValue const&, CustomPropertyResolutionContext const& = {});
 
     RefPtr<StyleValue const> parse_according_to_syntax_node(TokenStream<ComponentValue>& tokens, SyntaxNode const& syntax_node);
 

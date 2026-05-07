@@ -1,0 +1,12 @@
+Harness status: OK
+
+Found 6 tests
+
+1 Pass
+5 Fail
+Fail	Animating a custom property of type <color>+
+Fail	Animating a custom property of type <color>+ with a single keyframe
+Fail	Animating a custom property of type <color>+ with additivity
+Fail	Animating a custom property of type <color>+ with a single keyframe and additivity
+Fail	Animating a custom property of type <color>+ with iterationComposite
+Pass	Animating a custom property of type <color>+ with different lengths is discrete

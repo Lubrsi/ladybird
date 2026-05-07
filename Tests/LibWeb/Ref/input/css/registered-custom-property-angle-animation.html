@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<link rel="match" href="../../expected/css/registered-custom-property-angle-animation-ref.html" />
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@keyframes spin {
+    from { --a: 0deg; }
+    to { --a: 90deg; }
+}
+#box {
+    width: 100px;
+    height: 20px;
+    background: red;
+    transform: rotate(var(--a));
+    transform-origin: 0 0;
+    animation: spin 1s linear -0.5s paused;
+}
+</style>
+<div id="box"></div>

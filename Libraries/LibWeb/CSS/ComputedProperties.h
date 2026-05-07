@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <AK/HashTable.h>
 #include <AK/NonnullRefPtr.h>
 #include <LibGC/CellAllocator.h>
 #include <LibGC/Ptr.h>
@@ -38,6 +39,15 @@ struct TransitionProperties {
 enum class AnimatedPropertyResultOfTransition : u8 {
     No,
     Yes
+};
+
+// Snapshot of the cascade-time data needed to recompute a property's value when an animated registered custom
+// property changes. Captured during compute_properties, since cascaded properties are not stored on the element.
+struct AnimatedSubstitutionEntry {
+    PropertyID cascaded_property_id;
+    PropertyID inherited_property_id;
+    NonnullRefPtr<StyleValue const> unresolved_original;
+    PropertyID source_property_id;
 };
 
 class WEB_API ComputedProperties final : public JS::Cell {
@@ -85,6 +95,17 @@ public:
     void set_property_without_modifying_flags(PropertyID, NonnullRefPtr<StyleValue const> value);
     void set_animated_property(PropertyID, NonnullRefPtr<StyleValue const> value, AnimatedPropertyResultOfTransition, Inherited = Inherited::No);
     void remove_animated_property(PropertyID);
+
+    HashMap<FlyString, NonnullRefPtr<StyleValue const>> const& animated_custom_property_values() const { return m_animated_custom_property_values; }
+    RefPtr<StyleValue const> animated_custom_property(FlyString const&) const;
+    void set_animated_custom_property(FlyString, NonnullRefPtr<StyleValue const>);
+    void remove_animated_custom_property(FlyString const&);
+
+    HashMap<PropertyID, AnimatedSubstitutionEntry> const& animated_substitutions() const { return m_animated_substitutions; }
+    void set_animated_substitutions(HashMap<PropertyID, AnimatedSubstitutionEntry>);
+
+    HashTable<FlyString> const& cascaded_important_custom_properties() const { return m_cascaded_important_custom_properties; }
+    void set_cascaded_important_custom_properties(HashTable<FlyString>);
     enum class WithAnimationsApplied {
         No,
         Yes,
@@ -304,6 +325,9 @@ private:
     Array<u8, ceil_div(number_of_longhand_properties, 8uz)> m_animated_property_result_of_transition {};
 
     HashMap<PropertyID, NonnullRefPtr<StyleValue const>> m_animated_property_values;
+    HashMap<FlyString, NonnullRefPtr<StyleValue const>> m_animated_custom_property_values;
+    HashMap<PropertyID, AnimatedSubstitutionEntry> m_animated_substitutions;
+    HashTable<FlyString> m_cascaded_important_custom_properties;
 
     Display m_display_before_box_type_transformation { InitialValues::display() };
     bool m_depends_on_viewport_metrics { false };

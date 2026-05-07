@@ -20,6 +20,8 @@ enum class AllowDiscrete {
 };
 ValueComparingRefPtr<StyleValue const> interpolate_property(DOM::Element&, PropertyID, StyleValue const& from, StyleValue const& to, float delta, AllowDiscrete);
 
+RefPtr<StyleValue const> interpolate_custom_property(DOM::Element&, FlyString const& name, StyleValue const& from, StyleValue const& to, float delta, AllowDiscrete);
+
 // https://drafts.csswg.org/css-transitions/#transitionable
 bool property_values_are_transitionable(PropertyID, StyleValue const& old_value, StyleValue const& new_value, DOM::Element&, TransitionBehavior);
 

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<style>
+@property --p {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: true;
+}
+@keyframes parent-spin {
+    from { --p: 0deg; }
+    to { --p: 180deg; }
+}
+@keyframes child-spin {
+    to { --p: 360deg; }
+}
+#parent {
+    animation: parent-spin 1s linear -0.25s paused;
+}
+#child {
+    animation: child-spin 1s linear -0.25s paused;
+    transform: rotate(var(--p));
+}
+</style>
+<div id="parent">
+    <div id="child"></div>
+</div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const parent = document.getElementById("parent");
+    const child = document.getElementById("child");
+    println(`#parent --p (25% of 0 → 180 = 45deg): ${getComputedStyle(parent).getPropertyValue("--p")}`);
+    // Implicit-keyframe underlying value is the property's value with no animations active, so the child's
+    // implicit "from" is the registered initial 0deg, not the parent's animated 45deg. At 25% of 0 → 360, --p is 90deg.
+    println(`#child --p (25% of 0deg → 360deg = 90deg): ${getComputedStyle(child).getPropertyValue("--p")}`);
+});
+</script>

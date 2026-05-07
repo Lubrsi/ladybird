@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<number>";
+    initial-value: 0;
+    inherits: false;
+}
+@keyframes grow {
+    from { --a: 0; }
+    to { --a: 40; }
+}
+#box {
+    animation: grow 1s linear -0.5s paused;
+    margin-inline-start: calc(var(--a) * 1px);
+    width: 10px;
+    height: 10px;
+}
+</style>
+<div id="box"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box = document.getElementById("box");
+    println(`#box --a: ${getComputedStyle(box).getPropertyValue("--a")}`);
+    println(`#box margin-left: ${getComputedStyle(box).getPropertyValue("margin-left")}`);
+});
+</script>

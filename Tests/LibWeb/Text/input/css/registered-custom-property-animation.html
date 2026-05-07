@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@keyframes spin-implicit-from {
+    to { --a: 360deg; }
+}
+@keyframes spin {
+    from { --a: 0deg; }
+    to { --a: 90deg; }
+}
+#box {
+    animation: spin 1s linear -0.5s paused;
+    transform: rotate(var(--a));
+}
+#box-implicit {
+    width: 10px;
+    height: 10px;
+    background: conic-gradient(from var(--a), red, blue);
+    animation: spin-implicit-from 4s linear -1s paused;
+}
+</style>
+<div id="box"></div>
+<div id="box-implicit"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box = document.getElementById("box");
+    println(`#box --a: ${getComputedStyle(box).getPropertyValue("--a")}`);
+    println(`#box transform: ${getComputedStyle(box).getPropertyValue("transform")}`);
+    const boxImplicit = document.getElementById("box-implicit");
+    println(`#box-implicit --a: ${getComputedStyle(boxImplicit).getPropertyValue("--a")}`);
+    println(`#box-implicit background: ${getComputedStyle(boxImplicit).getPropertyValue("background-image")}`);
+});
+</script>

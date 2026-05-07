@@ -1109,6 +1109,9 @@ public:
     HashMap<FlyString, CSS::CustomPropertyRegistration>& registered_property_set();
     Optional<CSS::CustomPropertyRegistration const&> get_registered_custom_property(FlyString const& name) const;
     NonnullRefPtr<CSS::StyleValue const> custom_property_initial_value(FlyString const& name) const;
+    NonnullRefPtr<CSS::StyleValue const> parse_registered_custom_property_value(FlyString const& name, NonnullRefPtr<CSS::StyleValue const> input);
+    CSS::Parser::SyntaxNode const* parsed_syntax_for_registered_custom_property(FlyString const& name);
+    bool registered_custom_property_has_universal_syntax(FlyString const& name);
     size_t custom_property_registration_generation() const { return m_custom_property_registration_generation; }
     void did_change_custom_property_registrations();
 
@@ -1591,6 +1594,7 @@ private:
     // https://www.w3.org/TR/css-properties-values-api-1/#dom-window-registeredpropertyset-slot
     HashMap<FlyString, CSS::CustomPropertyRegistration> m_registered_property_set;
     HashMap<FlyString, CSS::CustomPropertyRegistration> m_cached_registered_properties_from_css_property_rules;
+    HashMap<FlyString, OwnPtr<CSS::Parser::SyntaxNode const>> m_parsed_custom_property_syntaxes;
     size_t m_custom_property_registration_generation { 0 };
 
     CSS::StyleScope m_style_scope;

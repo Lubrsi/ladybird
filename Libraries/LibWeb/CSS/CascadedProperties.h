@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/FixedBitmap.h>
+#include <AK/HashTable.h>
 #include <LibGC/CellAllocator.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/CSS/CascadeOrigin.h>
@@ -17,6 +18,11 @@
 #include <LibWeb/Forward.h>
 
 namespace Web::CSS {
+
+struct WinningSubstitution {
+    NonnullRefPtr<StyleValue const> unresolved_original;
+    PropertyID source_property_id;
+};
 
 class CascadedProperties final : public JS::Cell {
     GC_CELL(CascadedProperties, JS::Cell);
@@ -30,11 +36,15 @@ public:
     [[nodiscard]] GC::Ptr<CSSStyleDeclaration const> property_source(PropertyID) const;
     [[nodiscard]] GC::Ptr<DOM::ShadowRoot const> property_source_shadow_root(PropertyID) const;
     [[nodiscard]] Optional<StyleProperty> style_property(PropertyID) const;
+    [[nodiscard]] Optional<WinningSubstitution> winning_substitution(PropertyID) const;
 
-    void set_property(PropertyID, NonnullRefPtr<StyleValue const>, Important, CascadeOrigin, Optional<FlyString> layer_name, GC::Ptr<CSS::CSSStyleDeclaration const> source, GC::Ptr<DOM::ShadowRoot const> source_shadow_root);
+    void set_property(PropertyID, NonnullRefPtr<StyleValue const>, Important, CascadeOrigin, Optional<FlyString> layer_name, GC::Ptr<CSS::CSSStyleDeclaration const> source, GC::Ptr<DOM::ShadowRoot const> source_shadow_root, RefPtr<StyleValue const> unresolved_original = nullptr, Optional<PropertyID> unresolved_original_source = {});
 
     void revert_property(PropertyID, Important, CascadeOrigin);
     void revert_layer_property(PropertyID, Important, CascadeOrigin, Optional<FlyString> layer_name, GC::Ptr<DOM::ShadowRoot const> source_shadow_root);
+
+    [[nodiscard]] HashTable<FlyString> const& important_custom_properties() const { return m_important_custom_properties; }
+    void set_important_custom_properties(HashTable<FlyString>);
 
 private:
     CascadedProperties();
@@ -43,6 +53,11 @@ private:
 
     struct Entry {
         StyleProperty property;
+        // When this declaration's specified value contained arbitrary substitution functions, the unresolved value
+        // and the property id its grammar must be parsed against (the source can be a shorthand). Used by the
+        // animated-substitution recompute path to re-resolve the winning declaration against the in-progress style.
+        RefPtr<StyleValue const> unresolved_original;
+        Optional<PropertyID> unresolved_original_source;
         size_t cascade_index { 0 };
         CascadeOrigin origin;
         Optional<FlyString> layer_name;
@@ -52,6 +67,7 @@ private:
     HashMap<PropertyID, Vector<Entry>> m_properties;
     size_t m_next_cascade_index { 0 };
     AK::FixedBitmap<to_underlying(last_longhand_property_id) + 1> m_contained_properties_cache { false };
+    HashTable<FlyString> m_important_custom_properties;
 };
 
 }

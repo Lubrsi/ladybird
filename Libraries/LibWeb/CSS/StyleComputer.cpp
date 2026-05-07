@@ -634,8 +634,15 @@ void StyleComputer::apply_property_list_to_cascade(
         if (property_value->is_pending_substitution())
             continue;
 
-        if (property_value->is_unresolved())
+        // Capture the pre-substitution value so the animated-substitution recompute can re-resolve this
+        // declaration against the in-progress style. Captured even when no animation references the property:
+        // the cascade winner is determined later, and we need the metadata available on whichever entry wins.
+        RefPtr<StyleValue const> unresolved_original;
+        if (property_value->is_unresolved()) {
+            if (property_value->as_unresolved().contains_arbitrary_substitution_function())
+                unresolved_original = property_value;
             property_value = Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams { abstract_element.document() }, abstract_element, PropertyNameAndID::from_id(property.property_id), property_value->as_unresolved());
+        }
 
         if (property_value->is_guaranteed_invalid()) {
             // https://drafts.csswg.org/css-values-5/#invalid-at-computed-value-time
@@ -675,7 +682,7 @@ void StyleComputer::apply_property_list_to_cascade(
                 // Track the exact shadow-root scope that supplied this winning declaration. A constructable
                 // stylesheet can be adopted into multiple scopes at once, so the declaration object alone is
                 // not specific enough.
-                cascaded_properties.set_property(longhand_id, longhand_value, important, cascade_origin, layer_name, source, source_shadow_root);
+                cascaded_properties.set_property(longhand_id, longhand_value, important, cascade_origin, layer_name, source, source_shadow_root, unresolved_original, unresolved_original ? Optional<PropertyID> { property.property_id } : Optional<PropertyID> {});
             }
         });
     }
@@ -701,7 +708,7 @@ void StyleComputer::cascade_declarations(
     }
 }
 
-static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vector<StyleComputer::ScopedMatchingRule> const& matching_rules, OrderedHashMap<FlyString, StyleProperty>& custom_properties, Important important, bool include_inline_style)
+static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vector<StyleComputer::ScopedMatchingRule> const& matching_rules, OrderedHashMap<FlyString, StyleProperty>& custom_properties, Important important, bool include_inline_style, HashTable<FlyString>& important_names)
 {
     size_t needed_capacity = 0;
     for (auto const& matching_rule : matching_rules)
@@ -722,6 +729,11 @@ static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vec
                 continue;
 
             custom_properties.set(it.key, it.value);
+            // Record names whose winning declaration is !important so animations of these custom properties
+            // can be outranked later (css-cascade-5 §5.3). The important pass runs after the normal pass and
+            // always wins, so any name set during it is important in the final cascade.
+            if (important == Important::Yes)
+                important_names.set(it.key);
         }
     }
 
@@ -730,6 +742,8 @@ static void cascade_custom_properties(DOM::AbstractElement abstract_element, Vec
             if (it.value.important != important)
                 continue;
             custom_properties.set(it.key, it.value);
+            if (important == Important::Yes)
+                important_names.set(it.key);
         }
     }
 }
@@ -741,6 +755,8 @@ static RefPtr<CustomPropertyData const> inheritable_custom_property_data(DOM::Ab
         return nullptr;
     return data->inheritable(abstract_element.document());
 }
+
+static NonnullRefPtr<StyleValue const> compute_custom_property_from_specified_value(DOM::AbstractElement, FlyString const&, RefPtr<StyleValue const>, Optional<Parser::GuardedSubstitutionContexts&>, Parser::CustomPropertyResolutionContext const&);
 
 static Optional<CSS::EasingFunction> resolve_keyframe_easing(CSS::StyleValue const& style_value, DOM::AbstractElement abstract_element)
 {
@@ -838,7 +854,7 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
     }
 
     // FIXME: Follow https://drafts.csswg.org/web-animations-1/#ref-for-computed-keyframes in whatever the right place is.
-    auto compute_keyframe_values = [&computed_properties, &abstract_element, this](auto const& keyframe_values) {
+    auto compute_keyframe_values = [&computed_properties, &abstract_element, this](auto const& keyframe_values, Parser::CustomPropertyResolutionContext const& resolution_context) {
         HashMap<PropertyID, RefPtr<StyleValue const>> result;
         HashMap<PropertyID, PropertyID> longhands_set_by_property_id;
         AK::FixedBitmap<number_of_longhand_properties> property_is_set_by_use_initial(false);
@@ -906,8 +922,13 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
             if (style_value->is_pending_substitution())
                 continue;
 
+            // https://drafts.csswg.org/web-animations-1/#calculating-computed-keyframes
+            // "the computed values of dependencies held by value must be calculated first": resolution_context
+            // carries the keyframe's already-computed custom property values via the computed-custom-property
+            // lookup so e.g. `width: var(--x)` next to `--x: 100px` in the same keyframe sees the keyframe's
+            // `--x`, not the element's underlying `--x`.
             if (style_value->is_unresolved())
-                style_value = Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams { abstract_element.document() }, abstract_element, PropertyNameAndID::from_id(property_id), style_value->as_unresolved());
+                style_value = Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams { abstract_element.document() }, abstract_element, PropertyNameAndID::from_id(property_id), style_value->as_unresolved(), {}, resolution_context);
 
             // https://drafts.csswg.org/css-values-5/#invalid-at-computed-value-time
             // When substitution results in a guaranteed-invalid value, treat it as unset
@@ -979,9 +1000,60 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
         return result;
     };
 
+    auto compute_keyframe_custom_property_values = [&abstract_element](auto const& keyframe_values) {
+        HashMap<FlyString, RefPtr<StyleValue const>> result;
+        if (keyframe_values.custom_properties.is_empty())
+            return result;
+
+        // Snapshot specified values per property. UseInitial → SELF's cascade-time declared value; explicit →
+        // the keyframe value as-is, letting the shared resolver handle CSS-wide keywords / invalid recovery.
+        HashMap<FlyString, RefPtr<StyleValue const>> specified;
+        for (auto const& [name, value] : keyframe_values.custom_properties) {
+            RefPtr<StyleValue const> specified_value = value.visit(
+                [&](Animations::KeyframeEffect::KeyFrameSet::UseInitial) -> RefPtr<StyleValue const> {
+                    if (auto data = abstract_element.custom_property_data()) {
+                        if (auto const* property = data->get(name))
+                            return property->value;
+                    }
+                    return nullptr;
+                },
+                [&](RefPtr<StyleValue const> v) -> RefPtr<StyleValue const> {
+                    return v;
+                });
+            specified.set(name, specified_value);
+        }
+
+        // https://drafts.csswg.org/web-animations-1/#calculating-computed-keyframes
+        // For each property, compute via the substitution chain. var() refs to other keyframe properties hit
+        // the keyframe-specified-lookup path and recurse with the same GuardedSubstitutionContexts as the outer
+        // call, so cycles like `--a: var(--b); --b: var(--a)` get marked cyclic and fall through to
+        // invalid-at-computed-value-time recovery (css-variables cycle handling).
+        auto keyframe_context = Parser::CustomPropertyResolutionContext::for_keyframe_specified_lookup(specified);
+        for (auto const& [name, spec] : specified) {
+            auto computed = compute_custom_property_from_specified_value(abstract_element, name, spec, {}, keyframe_context);
+            result.set(name, computed);
+        }
+        return result;
+    };
+
+    auto build_keyframe_in_progress_style = [this](auto const& custom_values) -> GC::Ref<ComputedProperties> {
+        auto cp = m_document->heap().allocate<ComputedProperties>();
+        for (auto const& [name, value] : custom_values) {
+            if (value)
+                cp->set_animated_custom_property(name, *value);
+        }
+        return cp;
+    };
+
     VERIFY(computation_context_cache_is_empty());
-    HashMap<PropertyID, RefPtr<StyleValue const>> computed_start_values = compute_keyframe_values(keyframe_values);
-    HashMap<PropertyID, RefPtr<StyleValue const>> computed_end_values = compute_keyframe_values(keyframe_end_values);
+    HashMap<FlyString, RefPtr<StyleValue const>> computed_start_custom_values = compute_keyframe_custom_property_values(keyframe_values);
+    HashMap<FlyString, RefPtr<StyleValue const>> computed_end_custom_values = compute_keyframe_custom_property_values(keyframe_end_values);
+    auto start_in_progress = build_keyframe_in_progress_style(computed_start_custom_values);
+    auto end_in_progress = build_keyframe_in_progress_style(computed_end_custom_values);
+    auto start_resolution_context = Parser::CustomPropertyResolutionContext::for_computed_custom_property_lookup(*start_in_progress);
+    auto end_resolution_context = Parser::CustomPropertyResolutionContext::for_computed_custom_property_lookup(*end_in_progress);
+    HashMap<PropertyID, RefPtr<StyleValue const>> computed_start_values = compute_keyframe_values(keyframe_values, start_resolution_context);
+    HashMap<PropertyID, RefPtr<StyleValue const>> computed_end_values = compute_keyframe_values(keyframe_end_values, end_resolution_context);
     clear_computation_context_caches();
     auto to_composite_operation = [&](Bindings::CompositeOperationOrAuto composite_operation_or_auto) {
         switch (composite_operation_or_auto) {
@@ -1044,6 +1116,23 @@ void StyleComputer::collect_animation_into(DOM::AbstractElement abstract_element
             dbgln_if(LIBWEB_CSS_ANIMATION_DEBUG, "Interpolated value for property {} at {}: {} -> {} is invalid", string_from_property_id(it.key), progress_in_keyframe, start->to_string(SerializationMode::Normal), end->to_string(SerializationMode::Normal));
             computed_properties.set_animated_property(PropertyID::Visibility, KeywordStyleValue::create(Keyword::Hidden), is_result_of_transition);
         }
+    }
+
+    auto const& important_custom_properties = computed_properties.cascaded_important_custom_properties();
+    for (auto const& [name, start_value] : computed_start_custom_values) {
+        // Important declarations from all origins outrank animations per css-cascade-5 §5.3.
+        // Transitions are the exception (transition origin sits above important).
+        if (!animation->is_css_transition() && important_custom_properties.contains(name))
+            continue;
+        auto end_value = computed_end_custom_values.get(name).value_or(nullptr);
+        if (start_value && !end_value) {
+            computed_properties.set_animated_custom_property(name, *start_value);
+            continue;
+        }
+        if (!start_value || !end_value)
+            continue;
+        if (auto next_value = interpolate_custom_property(*effect->target(), name, *start_value, *end_value, progress_in_keyframe, AllowDiscrete::Yes))
+            computed_properties.set_animated_custom_property(name, next_value.release_nonnull());
     }
 }
 
@@ -2116,25 +2205,30 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
 
     auto old_custom_property_data = abstract_element.custom_property_data();
 
+    // Element-local cascade-time !important set for custom properties. Stashed on CascadedProperties below so
+    // compute_properties can mirror it onto ComputedProperties — matching how standard-property !important
+    // travels via CascadedProperties → ComputedProperties::is_property_important().
+    HashTable<FlyString> important_custom_properties;
+
     // Resolve all the CSS custom properties ("variables") for this element:
     if (!abstract_element.pseudo_element().has_value() || pseudo_element_supports_property(*abstract_element.pseudo_element(), PropertyID::Custom)) {
         OrderedHashMap<FlyString, StyleProperty> cascaded_all;
 
         auto element_context_shadow_root = as_if<DOM::ShadowRoot>(abstract_element.element().root());
         auto cascade_inline_style = [&](Important important) {
-            cascade_custom_properties(abstract_element, {}, cascaded_all, important, true);
+            cascade_custom_properties(abstract_element, {}, cascaded_all, important, true, important_custom_properties);
         };
 
         for (auto const& context : matching_rule_set.author_contexts.in_reverse()) {
             for (auto const& layer : context.author_rules)
-                cascade_custom_properties(abstract_element, layer.rules, cascaded_all, Important::No, false);
+                cascade_custom_properties(abstract_element, layer.rules, cascaded_all, Important::No, false, important_custom_properties);
             if (context.shadow_root == element_context_shadow_root)
                 cascade_inline_style(Important::No);
         }
 
         for (auto const& context : matching_rule_set.author_contexts) {
             for (auto const& layer : context.author_rules.in_reverse())
-                cascade_custom_properties(abstract_element, layer.rules, cascaded_all, Important::Yes, false);
+                cascade_custom_properties(abstract_element, layer.rules, cascaded_all, Important::Yes, false, important_custom_properties);
             if (context.shadow_root == element_context_shadow_root)
                 cascade_inline_style(Important::Yes);
         }
@@ -2191,6 +2285,8 @@ GC::Ptr<ComputedProperties> StyleComputer::compute_style_impl(DOM::AbstractEleme
             return {};
         }
     }
+
+    cascaded_properties->set_important_custom_properties(move(important_custom_properties));
 
     auto computed_properties = compute_properties(abstract_element, cascaded_properties);
 
@@ -2327,6 +2423,12 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
 
     auto computed_style = document().heap().allocate<CSS::ComputedProperties>();
 
+    // Mirror the cascade-time !important set for custom properties onto ComputedProperties so the animation
+    // collection later in this function (process_animation_definitions → collect_animation_into) sees it via
+    // the tick-path API. Standard-property importance is mirrored per-property inside the main computation loop
+    // below; for custom properties we copy the whole set up front since they don't flow through that loop.
+    computed_style->set_cascaded_important_custom_properties(cascaded_properties.important_custom_properties());
+
     bool recascaded_font_size_depends_on_viewport_metrics = false;
     auto new_font_size = recascade_font_size_if_needed(abstract_element, cascaded_properties, recascaded_font_size_depends_on_viewport_metrics);
     if (new_font_size) {
@@ -2362,6 +2464,12 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
         return *logical_alias_mapping_context;
     };
 
+    // Snapshot of cascade-time substitution data for the animation-tick recompute path
+    // (recompute_substituted_animated_properties). cascaded_properties is allocated fresh per restyle and dropped
+    // when this function returns, so the recompute path can no longer read winning_substitution() at tick time.
+    // Only entries for properties whose specified value contained an arbitrary substitution function land here.
+    HashMap<PropertyID, AnimatedSubstitutionEntry> animated_substitutions;
+
     for (auto property_id : property_computation_order()) {
         RefPtr<StyleValue const> value;
         bool requires_computation;
@@ -2390,6 +2498,15 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
             // of both properties together as one; in other words, the computed value of both properties in the pair is
             // derived from the specified value of the property declared with higher priority in the CSS cascade.
             cascaded_property_id = cascaded_properties.property_with_higher_priority(property_id, counterpart_property_id);
+        }
+
+        if (auto substitution = cascaded_properties.winning_substitution(cascaded_property_id); substitution.has_value()) {
+            animated_substitutions.set(property_id, AnimatedSubstitutionEntry {
+                .cascaded_property_id = cascaded_property_id,
+                .inherited_property_id = inherited_property_id,
+                .unresolved_original = substitution->unresolved_original,
+                .source_property_id = substitution->source_property_id,
+            });
         }
 
         if (auto cascaded_style_property = cascaded_properties.style_property(cascaded_property_id); cascaded_style_property.has_value()) {
@@ -2474,6 +2591,8 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
         computed_style->set_property_without_modifying_flags(property_id, move(computed_value));
     }
 
+    computed_style->set_animated_substitutions(move(animated_substitutions));
+
     if (is<HTML::HTMLHtmlElement>(abstract_element.element())) {
         m_root_element_font_metrics = calculate_root_element_font_metrics(computed_style);
         m_root_element_font_metrics_depend_on_viewport_metrics = computed_style->font_metrics_depend_on_viewport_metrics();
@@ -2501,6 +2620,11 @@ GC::Ref<ComputedProperties> StyleComputer::compute_properties(DOM::AbstractEleme
             }
         }
     }
+
+    // If a registered custom property was animated, properties that var() into it on the same element need to be
+    // re-resolved so the substituted value tracks the animation.
+    if (!computed_style->animated_custom_property_values().is_empty())
+        recompute_substituted_animated_properties(abstract_element, *computed_style);
 
     // Run automatic box type transformations
     transform_box_type_if_needed(computed_style, abstract_element);
@@ -2559,20 +2683,39 @@ static Optional<SimplifiedSelectorForBucketing> is_roundabout_selector_bucketabl
     return {};
 }
 
-NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_custom_property(DOM::AbstractElement abstract_element, FlyString const& name, Optional<Parser::GuardedSubstitutionContexts&> guarded_contexts)
+// Resolve a specified custom-property value into its computed value: cascade-resolves CSS-wide keywords, runs
+// arbitrary substitution, applies invalid-at-computed-value-time recovery. Shared between cascade-time
+// (`compute_value_of_custom_property`, which fetches from SELF's data first) and keyframe processing, so explicit
+// keyframe values like `--x: inherit` go through the cascade rather than being treated as ordinary tokens.
+static NonnullRefPtr<StyleValue const> compute_custom_property_from_specified_value(
+    DOM::AbstractElement abstract_element,
+    FlyString const& name,
+    RefPtr<StyleValue const> value,
+    Optional<Parser::GuardedSubstitutionContexts&> guarded_contexts,
+    Parser::CustomPropertyResolutionContext const& resolution_context)
 {
-    // https://drafts.csswg.org/css-variables/#propdef-
-    // The computed value of a custom property is its specified value with any arbitrary-substitution functions replaced.
-    // FIXME: These should probably be part of ComputedProperties.
     auto& document = abstract_element.document();
 
-    auto value = abstract_element.get_custom_property(name);
     if (!value || value->is_initial())
         return document.custom_property_initial_value(name);
 
-    // Unset is the same as inherit for inherited properties, and by default all custom properties are inherited.
-    // FIXME: Support non-inherited registered custom properties.
-    if (value->is_inherit() || value->is_unset()) {
+    // https://www.w3.org/TR/css-cascade-4/#inherit
+    if (value->is_inherit()) {
+        auto element_to_inherit_style_from = abstract_element.element_to_inherit_style_from();
+        if (!element_to_inherit_style_from.has_value())
+            return document.custom_property_initial_value(name);
+        auto inherited_value = element_to_inherit_style_from->get_custom_property(name);
+        if (!inherited_value)
+            return document.custom_property_initial_value(name);
+        return inherited_value.release_nonnull();
+    }
+
+    // https://www.w3.org/TR/css-cascade-4/#inherit-initial
+    // For inherited properties, `unset` resolves to `inherit`; for non-inherited, to `initial`.
+    if (value->is_unset()) {
+        auto registration = document.get_registered_custom_property(name);
+        if (registration.has_value() && !registration->inherit)
+            return document.custom_property_initial_value(name);
         auto element_to_inherit_style_from = abstract_element.element_to_inherit_style_from();
         if (!element_to_inherit_style_from.has_value())
             return document.custom_property_initial_value(name);
@@ -2589,11 +2732,143 @@ NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_custom_property(
         // FIXME: Implement reverting custom properties.
     }
 
-    if (!value->is_unresolved() || !value->as_unresolved().contains_arbitrary_substitution_function())
-        return value.release_nonnull();
+    NonnullRefPtr<StyleValue const> typed_value = [&]() -> NonnullRefPtr<StyleValue const> {
+        if (value->is_unresolved() && value->as_unresolved().contains_arbitrary_substitution_function()) {
+            auto const& unresolved = value->as_unresolved();
+            return Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams {}, abstract_element, PropertyNameAndID::from_name(name).release_value(), unresolved, guarded_contexts, resolution_context);
+        }
+        return document.parse_registered_custom_property_value(name, value.release_nonnull());
+    }();
 
-    auto& unresolved = value->as_unresolved();
-    return Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams {}, abstract_element, PropertyNameAndID::from_name(name).release_value(), unresolved, guarded_contexts);
+    // https://drafts.csswg.org/css-values-5/#invalid-at-computed-value-time
+    // Unregistered and universal-syntax registered properties keep the guaranteed-invalid value; only typed
+    // registered properties recover via unset (parent's inherited value, else registered initial value).
+    if (typed_value->is_guaranteed_invalid()) {
+        auto registration = document.get_registered_custom_property(name);
+        if (!registration.has_value() || document.registered_custom_property_has_universal_syntax(name))
+            return typed_value;
+        if (registration->inherit) {
+            if (auto element_to_inherit_style_from = abstract_element.element_to_inherit_style_from(); element_to_inherit_style_from.has_value()) {
+                if (auto inherited = element_to_inherit_style_from->get_custom_property(name))
+                    return inherited.release_nonnull();
+            }
+        }
+        return document.custom_property_initial_value(name);
+    }
+
+    return typed_value;
+}
+
+NonnullRefPtr<StyleValue const> StyleComputer::compute_value_of_custom_property(DOM::AbstractElement abstract_element, FlyString const& name, Optional<Parser::GuardedSubstitutionContexts&> guarded_contexts, Parser::CustomPropertyResolutionContext const& resolution_context)
+{
+    // https://drafts.csswg.org/css-variables/#propdef-
+    // The computed value of a custom property is its specified value with any arbitrary-substitution functions replaced.
+    // FIXME: These should probably be part of ComputedProperties.
+
+    // Optional pre-step: animation tick / scratch keyframe override or same-keyframe specified-value lookup. Hits
+    // here return early; misses fall through to the cascade-time SELF read below.
+    if (auto lookup = resolution_context.lookup_override(name); lookup.has_value()) {
+        if (lookup->needs_recursive_computation)
+            return compute_custom_property_from_specified_value(abstract_element, name, lookup->value, guarded_contexts, resolution_context);
+        return lookup->value;
+    }
+
+    // Read the cascade-time declared value. Going via `get_custom_property` would return SELF's previous-frame
+    // animated value during a full restyle and feed it back into the new cascade.
+    RefPtr<StyleValue const> value;
+    if (auto data = abstract_element.custom_property_data()) {
+        if (auto const* property = data->get(name))
+            value = property->value;
+    }
+
+    return compute_custom_property_from_specified_value(abstract_element, name, value, guarded_contexts, resolution_context);
+}
+
+// Mirror of the inherit / initial / unset / currentcolor handling in StyleComputer::compute_properties (the
+// `should_inherit` block around StyleComputer.cpp:2192). Returns nullptr when there's no inheritable parent and the
+// caller should leave the property alone.
+static RefPtr<StyleValue const> unwrap_css_wide_keyword_for_animated_substitution(PropertyID property_id, PropertyID inherited_property_id, StyleValue const& value, GC::Ptr<ComputedProperties const> computed_properties_to_inherit_from)
+{
+    bool should_inherit = value.is_inherit();
+    should_inherit |= value.is_unset() && is_inherited_property(property_id);
+    should_inherit |= property_id == PropertyID::Color && value.to_keyword() == Keyword::Currentcolor;
+
+    if (should_inherit) {
+        if (computed_properties_to_inherit_from)
+            return computed_properties_to_inherit_from->property(inherited_property_id, ComputedProperties::WithAnimationsApplied::No);
+        return property_initial_value(property_id);
+    }
+
+    if (value.is_initial() || value.is_unset())
+        return property_initial_value(property_id);
+
+    return value;
+}
+
+void StyleComputer::recompute_substituted_animated_properties(DOM::AbstractElement abstract_element, ComputedProperties& computed_properties) const
+{
+    // FIXME: Same-element transitive var() dependencies (`--b: var(--a)` where only `--a` is animated) aren't
+    //        re-resolved here. compute_custom_properties destructively replaces the element's custom_property_data
+    //        with already-resolved values, so we no longer have the original `var(--a)` specified value to feed
+    //        the in-progress style. Per web-animations-1 §"calculating-computed-keyframes" and css-variables-2
+    //        §"defining-variables", a custom-property leg over persistent cascade-time data is needed.
+    auto const& snapshot = computed_properties.animated_substitutions();
+    if (snapshot.is_empty())
+        return;
+
+    auto& document = abstract_element.document();
+    auto const device_pixels_per_css_pixel = document.page().client().device_pixels_per_css_pixel();
+    auto const computed_to_inherit_from = abstract_element.element_to_inherit_style_from().map([](auto const& el) { return el.computed_properties(); }).value_or(nullptr);
+
+    Function<NonnullRefPtr<StyleValue const>(PropertyID)> const get_property_specified_value = [&](PropertyID id) -> NonnullRefPtr<StyleValue const> {
+        return computed_properties.property(id, ComputedProperties::WithAnimationsApplied::No);
+    };
+
+    // Keying on source_id as well as the unresolved original prevents a `StyleValue` reused with different
+    // source-grammar contexts from polluting each other's expansion.
+    HashMap<PropertyID, HashMap<NonnullRefPtr<StyleValue const>, HashMap<PropertyID, NonnullRefPtr<StyleValue const>>>> per_source_expansions;
+
+    auto expand_source = [&](PropertyID source_id, NonnullRefPtr<StyleValue const> unresolved_original) -> HashMap<PropertyID, NonnullRefPtr<StyleValue const>> const& {
+        return per_source_expansions.ensure(source_id).ensure(unresolved_original, [&] {
+            HashMap<PropertyID, NonnullRefPtr<StyleValue const>> map;
+            auto recompute_context = Parser::CustomPropertyResolutionContext::for_computed_custom_property_lookup(computed_properties);
+            auto resolved = Parser::Parser::resolve_unresolved_style_value(Parser::ParsingParams { document }, abstract_element, PropertyNameAndID::from_id(source_id), unresolved_original->as_unresolved(), {}, recompute_context);
+            // https://drafts.csswg.org/css-values-5/#invalid-at-computed-value-time
+            // Guaranteed-invalid resolution makes the declaration behave as `unset`; collapse to inherited or initial
+            // per-longhand below.
+            if (resolved->is_guaranteed_invalid())
+                resolved = KeywordStyleValue::create(Keyword::Unset);
+            for_each_property_expanding_shorthands(source_id, *resolved, [&](PropertyID longhand_id, StyleValue const& v) {
+                map.set(longhand_id, NonnullRefPtr<StyleValue const>(v));
+            });
+            return map;
+        });
+    };
+
+    // Drive the loop with property_computation_order() so font-size and friends are recomputed before dependents
+    // that read em / line metrics from the cached computation contexts. The snapshot HashMap is keyed storage
+    // only; iterating it directly would yield arbitrary order and let dependents sample stale font-metrics.
+    for (auto property_id : property_computation_order()) {
+        auto entry_iter = snapshot.find(property_id);
+        if (entry_iter == snapshot.end())
+            continue;
+        auto const& entry = entry_iter->value;
+
+        auto const& expanded = expand_source(entry.source_property_id, entry.unresolved_original);
+        auto longhand_value_iter = expanded.find(entry.cascaded_property_id);
+        if (longhand_value_iter == expanded.end())
+            continue;
+
+        auto unwrapped = unwrap_css_wide_keyword_for_animated_substitution(property_id, entry.inherited_property_id, *longhand_value_iter->value, computed_to_inherit_from);
+        if (!unwrapped)
+            continue;
+
+        auto const& computation_context = get_computation_context_for_property(entry.inherited_property_id, computed_properties, abstract_element);
+        auto computed = compute_value_of_property(entry.inherited_property_id, unwrapped.release_nonnull(), get_property_specified_value, computation_context, device_pixels_per_css_pixel);
+        computed_properties.set_animated_property(property_id, computed, AnimatedPropertyResultOfTransition::No);
+    }
+
+    clear_computation_context_caches();
 }
 
 void StyleComputer::compute_custom_properties(ComputedProperties&, DOM::AbstractElement abstract_element) const

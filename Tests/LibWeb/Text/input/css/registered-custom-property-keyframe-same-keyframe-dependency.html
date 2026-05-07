@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@property --b {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@property --x {
+    syntax: "<length>";
+    initial-value: 0px;
+    inherits: false;
+}
+/* Same-keyframe longhand-depends-on-custom-property: width's var() must see the keyframe's --x. */
+@keyframes anim-longhand {
+    from { --x: 0px; width: var(--x); }
+    to { --x: 100px; width: var(--x); }
+}
+/* Same-keyframe custom-depends-on-custom: --b's var() must see the keyframe's --a. */
+@keyframes anim-custom-chain {
+    from { --a: 0deg; --b: var(--a); }
+    to { --a: 90deg; --b: var(--a); }
+}
+#box-longhand {
+    animation: anim-longhand 1s linear -0.5s paused;
+    width: 0px;
+    height: 10px;
+}
+#box-chain {
+    animation: anim-custom-chain 1s linear -0.5s paused;
+    transform: rotate(var(--b));
+}
+</style>
+<div id="box-longhand"></div>
+<div id="box-chain"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const longhand = document.getElementById("box-longhand");
+    println(`#box-longhand --x (50% of 0 → 100px): ${getComputedStyle(longhand).getPropertyValue("--x")}`);
+    println(`#box-longhand width (must track keyframe's --x, not element's underlying): ${getComputedStyle(longhand).getPropertyValue("width")}`);
+
+    const chain = document.getElementById("box-chain");
+    println(`#box-chain --a (50% of 0 → 90deg): ${getComputedStyle(chain).getPropertyValue("--a")}`);
+    println(`#box-chain --b (var(--a) in same keyframe → matches --a): ${getComputedStyle(chain).getPropertyValue("--b")}`);
+    println(`#box-chain transform (rotate(var(--b))): ${getComputedStyle(chain).getPropertyValue("transform")}`);
+});
+</script>

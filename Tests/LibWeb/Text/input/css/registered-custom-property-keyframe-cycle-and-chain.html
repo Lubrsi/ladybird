@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<style>
+/* Universal-syntax cycle: per css-values-5 invalid-at-computed-value-time, universal-syntax registered
+   properties keep the guaranteed-invalid value (which serializes as empty), they don't recover via unset. */
+@property --cu-a {
+    syntax: "*";
+    initial-value: u-initial;
+    inherits: false;
+}
+@property --cu-b {
+    syntax: "*";
+    initial-value: u-initial;
+    inherits: false;
+}
+@keyframes anim-cycle-universal {
+    from { --cu-a: var(--cu-b); --cu-b: var(--cu-a); }
+    to { --cu-a: var(--cu-b); --cu-b: var(--cu-a); }
+}
+#box-cycle-universal {
+    animation: anim-cycle-universal 1s linear -0.5s paused;
+}
+
+/* Typed-registration cycle: invalid-at-computed-value-time recovery falls back to the registered initial value
+   for typed (non-inheriting) registrations. */
+@property --ct-a { syntax: "<angle>"; initial-value: 5deg; inherits: false; }
+@property --ct-b { syntax: "<angle>"; initial-value: 5deg; inherits: false; }
+@keyframes anim-cycle-typed {
+    from { --ct-a: var(--ct-b); --ct-b: var(--ct-a); }
+    to { --ct-a: var(--ct-b); --ct-b: var(--ct-a); }
+}
+#box-cycle-typed {
+    animation: anim-cycle-typed 1s linear -0.5s paused;
+}
+
+/* Long chain (10 levels deep): --c0 ← var(--c1) ← var(--c2) ← ... ← var(--c9) which has the concrete value.
+   Iterative fixed-point would have capped before resolving; recursive substitution handles it in one pass. */
+@property --c0 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c1 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c2 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c3 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c4 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c5 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c6 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c7 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c8 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@property --c9 { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes anim-chain {
+    from {
+        --c0: var(--c1); --c1: var(--c2); --c2: var(--c3); --c3: var(--c4); --c4: var(--c5);
+        --c5: var(--c6); --c6: var(--c7); --c7: var(--c8); --c8: var(--c9); --c9: 90deg;
+    }
+    to {
+        --c0: var(--c1); --c1: var(--c2); --c2: var(--c3); --c3: var(--c4); --c4: var(--c5);
+        --c5: var(--c6); --c6: var(--c7); --c7: var(--c8); --c8: var(--c9); --c9: 90deg;
+    }
+}
+#box-chain {
+    animation: anim-chain 1s linear -0.5s paused;
+}
+</style>
+<div id="box-cycle-universal"></div>
+<div id="box-cycle-typed"></div>
+<div id="box-chain"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const universal = document.getElementById("box-cycle-universal");
+    // Universal-syntax cycle → guaranteed-invalid kept (serializes empty after trim).
+    println(`#box-cycle-universal --cu-a (cyclic, universal → guaranteed-invalid): "${getComputedStyle(universal).getPropertyValue("--cu-a")}"`);
+    println(`#box-cycle-universal --cu-b (cyclic, universal → guaranteed-invalid): "${getComputedStyle(universal).getPropertyValue("--cu-b")}"`);
+
+    const typed = document.getElementById("box-cycle-typed");
+    // Typed cycle → invalid recovery to the registered initial value (5deg).
+    println(`#box-cycle-typed --ct-a (cyclic, typed → registered initial): ${getComputedStyle(typed).getPropertyValue("--ct-a")}`);
+    println(`#box-cycle-typed --ct-b (cyclic, typed → registered initial): ${getComputedStyle(typed).getPropertyValue("--ct-b")}`);
+
+    const chain = document.getElementById("box-chain");
+    // 10-deep chain → recursive resolution traverses to the leaf in one pass; previous fixed-point cap was 8.
+    println(`#box-chain --c0 (10-deep chain to 90deg): ${getComputedStyle(chain).getPropertyValue("--c0")}`);
+});
+</script>

@@ -1,0 +1,2 @@
+#parent --p (25% of 0 → 180 = 45deg): 45deg
+#child --p (25% of 0deg → 360deg = 90deg): 90deg

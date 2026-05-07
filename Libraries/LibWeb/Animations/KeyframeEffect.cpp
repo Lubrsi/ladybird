@@ -11,6 +11,7 @@
 #include <LibWeb/Animations/KeyframeEffect.h>
 #include <LibWeb/Animations/PseudoElementParsing.h>
 #include <LibWeb/Bindings/KeyframeEffect.h>
+#include <LibWeb/CSS/CascadedProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
@@ -572,7 +573,7 @@ static WebIDL::ExceptionOr<Vector<BaseKeyframe>> process_a_keyframes_argument(JS
 }
 
 // https://www.w3.org/TR/css-animations-2/#keyframe-processing
-void KeyframeEffect::generate_initial_and_final_frames(RefPtr<KeyFrameSet> keyframe_set, HashTable<CSS::PropertyID> const& animated_properties)
+void KeyframeEffect::generate_initial_and_final_frames(RefPtr<KeyFrameSet> keyframe_set, HashTable<CSS::PropertyID> const& animated_properties, HashTable<FlyString> const& animated_custom_properties)
 {
     // 1. Find or create the initial keyframe, a keyframe with a keyframe offset of 0%, default timing function
     //    as its keyframe timing function, and default composite as its keyframe composite.
@@ -606,6 +607,10 @@ void KeyframeEffect::generate_initial_and_final_frames(RefPtr<KeyFrameSet> keyfr
         if (!expanded_properties(initial_keyframe->properties).contains(property))
             initial_keyframe->properties.set(property, KeyFrameSet::UseInitial {});
     }
+    for (auto const& name : animated_custom_properties) {
+        if (!initial_keyframe->custom_properties.contains(name))
+            initial_keyframe->custom_properties.set(name, KeyFrameSet::UseInitial {});
+    }
 
     // 3. If initial keyframe’s keyframe values is not empty, prepend initial keyframe to keyframes.
 
@@ -622,6 +627,10 @@ void KeyframeEffect::generate_initial_and_final_frames(RefPtr<KeyFrameSet> keyfr
     for (auto property : animated_properties) {
         if (!expanded_properties(final_keyframe->properties).contains(property))
             final_keyframe->properties.set(property, KeyFrameSet::UseInitial {});
+    }
+    for (auto const& name : animated_custom_properties) {
+        if (!final_keyframe->custom_properties.contains(name))
+            final_keyframe->custom_properties.set(name, KeyFrameSet::UseInitial {});
     }
 }
 
@@ -925,7 +934,7 @@ WebIDL::ExceptionOr<void> KeyframeEffect::set_keyframes(GC::Ptr<JS::Object> keyf
         keyframe_set->keyframes_by_key.insert(key, resolved_keyframe);
     }
 
-    generate_initial_and_final_frames(keyframe_set, m_target_properties);
+    generate_initial_and_final_frames(keyframe_set, m_target_properties, {});
     m_key_frame_set = keyframe_set;
 
     invalidate_effect();
@@ -981,6 +990,14 @@ void KeyframeEffect::update_computed_properties(AnimationUpdateContext& context)
     });
 
     target->document().style_computer().collect_animation_into(abstract_element, *this, *computed_properties);
+
+    // If this animation produced animated custom-property values, re-resolve any property whose specified value
+    // contained var() so var() consumers track the animated values without needing a full restyle.
+    // FIXME: Custom properties inherit by default (css-variables-2 §"--*"), so descendants that var() into an
+    //        ancestor-animated custom property should also re-resolve on each tick. Tracking those dependencies
+    //        and invalidating descendants is not yet implemented; only the animation target is recomputed.
+    if (!computed_properties->animated_custom_property_values().is_empty())
+        target->document().style_computer().recompute_substituted_animated_properties(abstract_element, *computed_properties);
 }
 
 Bindings::CompositeOperation css_animation_composition_to_bindings_composite_operation(CSS::AnimationComposition composition)

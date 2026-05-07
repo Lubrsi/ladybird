@@ -44,6 +44,7 @@
 #include <LibWeb/CSS/StyleValues/TextIndentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Painting/PaintableBox.h>
@@ -2259,6 +2260,19 @@ RefPtr<StyleValue const> interpolate_value(DOM::Element& element, CalculationCon
     if (auto result = interpolate_value_impl(element, calculation_context, from, to, delta, allow_discrete))
         return result;
     return interpolate_discrete(from, to, delta, allow_discrete);
+}
+
+// https://drafts.csswg.org/web-animations-1/#custom-properties
+// For custom properties registered using the registerProperty() method for the current global object, the animation
+// type is by computed value, derived from the type used in the property's syntax definition. Where there is no
+// computed value type that corresponds to the property's specified syntax (e.g. when the syntax is the universal
+// syntax definition) or when the custom property is not registered, the animation type is discrete.
+RefPtr<StyleValue const> interpolate_custom_property(DOM::Element& element, FlyString const& name, StyleValue const& from, StyleValue const& to, float delta, AllowDiscrete allow_discrete)
+{
+    auto& document = element.document();
+    if (!document.get_registered_custom_property(name).has_value() || document.registered_custom_property_has_universal_syntax(name))
+        return interpolate_discrete(from, to, delta, allow_discrete);
+    return interpolate_value(element, CalculationContext {}, from, to, delta, allow_discrete);
 }
 
 template<typename T>

@@ -1,0 +1,10 @@
+Harness status: OK
+
+Found 5 tests
+
+5 Fail
+Fail	Animating a custom property of type <transform-list> containing a single value
+Fail	Animating a custom property of type <transform-list> containing a single value with a single keyframe
+Fail	Animating a custom property of type <transform-list> containing a single value with additivity
+Fail	Animating a custom property of type <transform-list> containing a single value with a single keyframe and additivity
+Fail	Animating a custom property of type <transform-list> containing a single value with iterationComposite

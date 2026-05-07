@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/DOM/AbstractElement.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
@@ -174,6 +175,10 @@ void AbstractElement::set_custom_property_data(RefPtr<CSS::CustomPropertyData co
 
 RefPtr<CSS::StyleValue const> AbstractElement::get_custom_property(FlyString const& name) const
 {
+    if (auto computed = computed_properties()) {
+        if (auto animated = computed->animated_custom_property(name))
+            return animated;
+    }
     auto data = custom_property_data();
     if (!data)
         return nullptr;

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/ArbitrarySubstitutionFunctions.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/Parser/Syntax.h>
@@ -16,6 +17,41 @@
 #include <LibWeb/DOM/Element.h>
 
 namespace Web::CSS::Parser {
+
+CustomPropertyResolutionContext CustomPropertyResolutionContext::for_computed_custom_property_lookup(CSS::ComputedProperties const& computed_properties)
+{
+    return CustomPropertyResolutionContext { ComputedValues { &computed_properties } };
+}
+
+CustomPropertyResolutionContext CustomPropertyResolutionContext::for_keyframe_specified_lookup(HashMap<FlyString, RefPtr<CSS::StyleValue const>> const& specified_values)
+{
+    return CustomPropertyResolutionContext { KeyframeSpecifiedValues { &specified_values } };
+}
+
+Optional<CustomPropertyResolutionContext::LookupResult> CustomPropertyResolutionContext::lookup_override(FlyString const& name) const
+{
+    return m_state.visit(
+        [](Empty) -> Optional<LookupResult> { return {}; },
+        [&](ComputedValues const& computed) -> Optional<LookupResult> {
+            // ComputedProperties stores both per-tick animated values and the scratch values populated by the
+            // longhand keyframe pass under animated_custom_property(); the name is animation-flavored even though
+            // the storage now serves a wider role.
+            if (auto value = computed.computed_properties->animated_custom_property(name))
+                return LookupResult { *value, false };
+            return {};
+        },
+        [&](KeyframeSpecifiedValues const& keyframe) -> Optional<LookupResult> {
+            // HashMap::get on a RefPtr-valued map peeks as a raw pointer that can be null (e.g. UseInitial
+            // against a name with no cascade-time SELF entry). Treat null as "no override" and fall through.
+            auto specified = keyframe.specified_values->get(name);
+            if (!specified.has_value())
+                return {};
+            auto const* value = specified.release_value();
+            if (!value)
+                return {};
+            return LookupResult { *value, true };
+        });
+}
 
 bool SubstitutionContext::operator==(SubstitutionContext const& other) const
 {
@@ -102,7 +138,7 @@ static Vector<ComponentValue> mark_as_attr_tainted(Vector<ComponentValue> values
 }
 
 // https://drafts.csswg.org/css-values-5/#replace-an-attr-function
-static Vector<ComponentValue> replace_an_attr_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments)
+static Vector<ComponentValue> replace_an_attr_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     // 1. Let el be the element that the style containing the attr() function is being applied to.
     //    Let first arg be the first <declaration-value> in arguments.
@@ -133,14 +169,14 @@ static Vector<ComponentValue> replace_an_attr_function(DOM::AbstractElement& ele
             return { ComponentValue { GuaranteedInvalidValue {} } };
 
         // 3. Substitute arbitrary substitution functions in second arg, and return the result.
-        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value());
+        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value(), {}, resolution_context);
     };
 
     // 2. Substitute arbitrary substitution functions in first arg, then parse it as <attr-name> <attr-type>?.
     //    If that returns failure, jump to the last step (labeled FAILURE).
     //    Otherwise, let attr name and syntax be the results of parsing (with syntax being null if <attr-type> was
     //    omitted), processed as specified in the definition of those arguments.
-    auto substituted = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument);
+    auto substituted = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument, {}, resolution_context);
     TokenStream first_argument_tokens { substituted };
     // <attr-name> = [ <ident-token>? '|' ]? <ident-token>
     // FIXME: Support optional attribute namespace
@@ -253,7 +289,7 @@ static Vector<ComponentValue> replace_an_attr_function(DOM::AbstractElement& ele
     auto parser = Parser::create(ParsingParams { element.element().document() }, attribute_value.value());
     auto unsubstituted_values = parser.parse_as_list_of_component_values();
     auto substituted_values = substitute_arbitrary_substitution_functions(element, guarded_contexts, unsubstituted_values,
-        SubstitutionContext { SubstitutionContext::DependencyType::Attribute, attribute_name.to_string() });
+        SubstitutionContext { SubstitutionContext::DependencyType::Attribute, attribute_name.to_string() }, resolution_context);
 
     auto parsed_value = parse_with_a_syntax(ParsingParams { element.document() }, substituted_values, *syntax.get<NonnullOwnPtr<SyntaxNode>>());
     if (parsed_value->is_guaranteed_invalid())
@@ -265,7 +301,7 @@ static Vector<ComponentValue> replace_an_attr_function(DOM::AbstractElement& ele
 }
 
 // https://drafts.csswg.org/css-env/#substitute-an-env
-static Vector<ComponentValue> replace_an_env_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments)
+static Vector<ComponentValue> replace_an_env_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     // AD-HOC: env() is not defined as an ASF (and was defined before the ASF concept was), but behaves a lot like one.
     // So, this is a combination of the spec's "substitute an env()" algorithm linked above, and the "replace a FOO function()" algorithms.
@@ -275,7 +311,7 @@ static Vector<ComponentValue> replace_an_env_function(DOM::AbstractElement& elem
     auto const second_argument = declaration_value_list.get(1);
 
     // AD-HOC: Substitute ASFs in the first argument.
-    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument);
+    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument, {}, resolution_context);
 
     // AD-HOC: Parse the arguments.
     // env() = env( <custom-ident> <integer [0,∞]>*, <declaration-value>? )
@@ -316,14 +352,14 @@ static Vector<ComponentValue> replace_an_env_function(DOM::AbstractElement& elem
     //    the fallback value. If there are any env() references in the fallback, substitute them as well.
     // AD-HOC: Substitute all ASFs in the result.
     if (second_argument.has_value())
-        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value());
+        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value(), {}, resolution_context);
 
     // 3. Otherwise, the property or descriptor containing the env() function is invalid at computed-value time.
     return { ComponentValue { GuaranteedInvalidValue {} } };
 }
 
 // https://drafts.csswg.org/css-values-5/#replace-an-if-function
-static Vector<ComponentValue> replace_an_if_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments)
+static Vector<ComponentValue> replace_an_if_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     // NB: We create a single parser and reuse that for parsing all the conditions
     auto parser = Parser::create(ParsingParams { element.element().document() }, {});
@@ -332,7 +368,7 @@ static Vector<ComponentValue> replace_an_if_function(DOM::AbstractElement& eleme
     for (auto const& branch : arguments.get<IfArgs>()) {
         // 1. Substitute arbitrary substitution functions in the first <declaration-value> of branch, then parse the
         //    result as an <if-condition>. If parsing returns failure, continue; otherwise, let the result be condition.
-        auto substituted_condition = substitute_arbitrary_substitution_functions(element, guarded_contexts, branch.condition);
+        auto substituted_condition = substitute_arbitrary_substitution_functions(element, guarded_contexts, branch.condition, {}, resolution_context);
         auto condition_is_attr_tainted = contains_attr_tainted_value(substituted_condition);
 
         TokenStream<ComponentValue> tokens { substituted_condition };
@@ -356,7 +392,7 @@ static Vector<ComponentValue> replace_an_if_function(DOM::AbstractElement& eleme
         if (!branch.value.has_value())
             return {};
 
-        auto result = substitute_arbitrary_substitution_functions(element, guarded_contexts, branch.value.value());
+        auto result = substitute_arbitrary_substitution_functions(element, guarded_contexts, branch.value.value(), {}, resolution_context);
         if (condition_is_attr_tainted)
             return mark_as_attr_tainted(move(result));
         return result;
@@ -367,7 +403,7 @@ static Vector<ComponentValue> replace_an_if_function(DOM::AbstractElement& eleme
 }
 
 // https://drafts.csswg.org/css-values-5/#replace-an-inherit-function
-static Vector<ComponentValue> replace_an_inherit_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments)
+static Vector<ComponentValue> replace_an_inherit_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     // To replace an inherit() function, given a list of arguments:
     auto const& declaration_value_list = arguments.get<DeclarationValueList>();
@@ -376,7 +412,7 @@ static Vector<ComponentValue> replace_an_inherit_function(DOM::AbstractElement& 
 
     // 1. Substitute arbitrary substitution functions in the first <declaration-value> of arguments, then parse it as a
     //    <custom-property-name>.
-    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument);
+    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument, {}, resolution_context);
 
     TokenStream first_argument_tokens { substituted_first_argument };
     first_argument_tokens.discard_whitespace();
@@ -398,14 +434,14 @@ static Vector<ComponentValue> replace_an_inherit_function(DOM::AbstractElement& 
     // 3. Otherwise, if a second <declaration-value>? was passed in arguments, substitute arbitrary substitution
     //    functions in that argument, and return the result.
     if (second_argument.has_value())
-        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value());
+        return substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value(), {}, resolution_context);
 
     // 4. Otherwise, return the guaranteed-invalid value.
     return { ComponentValue { GuaranteedInvalidValue {} } };
 }
 
 // https://drafts.csswg.org/css-variables-1/#replace-a-var-function
-static Vector<ComponentValue> replace_a_var_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments)
+static Vector<ComponentValue> replace_a_var_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     // 1. Let el be the element that the style containing the var() function is being applied to.
     //    Let first arg be the first <declaration-value> in arguments.
@@ -418,7 +454,7 @@ static Vector<ComponentValue> replace_a_var_function(DOM::AbstractElement& eleme
     // 2. Substitute arbitrary substitution functions in first arg, then parse it as a <custom-property-name>.
     //    If parsing returned a <custom-property-name>, let result be the computed value of the corresponding custom
     //    property on el. Otherwise, let result be the guaranteed-invalid value.
-    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument);
+    auto substituted_first_argument = substitute_arbitrary_substitution_functions(element, guarded_contexts, first_argument, {}, resolution_context);
     TokenStream name_tokens { substituted_first_argument };
     name_tokens.discard_whitespace();
     auto& name_token = name_tokens.consume_a_token();
@@ -430,7 +466,7 @@ static Vector<ComponentValue> replace_a_var_function(DOM::AbstractElement& eleme
     } else {
         // Look up the value of the custom property
         auto& custom_property_name = name_token.token().ident();
-        auto custom_property_value = StyleComputer::compute_value_of_custom_property(element, custom_property_name, guarded_contexts);
+        auto custom_property_value = StyleComputer::compute_value_of_custom_property(element, custom_property_name, guarded_contexts, resolution_context);
         result = custom_property_value->tokenize();
     }
 
@@ -439,13 +475,13 @@ static Vector<ComponentValue> replace_a_var_function(DOM::AbstractElement& eleme
 
     // 4. If result contains the guaranteed-invalid value, and second arg was provided, set result to the result of substitute arbitrary substitution functions on second arg.
     if (contains_guaranteed_invalid_value(result) && second_argument.has_value())
-        result = substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value());
+        result = substitute_arbitrary_substitution_functions(element, guarded_contexts, second_argument.value(), {}, resolution_context);
 
     // 5. Return result.
     return result;
 }
 
-static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, TokenStream<ComponentValue>& source, Vector<ComponentValue>& dest)
+static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, TokenStream<ComponentValue>& source, Vector<ComponentValue>& dest, CustomPropertyResolutionContext const& resolution_context)
 {
     // Step 2 of https://drafts.csswg.org/css-values-5/#substitute-arbitrary-substitution-function
     // 2. For each arbitrary substitution function func in values (ordered via a depth-first pre-order traversal) that
@@ -478,7 +514,7 @@ static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::Abs
 
                 // 4. Replace an arbitrary substitution function for func, given arguments, as defined by that function.
                 //    Let result be the returned list of component values.
-                auto result = replace_an_arbitrary_substitution_function(element, guarded_contexts, function_id, arguments);
+                auto result = replace_an_arbitrary_substitution_function(element, guarded_contexts, function_id, arguments, resolution_context);
 
                 // 5. If result contains the guaranteed-invalid value, replace func in values with the guaranteed-invalid value.
                 //    Otherwise, replace func in values with result.
@@ -488,7 +524,7 @@ static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::Abs
                     // NB: Because we're doing this in one pass recursively, we now need to substitute any ASFs in result.
                     TokenStream result_stream { result };
                     Vector<ComponentValue> result_after_processing;
-                    TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, result_stream, result_after_processing));
+                    TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, result_stream, result_after_processing, resolution_context));
 
                     // NB: Protect against the billion-laughs attack by limiting to an arbitrary large number of tokens.
                     // https://drafts.csswg.org/css-values-5/#long-substitution
@@ -505,7 +541,7 @@ static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::Abs
 
             Vector<ComponentValue> function_values;
             TokenStream source_function_contents { source_function.value };
-            TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source_function_contents, function_values));
+            TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source_function_contents, function_values, resolution_context));
             dest.empend(Function { source_function.name, move(function_values) });
             continue;
         }
@@ -513,7 +549,7 @@ static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::Abs
             auto const& source_block = value.block();
             TokenStream source_block_values { source_block.value };
             Vector<ComponentValue> block_values;
-            TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source_block_values, block_values));
+            TRY(substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source_block_values, block_values, resolution_context));
             dest.empend(SimpleBlock { source_block.token, move(block_values) });
             continue;
         }
@@ -524,7 +560,7 @@ static ErrorOr<void> substitute_arbitrary_substitution_functions_step_2(DOM::Abs
 }
 
 // https://drafts.csswg.org/css-values-5/#substitute-arbitrary-substitution-function
-Vector<ComponentValue> substitute_arbitrary_substitution_functions(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ReadonlySpan<ComponentValue> values, Optional<SubstitutionContext> context)
+Vector<ComponentValue> substitute_arbitrary_substitution_functions(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ReadonlySpan<ComponentValue> values, Optional<SubstitutionContext> context, CustomPropertyResolutionContext const& resolution_context)
 {
     // To substitute arbitrary substitution functions in a sequence of component values values, given an optional
     // substitution context context:
@@ -545,7 +581,7 @@ Vector<ComponentValue> substitute_arbitrary_substitution_functions(DOM::Abstract
     //    is not nested in the contents of another arbitrary substitution function:
     Vector<ComponentValue> new_values;
     TokenStream source { values };
-    auto maybe_error = substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source, new_values);
+    auto maybe_error = substitute_arbitrary_substitution_functions_step_2(element, guarded_contexts, source, new_values, resolution_context);
     if (maybe_error.is_error())
         return { ComponentValue { GuaranteedInvalidValue {} } };
 
@@ -639,19 +675,19 @@ Optional<ArbitrarySubstitutionFunctionArguments> parse_according_to_argument_gra
 }
 
 // https://drafts.csswg.org/css-values-5/#replace-an-arbitrary-substitution-function
-Vector<ComponentValue> replace_an_arbitrary_substitution_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunction function, ArbitrarySubstitutionFunctionArguments const& arguments)
+Vector<ComponentValue> replace_an_arbitrary_substitution_function(DOM::AbstractElement& element, GuardedSubstitutionContexts& guarded_contexts, ArbitrarySubstitutionFunction function, ArbitrarySubstitutionFunctionArguments const& arguments, CustomPropertyResolutionContext const& resolution_context)
 {
     switch (function) {
     case ArbitrarySubstitutionFunction::Attr:
-        return replace_an_attr_function(element, guarded_contexts, arguments);
+        return replace_an_attr_function(element, guarded_contexts, arguments, resolution_context);
     case ArbitrarySubstitutionFunction::Env:
-        return replace_an_env_function(element, guarded_contexts, arguments);
+        return replace_an_env_function(element, guarded_contexts, arguments, resolution_context);
     case ArbitrarySubstitutionFunction::If:
-        return replace_an_if_function(element, guarded_contexts, arguments);
+        return replace_an_if_function(element, guarded_contexts, arguments, resolution_context);
     case ArbitrarySubstitutionFunction::Inherit:
-        return replace_an_inherit_function(element, guarded_contexts, arguments);
+        return replace_an_inherit_function(element, guarded_contexts, arguments, resolution_context);
     case ArbitrarySubstitutionFunction::Var:
-        return replace_a_var_function(element, guarded_contexts, arguments);
+        return replace_a_var_function(element, guarded_contexts, arguments, resolution_context);
     }
     VERIFY_NOT_REACHED();
 }

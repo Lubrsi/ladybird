@@ -1,0 +1,2 @@
+#child --b (50% of 30deg → 90deg = 60deg): 60deg
+#child transform: matrix(0.5, 0.866025, -0.866025, 0.5, 0, 0)

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<style>
+@property --u {
+    syntax: "*";
+    initial-value: foo;
+    inherits: false;
+}
+@keyframes flip {
+    from { --u: foo; }
+    to { --u: bar; }
+}
+#box-25 {
+    animation: flip 1s linear -0.25s paused;
+}
+#box-75 {
+    animation: flip 1s linear -0.75s paused;
+}
+</style>
+<div id="box-25"></div>
+<div id="box-75"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box25 = document.getElementById("box-25");
+    const box75 = document.getElementById("box-75");
+    println(`#box-25 --u (25% progress, discrete holds 'foo'): ${getComputedStyle(box25).getPropertyValue("--u")}`);
+    println(`#box-75 --u (75% progress, discrete flips to 'bar'): ${getComputedStyle(box75).getPropertyValue("--u")}`);
+});
+</script>

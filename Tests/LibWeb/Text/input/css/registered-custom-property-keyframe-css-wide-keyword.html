@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<style>
+@property --i {
+    syntax: "*";
+    initial-value: i-initial;
+    inherits: true;
+}
+@property --u {
+    syntax: "*";
+    initial-value: u-initial;
+    inherits: false;
+}
+@property --a {
+    syntax: "<angle>";
+    initial-value: 10deg;
+    inherits: true;
+}
+@keyframes anim-inherit {
+    from { --i: from-value; }
+    to { --i: inherit; }
+}
+@keyframes anim-initial {
+    from { --i: from-value; }
+    to { --i: initial; }
+}
+@keyframes anim-unset-non-inheriting {
+    from { --u: from-value; }
+    to { --u: unset; }
+}
+@keyframes anim-typed-inherit {
+    from { --a: 0deg; }
+    to { --a: inherit; }
+}
+#parent {
+    --i: parent-i-value;
+    --a: 90deg;
+}
+#box-inherit {
+    animation: anim-inherit 1s linear -0.75s paused;
+}
+#box-initial {
+    animation: anim-initial 1s linear -0.75s paused;
+}
+#box-unset {
+    animation: anim-unset-non-inheriting 1s linear -0.75s paused;
+}
+#box-typed-inherit {
+    animation: anim-typed-inherit 1s linear -0.5s paused;
+}
+</style>
+<div id="parent">
+    <div id="box-inherit"></div>
+    <div id="box-initial"></div>
+    <div id="box-unset"></div>
+    <div id="box-typed-inherit"></div>
+</div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const inherit = document.getElementById("box-inherit");
+    println(`#box-inherit --i (universal, to: inherit → parent's value at 75%): ${getComputedStyle(inherit).getPropertyValue("--i")}`);
+
+    const initial = document.getElementById("box-initial");
+    println(`#box-initial --i (universal, to: initial → registered initial at 75%): ${getComputedStyle(initial).getPropertyValue("--i")}`);
+
+    const unset = document.getElementById("box-unset");
+    println(`#box-unset --u (non-inheriting universal, to: unset → registered initial at 75%): ${getComputedStyle(unset).getPropertyValue("--u")}`);
+
+    const typedInherit = document.getElementById("box-typed-inherit");
+    println(`#box-typed-inherit --a (typed angle, from: 0deg, to: inherit → 90deg, at 50% = 45deg): ${getComputedStyle(typedInherit).getPropertyValue("--a")}`);
+});
+</script>

@@ -1,0 +1,8 @@
+Harness status: OK
+
+Found 3 tests
+
+3 Fail
+Fail	Animating a custom property of type <length> on a zoomed element
+Fail	Animating a custom property of type <transform-function> on a zoomed element
+Fail	Animating a custom property of type <transform-list> on a zoomed element

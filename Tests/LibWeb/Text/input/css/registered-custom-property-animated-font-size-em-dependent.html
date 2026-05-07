@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<style>
+@property --size {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 10px;
+}
+@keyframes anim {
+    from { --size: 10px; }
+    to { --size: 100px; }
+}
+.target {
+    --size: 10px;
+    --inline-size: 2em;
+    font-size: var(--size);
+    width: var(--inline-size);
+    animation: anim 1s linear -0.5s paused;
+}
+</style>
+<div class="target"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const el = document.querySelector(".target");
+    const cs = getComputedStyle(el);
+    // At 50% of 10px → 100px, animated --size is 55px. font-size: var(--size) → 55px.
+    // width: var(--inline-size) where --inline-size: 2em must resolve against the *animated*
+    // font-size, not the cascade-time font-size. If the recompute pass iterates the substitution
+    // snapshot in HashMap order (instead of property_computation_order()), width can be processed
+    // before font-size and read 2 * 10px = 20px instead of 2 * 55px = 110px.
+    println(`--size: ${cs.getPropertyValue("--size")}`);
+    println(`font-size: ${cs.fontSize}`);
+    println(`width: ${cs.width}`);
+});
+</script>

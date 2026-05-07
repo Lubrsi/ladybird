@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@property --b {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: true;
+}
+@property --c {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+html { --b: 90deg; }
+#child {
+    --a: red;
+    --b: red;
+    --bad: red;
+    --c: var(--bad);
+}
+</style>
+<div id="child"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const child = document.getElementById("child");
+    const style = getComputedStyle(child);
+    println(`--a: ${style.getPropertyValue("--a")}`);
+    println(`--b: ${style.getPropertyValue("--b")}`);
+    println(`--c: ${style.getPropertyValue("--c")}`);
+});
+</script>

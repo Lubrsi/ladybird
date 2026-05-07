@@ -63,6 +63,8 @@
 #include <LibWeb/CSS/MediaQueryList.h>
 #include <LibWeb/CSS/MediaQueryListEvent.h>
 #include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/Parser/Syntax.h>
+#include <LibWeb/CSS/Parser/SyntaxParsing.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleInvalidation.h>
@@ -9119,11 +9121,51 @@ NonnullRefPtr<CSS::StyleValue const> Document::custom_property_initial_value(Fly
 void Document::did_change_custom_property_registrations()
 {
     ++m_custom_property_registration_generation;
+    m_parsed_custom_property_syntaxes.clear();
 
     // Custom property registration changes can alter inheritance and initial values even when no selector matching
     // changes. Registrations only move when a stylesheet containing an @property rule is added/removed or when
     // CSS.registerProperty() is called, so a full document restyle is cheap enough in practice.
     invalidate_style(DOM::StyleInvalidationReason::Other);
+}
+
+CSS::Parser::SyntaxNode const* Document::parsed_syntax_for_registered_custom_property(FlyString const& name)
+{
+    auto registration = get_registered_custom_property(name);
+    if (!registration.has_value())
+        return nullptr;
+
+    if (auto it = m_parsed_custom_property_syntaxes.find(name); it != m_parsed_custom_property_syntaxes.end())
+        return it->value.ptr();
+
+    auto syntax_component_values = parse_component_values_list(CSS::Parser::ParsingParams { *this }, registration->syntax);
+    OwnPtr<CSS::Parser::SyntaxNode const> parsed = CSS::Parser::parse_as_syntax(syntax_component_values, CSS::Parser::LimitSingleComponentIdentToCustomIdent::Yes);
+    auto* result = parsed.ptr();
+    m_parsed_custom_property_syntaxes.set(name, move(parsed));
+    return result;
+}
+
+NonnullRefPtr<CSS::StyleValue const> Document::parse_registered_custom_property_value(FlyString const& name, NonnullRefPtr<CSS::StyleValue const> input)
+{
+    // Unregistered custom properties keep their raw token stream.
+    auto registration = get_registered_custom_property(name);
+    if (!registration.has_value())
+        return input;
+
+    // The universal syntax accepts any value, so there's nothing to parse.
+    auto* syntax = parsed_syntax_for_registered_custom_property(name);
+    if (!syntax || syntax->type() == CSS::Parser::SyntaxNode::NodeType::Universal)
+        return input;
+
+    // https://drafts.csswg.org/css-values-5/#parse-with-a-syntax
+    auto tokens = input->tokenize();
+    return CSS::Parser::parse_with_a_syntax(CSS::Parser::ParsingParams { *this }, tokens, *syntax);
+}
+
+bool Document::registered_custom_property_has_universal_syntax(FlyString const& name)
+{
+    auto* syntax = parsed_syntax_for_registered_custom_property(name);
+    return !syntax || syntax->type() == CSS::Parser::SyntaxNode::NodeType::Universal;
 }
 
 void Document::build_registered_properties_cache()

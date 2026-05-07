@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<style>
+@property --p {
+    syntax: "<length>";
+    initial-value: 0px;
+    inherits: true;
+}
+@keyframes anim {
+    from { --p: 100px; }
+    to { --p: 100px; }
+}
+#parent {
+    --p: 50px !important;
+}
+/* Cell 1: child has its own !important. Animation must NOT override. */
+#child-own-important {
+    --p: 30px !important;
+    animation: anim 1s linear -0.5s paused;
+}
+/* Cell 2: parent has !important, child has no own declaration.
+   Animation on child MUST override the inherited value. */
+#child-no-own {
+    animation: anim 1s linear -0.5s paused;
+}
+/* Cell 3: parent has !important, child has equal-value normal declaration.
+   Animation on child MUST override; child's own cascade is normal. */
+#child-equal-value-normal {
+    --p: 50px;
+    animation: anim 1s linear -0.5s paused;
+}
+/* Cell 4: parent has !important, child also has !important.
+   Animation must NOT override. */
+#child-own-important-different-value {
+    --p: 80px !important;
+    animation: anim 1s linear -0.5s paused;
+}
+</style>
+<div id="parent">
+    <div id="child-own-important"></div>
+    <div id="child-no-own"></div>
+    <div id="child-equal-value-normal"></div>
+    <div id="child-own-important-different-value"></div>
+</div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const cell1 = getComputedStyle(document.getElementById("child-own-important")).getPropertyValue("--p");
+    println(`cell 1 (child !important): ${cell1} (expected 30px)`);
+
+    const cell2 = getComputedStyle(document.getElementById("child-no-own")).getPropertyValue("--p");
+    println(`cell 2 (parent !important, child no own): ${cell2} (expected 100px)`);
+
+    const cell3 = getComputedStyle(document.getElementById("child-equal-value-normal")).getPropertyValue("--p");
+    println(`cell 3 (parent !important, child normal equal): ${cell3} (expected 100px)`);
+
+    const cell4 = getComputedStyle(document.getElementById("child-own-important-different-value")).getPropertyValue("--p");
+    println(`cell 4 (parent and child !important): ${cell4} (expected 80px)`);
+});
+</script>

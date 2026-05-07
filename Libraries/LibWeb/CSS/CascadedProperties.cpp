@@ -70,7 +70,7 @@ void CascadedProperties::revert_layer_property(PropertyID property_id, Important
     }
 }
 
-void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<StyleValue const> value, Important important, CascadeOrigin origin, Optional<FlyString> layer_name, GC::Ptr<CSS::CSSStyleDeclaration const> source, GC::Ptr<DOM::ShadowRoot const> source_shadow_root)
+void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<StyleValue const> value, Important important, CascadeOrigin origin, Optional<FlyString> layer_name, GC::Ptr<CSS::CSSStyleDeclaration const> source, GC::Ptr<DOM::ShadowRoot const> source_shadow_root, RefPtr<StyleValue const> unresolved_original, Optional<PropertyID> unresolved_original_source)
 {
     m_contained_properties_cache.set(to_underlying(property_id), true);
 
@@ -85,6 +85,8 @@ void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<Styl
                 .property_id = property_id,
                 .value = value,
             };
+            entry.unresolved_original = unresolved_original;
+            entry.unresolved_original_source = unresolved_original_source;
             entry.cascade_index = m_next_cascade_index++;
             entry.source = source;
             entry.source_shadow_root = source_shadow_root;
@@ -98,6 +100,8 @@ void CascadedProperties::set_property(PropertyID property_id, NonnullRefPtr<Styl
             .property_id = property_id,
             .value = value,
         },
+        .unresolved_original = unresolved_original,
+        .unresolved_original_source = unresolved_original_source,
         .cascade_index = m_next_cascade_index++,
         .origin = origin,
         .layer_name = move(layer_name),
@@ -150,6 +154,25 @@ Optional<StyleProperty> CascadedProperties::style_property(PropertyID property_i
         return {};
 
     return m_properties.get(property_id)->last().property;
+}
+
+Optional<WinningSubstitution> CascadedProperties::winning_substitution(PropertyID property_id) const
+{
+    if (!m_contained_properties_cache.get(to_underlying(property_id)))
+        return {};
+
+    auto const& entry = m_properties.get(property_id)->last();
+    if (!entry.unresolved_original)
+        return {};
+    return WinningSubstitution {
+        .unresolved_original = NonnullRefPtr { *entry.unresolved_original },
+        .source_property_id = entry.unresolved_original_source.value(),
+    };
+}
+
+void CascadedProperties::set_important_custom_properties(HashTable<FlyString> names)
+{
+    m_important_custom_properties = move(names);
 }
 
 }

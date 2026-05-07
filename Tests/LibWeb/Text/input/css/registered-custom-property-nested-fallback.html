@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<style>
+@property --a {
+    syntax: "<angle>";
+    initial-value: 0deg;
+    inherits: false;
+}
+@keyframes spin {
+    from { --a: 0deg; }
+    to { --a: 90deg; }
+}
+#box {
+    animation: spin 1s linear -0.5s paused;
+    transform: rotate(var(--missing, var(--a)));
+}
+</style>
+<div id="box"></div>
+<script src="../include.js"></script>
+<script>
+test(() => {
+    const box = document.getElementById("box");
+    println(`#box --a: ${getComputedStyle(box).getPropertyValue("--a")}`);
+    println(`#box transform: ${getComputedStyle(box).getPropertyValue("transform")}`);
+});
+</script>

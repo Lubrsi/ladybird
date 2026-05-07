@@ -1,0 +1,10 @@
+Harness status: OK
+
+Found 5 tests
+
+5 Fail
+Fail	Animating a custom property of type <integer>
+Fail	Animating a custom property of type <integer> with a single keyframe
+Fail	Animating a custom property of type <integer> with additivity
+Fail	Animating a custom property of type <integer> with a single keyframe and additivity
+Fail	Animating a custom property of type <integer> with iterationComposite

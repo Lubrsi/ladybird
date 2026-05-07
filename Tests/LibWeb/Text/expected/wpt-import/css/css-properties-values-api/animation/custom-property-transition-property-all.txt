@@ -1,0 +1,6 @@
+Harness status: OK
+
+Found 1 tests
+
+1 Fail
+Fail	A custom property can yield a CSS Transition with transition-property: all
