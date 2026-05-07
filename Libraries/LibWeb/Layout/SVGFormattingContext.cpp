@@ -539,10 +539,13 @@ Gfx::AffineTransform SVGFormattingContext::get_parent_svg_transform(Box const& b
             }
             continue;
         }
-        if (auto const* svg_graphics_box = as_if<SVGGraphicsBox>(*ancestor)) {
-            auto const& ancestor_state = m_state.get(*svg_graphics_box);
-            if (ancestor_state.computed_svg_transforms().has_value())
-                return ancestor_state.computed_svg_transforms()->svg_transform();
+        if (auto const* svg_graphics_ancestor = as_if<SVGGraphicsBox>(*ancestor)) {
+            // During partial relayout, ancestors above the next outer SVGSVGBox aren't pre-populated
+            // in the throwaway layout state. Skip them rather than tripping the subtree-membership check.
+            if (auto const* ancestor_state = m_state.try_get(*svg_graphics_ancestor)) {
+                if (ancestor_state->computed_svg_transforms().has_value())
+                    return ancestor_state->computed_svg_transforms()->svg_transform();
+            }
         }
     }
     return {};

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<svg id="outermost" width="200" height="200">
+    <g id="ancestor" transform="translate(20, 20)">
+        <svg id="middle" width="200" height="200">
+            <svg id="inner" width="100" height="100">
+                <g>
+                    <rect id="target" width="10" height="10" fill="blue"/>
+                </g>
+            </svg>
+        </svg>
+    </g>
+</svg>
+<script>
+    test(() => {
+        // Force initial layout
+        document.body.offsetWidth;
+
+        // Mutate an SVG attribute on a descendant of the innermost <svg> to trigger
+        // partial relayout. The transform-ancestor walk used to crash when stepping
+        // past the middle <svg> into a graphics ancestor outside the relayout subtree.
+        document.getElementById("target").setAttribute("transform", "translate(5, 5)");
+        document.body.offsetWidth;
+
+        println("Did not crash");
+    });
+</script>
