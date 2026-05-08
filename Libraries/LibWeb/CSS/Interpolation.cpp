@@ -2012,7 +2012,9 @@ static RefPtr<StyleValue const> interpolate_value_impl(DOM::Element& element, Ca
         return SuperellipseStyleValue::create(NumberStyleValue::create(interpolation_value_to_super_ellipse_parameter(interpolated_value)));
     }
     case StyleValue::Type::Transformation:
-        VERIFY_NOT_REACHED();
+        // Reached via registered custom properties with <transform-function> syntax. interpolate_transform
+        // accepts single Transformation inputs and treats them as one-element lists.
+        return interpolate_transform(element, calculation_context, from, to, delta, allow_discrete);
     case StyleValue::Type::ValueList: {
         auto const& from_list = from.as_value_list();
         auto const& to_list = to.as_value_list();
