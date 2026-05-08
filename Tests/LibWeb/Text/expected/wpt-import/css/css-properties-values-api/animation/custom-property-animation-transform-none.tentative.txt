@@ -2,6 +2,6 @@ Harness status: OK
 
 Found 2 tests
 
-2 Fail
-Fail	Animating a custom property of type "<transform-list>|none" from "none" to <transform-list> value
-Fail	Animating a custom property of type "<transform-function>|none" from "none" to <transform-function> value
+2 Pass
+Pass	Animating a custom property of type "<transform-list>|none" from "none" to <transform-list> value
+Pass	Animating a custom property of type "<transform-function>|none" from "none" to <transform-function> value

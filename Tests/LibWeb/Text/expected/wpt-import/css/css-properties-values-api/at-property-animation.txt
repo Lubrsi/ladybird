@@ -2,15 +2,15 @@ Harness status: OK
 
 Found 19 tests
 
-4 Pass
-15 Fail
+10 Pass
+9 Fail
 Pass	@keyframes works with @property
 Pass	@keyframes picks up the latest @property in the document
-Fail	Ongoing animation picks up redeclared custom property
-Fail	Ongoing animation matches new keyframes against the current registration
-Fail	Ongoing animation picks up redeclared intial value
-Fail	Ongoing animation picks up redeclared inherits flag
-Fail	Ongoing animation picks up redeclared meaning of 'unset'
+Pass	Ongoing animation picks up redeclared custom property
+Pass	Ongoing animation matches new keyframes against the current registration
+Pass	Ongoing animation picks up redeclared intial value
+Pass	Ongoing animation picks up redeclared inherits flag
+Pass	Ongoing animation picks up redeclared meaning of 'unset'
 Fail	Transitioning from initial value
 Fail	Transitioning from specified value
 Fail	Transition triggered by initial value change
@@ -20,6 +20,6 @@ Fail	Ongoing transition reverts to its initial state
 Fail	Unregistered properties referencing animated properties update correctly.
 Fail	Registered properties referencing animated properties update correctly.
 Pass	CSS animation setting "inherit" for a custom property on a keyframe is responsive to changing that custom property on the parent.
-Fail	JS-originated animation setting "inherit" for a custom property on a keyframe is responsive to changing that custom property on the parent.
+Pass	JS-originated animation setting "inherit" for a custom property on a keyframe is responsive to changing that custom property on the parent.
 Fail	CSS animation setting "currentColor" for a custom property on a keyframe is responsive to changing "color" on the parent.
 Fail	JS-originated animation setting "currentColor" for a custom property on a keyframe is responsive to changing "color" on the parent.

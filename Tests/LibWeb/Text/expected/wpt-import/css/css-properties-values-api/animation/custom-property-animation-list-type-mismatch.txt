@@ -2,5 +2,5 @@ Harness status: OK
 
 Found 1 tests
 
-1 Fail
-Fail	Animating a custom property allowing multiple list types with two mismatching types
+1 Pass
+Pass	Animating a custom property allowing multiple list types with two mismatching types

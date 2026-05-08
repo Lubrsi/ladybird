@@ -15,6 +15,7 @@
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
+#include <LibWeb/CSS/PropertyName.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/DOM/AbstractElement.h>
@@ -166,6 +167,9 @@ static WebIDL::ExceptionOr<KeyframeType<AL>> process_a_keyframe_like_object(JS::
             animation_properties.append(name);
         } else if (name == "float"sv || name == "offset"sv) {
             // Ignore these property names
+        } else if (CSS::is_a_custom_property_name_string(name)) {
+            // Spec step 4: admit names that conform to the <custom-property-name> production.
+            animation_properties.append(name);
         } else if (auto property = CSS::property_id_from_camel_case_string(name); property.has_value()) {
             if (CSS::is_animatable_property(property.value()))
                 animation_properties.append(name);
@@ -522,6 +526,15 @@ static WebIDL::ExceptionOr<Vector<BaseKeyframe>> process_a_keyframes_argument(JS
         //    highlight
         BaseKeyframe::ParsedProperties parsed_properties;
         for (auto& [property_string, value_string] : keyframe.unparsed_properties()) {
+            // Custom-property names parse as PropertyID::Custom; the resulting UnresolvedStyleValue is
+            // re-resolved per tick by compute_keyframe_custom_property_values in StyleComputer, where
+            // the registration generation and target are in scope.
+            if (CSS::is_a_custom_property_name_string(property_string)) {
+                if (auto style_value = parse_css_value(CSS::Parser::ParsingParams {}, value_string, CSS::PropertyID::Custom))
+                    parsed_properties.custom_properties.set(FlyString::from_utf8_without_validation(property_string.bytes()), style_value.release_nonnull());
+                continue;
+            }
+
             Optional<CSS::PropertyID> property_id;
 
             // Handle some special cases
@@ -542,7 +555,7 @@ static WebIDL::ExceptionOr<Vector<BaseKeyframe>> process_a_keyframes_argument(JS
                 // Handle 'initial' here so we don't have to get the default value of the property every frame in StyleComputer
                 if (style_value->is_initial())
                     style_value = CSS::property_initial_value(*property_id);
-                parsed_properties.set(*property_id, *style_value);
+                parsed_properties.properties.set(*property_id, *style_value);
             }
         }
         keyframe.properties.set(move(parsed_properties));
@@ -886,8 +899,14 @@ WebIDL::ExceptionOr<GC::RootVector<JS::Object*>> KeyframeEffect::get_keyframes()
                 TRY(object->set(vm.names.composite, JS::PrimitiveString::create(vm, "auto"sv), ShouldThrowExceptions::Yes));
             }
 
-            for (auto const& [id, value] : keyframe.parsed_properties()) {
+            for (auto const& [id, value] : keyframe.parsed_properties().properties) {
                 auto key = Utf16FlyString::from_utf8(CSS::camel_case_string_from_property_id(id));
+                auto value_string = JS::PrimitiveString::create(vm, value->to_string(CSS::SerializationMode::Normal));
+                TRY(object->set(JS::PropertyKey { move(key), JS::PropertyKey::StringMayBeNumber::No }, value_string, ShouldThrowExceptions::Yes));
+            }
+
+            for (auto const& [name, value] : keyframe.parsed_properties().custom_properties) {
+                auto key = Utf16FlyString::from_utf8(name.bytes_as_string_view());
                 auto value_string = JS::PrimitiveString::create(vm, value->to_string(CSS::SerializationMode::Normal));
                 TRY(object->set(JS::PropertyKey { move(key), JS::PropertyKey::StringMayBeNumber::No }, value_string, ShouldThrowExceptions::Yes));
             }
@@ -915,6 +934,7 @@ WebIDL::ExceptionOr<void> KeyframeEffect::set_keyframes(GC::Ptr<JS::Object> keyf
 
     auto keyframe_set = adopt_ref(*new KeyFrameSet);
     m_target_properties.clear();
+    m_target_custom_properties.clear();
 
     for (auto& keyframe : m_keyframes) {
         Animations::KeyframeEffect::KeyFrameSet::ResolvedKeyFrame resolved_keyframe;
@@ -924,17 +944,22 @@ WebIDL::ExceptionOr<void> KeyframeEffect::set_keyframes(GC::Ptr<JS::Object> keyf
 
         auto key = static_cast<u64>(keyframe.computed_offset.value() * 100 * AnimationKeyFrameKeyScaleFactor);
 
-        for (auto [property_id, property_value] : keyframe.parsed_properties()) {
+        for (auto [property_id, property_value] : keyframe.parsed_properties().properties) {
             resolved_keyframe.properties.set(property_id, property_value);
             CSS::StyleComputer::for_each_property_expanding_shorthands(property_id, property_value, [&](CSS::PropertyID longhand_id, CSS::StyleValue const&) {
                 m_target_properties.set(longhand_id);
             });
         }
 
+        for (auto const& [name, value] : keyframe.parsed_properties().custom_properties) {
+            resolved_keyframe.custom_properties.set(name, value);
+            m_target_custom_properties.set(name);
+        }
+
         keyframe_set->keyframes_by_key.insert(key, resolved_keyframe);
     }
 
-    generate_initial_and_final_frames(keyframe_set, m_target_properties, {});
+    generate_initial_and_final_frames(keyframe_set, m_target_properties, m_target_custom_properties);
     m_key_frame_set = keyframe_set;
 
     invalidate_effect();

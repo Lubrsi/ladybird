@@ -35,7 +35,10 @@ struct BasePropertyIndexedKeyframe {
 // https://www.w3.org/TR/web-animations-1/#dictdef-basekeyframe
 struct BaseKeyframe {
     using UnparsedProperties = HashMap<String, String>;
-    using ParsedProperties = HashMap<CSS::PropertyID, NonnullRefPtr<CSS::StyleValue const>>;
+    struct ParsedProperties {
+        HashMap<CSS::PropertyID, NonnullRefPtr<CSS::StyleValue const>> properties;
+        HashMap<FlyString, NonnullRefPtr<CSS::StyleValue const>> custom_properties;
+    };
 
     Optional<double> offset {};
     EasingValue easing { "linear"_string };
@@ -132,6 +135,10 @@ private:
 
     // A cached version of m_keyframes suitable for returning from get_keyframes()
     Vector<GC::Ref<JS::Object>> m_keyframe_objects {};
+
+    // Custom-property analogue of AnimationEffect::m_target_properties; populated by set_keyframes
+    // and consumed by generate_initial_and_final_frames to synthesize 0%/100% UseInitial entries.
+    HashTable<FlyString> m_target_custom_properties;
 
     RefPtr<KeyFrameSet const> m_key_frame_set {};
 };
