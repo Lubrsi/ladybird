@@ -261,6 +261,60 @@ ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext con
     return image;
 }
 
+ErrorOr<NonnullRefPtr<VulkanImage>> wrap_dmabuf_as_vulkan_image(VulkanContext const& context, int dma_buf_fd, uint32_t width, uint32_t height, size_t row_pitch, VkFormat format, uint64_t modifier)
+{
+    VkSubresourceLayout plane_layouts[1] = {
+        {
+            .offset = 0,
+            .size = 0,
+            .rowPitch = row_pitch,
+            .arrayPitch = 0,
+            .depthPitch = 0,
+        },
+    };
+    VkImageDrmFormatModifierExplicitCreateInfoEXT explicit_modifier_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+        .pNext = nullptr,
+        .drmFormatModifier = modifier,
+        .drmFormatModifierPlaneCount = 1,
+        .pPlaneLayouts = plane_layouts,
+    };
+    constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    auto image = TRY(create_dmabuf_image(context, width, height, format, usage, &explicit_modifier_info));
+
+    VkMemoryFdPropertiesKHR fd_props = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+        .pNext = nullptr,
+        .memoryTypeBits = 0,
+    };
+    auto result = context.ext_procs.get_memory_fd_properties(context.logical_device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, dma_buf_fd, &fd_props);
+    if (result != VK_SUCCESS) {
+        dbgln("vkGetMemoryFdPropertiesKHR returned {}", to_underlying(result));
+        return Error::from_string_literal("dma-buf fd properties query failed");
+    }
+
+    VkImportMemoryFdInfoKHR import_mem_info = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .pNext = nullptr,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        .fd = dma_buf_fd,
+    };
+    Array<VkMemoryPropertyFlags, 1> no_required_flags = { 0 };
+    TRY(allocate_bind_and_transition(context, *image, &import_mem_info, fd_props.memoryTypeBits, no_required_flags.span()));
+
+    image->info = {
+        .format = format,
+        .extent = { .width = width, .height = height, .depth = 1 },
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = usage,
+        .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
+        .layout = VK_IMAGE_LAYOUT_GENERAL,
+        .row_pitch = row_pitch,
+        .modifier = modifier,
+    };
+    return image;
+}
+
 }
 
 #endif

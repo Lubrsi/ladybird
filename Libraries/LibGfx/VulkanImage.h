@@ -54,6 +54,7 @@ static inline uint32_t vk_format_to_drm_format(VkFormat format)
 }
 
 ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext const& context, uint32_t width, uint32_t height, VkFormat format, ReadonlySpan<uint64_t> modifiers);
+ErrorOr<NonnullRefPtr<VulkanImage>> wrap_dmabuf_as_vulkan_image(VulkanContext const& context, int dma_buf_fd, uint32_t width, uint32_t height, size_t row_pitch, VkFormat format, uint64_t modifier);
 
 }
 

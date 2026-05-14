@@ -25,6 +25,7 @@ struct VulkanContext {
     struct
     {
         PFN_vkGetMemoryFdKHR get_memory_fd { nullptr };
+        PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties { nullptr };
         PFN_vkGetImageDrmFormatModifierPropertiesEXT get_image_drm_format_modifier_properties { nullptr };
     } ext_procs;
 #    endif

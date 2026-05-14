@@ -195,6 +195,10 @@ ErrorOr<VulkanContext> create_vulkan_context()
     if (pfn_vk_get_memory_fd_khr == nullptr) {
         return Error::from_string_literal("vkGetMemoryFdKHR unavailable");
     }
+    auto pfn_vk_get_memory_fd_properties_khr = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(vkGetDeviceProcAddr(logical_device, "vkGetMemoryFdPropertiesKHR"));
+    if (pfn_vk_get_memory_fd_properties_khr == nullptr) {
+        return Error::from_string_literal("vkGetMemoryFdPropertiesKHR unavailable");
+    }
     auto pfn_vk_get_image_drm_format_modifier_properties_khr = reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(vkGetDeviceProcAddr(logical_device, "vkGetImageDrmFormatModifierPropertiesEXT"));
     if (pfn_vk_get_image_drm_format_modifier_properties_khr == nullptr) {
         return Error::from_string_literal("vkGetImageDrmFormatModifierPropertiesEXT unavailable");
@@ -213,6 +217,7 @@ ErrorOr<VulkanContext> create_vulkan_context()
         .command_buffer = command_buffer,
         .ext_procs = {
             .get_memory_fd = pfn_vk_get_memory_fd_khr,
+            .get_memory_fd_properties = pfn_vk_get_memory_fd_properties_khr,
             .get_image_drm_format_modifier_properties = pfn_vk_get_image_drm_format_modifier_properties_khr,
         },
 #endif
