@@ -17,6 +17,7 @@
 #include <LibGfx/DecodedImageFrame.h>
 #include <LibGfx/PainterSkia.h>
 #include <LibGfx/Rect.h>
+#include <LibGfx/SkiaBackendContext.h>
 #include <LibJS/Runtime/ExternalMemory.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibJS/Runtime/ValueInlines.h>
@@ -272,11 +273,25 @@ void CanvasRenderingContext2D::allocate_painting_surface_if_needed()
     // FIXME: implement context attribute .color_space
     // FIXME: implement context attribute .color_type
     // FIXME: implement context attribute .desynchronized
-    // FIXME: implement context attribute .will_read_frequently
 
     auto color_type = m_context_attributes.alpha ? Gfx::BitmapFormat::BGRA8888 : Gfx::BitmapFormat::BGRx8888;
 
-    m_surface = Gfx::PaintingSurface::create_with_size(canvas_element().bitmap_size_for_canvas(), color_type, Gfx::AlphaType::Premultiplied);
+    // https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently
+    // When a CanvasSettings object's will read frequently is true, the user agent may
+    // optimize the canvas for readback operations.
+    //
+    // NOTE: On most devices the user agent needs to decide whether to store the canvas's
+    // output bitmap on the GPU (this is also called "hardware accelerated"), or on the
+    // CPU (also called "software"). Most rendering operations are more performant for
+    // accelerated canvases, with the major exception being readback with getImageData(),
+    // toDataURL(), or toBlob(). CanvasSettings objects with will read frequently equal
+    // to true tell the user agent that the webpage is likely to perform many readback
+    // operations and that it is advantageous to use a software canvas.
+    RefPtr<Gfx::SkiaBackendContext> backend_context;
+    if (!m_context_attributes.will_read_frequently)
+        backend_context = Gfx::SkiaBackendContext::the_main_thread_context();
+
+    m_surface = Gfx::PaintingSurface::create_with_size(canvas_element().bitmap_size_for_canvas(), color_type, Gfx::AlphaType::Premultiplied, backend_context);
     m_painter = nullptr;
 
     // https://html.spec.whatwg.org/multipage/canvas.html#the-canvas-settings:concept-canvas-alpha
