@@ -249,7 +249,7 @@ void DisplayListResourceStorage::clear_video_frame(VideoFrameResourceId frame_id
 void DisplayListResourceStorage::update_compositor_surface(CompositorSurfaceId surface_id, Gfx::SharedImage&& shared_image)
 {
     auto shared_image_buffer = Gfx::SharedImageBuffer::import_from_shared_image(move(shared_image));
-    m_compositor_surfaces.set(surface_id.value(), Gfx::DecodedImageFrame { *shared_image_buffer.bitmap() });
+    m_compositor_surfaces.set(surface_id.value(), Gfx::DecodedImageFrame { *shared_image_buffer->bitmap() });
 }
 
 void DisplayListResourceStorage::clear_compositor_surface(CompositorSurfaceId surface_id)

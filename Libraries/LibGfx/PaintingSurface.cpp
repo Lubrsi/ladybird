@@ -156,8 +156,8 @@ NonnullRefPtr<Bitmap> PaintingSurface::snapshot_bitmap() const
 SharedImage PaintingSurface::snapshot_into_shared_image() const
 {
     auto shared_image_buffer = SharedImageBuffer::create(size());
-    read_into_bitmap(*shared_image_buffer.bitmap());
-    return shared_image_buffer.export_shared_image();
+    read_into_bitmap(*shared_image_buffer->bitmap());
+    return shared_image_buffer->export_shared_image();
 }
 
 void PaintingSurface::read_into_bitmap(Bitmap& bitmap) const

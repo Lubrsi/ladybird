@@ -289,7 +289,7 @@ void OpenGLContext::clear_buffer_to_default_values()
 #ifdef AK_OS_MACOS
 void OpenGLContext::allocate_iosurface_painting_surface()
 {
-    m_shared_image_buffer = make<Gfx::SharedImageBuffer>(Gfx::SharedImageBuffer::create(m_size));
+    m_shared_image_buffer = Gfx::SharedImageBuffer::create(m_size);
     m_painting_surface = Gfx::PaintingSurface::create_from_shared_image_buffer(*m_shared_image_buffer, m_skia_backend_context, Gfx::PaintingSurface::Origin::BottomLeft);
 
     EGLint const surface_attributes[] = {

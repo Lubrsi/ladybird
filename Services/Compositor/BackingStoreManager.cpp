@@ -140,9 +140,9 @@ Optional<BackingStoreManager::Publication> BackingStoreManager::allocate_backing
 
     auto front_buffer = Gfx::SharedImageBuffer::create(allocation.size);
     auto back_buffer = Gfx::SharedImageBuffer::create(allocation.size);
-    auto front_shared_image = front_buffer.export_shared_image();
-    auto back_shared_image = back_buffer.export_shared_image();
-    auto backing_store_pair = create_shareable_bitmap_backing_stores(allocation.size, front_buffer, back_buffer, skia_backend_context);
+    auto front_shared_image = front_buffer->export_shared_image();
+    auto back_shared_image = back_buffer->export_shared_image();
+    auto backing_store_pair = create_shareable_bitmap_backing_stores(allocation.size, *front_buffer, *back_buffer, skia_backend_context);
     m_backing_stores.front_store = move(backing_store_pair.front);
     m_backing_stores.back_store = move(backing_store_pair.back);
     m_backing_stores.front_bitmap_id = allocation.front_bitmap_id;

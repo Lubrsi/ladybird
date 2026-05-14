@@ -351,7 +351,7 @@ protected:
     struct SharedBitmap {
         i32 id { -1 };
         Web::DevicePixelSize last_painted_size;
-        OwnPtr<Gfx::SharedImageBuffer> shared_image_buffer;
+        RefPtr<Gfx::SharedImageBuffer> shared_image_buffer;
     };
 
     struct ClientState {
@@ -415,7 +415,7 @@ protected:
 
     RefPtr<Core::Timer> m_backing_store_shrink_timer;
 
-    OwnPtr<Gfx::SharedImageBuffer> m_backup_shared_image_buffer;
+    RefPtr<Gfx::SharedImageBuffer> m_backup_shared_image_buffer;
     Web::DevicePixelSize m_backup_bitmap_size;
     Gfx::Color m_page_background_color { 255, 255, 255 };
     Gfx::Color m_system_canvas_background_color { 255, 255, 255 };

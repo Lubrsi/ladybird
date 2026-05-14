@@ -57,31 +57,31 @@ SharedImageBuffer::SharedImageBuffer(NonnullRefPtr<Bitmap> bitmap)
 }
 #endif
 
-SharedImageBuffer SharedImageBuffer::create(IntSize size)
+NonnullRefPtr<SharedImageBuffer> SharedImageBuffer::create(IntSize size)
 {
 #ifdef AK_OS_MACOS
     auto iosurface_handle = Core::IOSurfaceHandle::create(size.width(), size.height());
     auto bitmap = create_bitmap_from_iosurface(iosurface_handle);
-    return SharedImageBuffer(move(iosurface_handle), move(bitmap));
+    return adopt_ref(*new SharedImageBuffer(move(iosurface_handle), move(bitmap)));
 #else
-    return SharedImageBuffer(MUST(Bitmap::create_shareable(shared_image_buffer_format, shared_image_buffer_alpha_type, size)));
+    return adopt_ref(*new SharedImageBuffer(MUST(Bitmap::create_shareable(shared_image_buffer_format, shared_image_buffer_alpha_type, size))));
 #endif
 }
 
-SharedImageBuffer SharedImageBuffer::import_from_shared_image(SharedImage shared_image)
+NonnullRefPtr<SharedImageBuffer> SharedImageBuffer::import_from_shared_image(SharedImage shared_image)
 {
 #ifdef AK_OS_MACOS
     auto iosurface_handle = Core::IOSurfaceHandle::from_mach_port(shared_image.m_port);
     auto bitmap = create_bitmap_from_iosurface(iosurface_handle);
-    return SharedImageBuffer(move(iosurface_handle), move(bitmap));
+    return adopt_ref(*new SharedImageBuffer(move(iosurface_handle), move(bitmap)));
 #else
     return shared_image.m_data.visit(
-        [](ShareableBitmap& shareable_bitmap) -> SharedImageBuffer {
-            return SharedImageBuffer(*shareable_bitmap.bitmap());
+        [](ShareableBitmap& shareable_bitmap) -> NonnullRefPtr<SharedImageBuffer> {
+            return adopt_ref(*new SharedImageBuffer(*shareable_bitmap.bitmap()));
         },
-        [](LinuxDmaBufHandle& dmabuf) -> SharedImageBuffer {
+        [](LinuxDmaBufHandle& dmabuf) -> NonnullRefPtr<SharedImageBuffer> {
 #    ifdef USE_VULKAN_DMABUF_IMAGES
-            return SharedImageBuffer(create_bitmap_from_linux_dmabuf(dmabuf));
+            return adopt_ref(*new SharedImageBuffer(create_bitmap_from_linux_dmabuf(dmabuf)));
 #    else
             (void)dmabuf;
             VERIFY_NOT_REACHED();
@@ -89,10 +89,6 @@ SharedImageBuffer SharedImageBuffer::import_from_shared_image(SharedImage shared
         });
 #endif
 }
-
-SharedImageBuffer::SharedImageBuffer(SharedImageBuffer&&) = default;
-
-SharedImageBuffer& SharedImageBuffer::operator=(SharedImageBuffer&&) = default;
 
 SharedImageBuffer::~SharedImageBuffer() = default;
 

@@ -61,7 +61,7 @@ private:
     Gfx::IntSize m_size;
     RefPtr<Gfx::PaintingSurface> m_painting_surface;
 #ifdef AK_OS_MACOS
-    OwnPtr<Gfx::SharedImageBuffer> m_shared_image_buffer;
+    RefPtr<Gfx::SharedImageBuffer> m_shared_image_buffer;
 #endif
     NonnullOwnPtr<Impl> m_impl;
     Optional<Vector<String>> m_requestable_extensions;

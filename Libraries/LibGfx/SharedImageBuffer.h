@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/AtomicRefCounted.h>
 #include <AK/Noncopyable.h>
 #include <AK/NonnullRefPtr.h>
 #include <LibGfx/Bitmap.h>
@@ -17,20 +18,20 @@
 
 namespace Gfx {
 
-class SharedImageBuffer {
+class SharedImageBuffer final : public AtomicRefCounted<SharedImageBuffer> {
     AK_MAKE_NONCOPYABLE(SharedImageBuffer);
+    AK_MAKE_NONMOVABLE(SharedImageBuffer);
 
 public:
-    static SharedImageBuffer create(IntSize);
-    static SharedImageBuffer import_from_shared_image(SharedImage);
+    static NonnullRefPtr<SharedImageBuffer> create(IntSize);
+    static NonnullRefPtr<SharedImageBuffer> import_from_shared_image(SharedImage);
 
-    SharedImageBuffer(SharedImageBuffer&&);
-    SharedImageBuffer& operator=(SharedImageBuffer&&);
     ~SharedImageBuffer();
 
     SharedImage export_shared_image() const;
 
     NonnullRefPtr<Bitmap> bitmap() const { return m_bitmap; }
+    IntSize size() const { return m_bitmap->size(); }
 
 #ifdef AK_OS_MACOS
     Core::IOSurfaceHandle const& iosurface_handle() const { return m_iosurface_handle; }
