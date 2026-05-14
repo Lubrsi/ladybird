@@ -13,11 +13,11 @@
 
 namespace Gfx {
 
-static uint32_t find_memory_type_index(VkPhysicalDeviceMemoryProperties const& memory_properties, VkMemoryRequirements const& memory_requirements, VkMemoryPropertyFlags required_flags)
+static uint32_t find_memory_type_index(VkPhysicalDeviceMemoryProperties const& memory_properties, uint32_t allowed_type_bits, VkMemoryPropertyFlags required_flags)
 {
     for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
         auto const property_flags = memory_properties.memoryTypes[i].propertyFlags;
-        if ((memory_requirements.memoryTypeBits & (1u << i)) && (property_flags & required_flags) == required_flags)
+        if ((allowed_type_bits & (1u << i)) && (property_flags & required_flags) == required_flags)
             return i;
     }
 
@@ -96,6 +96,94 @@ int VulkanImage::get_dma_buf_fd() const
     return fd;
 }
 
+static ErrorOr<NonnullRefPtr<VulkanImage>> create_dmabuf_image(VulkanContext const& context, uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage, void const* modifier_info_pnext)
+{
+    VkExternalMemoryImageCreateInfo external_mem_image_info = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .pNext = modifier_info_pnext,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+    };
+    Array<uint32_t, 1> queue_families = { context.graphics_queue_family };
+    VkImageCreateInfo image_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = &external_mem_image_info,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = { .width = width, .height = height, .depth = 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = queue_families.size(),
+        .pQueueFamilyIndices = queue_families.data(),
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    NonnullRefPtr<VulkanImage> image = make_ref_counted<VulkanImage>(context);
+    auto result = vkCreateImage(context.logical_device, &image_info, nullptr, &image->image);
+    if (result != VK_SUCCESS) {
+        dbgln("vkCreateImage returned {}", to_underlying(result));
+        return Error::from_string_literal("image creation failed");
+    }
+    return image;
+}
+
+static ErrorOr<void> allocate_bind_and_transition(VulkanContext const& context, VulkanImage& image, void const* alloc_pnext, uint32_t external_memory_type_filter, ReadonlySpan<VkMemoryPropertyFlags> required_property_flag_candidates)
+{
+    VkMemoryRequirements mem_reqs;
+    vkGetImageMemoryRequirements(context.logical_device, image.image, &mem_reqs);
+
+    uint32_t allowed_type_bits = mem_reqs.memoryTypeBits;
+    if (external_memory_type_filter != 0)
+        allowed_type_bits &= external_memory_type_filter;
+
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(context.physical_device, &mem_props);
+
+    uint32_t mem_type_idx = mem_props.memoryTypeCount;
+    for (auto required_flags : required_property_flag_candidates) {
+        mem_type_idx = find_memory_type_index(mem_props, allowed_type_bits, required_flags);
+        if (mem_type_idx != mem_props.memoryTypeCount)
+            break;
+    }
+
+    if (mem_type_idx == mem_props.memoryTypeCount) {
+        return Error::from_string_literal("unable to find suitable image memory type");
+    }
+
+    // Set up dedicated memory allocation; required for NVIDIA 10 series GPUs.
+    // https://docs.vulkan.org/refpages/latest/refpages/source/VkMemoryAllocateInfo.html#VUID-VkMemoryAllocateInfo-pNext-00639
+    VkMemoryDedicatedAllocateInfo mem_dedicated_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = alloc_pnext,
+        .image = image.image,
+        .buffer = VK_NULL_HANDLE,
+    };
+    VkMemoryAllocateInfo mem_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = &mem_dedicated_alloc_info,
+        .allocationSize = mem_reqs.size,
+        .memoryTypeIndex = mem_type_idx,
+    };
+    auto result = vkAllocateMemory(context.logical_device, &mem_alloc_info, nullptr, &image.memory);
+    if (result != VK_SUCCESS) {
+        dbgln("vkAllocateMemory returned {}", to_underlying(result));
+        return Error::from_string_literal("image memory allocation failed");
+    }
+
+    result = vkBindImageMemory(context.logical_device, image.image, image.memory, 0);
+    if (result != VK_SUCCESS) {
+        dbgln("vkBindImageMemory returned {}", to_underlying(result));
+        return Error::from_string_literal("bind image memory failed");
+    }
+
+    image.transition_layout(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    return {};
+}
+
 ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext const& context, uint32_t width, uint32_t height, VkFormat format, ReadonlySpan<uint64_t> modifiers)
 {
     VkDrmFormatModifierPropertiesListEXT format_mod_props_list = {};
@@ -124,97 +212,28 @@ ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext con
     if (!modifiers.is_empty() && format_mods.is_empty())
         return Error::from_string_literal("no supported DRM format modifiers for shared image");
 
-    NonnullRefPtr<VulkanImage> image = make_ref_counted<VulkanImage>(context);
-    VkImageDrmFormatModifierListCreateInfoEXT image_drm_format_modifier_list_info = {
+    VkImageDrmFormatModifierListCreateInfoEXT modifier_list_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
         .pNext = nullptr,
         .drmFormatModifierCount = static_cast<uint32_t>(format_mods.size()),
         .pDrmFormatModifiers = format_mods.data(),
     };
-    VkExternalMemoryImageCreateInfo external_mem_image_info = {
-        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-        .pNext = &image_drm_format_modifier_list_info,
-        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-    };
-    Array<uint32_t, 1> queue_families = { context.graphics_queue_family };
-    VkImageCreateInfo image_info = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .pNext = &external_mem_image_info,
-        .flags = 0,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .format = format,
-        .extent = {
-            .width = width,
-            .height = height,
-            .depth = 1,
-        },
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
-        .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = queue_families.size(),
-        .pQueueFamilyIndices = queue_families.data(),
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    };
-    auto result = vkCreateImage(context.logical_device, &image_info, nullptr, &image->image);
-    if (result != VK_SUCCESS) {
-        dbgln("vkCreateImage returned {}", to_underlying(result));
-        return Error::from_string_literal("image creation failed");
-    }
-
-    VkMemoryRequirements mem_reqs;
-    vkGetImageMemoryRequirements(context.logical_device, image->image, &mem_reqs);
-    VkPhysicalDeviceMemoryProperties mem_props;
-    vkGetPhysicalDeviceMemoryProperties(context.physical_device, &mem_props);
-    bool const is_linear_image = format_mods.size() == 1 && format_mods[0] == DRM_FORMAT_MOD_LINEAR;
-    uint32_t mem_type_idx = mem_props.memoryTypeCount;
-
-    if (is_linear_image) {
-        mem_type_idx = find_memory_type_index(mem_props, mem_reqs, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-        if (mem_type_idx == mem_props.memoryTypeCount) {
-            mem_type_idx = find_memory_type_index(mem_props, mem_reqs, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        }
-    } else {
-        mem_type_idx = find_memory_type_index(mem_props, mem_reqs, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    }
-
-    if (mem_type_idx == mem_props.memoryTypeCount) {
-        return Error::from_string_literal("unable to find suitable image memory type");
-    }
-
-    // Set up dedicated memory allocation; required for NVIDIA 10 series GPUs.
-    // https://docs.vulkan.org/refpages/latest/refpages/source/VkMemoryAllocateInfo.html#VUID-VkMemoryAllocateInfo-pNext-00639
-    VkMemoryDedicatedAllocateInfo mem_dedicated_alloc_info = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-        .pNext = nullptr,
-        .image = image->image,
-        .buffer = VK_NULL_HANDLE,
-    };
+    constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    auto image = TRY(create_dmabuf_image(context, width, height, format, usage, &modifier_list_info));
 
     VkExportMemoryAllocateInfo export_mem_alloc_info = {
         .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
-        .pNext = &mem_dedicated_alloc_info,
+        .pNext = nullptr,
         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
     };
-    VkMemoryAllocateInfo mem_alloc_info = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .pNext = &export_mem_alloc_info,
-        .allocationSize = mem_reqs.size,
-        .memoryTypeIndex = mem_type_idx,
+    bool const is_linear_image = format_mods.size() == 1 && format_mods[0] == DRM_FORMAT_MOD_LINEAR;
+    Array<VkMemoryPropertyFlags, 2> linear_flag_candidates = {
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
     };
-    result = vkAllocateMemory(context.logical_device, &mem_alloc_info, nullptr, &image->memory);
-    if (result != VK_SUCCESS) {
-        dbgln("vkAllocateMemory returned {}", to_underlying(result));
-        return Error::from_string_literal("image memory allocation failed");
-    }
-
-    result = vkBindImageMemory(context.logical_device, image->image, image->memory, 0);
-    if (result != VK_SUCCESS) {
-        dbgln("vkBindImageMemory returned {}", to_underlying(result));
-        return Error::from_string_literal("bind image memory failed");
-    }
+    Array<VkMemoryPropertyFlags, 1> device_local_flag_candidates = { VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT };
+    ReadonlySpan<VkMemoryPropertyFlags> required_flag_candidates = is_linear_image ? linear_flag_candidates.span() : device_local_flag_candidates.span();
+    TRY(allocate_bind_and_transition(context, *image, &export_mem_alloc_info, 0, required_flag_candidates));
 
     VkImageSubresource subresource = { VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, 0, 0 };
     VkSubresourceLayout subresource_layout = {};
@@ -223,23 +242,19 @@ ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext con
     VkImageDrmFormatModifierPropertiesEXT image_format_mod_props = {};
     image_format_mod_props.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT;
     image_format_mod_props.pNext = nullptr;
-    result = context.ext_procs.get_image_drm_format_modifier_properties(context.logical_device, image->image, &image_format_mod_props);
+    auto result = context.ext_procs.get_image_drm_format_modifier_properties(context.logical_device, image->image, &image_format_mod_props);
     if (result != VK_SUCCESS) {
         dbgln("vkGetImageDrmFormatModifierPropertiesEXT returned {}", to_underlying(result));
         return Error::from_string_literal("image format modifier retrieval failed");
     }
 
-    // external APIs require general layout
-    VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;
-    image->transition_layout(VK_IMAGE_LAYOUT_UNDEFINED, layout);
-
     image->info = {
-        .format = image_info.format,
-        .extent = image_info.extent,
-        .tiling = image_info.tiling,
-        .usage = image_info.usage,
-        .sharing_mode = image_info.sharingMode,
-        .layout = layout,
+        .format = format,
+        .extent = { .width = width, .height = height, .depth = 1 },
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = usage,
+        .sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
+        .layout = VK_IMAGE_LAYOUT_GENERAL,
         .row_pitch = subresource_layout.rowPitch,
         .modifier = image_format_mod_props.drmFormatModifier,
     };
