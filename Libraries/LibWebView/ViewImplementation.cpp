@@ -133,7 +133,10 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
 {
     if (m_client_state.has_usable_bitmap) {
         // Keep showing the old page until the new WebContent process paints its first frame.
+        m_backup_bitmap = move(m_client_state.front_bitmap.bitmap);
+#ifdef AK_OS_MACOS
         m_backup_shared_image_buffer = move(m_client_state.front_bitmap.shared_image_buffer);
+#endif
         m_backup_bitmap_size = m_client_state.front_bitmap.last_painted_size;
     }
 
@@ -159,7 +162,10 @@ void ViewImplementation::server_did_paint(Badge<WebContentClient>, i32 bitmap_id
         m_client_state.has_usable_bitmap = true;
         m_client_state.back_bitmap.last_painted_size = size.to_type<Web::DevicePixels>();
         swap(m_client_state.back_bitmap, m_client_state.front_bitmap);
+        m_backup_bitmap = nullptr;
+#ifdef AK_OS_MACOS
         m_backup_shared_image_buffer = nullptr;
+#endif
         did_swap_bitmap = true;
     }
 
@@ -757,14 +763,24 @@ void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i3
         page_id(), front_bitmap_id, back_bitmap_id, m_client_state.has_usable_bitmap);
     if (m_client_state.has_usable_bitmap) {
         // NOTE: We keep the outgoing front bitmap as a backup so we have something to paint until we get a new one.
+        m_backup_bitmap = move(m_client_state.front_bitmap.bitmap);
+#ifdef AK_OS_MACOS
         m_backup_shared_image_buffer = move(m_client_state.front_bitmap.shared_image_buffer);
+#endif
         m_backup_bitmap_size = m_client_state.front_bitmap.last_painted_size;
     }
     m_client_state.has_usable_bitmap = false;
     m_client_state.front_bitmap.id = front_bitmap_id;
     m_client_state.back_bitmap.id = back_bitmap_id;
+#ifdef AK_OS_MACOS
     m_client_state.front_bitmap.shared_image_buffer = Gfx::SharedImageBuffer::import_from_shared_image(move(front_backing_store));
     m_client_state.back_bitmap.shared_image_buffer = Gfx::SharedImageBuffer::import_from_shared_image(move(back_backing_store));
+    m_client_state.front_bitmap.bitmap = m_client_state.front_bitmap.shared_image_buffer->bitmap();
+    m_client_state.back_bitmap.bitmap = m_client_state.back_bitmap.shared_image_buffer->bitmap();
+#else
+    m_client_state.front_bitmap.bitmap = Gfx::SharedImageBuffer::import_bitmap_from_shared_image(move(front_backing_store));
+    m_client_state.back_bitmap.bitmap = Gfx::SharedImageBuffer::import_bitmap_from_shared_image(move(back_backing_store));
+#endif
 }
 
 void ViewImplementation::update_zoom()
@@ -872,7 +888,10 @@ void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_err
     VERIFY(m_client_state.client);
 
     // Don't keep a stale backup bitmap around.
+    m_backup_bitmap = nullptr;
+#ifdef AK_OS_MACOS
     m_backup_shared_image_buffer = nullptr;
+#endif
 
     handle_resize();
 
@@ -974,10 +993,10 @@ NonnullRefPtr<Core::Promise<LexicalPath>> ViewImplementation::take_screenshot(Sc
     case ScreenshotType::Visible: {
         Gfx::Bitmap const* visible_bitmap = nullptr;
         if (m_client_state.has_usable_bitmap) {
-            VERIFY(m_client_state.front_bitmap.shared_image_buffer);
-            visible_bitmap = m_client_state.front_bitmap.shared_image_buffer->bitmap().ptr();
-        } else if (m_backup_shared_image_buffer) {
-            visible_bitmap = m_backup_shared_image_buffer->bitmap().ptr();
+            VERIFY(m_client_state.front_bitmap.bitmap);
+            visible_bitmap = m_client_state.front_bitmap.bitmap.ptr();
+        } else if (m_backup_bitmap) {
+            visible_bitmap = m_backup_bitmap.ptr();
         }
         if (visible_bitmap) {
             if (auto result = save_screenshot(visible_bitmap); result.is_error())

@@ -351,7 +351,10 @@ protected:
     struct SharedBitmap {
         i32 id { -1 };
         Web::DevicePixelSize last_painted_size;
+        RefPtr<Gfx::Bitmap> bitmap;
+#ifdef AK_OS_MACOS
         RefPtr<Gfx::SharedImageBuffer> shared_image_buffer;
+#endif
     };
 
     struct ClientState {
@@ -415,7 +418,10 @@ protected:
 
     RefPtr<Core::Timer> m_backing_store_shrink_timer;
 
+    RefPtr<Gfx::Bitmap> m_backup_bitmap;
+#ifdef AK_OS_MACOS
     RefPtr<Gfx::SharedImageBuffer> m_backup_shared_image_buffer;
+#endif
     Web::DevicePixelSize m_backup_bitmap_size;
     Gfx::Color m_page_background_color { 255, 255, 255 };
     Gfx::Color m_system_canvas_background_color { 255, 255, 255 };

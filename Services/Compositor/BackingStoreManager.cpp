@@ -5,7 +5,10 @@
  */
 
 #include <Compositor/BackingStoreManager.h>
+#include <LibGfx/Bitmap.h>
 #include <LibGfx/PaintingSurface.h>
+#include <LibGfx/ShareableBitmap.h>
+#include <LibGfx/SharedImage.h>
 #include <LibGfx/SharedImageBuffer.h>
 #include <LibGfx/SkiaBackendContext.h>
 
@@ -22,7 +25,7 @@ struct BackingStorePair {
     RefPtr<Gfx::PaintingSurface> back;
 };
 
-#ifdef USE_VULKAN
+#if defined(USE_VULKAN) && !defined(USE_VULKAN_DMABUF_IMAGES)
 static NonnullRefPtr<Gfx::PaintingSurface> create_gpu_painting_surface_with_bitmap_flush(Gfx::IntSize size, Gfx::SharedImageBuffer& buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
 {
     auto surface = Gfx::PaintingSurface::create_with_size(size, Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, skia_backend_context);
@@ -34,33 +37,35 @@ static NonnullRefPtr<Gfx::PaintingSurface> create_gpu_painting_surface_with_bitm
 }
 #endif
 
+#ifndef USE_VULKAN_DMABUF_IMAGES
 static BackingStorePair create_shareable_bitmap_backing_stores([[maybe_unused]] Gfx::IntSize size, Gfx::SharedImageBuffer& front_buffer, Gfx::SharedImageBuffer& back_buffer, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context)
 {
-#ifdef AK_OS_MACOS
+#    ifdef AK_OS_MACOS
     if (skia_backend_context) {
         return {
             .front = Gfx::PaintingSurface::create_from_shared_image_buffer(front_buffer, *skia_backend_context),
             .back = Gfx::PaintingSurface::create_from_shared_image_buffer(back_buffer, *skia_backend_context),
         };
     }
-#else
-#    ifdef USE_VULKAN
+#    else
+#        ifdef USE_VULKAN
     if (skia_backend_context) {
         return {
             .front = create_gpu_painting_surface_with_bitmap_flush(size, front_buffer, skia_backend_context),
             .back = create_gpu_painting_surface_with_bitmap_flush(size, back_buffer, skia_backend_context),
         };
     }
-#    else
+#        else
     (void)skia_backend_context;
+#        endif
 #    endif
-#endif
 
     return {
         .front = Gfx::PaintingSurface::wrap_bitmap(*front_buffer.bitmap()),
         .back = Gfx::PaintingSurface::wrap_bitmap(*back_buffer.bitmap()),
     };
 }
+#endif
 
 #ifdef USE_VULKAN_DMABUF_IMAGES
 struct DMABufBackingStorePair {
@@ -120,7 +125,7 @@ Optional<BackingStoreManager::Allocation> BackingStoreManager::resize_backing_st
 Optional<BackingStoreManager::Publication> BackingStoreManager::allocate_backing_stores(Allocation const& allocation, RefPtr<Gfx::SkiaBackendContext> const& skia_backend_context, bool should_publish)
 {
 #ifdef USE_VULKAN_DMABUF_IMAGES
-    if (skia_backend_context && should_publish) {
+    if (skia_backend_context) {
         auto backing_stores = create_linear_dmabuf_backing_stores(allocation.size, *skia_backend_context);
         if (!backing_stores.is_error()) {
             auto backing_store_pair = backing_stores.release_value();
@@ -128,6 +133,8 @@ Optional<BackingStoreManager::Publication> BackingStoreManager::allocate_backing
             m_backing_stores.back_store = move(backing_store_pair.back);
             m_backing_stores.front_bitmap_id = allocation.front_bitmap_id;
             m_backing_stores.back_bitmap_id = allocation.back_bitmap_id;
+            if (!should_publish)
+                return {};
             return Publication {
                 .front_bitmap_id = allocation.front_bitmap_id,
                 .front_shared_image = move(backing_store_pair.front_shared_image),
@@ -136,8 +143,25 @@ Optional<BackingStoreManager::Publication> BackingStoreManager::allocate_backing
             };
         }
     }
-#endif
 
+    // SharedImageBuffer::create on DMABUF requires a VulkanContext, so build shareable bitmaps directly.
+    auto front_bitmap = MUST(Gfx::Bitmap::create_shareable(Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, allocation.size));
+    auto back_bitmap = MUST(Gfx::Bitmap::create_shareable(Gfx::BitmapFormat::BGRA8888, Gfx::AlphaType::Premultiplied, allocation.size));
+    auto front_shared_image = Gfx::SharedImage { Gfx::ShareableBitmap { front_bitmap, Gfx::ShareableBitmap::ConstructWithKnownGoodBitmap } };
+    auto back_shared_image = Gfx::SharedImage { Gfx::ShareableBitmap { back_bitmap, Gfx::ShareableBitmap::ConstructWithKnownGoodBitmap } };
+    m_backing_stores.front_store = Gfx::PaintingSurface::wrap_bitmap(*front_bitmap);
+    m_backing_stores.back_store = Gfx::PaintingSurface::wrap_bitmap(*back_bitmap);
+    m_backing_stores.front_bitmap_id = allocation.front_bitmap_id;
+    m_backing_stores.back_bitmap_id = allocation.back_bitmap_id;
+    if (!should_publish)
+        return {};
+    return Publication {
+        .front_bitmap_id = allocation.front_bitmap_id,
+        .front_shared_image = move(front_shared_image),
+        .back_bitmap_id = allocation.back_bitmap_id,
+        .back_shared_image = move(back_shared_image),
+    };
+#else
     auto front_buffer = Gfx::SharedImageBuffer::create(allocation.size);
     auto back_buffer = Gfx::SharedImageBuffer::create(allocation.size);
     auto front_shared_image = front_buffer->export_shared_image();
@@ -157,6 +181,7 @@ Optional<BackingStoreManager::Publication> BackingStoreManager::allocate_backing
         .back_bitmap_id = allocation.back_bitmap_id,
         .back_shared_image = move(back_shared_image),
     };
+#endif
 }
 
 bool BackingStoreManager::is_valid() const
