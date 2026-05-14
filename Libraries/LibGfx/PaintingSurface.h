@@ -11,6 +11,7 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/RefPtr.h>
 #include <LibGfx/Color.h>
+#include <LibGfx/SharedImageBuffer.h>
 #include <LibGfx/Size.h>
 #include <LibGfx/SkiaBackendContext.h>
 
@@ -45,8 +46,8 @@ public:
     static NonnullRefPtr<PaintingSurface> create_with_size(IntSize size, BitmapFormat color_type, AlphaType alpha_type, RefPtr<SkiaBackendContext> = {});
     static NonnullRefPtr<PaintingSurface> wrap_bitmap(Bitmap&);
 
-#ifdef AK_OS_MACOS
-    static NonnullRefPtr<PaintingSurface> create_from_shared_image_buffer(SharedImageBuffer&, NonnullRefPtr<SkiaBackendContext>, Origin = Origin::TopLeft);
+#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
+    static NonnullRefPtr<PaintingSurface> create_from_shared_image_buffer(SharedImageBuffer const&, NonnullRefPtr<SkiaBackendContext>, Origin = Origin::TopLeft);
 #endif
 
 #ifdef USE_VULKAN_DMABUF_IMAGES
@@ -55,6 +56,11 @@ public:
 
     NonnullRefPtr<Bitmap> snapshot_bitmap() const;
     SharedImage snapshot_into_shared_image() const;
+
+#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
+    // GPU-blits into a fresh SharedImageBuffer; producer must not touch the buffer after publishing.
+    SharedFrame snapshot_shared_frame() const;
+#endif
 
     void read_into_bitmap(Bitmap&) const;
     void write_from_bitmap(Bitmap const&);

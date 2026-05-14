@@ -9,6 +9,7 @@
 #include <LibGfx/SharedImageBuffer.h>
 #include <LibGfx/SkiaUtils.h>
 
+#include <core/SkCanvas.h>
 #include <core/SkColorSpace.h>
 #include <core/SkSurface.h>
 #include <gpu/ganesh/GrBackendSurface.h>
@@ -122,7 +123,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::wrap_bitmap(Bitmap& bitmap)
 }
 
 #ifdef AK_OS_MACOS
-NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_shared_image_buffer(SharedImageBuffer& shared_image_buffer, NonnullRefPtr<SkiaBackendContext> context, Origin origin)
+NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_shared_image_buffer(SharedImageBuffer const& shared_image_buffer, NonnullRefPtr<SkiaBackendContext> context, Origin origin)
 {
     auto const& iosurface_handle = shared_image_buffer.iosurface_handle();
     auto metal_texture = context->metal_context().create_texture_from_iosurface(iosurface_handle);
@@ -133,6 +134,24 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_shared_image_buffer(
     auto backend_render_target = GrBackendRenderTargets::MakeMtl(metal_texture->width(), metal_texture->height(), mtl_info);
     auto surface = SkSurfaces::WrapBackendRenderTarget(context->sk_context(), backend_render_target, origin_to_sk_origin(origin), kBGRA_8888_SkColorType, SkColorSpace::MakeSRGB(), nullptr);
     return adopt_ref(*new PaintingSurface(make<Impl>(context, size, surface, nullptr)));
+}
+#elif defined(USE_VULKAN_DMABUF_IMAGES)
+NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_shared_image_buffer(SharedImageBuffer const& shared_image_buffer, NonnullRefPtr<SkiaBackendContext> context, Origin origin)
+{
+    // The producer's VulkanImage is bound to a different VkDevice; re-import its DMA-BUF onto the
+    // consumer's context as a new VkImage that this GrDirectContext can wrap.
+    auto producer_image = shared_image_buffer.vulkan_image();
+    int dma_buf_fd = producer_image->get_dma_buf_fd();
+    VERIFY(dma_buf_fd >= 0);
+    auto consumer_image = MUST(wrap_dmabuf_as_vulkan_image(
+        context->vulkan_context(),
+        dma_buf_fd,
+        producer_image->info.extent.width,
+        producer_image->info.extent.height,
+        producer_image->info.row_pitch,
+        producer_image->info.format,
+        producer_image->info.modifier));
+    return create_from_vkimage(context, move(consumer_image), origin);
 }
 #endif
 
@@ -208,6 +227,28 @@ sk_sp<SkImage> PaintingSurface::sk_image_snapshot() const
 {
     return m_impl->surface->makeImageSnapshot();
 }
+
+#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
+SharedFrame PaintingSurface::snapshot_shared_frame() const
+{
+    auto context = m_impl->context;
+    VERIFY(context);
+
+    auto size = m_impl->size;
+#    ifdef AK_OS_MACOS
+    auto buffer = SharedImageBuffer::create(size);
+#    else
+    auto buffer = SharedImageBuffer::create(size, context->vulkan_context());
+#    endif
+    auto destination = create_from_shared_image_buffer(*buffer, *context);
+
+    auto source_image = m_impl->surface->makeImageSnapshot();
+    destination->canvas().drawImage(source_image, 0, 0);
+    context->flush_and_submit(&destination->sk_surface());
+
+    return SharedFrame { move(buffer), size };
+}
+#endif
 
 RefPtr<SkiaBackendContext> PaintingSurface::skia_backend_context() const
 {
