@@ -41,6 +41,7 @@ set(SOURCES
     ImageFormats/WebPWriter.cpp
     ImageFormats/WebPWriterLossless.cpp
     DecodedImageFrameSkiaImageCache.cpp
+    SharedImageBufferSkiaImageCache.cpp
     PaintStyle.cpp
     Painter.cpp
     PainterSkia.cpp
