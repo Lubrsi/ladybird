@@ -51,16 +51,11 @@ public:
 #endif
 
 #ifdef USE_VULKAN_DMABUF_IMAGES
-    static NonnullRefPtr<PaintingSurface> create_from_vkimage(NonnullRefPtr<SkiaBackendContext> context, NonnullRefPtr<VulkanImage> vulkan_image, Origin origin);
+    static NonnullRefPtr<PaintingSurface> create_from_vkimage(NonnullRefPtr<SkiaBackendContext> context, NonnullRefPtr<VulkanImage const> vulkan_image, Origin origin);
 #endif
 
     NonnullRefPtr<Bitmap> snapshot_bitmap() const;
     SharedImage snapshot_into_shared_image() const;
-
-#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
-    // GPU-blits into a fresh SharedImageBuffer; producer must not touch the buffer after publishing.
-    SharedFrame snapshot_shared_frame() const;
-#endif
 
     void read_into_bitmap(Bitmap&) const;
     void write_from_bitmap(Bitmap const&);

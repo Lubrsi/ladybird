@@ -6,6 +6,8 @@
 
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/PaintingSurface.h>
+#include <LibGfx/ShareableBitmap.h>
+#include <LibGfx/SharedImage.h>
 #include <LibGfx/SharedImageBuffer.h>
 #include <LibGfx/SkiaUtils.h>
 
@@ -66,7 +68,7 @@ static void release_vulkan_image(void* context)
     image->unref();
 }
 
-NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_vkimage(NonnullRefPtr<SkiaBackendContext> context, NonnullRefPtr<VulkanImage> vulkan_image, Origin origin)
+NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_vkimage(NonnullRefPtr<SkiaBackendContext> context, NonnullRefPtr<VulkanImage const> vulkan_image, Origin origin)
 {
     IntSize size(vulkan_image->info.extent.width, vulkan_image->info.extent.height);
     GrVkImageInfo info = {
@@ -87,7 +89,7 @@ NonnullRefPtr<PaintingSurface> PaintingSurface::create_from_vkimage(NonnullRefPt
     // Note, we're implicitly giving Skia a reference to vulkan_image. It will eventually be released by the callback function.
     vulkan_image->ref();
     sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(context->sk_context(), rt, origin_to_sk_origin(origin), vk_format_to_sk_color_type(vulkan_image->info.format),
-        SkColorSpace::MakeSRGB(), nullptr, release_vulkan_image, vulkan_image.ptr());
+        SkColorSpace::MakeSRGB(), nullptr, release_vulkan_image, const_cast<VulkanImage*>(vulkan_image.ptr()));
     return adopt_ref(*new PaintingSurface(make<Impl>(context, size, surface, nullptr)));
 }
 #endif
@@ -174,9 +176,36 @@ NonnullRefPtr<Bitmap> PaintingSurface::snapshot_bitmap() const
 
 SharedImage PaintingSurface::snapshot_into_shared_image() const
 {
+#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
+    if (auto context = m_impl->context) {
+#    ifdef AK_OS_MACOS
+        auto buffer = SharedImageBuffer::create(size());
+        auto destination = create_from_shared_image_buffer(*buffer, *context);
+        destination->canvas().drawImage(m_impl->surface->makeImageSnapshot(), 0, 0);
+        context->flush_and_submit(&destination->sk_surface());
+        return buffer->export_shared_image();
+#    else
+        if (auto buffer_or_error = SharedImageBuffer::create(size(), context->vulkan_context()); !buffer_or_error.is_error()) {
+            auto buffer = buffer_or_error.release_value();
+            auto destination = create_from_vkimage(*context, buffer->vulkan_image(), Origin::TopLeft);
+            destination->canvas().drawImage(m_impl->surface->makeImageSnapshot(), 0, 0);
+            context->flush_and_submit(&destination->sk_surface());
+            return buffer->export_shared_image();
+        }
+        // Fall through to CPU readback if the driver couldn't allocate a linear BGRA DMA-BUF.
+#    endif
+    }
+#endif
+
+#ifdef USE_VULKAN_DMABUF_IMAGES
+    auto bitmap = MUST(Bitmap::create_shareable(BitmapFormat::BGRA8888, AlphaType::Premultiplied, size()));
+    read_into_bitmap(*bitmap);
+    return SharedImage { ShareableBitmap { move(bitmap), ShareableBitmap::ConstructWithKnownGoodBitmap } };
+#else
     auto shared_image_buffer = SharedImageBuffer::create(size());
     read_into_bitmap(*shared_image_buffer->bitmap());
     return shared_image_buffer->export_shared_image();
+#endif
 }
 
 void PaintingSurface::read_into_bitmap(Bitmap& bitmap) const
@@ -227,28 +256,6 @@ sk_sp<SkImage> PaintingSurface::sk_image_snapshot() const
 {
     return m_impl->surface->makeImageSnapshot();
 }
-
-#if defined(AK_OS_MACOS) || defined(USE_VULKAN_DMABUF_IMAGES)
-SharedFrame PaintingSurface::snapshot_shared_frame() const
-{
-    auto context = m_impl->context;
-    VERIFY(context);
-
-    auto size = m_impl->size;
-#    ifdef AK_OS_MACOS
-    auto buffer = SharedImageBuffer::create(size);
-#    else
-    auto buffer = SharedImageBuffer::create(size, context->vulkan_context());
-#    endif
-    auto destination = create_from_shared_image_buffer(*buffer, *context);
-
-    auto source_image = m_impl->surface->makeImageSnapshot();
-    destination->canvas().drawImage(source_image, 0, 0);
-    context->flush_and_submit(&destination->sk_surface());
-
-    return SharedFrame { move(buffer), size };
-}
-#endif
 
 RefPtr<SkiaBackendContext> PaintingSurface::skia_backend_context() const
 {

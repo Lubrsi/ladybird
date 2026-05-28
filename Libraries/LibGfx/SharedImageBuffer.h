@@ -64,9 +64,4 @@ private:
     NonnullRefPtr<Bitmap> m_bitmap;
 };
 
-struct SharedFrame {
-    NonnullRefPtr<SharedImageBuffer const> buffer;
-    IntSize size;
-};
-
 }
