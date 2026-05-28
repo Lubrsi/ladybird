@@ -119,6 +119,29 @@ NonnullRefPtr<SharedImageBuffer> SharedImageBuffer::import_from_shared_image(Sha
 }
 #endif
 
+#ifdef USE_VULKAN_DMABUF_IMAGES
+SharedImageBuffer::ImportedSharedImage SharedImageBuffer::import_shared_image(SharedImage shared_image, VulkanContext const* vulkan_context)
+{
+    return shared_image.m_data.visit(
+        [](ShareableBitmap& shareable_bitmap) -> ImportedSharedImage {
+            return NonnullRefPtr<Bitmap> { *shareable_bitmap.bitmap() };
+        },
+        [&](LinuxDmaBufHandle& dmabuf) -> ImportedSharedImage {
+            if (!vulkan_context)
+                return create_bitmap_from_linux_dmabuf(dmabuf);
+            auto cloned = MUST(IPC::File::clone_fd(dmabuf.file.fd()));
+            auto vulkan_image = MUST(wrap_dmabuf_as_vulkan_image(*vulkan_context, cloned.take_fd(), dmabuf.size.width(), dmabuf.size.height(), dmabuf.pitch, VK_FORMAT_B8G8R8A8_UNORM, dmabuf.modifier));
+            auto bitmap = create_bitmap_from_linux_dmabuf(dmabuf);
+            return NonnullRefPtr<SharedImageBuffer> { adopt_ref(*new SharedImageBuffer(move(vulkan_image), move(bitmap))) };
+        });
+}
+#else
+SharedImageBuffer::ImportedSharedImage SharedImageBuffer::import_shared_image(SharedImage shared_image)
+{
+    return ImportedSharedImage { import_from_shared_image(move(shared_image)) };
+}
+#endif
+
 NonnullRefPtr<Bitmap> SharedImageBuffer::import_bitmap_from_shared_image(SharedImage shared_image)
 {
 #ifdef AK_OS_MACOS

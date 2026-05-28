@@ -8,6 +8,7 @@
 
 #include <AK/Function.h>
 #include <LibGfx/DecodedImageFrameSkiaImageCache.h>
+#include <LibGfx/SharedImageBufferSkiaImageCache.h>
 #include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/DisplayListCommand.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
@@ -76,6 +77,7 @@ private:
 
     RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     Gfx::DecodedImageFrameSkiaImageCache m_image_cache;
+    Gfx::SharedImageBufferSkiaImageCache m_compositor_surface_cache;
 };
 
 }

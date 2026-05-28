@@ -181,8 +181,10 @@ void CompositorState::create_context(Web::Compositor::CompositorContextId contex
         VERIFY(!Web::Compositor::is_page_presenting_compositor_context_id(context_id));
     }
 
-    auto& context = *m_contexts.ensure(context_id, [] {
-        return make<ContextState>();
+    auto& context = *m_contexts.ensure(context_id, [this] {
+        auto state = make<ContextState>();
+        state->display_list_resource_storage.set_skia_backend_context(m_skia_backend_context);
+        return state;
     });
     context.web_content_client = &web_content_client;
     context.page_id = page_id;

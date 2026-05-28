@@ -7,6 +7,7 @@
 #include <LibGfx/Filter.h>
 #include <LibGfx/Font/Font.h>
 #include <LibGfx/SharedImageBuffer.h>
+#include <LibGfx/SkiaBackendContext.h>
 #include <LibMedia/VideoFrame.h>
 #include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/DisplayListResourceStorage.h>
@@ -246,10 +247,28 @@ void DisplayListResourceStorage::clear_video_frame(VideoFrameResourceId frame_id
         m_video_frames.set(frame_id.value(), nullptr);
 }
 
+void DisplayListResourceStorage::set_skia_backend_context(RefPtr<Gfx::SkiaBackendContext> context)
+{
+    m_skia_backend_context = move(context);
+}
+
 void DisplayListResourceStorage::update_compositor_surface(CompositorSurfaceId surface_id, Gfx::SharedImage&& shared_image)
 {
-    auto shared_image_buffer = Gfx::SharedImageBuffer::import_from_shared_image(move(shared_image));
-    m_compositor_surfaces.set(surface_id.value(), Gfx::DecodedImageFrame { *shared_image_buffer->bitmap() });
+#ifdef USE_VULKAN_DMABUF_IMAGES
+    Gfx::VulkanContext const* vulkan_context = nullptr;
+    if (m_skia_backend_context)
+        vulkan_context = &m_skia_backend_context->vulkan_context();
+    auto imported = Gfx::SharedImageBuffer::import_shared_image(move(shared_image), vulkan_context);
+#else
+    auto imported = Gfx::SharedImageBuffer::import_shared_image(move(shared_image));
+#endif
+    imported.visit(
+        [&](NonnullRefPtr<Gfx::SharedImageBuffer>& buffer) {
+            m_compositor_surfaces.set(surface_id.value(), CompositorSurfaceFrame { move(buffer) });
+        },
+        [&](NonnullRefPtr<Gfx::Bitmap>& bitmap) {
+            m_compositor_surfaces.set(surface_id.value(), CompositorSurfaceFrame { move(bitmap) });
+        });
 }
 
 void DisplayListResourceStorage::clear_compositor_surface(CompositorSurfaceId surface_id)

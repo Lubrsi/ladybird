@@ -15,9 +15,13 @@
 #include <AK/Optional.h>
 #include <AK/RefPtr.h>
 #include <AK/Span.h>
+#include <AK/Variant.h>
 #include <AK/Vector.h>
+#include <LibGfx/Bitmap.h>
 #include <LibGfx/DecodedImageFrame.h>
 #include <LibGfx/Forward.h>
+#include <LibGfx/SharedImageBuffer.h>
+#include <LibGfx/SkiaBackendContext.h>
 #include <LibIPC/Forward.h>
 #include <LibMedia/VideoFrame.h>
 #include <LibWeb/Forward.h>
@@ -95,13 +99,25 @@ public:
     void update_compositor_surface(CompositorSurfaceId, Gfx::SharedImage&&);
     void clear_compositor_surface(CompositorSurfaceId);
 
+    // Compositor-side only. The DMABUF arm of update_compositor_surface needs a Vulkan
+    // context to import; left null on WebContent and in CPU compositor mode.
+    void set_skia_backend_context(RefPtr<Gfx::SkiaBackendContext>);
+
+    using CompositorSurfaceFrame = Variant<NonnullRefPtr<Gfx::SharedImageBuffer>, NonnullRefPtr<Gfx::Bitmap>>;
+
     Gfx::Font const& font(FontResourceId id) const { return *m_fonts.get(id.value()).value(); }
     Gfx::DecodedImageFrame const& image_frame(ImageFrameResourceId id) const { return m_image_frames.get(id.value()).value(); }
     RefPtr<Media::VideoFrame const> video_frame(VideoFrameResourceId id) const { return m_video_frames.get(id.value()).value(); }
     DisplayListResource const& display_list_resource(DisplayListResourceId id) const { return m_display_lists.get(id.value()).value(); }
     DisplayList const& display_list(DisplayListResourceId id) const { return *display_list_resource(id).display_list; }
     AccumulatedVisualContextTree const& display_list_visual_context_tree(DisplayListResourceId id) const { return display_list_resource(id).visual_context_tree; }
-    Optional<Gfx::DecodedImageFrame const&> compositor_surface(CompositorSurfaceId id) const { return m_compositor_surfaces.get(id.value()); }
+    Optional<CompositorSurfaceFrame> compositor_surface(CompositorSurfaceId id) const
+    {
+        auto it = m_compositor_surfaces.find(id.value());
+        if (it == m_compositor_surfaces.end())
+            return {};
+        return it->value;
+    }
 
 private:
     void collect_referenced_resources(ReadonlyBytes command_bytes, DisplayListResourceSet&) const;
@@ -110,7 +126,8 @@ private:
     HashMap<u64, Gfx::DecodedImageFrame> m_image_frames;
     HashMap<u64, RefPtr<Media::VideoFrame const>> m_video_frames;
     HashMap<u64, DisplayListResource> m_display_lists;
-    HashMap<u64, Gfx::DecodedImageFrame> m_compositor_surfaces;
+    HashMap<u64, CompositorSurfaceFrame> m_compositor_surfaces;
+    RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
 };
 
 }
