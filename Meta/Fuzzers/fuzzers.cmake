@@ -20,11 +20,17 @@ set(FUZZER_TARGETS
 
 if (TARGET LibWeb)
     list(APPEND FUZZER_TARGETS CSSParser)
+    list(APPEND FUZZER_TARGETS StructuredDeserializeIPC)
+    list(APPEND FUZZER_TARGETS StructuredDeserializeStorage)
+    list(APPEND FUZZER_TARGETS StructuredDeserializeTransfer)
 endif()
 
 set(FUZZER_DEPENDENCIES_ASN1 LibCrypto LibTLS)
 set(FUZZER_DEPENDENCIES_BMPLoader LibGfx LibImageDecoders)
 set(FUZZER_DEPENDENCIES_CSSParser LibWeb)
+set(FUZZER_DEPENDENCIES_StructuredDeserializeIPC LibWeb LibGC LibIPC LibJS)
+set(FUZZER_DEPENDENCIES_StructuredDeserializeStorage LibWeb LibGC LibIPC LibJS)
+set(FUZZER_DEPENDENCIES_StructuredDeserializeTransfer LibWeb LibGC LibIPC LibJS)
 set(FUZZER_DEPENDENCIES_ELF LibELF)
 set(FUZZER_DEPENDENCIES_GIFLoader LibGfx LibImageDecoders)
 set(FUZZER_DEPENDENCIES_ICOLoader LibGfx LibImageDecoders)
