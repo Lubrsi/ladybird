@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/ByteString.h>
+#include <AK/Checked.h>
 #include <AK/Concepts.h>
 #include <AK/Forward.h>
 #include <AK/Queue.h>
@@ -68,6 +69,17 @@ private:
     Stream& m_stream;
     Queue<Attachment>& m_attachments;
 };
+
+static constexpr size_t MAX_DECODED_SIZE = 64 * MiB;
+
+inline ErrorOr<size_t> checked_container_byte_size(size_t count, size_t element_size)
+{
+    Checked<size_t> byte_size = count;
+    byte_size *= element_size;
+    if (byte_size.has_overflow() || byte_size.value() > MAX_DECODED_SIZE)
+        return Error::from_string_literal("IPC decode: Container size exceeds maximum allowed");
+    return byte_size.value();
+}
 
 template<Arithmetic T>
 ErrorOr<T> decode(Decoder& decoder)
@@ -166,6 +178,7 @@ ErrorOr<T> decode(Decoder& decoder)
     T vector;
 
     auto size = TRY(decoder.decode_size());
+    TRY(checked_container_byte_size(size, sizeof(typename T::ValueType)));
     TRY(vector.try_ensure_capacity(size));
 
     for (size_t i = 0; i < size; ++i) {
@@ -182,10 +195,9 @@ ErrorOr<T> decode(Decoder& decoder)
 {
     T vector;
     auto size = TRY(decoder.decode_size());
-    if (Checked<size_t>::multiplication_would_overflow(size, sizeof(typename T::ValueType)))
-        return Error::from_string_literal("IPC decode: Vector size would overflow");
+    auto byte_size = TRY(checked_container_byte_size(size, sizeof(typename T::ValueType)));
     TRY(vector.try_resize(size));
-    TRY(decoder.decode_into({ reinterpret_cast<u8*>(vector.data()), size * sizeof(typename T::ValueType) }));
+    TRY(decoder.decode_into({ reinterpret_cast<u8*>(vector.data()), byte_size }));
     return vector;
 }
 
@@ -195,6 +207,7 @@ ErrorOr<T> decode(Decoder& decoder)
     T hashmap;
 
     auto size = TRY(decoder.decode_size());
+    TRY(checked_container_byte_size(size, sizeof(typename T::KeyType) + sizeof(typename T::ValueType)));
     TRY(hashmap.try_ensure_capacity(size));
 
     for (size_t i = 0; i < size; ++i) {

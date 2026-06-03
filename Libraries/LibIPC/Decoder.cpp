@@ -19,10 +19,6 @@
 
 namespace IPC {
 
-// Maximum size for decoded containers (strings, buffers, vectors, etc.)
-// This prevents a malicious peer from claiming huge sizes to cause OOM.
-static constexpr size_t MAX_DECODED_SIZE = 64 * MiB;
-
 ErrorOr<size_t> Decoder::decode_size()
 {
     auto size = static_cast<size_t>(TRY(decode<u32>()));
