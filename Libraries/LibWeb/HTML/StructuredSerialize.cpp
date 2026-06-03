@@ -2407,6 +2407,10 @@ ErrorOr<Web::HTML::TransferDataEncoder> decode(Decoder& decoder)
     auto data = TRY(decoder.decode<MessageDataType>());
     auto attachment_count = TRY(decoder.decode<u32>());
 
+    // The encoded count cannot exceed the attachments actually transmitted with the message.
+    if (attachment_count > decoder.attachments().size())
+        return Error::from_string_literal("IPC decode: TransferDataEncoder attachment count exceeds received attachments");
+
     Vector<Attachment> attachments;
     TRY(attachments.try_ensure_capacity(attachment_count));
     for (u32 i = 0; i < attachment_count; ++i)
