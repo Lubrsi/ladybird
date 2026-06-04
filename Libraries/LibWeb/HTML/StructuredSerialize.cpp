@@ -1636,6 +1636,10 @@ public:
             auto buffer = TRY(decode<ByteBuffer>());
             auto max_byte_length = TRY(decode_max_byte_length());
 
+            // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
+            if (max_byte_length < buffer.size())
+                return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("ArrayBuffer max byte length is less than its byte length"));
+
             auto data = JS::ArrayBuffer::create(realm, move(buffer), JS::DataBlock::Shared::Yes);
             data->set_max_byte_length(max_byte_length);
 
@@ -1654,6 +1658,10 @@ public:
         case ValueTag::ResizeableArrayBuffer: {
             auto buffer = TRY(decode<ByteBuffer>());
             auto max_byte_length = TRY(decode_max_byte_length());
+
+            // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
+            if (max_byte_length < buffer.size())
+                return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("ArrayBuffer max byte length is less than its byte length"));
 
             auto data = JS::ArrayBuffer::create(realm, move(buffer));
             data->set_max_byte_length(max_byte_length);
@@ -2173,6 +2181,10 @@ WebIDL::ExceptionOr<JS::Value> structured_deserialize_with_transfer_internal(Tra
     else if (type == TransferType::ResizableArrayBuffer) {
         auto buffer = TRY(decode_or_throw_data_clone_error<ByteBuffer>(target_realm, decoder));
         auto max_byte_length = TRY(decode_or_throw_data_clone_error<size_t>(target_realm, decoder));
+
+        // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
+        if (max_byte_length < buffer.size())
+            return WebIDL::DataCloneError::create(target_realm, "ArrayBuffer max byte length is less than its byte length"_utf16);
 
         auto data = JS::ArrayBuffer::create(target_realm, move(buffer));
         data->set_max_byte_length(max_byte_length);
