@@ -21,7 +21,10 @@ GC_DEFINE_ALLOCATOR(ImageBitmap);
 {
     auto bitmap_data = TRY_OR_THROW_OOM(realm.vm(), try_make<ByteBuffer>(move(data)));
     auto bytes = bitmap_data->bytes();
-    return TRY_OR_THROW_OOM(realm.vm(), Gfx::Bitmap::create_wrapper(format, alpha_type, Gfx::IntSize(width, height), pitch, bytes, [bitmap_data = move(bitmap_data)] { }));
+    auto bitmap = Gfx::Bitmap::create_wrapper(format, alpha_type, Gfx::IntSize(width, height), pitch, bytes, [bitmap_data = move(bitmap_data)] { });
+    if (bitmap.is_error())
+        return WebIDL::DataCloneError::create(realm, "Invalid ImageBitmap data"_utf16);
+    return bitmap.release_value();
 }
 
 template<typename T, typename Encoder>
