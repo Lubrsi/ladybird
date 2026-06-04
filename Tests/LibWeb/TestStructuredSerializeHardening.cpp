@@ -379,6 +379,31 @@ TEST_CASE(storage_reader_rejects_end_object_tag_where_a_value_is_expected)
     }
 }
 
+TEST_CASE(storage_reader_rejects_invalid_image_bitmap_payloads)
+{
+    Array<u8, 16> pixels {};
+    ReadonlyBytes full { pixels.data(), pixels.size() };
+
+    EXPECT(!storage_deserialize(image_bitmap_record(2, 2, 8, "BGRA8888"sv, "premultiplied"sv, full)).is_error());
+
+    // Invalid format: BitmapFormat::Invalid would otherwise abort in minimum_pitch().
+    EXPECT(storage_deserialize(image_bitmap_record(2, 2, 8, "Invalid"sv, "premultiplied"sv, full)).is_error());
+
+    // Pitch below the minimum for the width and format.
+    EXPECT(storage_deserialize(image_bitmap_record(2, 2, 4, "BGRA8888"sv, "premultiplied"sv, full)).is_error());
+
+    // Pixel buffer too small for pitch * height.
+    Array<u8, 4> short_pixels {};
+    EXPECT(storage_deserialize(image_bitmap_record(2, 2, 8, "BGRA8888"sv, "premultiplied"sv, { short_pixels.data(), short_pixels.size() })).is_error());
+
+    // Do not let pitch * height wrap to a small required size.
+    EXPECT(storage_deserialize(image_bitmap_record(2, 2, 0x8000000000000000, "BGRA8888"sv, "premultiplied"sv, full)).is_error());
+
+    EXPECT(storage_deserialize(image_bitmap_record(0, 0, 0, "BGRA8888"sv, "premultiplied"sv, {})).is_error());
+    EXPECT(storage_deserialize(image_bitmap_record(2, 0, 8, "BGRA8888"sv, "premultiplied"sv, {})).is_error());
+    EXPECT(storage_deserialize(image_bitmap_record(0, 2, 0, "BGRA8888"sv, "premultiplied"sv, {})).is_error());
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;
