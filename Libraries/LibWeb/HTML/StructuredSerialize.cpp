@@ -1544,6 +1544,10 @@ public:
             return JS::BigInt::create(m_vm, TRY(decode_signed_big_integer(m_serialized, realm)));
         };
 
+        // AD-HOC: Storage never writes a shared buffer; a shared-buffer tag in a storage record is corrupt input.
+        if (m_serialized.type() == SerializationType::Storage && (tag == ValueTag::SharedArrayBuffer || tag == ValueTag::GrowableSharedArrayBuffer))
+            return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("Cannot deserialize SharedArrayBuffer from storage"));
+
         switch (tag) {
         // 5. If serialized.[[Type]] is "primitive", then set value to serialized.[[Value]].
         case ValueTag::UndefinedPrimitive:
