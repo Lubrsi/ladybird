@@ -379,6 +379,15 @@ TEST_CASE(storage_reader_rejects_end_object_tag_where_a_value_is_expected)
     }
 }
 
+TEST_CASE(transfer_reader_rejects_unknown_transfer_type)
+{
+    auto& realm = test_realm();
+    Web::HTML::TransferDataEncoder holder;
+    MUST(holder.encode(static_cast<Web::HTML::TransferType>(99)));
+    Web::HTML::TransferDataDecoder decoder { move(holder) };
+    EXPECT(Web::HTML::structured_deserialize_with_transfer_internal(decoder, realm).is_error());
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;
