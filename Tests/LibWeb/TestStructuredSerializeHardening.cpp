@@ -441,6 +441,24 @@ TEST_CASE(transfer_reader_rejects_unknown_transfer_type)
     EXPECT(Web::HTML::structured_deserialize_with_transfer_internal(decoder, realm).is_error());
 }
 
+TEST_CASE(storage_reader_rejects_shared_array_buffers)
+{
+    // Storage serialization never writes shared-buffer tags.
+    {
+        Vector<u8> value;
+        value.append(to_underlying(ValueTag::SharedArrayBuffer));
+        append_storage_leb128(value, 0); // empty buffer
+        EXPECT(storage_deserialize(storage_record_with_value(value)).is_error());
+    }
+    {
+        Vector<u8> value;
+        value.append(to_underlying(ValueTag::GrowableSharedArrayBuffer));
+        append_storage_leb128(value, 0); // empty buffer
+        append_storage_leb128(value, 0); // max byte length
+        EXPECT(storage_deserialize(storage_record_with_value(value)).is_error());
+    }
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;

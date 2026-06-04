@@ -712,6 +712,46 @@ TEST_CASE(file_name_with_lone_surrogate_is_rejected)
     EXPECT(storage_deserialize(serializable_storage_record("File"sv, 1, body)).is_error());
 }
 
+TEST_CASE(value_tag_table_completeness)
+{
+    // Every PositiveGolden ValueTag must appear in `covered`.
+    Array covered {
+        ValueTag::UndefinedPrimitive, ValueTag::NullPrimitive, ValueTag::BooleanPrimitive,
+        ValueTag::NumberPrimitive, ValueTag::StringPrimitive, ValueTag::BigIntPrimitive,
+        ValueTag::BooleanObject, ValueTag::NumberObject, ValueTag::StringObject, ValueTag::BigIntObject,
+        ValueTag::DateObject, ValueTag::RegExpObject, ValueTag::MapObject, ValueTag::SetObject,
+        ValueTag::ArrayObject, ValueTag::ErrorObject, ValueTag::Object, ValueTag::ObjectReference,
+        ValueTag::ResizeableArrayBuffer, ValueTag::ArrayBuffer, ValueTag::ArrayBufferView,
+        ValueTag::SerializableObject, ValueTag::Int32Primitive
+    };
+    auto has_positive_golden = [&](ValueTag tag) {
+        for (auto candidate : covered) {
+            if (candidate == tag)
+                return true;
+        }
+        return false;
+    };
+
+    for (auto const& entry : Web::HTML::s_value_tag_expectations) {
+        if (entry.expectation == Web::HTML::Expectation::PositiveGolden) {
+            EXPECT(has_positive_golden(entry.tag));
+        } else {
+            // DocumentedReject tags (shared array buffers) must reject from storage.
+            EXPECT(!has_positive_golden(entry.tag));
+            Vector<u8> value;
+            value.append(to_underlying(entry.tag));
+            append_storage_leb128(value, 0); // empty buffer
+            if (entry.tag == ValueTag::GrowableSharedArrayBuffer)
+                append_storage_leb128(value, 0); // max byte length
+            EXPECT(storage_deserialize(storage_record_with_value(value)).is_error());
+        }
+    }
+
+    // A tag absent from the table is unknown input and must reject.
+    EXPECT(storage_deserialize(storage_record_with_value({ to_underlying(ValueTag::Empty) })).is_error());
+    EXPECT(storage_deserialize(storage_record_with_value({ to_underlying(ValueTag::EndObject) })).is_error());
+}
+
 TEST_CASE(serializable_registry_completeness)
 {
     // Every registry entry must have a decode golden.
