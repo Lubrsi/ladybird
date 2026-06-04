@@ -2062,10 +2062,9 @@ static bool is_transferable_interface_exposed_on_target_realm(TransferType name,
     case TransferType::ImageBitmap:
         return is_exposed(Bindings::InterfaceName::ImageBitmap, realm);
     case TransferType::Unknown:
+    default:
         dbgln("Unknown interface type for transfer: {}", to_underlying(name));
         break;
-    default:
-        VERIFY_NOT_REACHED();
     }
     return false;
 }
