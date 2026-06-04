@@ -432,6 +432,15 @@ TEST_CASE(storage_reader_rejects_image_data_larger_than_its_dimensions)
     EXPECT(!storage_deserialize(image_data_record(pixels, 2, 1, "srgb"sv)).is_error());
 }
 
+TEST_CASE(transfer_reader_rejects_unknown_transfer_type)
+{
+    auto& realm = test_realm();
+    Web::HTML::TransferDataEncoder holder;
+    MUST(holder.encode(static_cast<Web::HTML::TransferType>(99)));
+    Web::HTML::TransferDataDecoder decoder { move(holder) };
+    EXPECT(Web::HTML::structured_deserialize_with_transfer_internal(decoder, realm).is_error());
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;
