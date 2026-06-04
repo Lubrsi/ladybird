@@ -459,6 +459,38 @@ TEST_CASE(storage_reader_rejects_shared_array_buffers)
     }
 }
 
+TEST_CASE(transfer_reader_rejects_resizable_array_buffer_with_max_below_byte_length)
+{
+    auto& realm = test_realm();
+    auto is_rejected = [&](size_t max_byte_length) {
+        Web::HTML::TransferDataEncoder holder;
+        MUST(holder.encode(Web::HTML::TransferType::ResizableArrayBuffer));
+        MUST(holder.encode(MUST(ByteBuffer::copy("abcdefgh"sv.bytes())))); // 8-byte buffer
+        MUST(holder.encode(max_byte_length));
+        Web::HTML::TransferDataDecoder decoder { move(holder) };
+        return Web::HTML::structured_deserialize_with_transfer_internal(decoder, realm).is_error();
+    };
+    EXPECT(is_rejected(4));   // max below byte length is invalid
+    EXPECT(!is_rejected(16)); // max above byte length still decodes
+    EXPECT(!is_rejected(8));  // max equal to byte length is the valid boundary
+}
+
+TEST_CASE(storage_reader_rejects_resizable_array_buffer_with_max_below_byte_length)
+{
+    auto resizable = [](u32 buffer_size, u64 max_byte_length) {
+        Vector<u8> value;
+        value.append(to_underlying(ValueTag::ResizeableArrayBuffer));
+        append_storage_leb128(value, buffer_size);
+        for (u32 i = 0; i < buffer_size; ++i)
+            value.append(0);
+        append_storage_leb128(value, max_byte_length);
+        return storage_deserialize(storage_record_with_value(value)).is_error();
+    };
+    EXPECT(resizable(8, 4));   // max below byte length is invalid
+    EXPECT(!resizable(8, 16)); // max above byte length still decodes
+    EXPECT(!resizable(8, 8));  // max equal to byte length is the valid boundary
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;
