@@ -212,9 +212,9 @@ template<>
 WEB_API ErrorOr<Web::HTML::TransferDataEncoder> decode(Decoder&);
 
 template<>
-ErrorOr<void> encode(Encoder&, Web::HTML::SerializedTransferRecord const&);
+WEB_API ErrorOr<void> encode(Encoder&, Web::HTML::SerializedTransferRecord const&);
 
 template<>
-ErrorOr<Web::HTML::SerializedTransferRecord> decode(Decoder&);
+WEB_API ErrorOr<Web::HTML::SerializedTransferRecord> decode(Decoder&);
 
 }
