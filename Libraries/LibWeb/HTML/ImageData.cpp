@@ -251,9 +251,10 @@ WebIDL::ExceptionOr<void> ImageData::deserialization_steps(HTML::StructuredSeria
 
     // FIXME: 5. Initialize value's pixelFormat attribute to serialized.[[PixelFormat]].
 
-    // AD-HOC: Validate that the bitmap can be backed by the Uint8ClampedArray.
-    if (validate_uint8_clamped_array_can_back_bitmap(m_width, m_height, *m_data).is_error())
-        return WebIDL::InvalidStateError::create(realm, "Image data must not be detached or out-of-bounds."_utf16);
+    // AD-HOC: The dimensions arrive in the record independently of the data, so enforce the constructor's
+    //         invariant that data.length is exactly width * height * 4.
+    if (m_width == 0 || m_height == 0 || static_cast<u64>(m_width) * static_cast<u64>(m_height) * sizeof(u32) != m_data->byte_length().length())
+        return WebIDL::DataCloneError::create(realm, "Invalid ImageData dimensions"_utf16);
 
     define_direct_property("data"_utf16_fly_string, m_data, JS::Attribute::Enumerable);
 
