@@ -245,7 +245,11 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
             worker_global_scope->set_internal_port(*inside_port);
 
             Web::HTML::TransferDataDecoder decoder { move(message_port_data) };
-            MUST(inside_port->transfer_receiving_steps(decoder));
+            if (inside_port->transfer_receiving_steps(decoder).is_error()) {
+                dbgln("DedicatedWorkerHost: Discarding worker with an undecodable transferred MessagePort");
+                inside_settings->discard_environment();
+                return;
+            }
         }
 
         // 6. Create a new WorkerLocation object and associate it with worker global scope.
@@ -353,7 +357,10 @@ void WorkerHost::connect_shared_worker_impl(Web::HTML::TransferDataEncoder messa
 
     // 11.5.6. Entangle outsidePort and insidePort.
     Web::HTML::TransferDataDecoder decoder { move(message_port_data) };
-    MUST(inside_port->transfer_receiving_steps(decoder));
+    if (inside_port->transfer_receiving_steps(decoder).is_error()) {
+        dbgln("WorkerHost: Dropping shared worker connection with an undecodable transferred MessagePort");
+        return;
+    }
 
     // 11.5.7. Queue a global task on the DOM manipulation task source given workerGlobalScope to
     //         fire an event named connect at workerGlobalScope, using MessageEvent, with the data
