@@ -508,13 +508,15 @@ WebIDL::ExceptionOr<void> ReadableStream::transfer_receiving_steps(HTML::Transfe
     HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
     // 1. Let deserializedRecord be ! StructuredDeserializeWithTransfer(dataHolder.[[port]], the current Realm).
-    auto deserialized_record = MUST(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
+    auto deserialized_record = TRY(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
 
     // 2. Let port be deserializedRecord.[[Deserialized]].
-    auto& port = as<HTML::MessagePort>(deserialized_record.as_object());
+    auto* port = deserialized_record.is_object() ? as_if<HTML::MessagePort>(deserialized_record.as_object()) : nullptr;
+    if (!port)
+        return WebIDL::DataCloneError::create(realm, "Transferred ReadableStream is not backed by a MessagePort"_utf16);
 
     // 3. Perform ! SetUpCrossRealmTransformReadable(value, port).
-    set_up_cross_realm_transform_readable(realm, *this, port);
+    set_up_cross_realm_transform_readable(realm, *this, *port);
 
     return {};
 }
