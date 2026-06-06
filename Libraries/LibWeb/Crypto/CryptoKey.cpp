@@ -217,6 +217,9 @@ WebIDL::ExceptionOr<::Crypto::PK::ECPublicKey> deserialize_ec_public_key(HTML::S
 {
     auto x_bytes = TRY(HTML::decode_or_throw_data_clone_error<ByteBuffer>(realm, decoder));
     auto y_bytes = TRY(HTML::decode_or_throw_data_clone_error<ByteBuffer>(realm, decoder));
+    // Mismatched coordinate lengths would create a key that cannot be re-exported.
+    if (x_bytes.size() != y_bytes.size())
+        return HTML::data_clone_error_from_serialization_error(realm, Error::from_string_literal("EC public key coordinates have mismatched lengths"));
     auto scalar_size = x_bytes.size();
     return ::Crypto::PK::ECPublicKey { ::Crypto::UnsignedBigInteger::import_data(x_bytes), ::Crypto::UnsignedBigInteger::import_data(y_bytes), scalar_size };
 }
