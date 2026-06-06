@@ -5,6 +5,7 @@
  */
 
 #include "StructuredSerializeTestHelpers.h"
+#include <LibWeb/HTML/MessagePort.h>
 
 TEST_CASE(storage_reader_rejects_unknown_enum_like_identifiers)
 {
@@ -395,4 +396,19 @@ TEST_CASE(crypto_key_with_truncated_handle_is_rejected)
     EXPECT(crypto_storage_deserialize(crypto_key_secret_record(handle, 128)).is_error());
 
     EXPECT(!crypto_storage_deserialize(crypto_key_secret_record(handle, handle.size())).is_error());
+}
+
+TEST_CASE(message_port_transfer_rejects_unknown_fd_tag)
+{
+    auto& realm = test_realm();
+    auto port = Web::HTML::MessagePort::create(realm);
+
+    Web::HTML::TransferDataEncoder holder;
+    MUST(holder.encode(Vector<Web::HTML::SerializedTransferRecord> {})); // pending incoming messages
+    MUST(holder.encode(Vector<Web::HTML::SerializedTransferRecord> {})); // pending outgoing messages
+    MUST(holder.encode(false));                                          // should shutdown on enable
+    MUST(holder.encode(static_cast<u8>(0x42)));                          // neither 0 nor the file-descriptor tag
+
+    Web::HTML::TransferDataDecoder decoder { move(holder) };
+    EXPECT(port->transfer_receiving_steps(decoder).is_error());
 }

@@ -163,8 +163,7 @@ WebIDL::ExceptionOr<void> MessagePort::transfer_receiving_steps(HTML::TransferDa
 
         flush_pending_outgoing_messages();
     } else if (fd_tag != 0) {
-        dbgln("Unexpected byte {:x} in MessagePort transfer data", fd_tag);
-        VERIFY_NOT_REACHED();
+        return data_clone_error_from_serialization_error(realm(), Error::from_string_literal("Unexpected file-descriptor tag in MessagePort transfer data"));
     }
 
     return {};
@@ -354,7 +353,12 @@ void MessagePort::drain_transport()
         FixedMemoryStream stream { raw_message.bytes.bytes() };
         IPC::Decoder decoder { stream, raw_message.attachments };
 
-        m_pending_incoming_messages.append(MUST(decoder.decode<SerializedTransferRecord>()));
+        auto message = decoder.decode<SerializedTransferRecord>();
+        if (message.is_error()) {
+            dbgln("MessagePort: Dropping undecodable incoming message: {}", message.error());
+            return;
+        }
+        m_pending_incoming_messages.append(message.release_value());
     });
 
     if (schedule_shutdown == IPC::Transport::ShouldShutdown::Yes)
