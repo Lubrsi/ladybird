@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Checked.h>
 #include <LibGfx/Bitmap.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/ImageData.h>
@@ -22,6 +23,19 @@ GC_DEFINE_ALLOCATOR(ImageData);
 [[nodiscard]] static auto create_bitmap_backed_by_uint8_clamped_array(u32 const width, u32 const height, JS::Uint8ClampedArray& data)
 {
     return Gfx::Bitmap::create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::AlphaType::Unpremultiplied, Gfx::IntSize(width, height), width * sizeof(u32), data.data());
+}
+
+// The returned bitmap aliases the Uint8ClampedArray's backing store instead of copying it. The dimensions
+// arrive in the record independently of the data, so enforce the constructor's invariant that data.length
+// is exactly width * height * 4; a mismatched or non-positive pair becomes a "DataCloneError".
+[[nodiscard]] static WebIDL::ExceptionOr<NonnullRefPtr<Gfx::Bitmap>> create_validated_bitmap_backed_by_uint8_clamped_array(JS::Realm& realm, int const width, int const height, JS::Uint8ClampedArray& data)
+{
+    if (width <= 0 || height <= 0 || static_cast<u64>(width) * static_cast<u64>(height) * sizeof(u32) != data.byte_length().length())
+        return WebIDL::DataCloneError::create(realm, "Invalid ImageData dimensions"_utf16);
+    auto bitmap = create_bitmap_backed_by_uint8_clamped_array(static_cast<u32>(width), static_cast<u32>(height), data);
+    if (bitmap.is_error())
+        return WebIDL::DataCloneError::create(realm, "Invalid ImageData dimensions"_utf16);
+    return bitmap.release_value();
 }
 
 GC::Ref<ImageData> ImageData::create(JS::Realm& realm)
@@ -218,7 +232,7 @@ WebIDL::ExceptionOr<void> ImageData::deserialization_steps(HTML::StructuredSeria
     // FIXME: 5. Initialize value's pixelFormat attribute to serialized.[[PixelFormat]].
 
     // AD-HOC: Create the bitmap backed by the Uint8ClampedArray.
-    m_bitmap = TRY_OR_THROW_OOM(vm, create_bitmap_backed_by_uint8_clamped_array(width, height, *m_data));
+    m_bitmap = TRY(create_validated_bitmap_backed_by_uint8_clamped_array(realm, width, height, *m_data));
 
     define_direct_property("data"_utf16_fly_string, m_data, JS::Attribute::Enumerable);
 

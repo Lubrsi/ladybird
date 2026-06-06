@@ -404,6 +404,34 @@ TEST_CASE(storage_reader_rejects_invalid_image_bitmap_payloads)
     EXPECT(storage_deserialize(image_bitmap_record(0, 2, 0, "BGRA8888"sv, "premultiplied"sv, {})).is_error());
 }
 
+TEST_CASE(storage_reader_rejects_image_data_smaller_than_its_dimensions)
+{
+    auto& realm = test_realm();
+
+    auto pixels = MUST(JS::Uint8ClampedArray::create(realm, 4));
+
+    EXPECT(!storage_deserialize(image_data_record(pixels, 1, 1, "srgb"sv)).is_error());
+
+    EXPECT(storage_deserialize(image_data_record(pixels, 256, 256, "srgb"sv)).is_error());
+
+    EXPECT(storage_deserialize(image_data_record(pixels, -1, 1, "srgb"sv)).is_error());
+    EXPECT(storage_deserialize(image_data_record(pixels, 0x7fffffff, 0x7fffffff, "srgb"sv)).is_error());
+
+    EXPECT(storage_deserialize(image_data_record(pixels, 0, 1, "srgb"sv)).is_error());
+    EXPECT(storage_deserialize(image_data_record(pixels, 1, 0, "srgb"sv)).is_error());
+}
+
+TEST_CASE(storage_reader_rejects_image_data_larger_than_its_dimensions)
+{
+    auto& realm = test_realm();
+
+    // data.length must match width * height * 4 exactly.
+    auto pixels = MUST(JS::Uint8ClampedArray::create(realm, 8));
+    EXPECT(storage_deserialize(image_data_record(pixels, 1, 1, "srgb"sv)).is_error());
+
+    EXPECT(!storage_deserialize(image_data_record(pixels, 2, 1, "srgb"sv)).is_error());
+}
+
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
 {
     Vector<u8> value;
