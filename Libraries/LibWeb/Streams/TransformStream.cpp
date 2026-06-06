@@ -18,6 +18,7 @@
 #include <LibWeb/Streams/WritableStream.h>
 #include <LibWeb/Streams/WritableStreamOperations.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
+#include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 
 namespace Web::Streams {
@@ -224,16 +225,21 @@ WebIDL::ExceptionOr<void> TransformStream::transfer_receiving_steps(HTML::Transf
     auto& realm = this->realm();
 
     // 1. Let readableRecord be ! StructuredDeserializeWithTransfer(dataHolder.[[readable]], the current Realm).
-    auto readable_record = MUST(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
+    auto readable_record = TRY(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
 
     // 2. Let writableRecord be ! StructuredDeserializeWithTransfer(dataHolder.[[writable]], the current Realm).
-    auto writeable_record = MUST(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
+    auto writeable_record = TRY(HTML::structured_deserialize_with_transfer_internal(data_holder, realm));
+
+    auto* readable = readable_record.is_object() ? as_if<ReadableStream>(readable_record.as_object()) : nullptr;
+    auto* writable = writeable_record.is_object() ? as_if<WritableStream>(writeable_record.as_object()) : nullptr;
+    if (!readable || !writable)
+        return WebIDL::DataCloneError::create(realm, "Transferred TransformStream is not backed by a readable and writable stream"_utf16);
 
     // 3. Set value.[[readable]] to readableRecord.[[Deserialized]].
-    set_readable(as<ReadableStream>(readable_record.as_object()));
+    set_readable(*readable);
 
     // 4. Set value.[[writable]] to writableRecord.[[Deserialized]].
-    set_writable(as<WritableStream>(writeable_record.as_object()));
+    set_writable(*writable);
 
     // 5. Set value.[[backpressure]], value.[[backpressureChangePromise]], and value.[[controller]] to undefined.
     set_backpressure({});
