@@ -1034,6 +1034,14 @@ WebIDL::ExceptionOr<String> decode_utf8_text_or_throw_data_clone_error(JS::Realm
     return utf8.release_value();
 }
 
+// Keep decoded maxByteLength within the range real ArrayBuffers can have.
+static WebIDL::ExceptionOr<void> validate_decoded_array_buffer_max_byte_length(JS::Realm& realm, size_t max_byte_length, size_t byte_length)
+{
+    if (max_byte_length < byte_length || static_cast<double>(max_byte_length) > JS::MAX_ARRAY_LIKE_INDEX)
+        return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("Invalid ArrayBuffer max byte length"));
+    return {};
+}
+
 // https://html.spec.whatwg.org/multipage/structured-data.html#structuredserializeinternal
 static WebIDL::ExceptionOr<void> serialize_array_buffer(JS::VM& vm, StructuredSerializeWriter& data_holder, JS::ArrayBuffer const& array_buffer, bool for_storage)
 {
@@ -1636,9 +1644,7 @@ public:
             auto buffer = TRY(decode<ByteBuffer>());
             auto max_byte_length = TRY(decode_max_byte_length());
 
-            // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
-            if (max_byte_length < buffer.size())
-                return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("ArrayBuffer max byte length is less than its byte length"));
+            TRY(validate_decoded_array_buffer_max_byte_length(realm, max_byte_length, buffer.size()));
 
             auto data = JS::ArrayBuffer::create(realm, move(buffer), JS::DataBlock::Shared::Yes);
             data->set_max_byte_length(max_byte_length);
@@ -1659,9 +1665,7 @@ public:
             auto buffer = TRY(decode<ByteBuffer>());
             auto max_byte_length = TRY(decode_max_byte_length());
 
-            // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
-            if (max_byte_length < buffer.size())
-                return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("ArrayBuffer max byte length is less than its byte length"));
+            TRY(validate_decoded_array_buffer_max_byte_length(realm, max_byte_length, buffer.size()));
 
             auto data = JS::ArrayBuffer::create(realm, move(buffer));
             data->set_max_byte_length(max_byte_length);
@@ -2182,9 +2186,7 @@ WebIDL::ExceptionOr<JS::Value> structured_deserialize_with_transfer_internal(Tra
         auto buffer = TRY(decode_or_throw_data_clone_error<ByteBuffer>(target_realm, decoder));
         auto max_byte_length = TRY(decode_or_throw_data_clone_error<size_t>(target_realm, decoder));
 
-        // AD-HOC: A max below the byte length is the invalid state the ArrayBuffer constructors reject.
-        if (max_byte_length < buffer.size())
-            return WebIDL::DataCloneError::create(target_realm, "ArrayBuffer max byte length is less than its byte length"_utf16);
+        TRY(validate_decoded_array_buffer_max_byte_length(target_realm, max_byte_length, buffer.size()));
 
         auto data = JS::ArrayBuffer::create(target_realm, move(buffer));
         data->set_max_byte_length(max_byte_length);

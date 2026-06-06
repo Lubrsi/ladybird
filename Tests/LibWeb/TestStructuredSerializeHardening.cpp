@@ -473,6 +473,9 @@ TEST_CASE(transfer_reader_rejects_resizable_array_buffer_with_max_below_byte_len
     EXPECT(is_rejected(4));   // max below byte length is invalid
     EXPECT(!is_rejected(16)); // max above byte length still decodes
     EXPECT(!is_rejected(8));  // max equal to byte length is the valid boundary
+
+    // Reject maxByteLength values no real ArrayBuffer can have.
+    EXPECT(is_rejected(NumericLimits<size_t>::max()));
 }
 
 TEST_CASE(storage_reader_rejects_resizable_array_buffer_with_max_below_byte_length)
@@ -489,6 +492,9 @@ TEST_CASE(storage_reader_rejects_resizable_array_buffer_with_max_below_byte_leng
     EXPECT(resizable(8, 4));   // max below byte length is invalid
     EXPECT(!resizable(8, 16)); // max above byte length still decodes
     EXPECT(!resizable(8, 8));  // max equal to byte length is the valid boundary
+
+    // Reject maxByteLength values no real ArrayBuffer can have.
+    EXPECT(resizable(8, NumericLimits<u64>::max()));
 }
 
 TEST_CASE(storage_reader_does_not_overallocate_on_huge_vector_count)
