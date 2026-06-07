@@ -17,7 +17,7 @@
 
 namespace Web::HTML {
 
-class ImageData final
+class WEB_API ImageData final
     : public Bindings::PlatformObject
     , public Bindings::Serializable {
     WEB_PLATFORM_OBJECT(ImageData, Bindings::PlatformObject);
