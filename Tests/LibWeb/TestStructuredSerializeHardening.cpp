@@ -432,6 +432,25 @@ TEST_CASE(storage_reader_rejects_image_data_larger_than_its_dimensions)
     EXPECT(!storage_deserialize(image_data_record(pixels, 2, 1, "srgb"sv)).is_error());
 }
 
+TEST_CASE(storage_reader_rejects_image_data_with_resizable_backing_buffer)
+{
+    // The decoded bitmap would alias storage that resize() can reallocate.
+    Array<u8, 4> pixels {}; // one valid RGBA pixel for a 1x1 ImageData
+
+    auto image_data_with_backing = [&](BackingBuffer backing) {
+        Vector<u8> body;
+        append_array_buffer_view_value(body, "Uint8ClampedArray"sv, backing, { pixels.data(), pixels.size() }, 4, 0, 4);
+        append_storage_signed_leb128(body, 1); // width
+        append_storage_signed_leb128(body, 1); // height
+        append_storage_string(body, "srgb"sv);
+        return serializable_storage_record("ImageData"sv, 1, body);
+    };
+
+    EXPECT(!storage_deserialize(image_data_with_backing(BackingBuffer::Fixed)).is_error());
+
+    EXPECT(storage_deserialize(image_data_with_backing(BackingBuffer::Resizable)).is_error());
+}
+
 TEST_CASE(transfer_reader_rejects_unknown_transfer_type)
 {
     auto& realm = test_realm();
