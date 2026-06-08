@@ -7,6 +7,7 @@
 
 #include <AK/Checked.h>
 #include <LibGfx/Bitmap.h>
+#include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/ImageData.h>
 #include <LibWeb/Bindings/Intrinsics.h>
@@ -25,9 +26,7 @@ GC_DEFINE_ALLOCATOR(ImageData);
     return Gfx::Bitmap::create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::AlphaType::Unpremultiplied, Gfx::IntSize(width, height), width * sizeof(u32), data.data());
 }
 
-// The returned bitmap aliases the Uint8ClampedArray's backing store instead of copying it. The dimensions
-// arrive in the record independently of the data, so enforce the constructor's invariant that data.length
-// is exactly width * height * 4; a mismatched or non-positive pair becomes a "DataCloneError".
+// The bitmap aliases the Uint8ClampedArray, so keep the constructor's data.length invariant.
 [[nodiscard]] static WebIDL::ExceptionOr<NonnullRefPtr<Gfx::Bitmap>> create_validated_bitmap_backed_by_uint8_clamped_array(JS::Realm& realm, int const width, int const height, JS::Uint8ClampedArray& data)
 {
     if (width <= 0 || height <= 0 || static_cast<u64>(width) * static_cast<u64>(height) * sizeof(u32) != data.byte_length().length())
@@ -219,6 +218,10 @@ WebIDL::ExceptionOr<void> ImageData::deserialization_steps(HTML::StructuredSeria
 
     // 1. Initialize value's data attribute to the sub-deserialization of serialized.[[Data]].
     m_data = TRY(deserialize_nested_as<JS::Uint8ClampedArray>(vm, serialized, realm, memory));
+
+    // AD-HOC: The bitmap below aliases this buffer's storage, which resize() reallocates; reject a resizable one.
+    if (!m_data->viewed_array_buffer()->is_fixed_length())
+        return WebIDL::DataCloneError::create(realm, "ImageData data must be backed by a fixed-length ArrayBuffer"_utf16);
 
     // 2. Initialize value's width attribute to serialized.[[Width]].
     auto width = TRY(HTML::decode_or_throw_data_clone_error<int>(realm, serialized));
