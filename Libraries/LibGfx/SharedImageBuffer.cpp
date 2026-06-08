@@ -22,7 +22,8 @@ static NonnullRefPtr<Bitmap> create_bitmap_from_iosurface(Core::IOSurfaceHandle 
 {
     auto size = IntSize(static_cast<int>(iosurface_handle.width()), static_cast<int>(iosurface_handle.height()));
     auto bitmap_handle = Core::IOSurfaceHandle::from_mach_port(iosurface_handle.create_mach_port());
-    return MUST(Bitmap::create_wrapper(shared_image_buffer_format, shared_image_buffer_alpha_type, size, iosurface_handle.bytes_per_row(), iosurface_handle.data(), [handle = move(bitmap_handle)] { }));
+    Bytes data { static_cast<u8*>(iosurface_handle.data()), Bitmap::size_in_bytes(iosurface_handle.bytes_per_row(), iosurface_handle.height()) };
+    return MUST(Bitmap::create_wrapper(shared_image_buffer_format, shared_image_buffer_alpha_type, size, iosurface_handle.bytes_per_row(), data, [handle = move(bitmap_handle)] { }));
 }
 
 SharedImageBuffer::SharedImageBuffer(Core::IOSurfaceHandle&& iosurface_handle, NonnullRefPtr<Bitmap> bitmap)
@@ -45,7 +46,7 @@ static NonnullRefPtr<Bitmap> create_bitmap_from_linux_dmabuf(LinuxDmaBufHandle c
     auto data_size = Bitmap::size_in_bytes(dmabuf.pitch, dmabuf.size.height());
     auto* data = ::mmap(nullptr, data_size, PROT_READ, MAP_SHARED, dmabuf.file.fd(), 0);
     VERIFY(data != MAP_FAILED);
-    return MUST(Bitmap::create_wrapper(dmabuf.bitmap_format, dmabuf.alpha_type, dmabuf.size, dmabuf.pitch, data, [data, data_size] {
+    return MUST(Bitmap::create_wrapper(dmabuf.bitmap_format, dmabuf.alpha_type, dmabuf.size, dmabuf.pitch, { static_cast<u8*>(data), data_size }, [data, data_size] {
         VERIFY(::munmap(data, data_size) == 0);
     }));
 }

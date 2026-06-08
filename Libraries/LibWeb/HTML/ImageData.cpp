@@ -41,7 +41,8 @@ GC_DEFINE_ALLOCATOR(ImageData);
 [[nodiscard]] static ErrorOr<NonnullRefPtr<Gfx::Bitmap>> create_bitmap_backed_by_uint8_clamped_array(u32 const width, u32 const height, JS::Uint8ClampedArray& data)
 {
     TRY(validate_uint8_clamped_array_can_back_bitmap(width, height, data));
-    return Gfx::Bitmap::create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::AlphaType::Unpremultiplied, Gfx::IntSize(width, height), width * sizeof(u32), data.viewed_array_buffer()->data_at(data.byte_offset()));
+    auto data_record = JS::make_typed_array_with_buffer_witness_record(data, JS::ArrayBuffer::Order::SeqCst);
+    return Gfx::Bitmap::create_wrapper(Gfx::BitmapFormat::RGBA8888, Gfx::AlphaType::Unpremultiplied, Gfx::IntSize(width, height), width * sizeof(u32), Bytes { data.viewed_array_buffer()->data_at(data.byte_offset()), JS::typed_array_byte_length(data_record) });
 }
 
 GC::Ref<ImageData> ImageData::create(JS::Realm& realm)
