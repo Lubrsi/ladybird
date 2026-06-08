@@ -7,6 +7,7 @@
 
 #include <AK/Checked.h>
 #include <LibGfx/Bitmap.h>
+#include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/ImageData.h>
 #include <LibWeb/Bindings/Intrinsics.h>
@@ -239,6 +240,10 @@ WebIDL::ExceptionOr<void> ImageData::deserialization_steps(HTML::StructuredSeria
 
     // 1. Initialize value's data attribute to the sub-deserialization of serialized.[[Data]].
     m_data = TRY(deserialize_nested_as<JS::Uint8ClampedArray>(vm, serialized, realm, memory));
+
+    // AD-HOC: The bitmap below aliases this buffer's storage, which resize() reallocates; reject a resizable one.
+    if (!m_data->viewed_array_buffer()->is_fixed_length())
+        return WebIDL::DataCloneError::create(realm, "ImageData data must be backed by a fixed-length ArrayBuffer"_utf16);
 
     // 2. Initialize value's width attribute to serialized.[[Width]].
     m_width = TRY(HTML::decode_or_throw_data_clone_error<u32>(realm, serialized));
