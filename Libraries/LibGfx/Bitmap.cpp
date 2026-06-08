@@ -113,11 +113,19 @@ Bitmap::Bitmap(BitmapFormat format, AlphaType alpha_type, IntSize size, BackingS
     };
 }
 
-ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_wrapper(BitmapFormat format, AlphaType alpha_type, IntSize size, size_t pitch, void* data, Function<void()>&& destruction_callback)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_wrapper(BitmapFormat format, AlphaType alpha_type, IntSize size, size_t pitch, Bytes data, Function<void()>&& destruction_callback)
 {
+    if (size.is_empty())
+        return Error::from_string_literal("Gfx::Bitmap::create_wrapper empty size");
     if (size_would_overflow(format, size))
         return Error::from_string_literal("Gfx::Bitmap::create_wrapper size overflow");
-    return adopt_ref(*new Bitmap(format, alpha_type, size, pitch, data, move(destruction_callback)));
+    if (pitch < minimum_pitch(size.width(), format))
+        return Error::from_string_literal("Gfx::Bitmap::create_wrapper pitch too small for width");
+    Checked<size_t> data_size = pitch;
+    data_size *= static_cast<size_t>(size.height());
+    if (data_size.has_overflow() || data.size() < data_size.value())
+        return Error::from_string_literal("Gfx::Bitmap::create_wrapper data buffer too small");
+    return adopt_ref(*new Bitmap(format, alpha_type, size, pitch, data.data(), move(destruction_callback)));
 }
 
 Bitmap::Bitmap(BitmapFormat format, AlphaType alpha_type, IntSize size, size_t pitch, void* data, Function<void()>&& destruction_callback)
@@ -130,7 +138,6 @@ Bitmap::Bitmap(BitmapFormat format, AlphaType alpha_type, IntSize size, size_t p
 {
     VERIFY(pitch >= minimum_pitch(size.width(), format));
     VERIFY(!size_would_overflow(format, size));
-    // FIXME: assert that `data` is actually long enough!
 }
 
 ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::create_with_anonymous_buffer(BitmapFormat format, AlphaType alpha_type, Core::AnonymousBuffer buffer, IntSize size)

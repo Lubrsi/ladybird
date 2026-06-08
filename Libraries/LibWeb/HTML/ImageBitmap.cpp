@@ -20,8 +20,8 @@ GC_DEFINE_ALLOCATOR(ImageBitmap);
 [[nodiscard]] static WebIDL::ExceptionOr<NonnullRefPtr<Gfx::Bitmap>> create_bitmap_from_bitmap_data(JS::Realm& realm, Gfx::BitmapFormat const format, Gfx::AlphaType const alpha_type, int const width, int const height, size_t const pitch, ByteBuffer data)
 {
     auto bitmap_data = TRY_OR_THROW_OOM(realm.vm(), try_make<ByteBuffer>(move(data)));
-    auto* pixels = bitmap_data->data();
-    return TRY_OR_THROW_OOM(realm.vm(), Gfx::Bitmap::create_wrapper(format, alpha_type, Gfx::IntSize(width, height), pitch, pixels, [bitmap_data = move(bitmap_data)] { }));
+    auto bytes = bitmap_data->bytes();
+    return TRY_OR_THROW_OOM(realm.vm(), Gfx::Bitmap::create_wrapper(format, alpha_type, Gfx::IntSize(width, height), pitch, bytes, [bitmap_data = move(bitmap_data)] { }));
 }
 
 template<typename T, typename Encoder>
