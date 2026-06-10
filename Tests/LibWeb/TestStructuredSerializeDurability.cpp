@@ -297,6 +297,11 @@ TEST_CASE(value_tag_object_reference_aliases_prior_object)
     EXPECT(first.is_object());
     EXPECT(second.is_object());
     EXPECT(&first.as_object() == &second.as_object());
+
+    // 0xFFFFFFFF is just another out-of-range reference index.
+    Vector<u8> sentinel { to_underlying(ValueTag::ObjectReference) };
+    append_storage_leb128(sentinel, 0xffffffff);
+    EXPECT(storage_deserialize(storage_record_with_value(sentinel)).is_error());
 }
 
 TEST_CASE(value_tag_error_objects_round_trip)
