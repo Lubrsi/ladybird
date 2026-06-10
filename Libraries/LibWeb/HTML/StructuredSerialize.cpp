@@ -1528,8 +1528,6 @@ public:
         // 2. If memory[serialized] exists, then return memory[serialized].
         if (tag == ValueTag::ObjectReference) {
             auto index = TRY(decode<u32>());
-            if (index == NumericLimits<u32>::max())
-                return JS::Object::create(*m_vm.current_realm(), nullptr);
             if (index >= m_memory.size())
                 return data_clone_error_from_serialization_error(realm, AK::Error::from_string_literal("Object reference index out of range"));
             return m_memory[index];
