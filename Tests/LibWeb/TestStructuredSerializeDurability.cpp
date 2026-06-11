@@ -558,6 +558,37 @@ TEST_CASE(crypto_key_algorithm_variants_decode_from_frozen_bytes)
     }
 }
 
+TEST_CASE(crypto_key_algorithm_completeness)
+{
+    // PositiveGolden tags need decode goldens; RsaKeyAlgorithm must reject.
+    auto goldens = crypto_algorithm_goldens();
+    auto has_golden = [&](KeyAlgorithmTag tag) {
+        for (auto const& golden : goldens) {
+            if (golden.tag == tag)
+                return true;
+        }
+        return false;
+    };
+
+    for (auto const& entry : Web::Crypto::s_key_algorithm_tag_expectations) {
+        if (entry.expectation == Web::HTML::Expectation::PositiveGolden) {
+            EXPECT(has_golden(entry.tag));
+        } else {
+            EXPECT(!has_golden(entry.tag));
+            // RsaKeyAlgorithm (tag 1): a forged tag-1 record cannot pair into a consistent key.
+            Vector<u8> algorithm;
+            Array<u8, 3> exponent { 0x01, 0x00, 0x01 };
+            algorithm.append(1); // KeyAlgorithmTag::RsaKeyAlgorithm
+            append_storage_string(algorithm, "RSASSA-PKCS1-v1_5"sv);
+            append_storage_leb128(algorithm, 2048);
+            append_storage_big_integer(algorithm, exponent);
+            Array<u8, 4> modulus { 0xC0, 0x00, 0x00, 0x01 };
+            auto record = crypto_key_full_record("public"sv, "verify"sv, algorithm, handle_rsa_public_key(modulus, exponent));
+            EXPECT(crypto_storage_deserialize(record).is_error());
+        }
+    }
+}
+
 TEST_CASE(crypto_key_handle_variants_decode_from_frozen_bytes)
 {
     for (auto const& golden : crypto_handle_goldens()) {

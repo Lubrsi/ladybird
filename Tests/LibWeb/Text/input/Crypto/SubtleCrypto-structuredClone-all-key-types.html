@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // Keep CryptoKey's deserialization allowlist in sync with constructible keys.
+    asyncTest(async done => {
+        function checkClone(key) {
+            try {
+                const clone = structuredClone(key);
+                const same = clone.algorithm.name === key.algorithm.name
+                    && clone.type === key.type
+                    && clone.extractable === key.extractable
+                    && clone.usages.join(",") === key.usages.join(",");
+                println(`${key.algorithm.name} ${key.type} ${same ? "ok" : "MISMATCH"}`);
+            } catch (e) {
+                println(`${key.algorithm.name} ${key.type} ERROR ${e.name}`);
+            }
+        }
+
+        async function checkSecret(algorithm, importFormat, byteLength, usages, extractable = true) {
+            const name = typeof algorithm === "string" ? algorithm : algorithm.name;
+            try {
+                const key = await crypto.subtle.importKey(
+                    importFormat, new Uint8Array(byteLength).fill(7), algorithm, extractable, usages);
+                checkClone(key);
+            } catch (e) {
+                println(`${name} import ERROR ${e.name}`);
+            }
+        }
+
+        async function checkGenerated(algorithm, usages, extractable = true) {
+            const name = typeof algorithm === "string" ? algorithm : algorithm.name;
+            try {
+                const result = await crypto.subtle.generateKey(algorithm, extractable, usages);
+                if (result.publicKey) {
+                    checkClone(result.publicKey);
+                    checkClone(result.privateKey);
+                } else {
+                    checkClone(result);
+                }
+            } catch (e) {
+                println(`${name} generate ERROR ${e.name}`);
+            }
+        }
+
+        for (const name of ["AES-CBC", "AES-CTR", "AES-GCM"])
+            await checkGenerated({ name, length: 128 }, ["encrypt", "decrypt"]);
+        await checkGenerated({ name: "AES-KW", length: 128 }, ["wrapKey", "unwrapKey"]);
+        await checkGenerated({ name: "AES-OCB", length: 128 }, ["encrypt", "decrypt"]);
+
+        await checkGenerated({ name: "HMAC", hash: "SHA-256" }, ["sign", "verify"]);
+        for (const name of ["KMAC128", "KMAC256"])
+            await checkGenerated({ name }, ["sign", "verify"]);
+
+        for (const name of ["HKDF", "PBKDF2"])
+            await checkSecret(name, "raw", 16, ["deriveBits"], false);
+        for (const name of ["Argon2d", "Argon2i", "Argon2id"])
+            await checkSecret(name, "raw-secret", 16, ["deriveBits"], false);
+        await checkSecret("ChaCha20-Poly1305", "raw-secret", 32, ["encrypt", "decrypt"]);
+
+        await checkGenerated({ name: "ECDSA", namedCurve: "P-256" }, ["sign", "verify"]);
+        await checkGenerated({ name: "ECDH", namedCurve: "P-256" }, ["deriveBits"]);
+
+        for (const name of ["Ed25519", "Ed448"])
+            await checkGenerated({ name }, ["sign", "verify"]);
+        for (const name of ["X25519", "X448"])
+            await checkGenerated({ name }, ["deriveBits"]);
+
+        for (const name of ["ML-DSA-44", "ML-DSA-65", "ML-DSA-87"])
+            await checkGenerated({ name }, ["sign", "verify"]);
+        for (const name of ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"])
+            await checkGenerated({ name }, ["encapsulateBits", "decapsulateBits"]);
+
+        // Reuse one generated RSA key pair for the RSA import cases.
+        try {
+            const pair = await crypto.subtle.generateKey(
+                { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+                true, ["sign", "verify"]);
+            checkClone(pair.publicKey);
+            checkClone(pair.privateKey);
+
+            const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+            const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+            for (const jwk of [publicJwk, privateJwk]) {
+                delete jwk.alg;
+                delete jwk.key_ops;
+                delete jwk.use;
+            }
+
+            for (const [name, publicUsages, privateUsages] of [
+                ["RSA-PSS", ["verify"], ["sign"]],
+                ["RSA-OAEP", ["encrypt"], ["decrypt"]],
+            ]) {
+                const algorithm = { name, hash: "SHA-256" };
+                checkClone(await crypto.subtle.importKey("jwk", publicJwk, algorithm, true, publicUsages));
+                checkClone(await crypto.subtle.importKey("jwk", privateJwk, algorithm, true, privateUsages));
+            }
+        } catch (e) {
+            println(`RSA ERROR ${e.name}`);
+        }
+
+        done();
+    });
+</script>

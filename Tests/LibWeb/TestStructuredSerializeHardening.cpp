@@ -549,3 +549,109 @@ TEST_CASE(message_port_transfer_rejects_unknown_fd_tag)
     Web::HTML::TransferDataDecoder decoder { move(holder) };
     EXPECT(port->transfer_receiving_steps(decoder).is_error());
 }
+
+static Web::HTML::StorageSerializationRecord crypto_key_record(StringView type, StringView usage, Vector<u8> const& algorithm, Vector<u8> const& handle)
+{
+    Vector<u8> body;
+    append_storage_string(body, type);
+    body.append(0); // [[extractable]] = false
+    body.append(algorithm.data(), algorithm.size());
+    append_storage_leb128(body, 1); // [[usages]] count
+    append_storage_string(body, usage);
+    body.append(handle.data(), handle.size());
+    return serializable_storage_record("CryptoKey"sv, 1, body);
+}
+
+static Vector<u8> ec_key_algorithm(StringView name)
+{
+    Vector<u8> bytes;
+    bytes.append(3); // KeyAlgorithmTag::EcKeyAlgorithm
+    append_storage_string(bytes, name);
+    append_storage_ascii_utf16(bytes, "P-256"sv);
+    return bytes;
+}
+
+static Vector<u8> plain_key_algorithm(StringView name)
+{
+    Vector<u8> bytes;
+    bytes.append(0); // KeyAlgorithmTag::KeyAlgorithm
+    append_storage_string(bytes, name);
+    return bytes;
+}
+
+static Vector<u8> byte_buffer_handle()
+{
+    Vector<u8> bytes;
+    bytes.append(0); // HandleTag::ByteBuffer
+    append_storage_leb128(bytes, 8);
+    for (size_t i = 0; i < 8; ++i)
+        bytes.append(0);
+    return bytes;
+}
+
+static Vector<u8> ec_public_key_handle()
+{
+    Vector<u8> bytes;
+    bytes.append(3); // HandleTag::ECPublicKey
+    for (u8 coordinate = 1; coordinate <= 2; ++coordinate) {
+        append_storage_leb128(bytes, 32);
+        for (size_t i = 0; i < 32; ++i)
+            bytes.append(coordinate);
+    }
+    return bytes;
+}
+
+static Vector<u8> okp_key_handle(u8 tag)
+{
+    Vector<u8> bytes;
+    bytes.append(tag);
+    append_storage_leb128(bytes, 32);
+    for (size_t i = 0; i < 32; ++i)
+        bytes.append(tag);
+    return bytes;
+}
+
+static Vector<u8> okp_public_key_handle()
+{
+    return okp_key_handle(9); // HandleTag::OKPPublicKey
+}
+
+static Vector<u8> okp_private_key_handle()
+{
+    return okp_key_handle(10); // HandleTag::OKPPrivateKey
+}
+
+TEST_CASE(crypto_key_with_a_handle_foreign_to_its_algorithm_is_rejected)
+{
+    EXPECT(crypto_storage_deserialize(crypto_key_record("public"sv, "verify"sv, ec_key_algorithm("ECDSA"sv), byte_buffer_handle())).is_error());
+
+    EXPECT(!crypto_storage_deserialize(crypto_key_record("public"sv, "verify"sv, ec_key_algorithm("ECDSA"sv), ec_public_key_handle())).is_error());
+}
+
+TEST_CASE(crypto_key_whose_type_disagrees_with_its_handle_is_rejected)
+{
+    EXPECT(crypto_storage_deserialize(crypto_key_record("private"sv, "sign"sv, ec_key_algorithm("ECDSA"sv), ec_public_key_handle())).is_error());
+    EXPECT(crypto_storage_deserialize(crypto_key_record("public"sv, "deriveKey"sv, plain_key_algorithm("HKDF"sv), byte_buffer_handle())).is_error());
+}
+
+TEST_CASE(crypto_key_whose_algorithm_class_disagrees_with_its_name_is_rejected)
+{
+    EXPECT(crypto_storage_deserialize(crypto_key_record("secret"sv, "sign"sv, plain_key_algorithm("HMAC"sv), byte_buffer_handle())).is_error());
+}
+
+TEST_CASE(crypto_key_with_an_unknown_algorithm_name_is_rejected)
+{
+    EXPECT(crypto_storage_deserialize(crypto_key_record("secret"sv, "sign"sv, plain_key_algorithm("TwoFish"sv), byte_buffer_handle())).is_error());
+}
+
+TEST_CASE(crypto_key_okp_record_whose_type_disagrees_with_its_handle_is_rejected)
+{
+    // OKP handle tags keep raw public and private key octets distinct.
+    EXPECT(crypto_storage_deserialize(crypto_key_record("public"sv, "verify"sv, plain_key_algorithm("Ed25519"sv), okp_private_key_handle())).is_error());
+    EXPECT(crypto_storage_deserialize(crypto_key_record("private"sv, "sign"sv, plain_key_algorithm("Ed25519"sv), okp_public_key_handle())).is_error());
+
+    EXPECT(crypto_storage_deserialize(crypto_key_record("public"sv, "verify"sv, plain_key_algorithm("Ed25519"sv), byte_buffer_handle())).is_error());
+
+    EXPECT(!crypto_storage_deserialize(crypto_key_record("public"sv, "verify"sv, plain_key_algorithm("Ed25519"sv), okp_public_key_handle())).is_error());
+    EXPECT(!crypto_storage_deserialize(crypto_key_record("private"sv, "sign"sv, plain_key_algorithm("Ed25519"sv), okp_private_key_handle())).is_error());
+}
