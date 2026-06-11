@@ -325,6 +325,64 @@ WebIDL::ExceptionOr<OKPPrivateKey> deserialize_okp_private_key(HTML::StructuredS
     return OKPPrivateKey { TRY(HTML::decode_or_throw_data_clone_error<ByteBuffer>(realm, decoder)) };
 }
 
+// https://w3c.github.io/webcrypto/#cryptokey-interface-serializable
+// NOTE: When deserializing a serialized CryptoKey object, it is important that the object is not
+// deserialized as a different type. This is normatively required by the definition of the deserialization
+// steps, but it merits specific attention, as such deserialization may expose the contents of the key
+// material, which in some cases (such as when the [[extractable]] internal slot is false) should not be
+// exposed to applications.
+bool deserialized_key_slots_are_consistent(JS::Object const& algorithm_object, Bindings::KeyType type, CryptoKey::InternalKeyData const& handle)
+{
+    auto is_plain_key_algorithm = !is<RsaKeyAlgorithm>(algorithm_object) && !is<EcKeyAlgorithm>(algorithm_object)
+        && !is<AesKeyAlgorithm>(algorithm_object) && !is<HmacKeyAlgorithm>(algorithm_object)
+        && !is<KmacKeyAlgorithm>(algorithm_object);
+
+    auto handle_is_key_pair_member = [&]<typename PublicKey, typename PrivateKey>() {
+        if (type == Bindings::KeyType::Public)
+            return handle.has<PublicKey>();
+        return type == Bindings::KeyType::Private && handle.has<PrivateKey>();
+    };
+
+    auto const& name = as<KeyAlgorithm>(algorithm_object).name();
+
+    if (name.is_one_of("RSASSA-PKCS1-v1_5"sv, "RSA-PSS"sv, "RSA-OAEP"sv))
+        return is<RsaHashedKeyAlgorithm>(algorithm_object)
+            && handle_is_key_pair_member.template operator()<::Crypto::PK::RSAPublicKey, ::Crypto::PK::RSAPrivateKey>();
+
+    if (name.is_one_of("ECDSA"sv, "ECDH"sv))
+        return is<EcKeyAlgorithm>(algorithm_object)
+            && handle_is_key_pair_member.template operator()<::Crypto::PK::ECPublicKey, ::Crypto::PK::ECPrivateKey>();
+
+    if (name.is_one_of("ML-DSA-44"sv, "ML-DSA-65"sv, "ML-DSA-87"sv))
+        return is_plain_key_algorithm
+            && handle_is_key_pair_member.template operator()<::Crypto::PK::MLDSAPublicKey, ::Crypto::PK::MLDSAPrivateKey>();
+
+    if (name.is_one_of("ML-KEM-512"sv, "ML-KEM-768"sv, "ML-KEM-1024"sv))
+        return is_plain_key_algorithm
+            && handle_is_key_pair_member.template operator()<::Crypto::PK::MLKEMPublicKey, ::Crypto::PK::MLKEMPrivateKey>();
+
+    if (name.is_one_of("Ed25519"sv, "Ed448"sv, "X25519"sv, "X448"sv))
+        return is_plain_key_algorithm
+            && handle_is_key_pair_member.template operator()<OKPPublicKey, OKPPrivateKey>();
+
+    if (type != Bindings::KeyType::Secret || !handle.has<ByteBuffer>())
+        return false;
+
+    if (name.is_one_of("AES-CBC"sv, "AES-CTR"sv, "AES-GCM"sv, "AES-KW"sv, "AES-OCB"sv))
+        return is<AesKeyAlgorithm>(algorithm_object);
+
+    if (name == "HMAC"sv)
+        return is<HmacKeyAlgorithm>(algorithm_object);
+
+    if (name.is_one_of("KMAC128"sv, "KMAC256"sv))
+        return is<KmacKeyAlgorithm>(algorithm_object);
+
+    if (name.is_one_of("HKDF"sv, "PBKDF2"sv, "Argon2d"sv, "Argon2i"sv, "Argon2id"sv, "ChaCha20-Poly1305"sv))
+        return is_plain_key_algorithm;
+
+    return false;
+}
+
 }
 
 GC_DEFINE_ALLOCATOR(CryptoKey);
@@ -524,6 +582,9 @@ WebIDL::ExceptionOr<void> CryptoKey::deserialization_steps(HTML::StructuredSeria
         m_key_data = TRY(deserialize_okp_private_key(serialized, realm));
         break;
     }
+
+    if (!deserialized_key_slots_are_consistent(*m_algorithm_cached, m_type, m_key_data))
+        return HTML::data_clone_error_from_serialization_error(realm, Error::from_string_literal("CryptoKey record pairs inconsistent algorithm, type, and handle"));
 
     return {};
 }
