@@ -6680,10 +6680,8 @@ Outcome BytecodeInterpreter::call_address(Configuration& configuration, Function
     Result result { Trap::from_string("") };
     Outcome final_outcome = Outcome::Continue;
     {
-        Optional<ScopedValueRollback<decltype(configuration.regs)>> regs_rollback;
-
-        if (call_type == CallType::UsingRegisters || call_type == CallType::UsingCallRecord)
-            regs_rollback = ScopedValueRollback { configuration.regs };
+        // The callee reuses configuration.regs as its register file, so preserve the caller's across the call.
+        ScopedValueRollback regs_rollback { configuration.regs };
 
         auto instance = configuration.store().get(address);
         FunctionType const* type { nullptr };

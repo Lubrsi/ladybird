@@ -164,7 +164,7 @@ GC_DEFINE_ALLOCATOR(WebAssemblyModule);
 Wasm::AbstractMachine WebAssemblyModule::m_machine;
 HashMap<Wasm::Linker::Name, Wasm::ExternValue> WebAssemblyModule::s_spec_test_namespace;
 
-TESTJS_GLOBAL_FUNCTION(parse_webassembly_module, parseWebAssemblyModule)
+static JS::ThrowCompletionOr<JS::Value> parse_and_instantiate(JS::VM& vm, Wasm::CompileToNative compile_to_native)
 {
     auto& realm = *vm.current_realm();
     auto object = TRY(vm.argument(0).to_object(vm));
@@ -175,6 +175,13 @@ TESTJS_GLOBAL_FUNCTION(parse_webassembly_module, parseWebAssemblyModule)
     auto result = Wasm::Module::parse(stream);
     if (result.is_error())
         return vm.throw_completion<JS::SyntaxError>(Wasm::parse_error_to_byte_string(result.error()));
+
+    // Validating up front marks the module valid, so the CompileToNative::Yes validation inside
+    // instantiate() is a no-op. CompileToNative::No therefore keeps execution on the interpreter.
+    if (compile_to_native == Wasm::CompileToNative::No) {
+        if (auto validation = WebAssemblyModule::machine().validate(*result.value(), {}, Wasm::CompileToNative::No); validation.is_error())
+            return vm.throw_completion<JS::SyntaxError>(validation.release_error().error_string);
+    }
 
     HashMap<Wasm::Linker::Name, Wasm::ExternValue> imports;
     auto import_value = vm.argument(1);
@@ -191,6 +198,18 @@ TESTJS_GLOBAL_FUNCTION(parse_webassembly_module, parseWebAssemblyModule)
     }
 
     return JS::Value(TRY(WebAssemblyModule::create(realm, result.release_value(), imports)));
+}
+
+TESTJS_GLOBAL_FUNCTION(parse_webassembly_module, parseWebAssemblyModule)
+{
+    return parse_and_instantiate(vm, Wasm::CompileToNative::Yes);
+}
+
+// As parseWebAssemblyModule, but pins execution to the bytecode interpreter for tests that exercise
+// interpreter-only behavior (which would otherwise run as Cranelift-compiled native code).
+TESTJS_GLOBAL_FUNCTION(parse_webassembly_module_interpreted, parseWebAssemblyModuleInterpreted)
+{
+    return parse_and_instantiate(vm, Wasm::CompileToNative::No);
 }
 
 TESTJS_GLOBAL_FUNCTION(validate_webassembly_module, validateWebAssemblyModule)
