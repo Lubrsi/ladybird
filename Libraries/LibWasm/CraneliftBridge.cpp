@@ -351,8 +351,9 @@ static ALWAYS_INLINE i32 wasm_cl_finish_call(BytecodeInterpreter& interpreter, C
         if (arg_count + entry.total_local_count > 64) [[unlikely]]
             return wasm_cl_run_compiled_with_heap_locals(interpreter, config, entry, args.data(), arg_count);
 
-        // No zeroing of the non-argument slots: the compiled entry block initializes its own locals.
-        Value callee_locals[64];
+        // No zeroing of the non-argument slots, opting out of -ftrivial-auto-var-init: the argument
+        // slots are written just below, and the compiled entry block initializes its own locals.
+        __attribute__((uninitialized)) Value callee_locals[64];
         for (size_t i = 0; i < arg_count; i++)
             callee_locals[i] = args[i];
         return wasm_cl_run_compiled(interpreter, config, entry, callee_locals);
@@ -855,8 +856,8 @@ static ALWAYS_INLINE i32 wasm_cl_direct_call_impl(BytecodeInterpreter& interpret
     if (arg_count + entry.total_local_count > 64) [[unlikely]]
         return wasm_cl_run_compiled_with_heap_locals(interpreter, config, entry, args, arg_count);
 
-    // No zeroing of the non-argument slots: the compiled entry block initializes its own locals.
-    Value callee_locals[64];
+    // No zeroing of the non-argument slots, opting out of -ftrivial-auto-var-init as above.
+    __attribute__((uninitialized)) Value callee_locals[64];
     for (size_t i = 0; i < arg_count; i++)
         callee_locals[i] = args[i];
     return wasm_cl_run_compiled(interpreter, config, entry, callee_locals);
