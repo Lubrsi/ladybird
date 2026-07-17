@@ -539,6 +539,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                             auto result = machine.invoke(g_interpreter, *address, move(wasm_args));
                             if (result.is_trap())
                                 return vm.throw_completion<JS::TypeError>(Utf16String::formatted("wasm reentry trapped: {}"sv, result.trap().format()));
+                            if (type.results().size() > 1)
+                                return vm.throw_completion<JS::TypeError>("wasm reentry: multiple results not supported yet"_utf16);
                             if (result.values().is_empty() || type.results().is_empty())
                                 return JS::js_undefined();
                             auto const& returned = result.values().first();
