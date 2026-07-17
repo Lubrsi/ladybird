@@ -86,7 +86,11 @@ static StringView cranelift_trap_message(u8 trap_code)
 
 static bool is_wasm_memory_fault(Wasm::Configuration& configuration, void* address)
 {
-    auto const& memories = configuration.frame().module().memories();
+    // Not frame().module(): the faulting code may be a frameless compiled callee.
+    auto const* module = configuration.current_module();
+    if (!module)
+        return false;
+    auto const& memories = module->memories();
     for (auto const& memory_address : memories) {
         auto* memory = configuration.store().unsafe_get(memory_address);
         if (memory && memory->contains_virtual_address(address))
@@ -219,21 +223,24 @@ static void compiled_fault_signal_handler(int signal, siginfo_t* info, void* con
 #            endif
 #        endif
 
-        auto const& compiled = recovery->configuration->frame().expression().compiled_instructions;
-        auto const code_start = compiled.cranelift_entry;
-        auto const code_size = compiled.cranelift_code_size;
-        if (compiled.cranelift_compiled && code_start != 0 && pc >= code_start && pc < code_start + code_size) {
-            auto const offset = static_cast<u32>(pc - code_start);
-            for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
-                auto const& trap = compiled.cranelift_traps[i];
-                if (trap.offset != offset)
-                    continue;
+        // Not frame().expression(): the faulting code may be a frameless compiled callee.
+        if (auto const* expression = recovery->configuration->current_expression()) {
+            auto const& compiled = expression->compiled_instructions;
+            auto const code_start = compiled.cranelift_entry;
+            auto const code_size = compiled.cranelift_code_size;
+            if (compiled.cranelift_compiled && code_start != 0 && pc >= code_start && pc < code_start + code_size) {
+                auto const offset = static_cast<u32>(pc - code_start);
+                for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
+                    auto const& trap = compiled.cranelift_traps[i];
+                    if (trap.offset != offset)
+                        continue;
 
-                recovery->faulted = true;
-                recovery->fault_kind = CompiledFaultKind::CraneliftTrap;
-                recovery->cranelift_trap_code = trap.code;
-                redirect_to_trampoline();
-                return;
+                    recovery->faulted = true;
+                    recovery->fault_kind = CompiledFaultKind::CraneliftTrap;
+                    recovery->cranelift_trap_code = trap.code;
+                    redirect_to_trampoline();
+                    return;
+                }
             }
         }
     }

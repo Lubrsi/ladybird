@@ -299,6 +299,7 @@ public:
         , m_locals_base(config.locals_base())
         , m_current_module(config.current_module())
         , m_current_compiled_fn_table(config.current_compiled_fn_table())
+        , m_current_expression(config.current_expression())
         , m_default_memory(config.default_memory())
     {
     }
@@ -308,6 +309,7 @@ public:
         m_config.m_locals_base = m_locals_base;
         m_config.m_current_module = m_current_module;
         m_config.m_current_compiled_fn_table = m_current_compiled_fn_table;
+        m_config.m_current_expression = m_current_expression;
         m_config.m_default_memory = m_default_memory;
     }
 
@@ -316,6 +318,7 @@ private:
     Value* m_locals_base;
     ModuleInstance const* m_current_module;
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table;
+    Expression const* m_current_expression;
     MemoryInstance* m_default_memory;
 };
 

@@ -54,6 +54,7 @@ public:
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
         m_current_module = &frame.module();
         m_current_compiled_fn_table = frame.compiled_fn_table();
+        m_current_expression = &frame.expression();
 
         auto continuation = frame.expression().instructions().size() - 1;
         if (auto size = frame.expression().compiled_instructions.dispatches.size(); size > 0)
@@ -90,6 +91,7 @@ public:
             m_default_memory = memories.is_empty() ? nullptr : m_store.unsafe_get(memories[0]);
         }
         m_locals_base = locals_ptr;
+        m_current_expression = &expression;
         // Compiled code pushes to the value stack without bounds checks, so the frame's
         // whole stack usage must be verified to fit here.
         if (auto hint = expression.stack_usage_hint(); hint.has_value())
@@ -122,6 +124,7 @@ public:
 
     ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
     ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
+    ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
     static constexpr size_t default_memory_offset() { return __builtin_offsetof(Configuration, m_default_memory); }
@@ -317,10 +320,12 @@ public:
     Value* m_call_record_base { nullptr };
     MemoryInstance* m_default_memory { nullptr };
     Value m_compiled_call_result_scratch;
-    // The innermost frame's module and compiled-function table, mirrored here so the
-    // Cranelift bridge helpers can resolve them without reaching into the frame stack.
+    // The innermost frame's module, compiled-function table, and expression, mirrored here
+    // so the Cranelift bridge helpers and the compiled fault handlers can resolve them
+    // without reaching into the frame stack.
     ModuleInstance const* m_current_module { nullptr };
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
+    Expression const* m_current_expression { nullptr };
 };
 
 }

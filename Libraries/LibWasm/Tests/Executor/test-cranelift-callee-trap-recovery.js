@@ -1,0 +1,33 @@
+test("a trap inside a compiled-to-compiled callee recovers cleanly", () => {
+    // prettier-ignore
+    const binary = new Uint8Array([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0a, 0x02, 0x60,
+        0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x01, 0x7f, 0x03, 0x04, 0x03, 0x00,
+        0x00, 0x01, 0x07, 0x11, 0x02, 0x06, 0x6d, 0x69, 0x64, 0x64, 0x6c, 0x65,
+        0x00, 0x01, 0x04, 0x6d, 0x61, 0x69, 0x6e, 0x00, 0x02, 0x0a, 0x1c, 0x03,
+        0x07, 0x00, 0x20, 0x00, 0x41, 0x01, 0x6b, 0x0b, 0x0b, 0x00, 0x41, 0xc0,
+        0x84, 0x3d, 0x20, 0x00, 0x10, 0x00, 0x6d, 0x0b, 0x06, 0x00, 0x41, 0x01,
+        0x10, 0x01, 0x0b
+    ]);
+
+    const module = parseWebAssemblyModule(binary);
+    const main = module.getExport("main");
+    const middle = module.getExport("middle");
+
+    const mainEligible = isCraneliftEligible(main);
+    const middleEligible = isCraneliftEligible(middle);
+
+    if (!mainEligible && !middleEligible) return;
+
+    expect(mainEligible).toBe(true);
+    expect(middleEligible).toBe(true);
+
+    expect(isCraneliftCompiled(main)).toBe(true);
+    expect(isCraneliftCompiled(middle)).toBe(true);
+
+    // `middle` divides by zero when called from `main`'s compiled code, so the trap
+    // fires in a callee that has no frame on the frame stack.
+    expect(() => module.invoke(main)).toThrowWithMessage(TypeError, "Execution trapped: Integer division overflow");
+
+    expect(module.invoke(middle, 3)).toBe(500000);
+});
