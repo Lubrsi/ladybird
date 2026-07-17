@@ -310,17 +310,20 @@ static ALWAYS_INLINE i32 wasm_cl_run_compiled(BytecodeInterpreter& interpreter, 
     return 0;
 }
 
-// Kept out of line so callers' hot paths don't carry the Vector's construction and destruction.
+// Kept out of line so callers' hot paths don't carry the oversized-locals setup.
 static NEVER_INLINE COLD i32 wasm_cl_run_compiled_with_heap_locals(BytecodeInterpreter& interpreter, Configuration& config, CompiledFunctionEntry const& entry, Value const* args, size_t arg_count)
 {
+    // Oversized locals live in the call-record region rather than a heap Vector: the GC conservatively
+    // scans that region but not the malloc heap, and a reference-typed local may hold the only pointer
+    // keeping a cell alive.
     auto total = arg_count + entry.total_local_count;
-    Vector<Value, ArgumentsStaticSize> heap_buf;
-    heap_buf.ensure_capacity(total);
-    heap_buf.resize_and_keep_capacity(total);
-    auto* callee_locals = heap_buf.data();
+    auto* mark = config.m_call_record_stack.mark();
+    auto* callee_locals = config.m_call_record_stack.allocate(total);
     for (size_t i = 0; i < arg_count; i++)
         callee_locals[i] = args[i];
-    return wasm_cl_run_compiled(interpreter, config, entry, callee_locals);
+    auto result = wasm_cl_run_compiled(interpreter, config, entry, callee_locals);
+    config.m_call_record_stack.release_to(mark);
+    return result;
 }
 
 static ALWAYS_INLINE i32 wasm_cl_finish_call(BytecodeInterpreter& interpreter, Configuration& config, FunctionAddress address, Value const* args, size_t arg_count)
