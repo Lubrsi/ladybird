@@ -86,6 +86,9 @@ private:
 
     static HashMap<Wasm::Linker::Name, Wasm::ExternValue> const& spec_test_namespace()
     {
+        if (!s_spec_test_namespace.is_empty())
+            return s_spec_test_namespace;
+
         Wasm::FunctionType print_type { {}, {} };
         auto address_print = alloc_noop_function(print_type);
         s_spec_test_namespace.set({ "spectest", "print", print_type }, Wasm::ExternValue { *address_print });
