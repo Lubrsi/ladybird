@@ -104,7 +104,7 @@ struct BatchInput {
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
 // Version 8: f32 values are kept in an F32 register bank instead of round-tripping through i64.
-constexpr u32 cache_blob_format_version = 9;
+constexpr u32 cache_blob_format_version = 10;
 
 struct CacheBlobHeader {
     u64 magic;
