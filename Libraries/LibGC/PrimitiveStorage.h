@@ -36,9 +36,14 @@ public:
         Yes,
     };
 
-    static constexpr size_t default_cage_size = 64ull * GiB;
+    // Address space only; linear memories reserve their full index space in here, so
+    // the cage must fit hundreds of multi-GiB reservations.
+    static constexpr size_t default_cage_size = 1ull * TiB;
     static_assert(is_power_of_two(default_cage_size));
     static constexpr size_t cage_offset_mask = default_cage_size - 1;
+    // Address-space-only guard after the cage: a masked offset plus any displacement
+    // below this stays inside the reservation instead of reaching unrelated mappings.
+    static constexpr size_t cage_tail_guard_size = 8ull * GiB;
     static constexpr size_t invalid_offset = NumericLimits<size_t>::max();
 
     static PrimitiveStorage& the();

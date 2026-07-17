@@ -97,6 +97,9 @@ pub struct RuntimeHelpers {
     pub value_stack_base_offset: u32,
     pub value_stack_top_offset: u32,
     pub call_record_base_offset: u32,
+    // Accesses with static offset + size at or below this need no bounds check
+    // (guard pages catch them); zero disables the elision.
+    pub default_memory_guard_size: u32,
 }
 
 /// Stable index assigned to each runtime helper. Embedded in cranelift `ExternalName`

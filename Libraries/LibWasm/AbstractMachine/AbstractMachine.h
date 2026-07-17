@@ -598,7 +598,7 @@ public:
     MemoryBuffer(MemoryBuffer const&) = delete;
     MemoryBuffer& operator=(MemoryBuffer const&) = delete;
 
-    ErrorOr<void> try_reserve(size_t capacity);
+    ErrorOr<void> try_reserve(size_t capacity, size_t guard_size = 0);
     ErrorOr<void> try_resize(size_t new_size);
     ErrorOr<void> try_resize(size_t new_size, size_t reserved_capacity);
 

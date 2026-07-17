@@ -72,12 +72,10 @@ ErrorOr<void> PrimitiveStorage::Allocator::ensure_cage()
 
     m_cage_size = PrimitiveStorage::default_cage_size;
     Checked<size_t> reservation_size = m_cage_size;
-    reservation_size += page_size();
+    reservation_size += cage_tail_guard_size;
     if (reservation_size.has_overflow())
         return Error::from_errno(ENOMEM);
 
-    // Leave an inaccessible page after the logical cage so a masked fixed-width
-    // access at the top edge cannot cross into an unrelated mapping.
     auto mapping = TRY(Core::System::reserve_address_space(reservation_size.value()));
     m_cage_base = static_cast<u8*>(mapping);
     js_primitive_storage_cage_base = bit_cast<FlatPtr>(m_cage_base);

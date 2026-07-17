@@ -203,7 +203,7 @@ void MemoryBuffer::update_storage_offset()
     m_storage_offset = GC::PrimitiveStorage::the().offset(m_handle);
 }
 
-ErrorOr<void> MemoryBuffer::try_reserve(size_t capacity)
+ErrorOr<void> MemoryBuffer::try_reserve(size_t capacity, size_t guard_size)
 {
     if (m_handle.is_valid()) {
         if (capacity <= m_reserved_capacity)
@@ -214,7 +214,7 @@ ErrorOr<void> MemoryBuffer::try_reserve(size_t capacity)
         return {};
     }
 
-    m_handle = TRY(GC::PrimitiveStorage::the().try_reserve(0, capacity, GC::PrimitiveStorage::ZeroFillNewBytes::Yes));
+    m_handle = TRY(GC::PrimitiveStorage::the().try_reserve(0, capacity, GC::PrimitiveStorage::ZeroFillNewBytes::Yes, guard_size));
     m_reserved_capacity = capacity;
     update_storage_offset();
     return {};
@@ -398,43 +398,21 @@ static ErrorOr<size_t> maximum_memory_size(MemoryType const& type)
     return size_from_page_count(max_pages);
 }
 
-static ErrorOr<size_t> initial_memory_reservation_size(MemoryType const& type)
-{
-    auto maximum_size = TRY(maximum_memory_size(type));
-    auto initial_size = TRY(size_from_page_count(type.limits().min()));
-    if (initial_size > maximum_size)
-        return Error::from_errno(ENOMEM);
-
-    if (type.limits().max().has_value())
-        return maximum_size;
-
-    if (type.limits().address_type() != AddressType::I32)
-        return initial_size;
-
-    return min(max(initial_size, static_cast<size_t>(Constants::wasm32_default_memory_reservation_size)), maximum_size);
-}
-
-static size_t grown_memory_reservation_size(size_t current_capacity, size_t required_size, size_t maximum_size)
-{
-    auto new_capacity = max(current_capacity, static_cast<size_t>(Constants::wasm32_default_memory_reservation_size));
-    while (new_capacity < required_size) {
-        if (new_capacity > maximum_size / 2) {
-            new_capacity = maximum_size;
-            break;
-        }
-        new_capacity *= 2;
-    }
-    return min(max(new_capacity, required_size), maximum_size);
-}
-
 ErrorOr<MemoryInstance> MemoryInstance::create(MemoryType const& type)
 {
     MemoryInstance instance { type };
 
-    auto reserved_capacity = TRY(initial_memory_reservation_size(type));
-    TRY(instance.m_data.try_reserve(reserved_capacity));
-
     auto initial_size = TRY(size_from_page_count(type.limits().min()));
+    auto reserved_capacity = TRY(maximum_memory_size(type));
+    if (initial_size > reserved_capacity)
+        return Error::from_errno(ENOMEM);
+
+    // The reservation must cover the full 32-bit index space plus the guard region
+    // regardless of the declared maximum; only up to the maximum is ever committed.
+    constexpr auto full_reservation_size = static_cast<size_t>(Constants::wasm32_max_pages) * Constants::page_size + Constants::memory_guard_region_size;
+    static_assert(full_reservation_size <= GC::PrimitiveStorage::cage_tail_guard_size);
+    TRY(instance.m_data.try_reserve(reserved_capacity, full_reservation_size - reserved_capacity));
+
     if (!instance.grow(initial_size, GrowType::No))
         return Error::from_string_literal("Failed to grow to requested size");
 
@@ -460,13 +438,9 @@ bool MemoryInstance::grow(size_t size_to_grow, GrowType grow_type, InhibitGrowCa
     if (new_size.has_overflow() || new_size.value() > maximum_size.value())
         return false;
 
-    auto new_capacity = m_data.capacity();
-    if (new_size.value() > new_capacity)
-        new_capacity = m_type.limits().max().has_value()
-            ? maximum_size.value()
-            : grown_memory_reservation_size(new_capacity, new_size.value(), maximum_size.value());
-
-    if (m_data.try_resize(new_size.value(), new_capacity).is_error())
+    // The full maximum is reserved at creation, so growing only commits pages and
+    // never relocates the backing storage.
+    if (m_data.try_resize(new_size.value()).is_error())
         return false;
     if (inhibit_callback == InhibitGrowCallback::No && successful_grow_hook)
         successful_grow_hook();

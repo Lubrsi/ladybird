@@ -68,9 +68,13 @@ static constexpr u64 wasm32_max_pages = 1ull << 16;
 // FIXME: The compiled memory access path currently narrows memory64 addresses
 //        to i32 before adding the memarg offset. Keep memory64 memories within
 //        the currently supported address width until 64-bit memory accesses are
-//        implemented there.
+//        implemented there; the guarded memory reservation below relies on the
+//        same 32-bit index bound.
 static constexpr u64 wasm64_max_pages = wasm32_max_pages;
-static constexpr auto wasm32_default_memory_reservation_size = 16 * MiB;
+// Every linear memory reserves the full 32-bit index space plus this guard, so
+// compiled accesses whose static offset stays below it need no bounds check: an
+// out-of-bounds access faults in reserved-but-uncommitted pages.
+static constexpr auto memory_guard_region_size = 32 * MiB;
 
 // Implementation-defined limits
 // These are not concretely defined by the spec, so the values are only defined by us.

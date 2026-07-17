@@ -104,7 +104,7 @@ struct BatchInput {
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
 // Version 8: f32 values are kept in an F32 register bank instead of round-tripping through i64.
-constexpr u32 cache_blob_format_version = 10;
+constexpr u32 cache_blob_format_version = 11;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -181,6 +181,7 @@ static u64 compute_layout_hash(RuntimeHelpers const& h)
     hash = fnv1a(hash, h.value_stack_base_offset);
     hash = fnv1a(hash, h.value_stack_top_offset);
     hash = fnv1a(hash, h.call_record_base_offset);
+    hash = fnv1a(hash, h.default_memory_guard_size);
     return hash;
 }
 
@@ -1038,6 +1039,7 @@ static RuntimeHelpers make_runtime_helpers()
         .value_stack_base_offset = static_cast<u32>(Configuration::value_stack_base_offset()),
         .value_stack_top_offset = static_cast<u32>(Configuration::value_stack_top_offset()),
         .call_record_base_offset = static_cast<u32>(Configuration::call_record_base_offset()),
+        .default_memory_guard_size = static_cast<u32>(Constants::memory_guard_region_size),
     };
 }
 

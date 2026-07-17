@@ -265,7 +265,10 @@ impl CraneliftCompiler {
         let value_stack_base_offset = helpers.value_stack_base_offset as i32;
         let value_stack_top_offset = helpers.value_stack_top_offset as i32;
         let call_record_base_offset = helpers.call_record_base_offset as i32;
-        let wasm_memory_flags = MemFlags::new().with_notrap();
+        let default_memory_guard_size = u64::from(helpers.default_memory_guard_size);
+        // Not notrap: accesses under the guard threshold carry no bounds check and are
+        // expected to fault on out-of-bounds addresses.
+        let wasm_memory_flags = MemFlags::new();
         let interp_var = Variable::from_u32(8);
         builder.declare_var(interp_var, ptr_type);
         builder.def_var(interp_var, interpreter_val);
@@ -281,8 +284,10 @@ impl CraneliftCompiler {
         builder.def_var(locals_base_var, initial_locals_base);
         let default_memory_size_var = Variable::from_u32(11);
         builder.declare_var(default_memory_size_var, types::I64);
-        let default_memory_storage_offset_var = Variable::from_u32(12);
-        builder.declare_var(default_memory_storage_offset_var, types::I64);
+        // cage_base + masked storage offset; masking here keeps a corrupted offset inside
+        // the cage (plus its tail guard) without a per-access mask.
+        let default_memory_base_var = Variable::from_u32(12);
+        builder.declare_var(default_memory_base_var, ptr_type);
         let primitive_storage_cage_base_var = Variable::from_u32(13);
         builder.declare_var(primitive_storage_cage_base_var, ptr_type);
 
@@ -336,14 +341,22 @@ impl CraneliftCompiler {
                 default_memory,
                 memory_buffer_offset + memory_buffer_storage_offset_offset,
             );
-            builder.def_var(default_memory_storage_offset_var, storage_offset);
             let cage_base_storage = builder.ins().func_addr(ptr_type, h_primitive_storage_cage_base);
             let cage_base = builder.ins().load(ptr_type, MemFlags::trusted(), cage_base_storage, 0);
             builder.def_var(primitive_storage_cage_base_var, cage_base);
+            let mask = builder.ins().iconst(types::I64, primitive_storage_cage_offset_mask);
+            let masked_offset = builder.ins().band(storage_offset, mask);
+            let masked_offset = if ptr_type == types::I64 {
+                masked_offset
+            } else {
+                builder.ins().ireduce(ptr_type, masked_offset)
+            };
+            let memory_base = builder.ins().iadd(cage_base, masked_offset);
+            builder.def_var(default_memory_base_var, memory_base);
         } else {
             let zero = builder.ins().iconst(types::I64, 0);
             builder.def_var(default_memory_size_var, zero);
-            builder.def_var(default_memory_storage_offset_var, zero);
+            builder.def_var(default_memory_base_var, zero);
             builder.def_var(primitive_storage_cage_base_var, zero);
         }
 
@@ -1094,7 +1107,18 @@ impl CraneliftCompiler {
                         memory,
                         memory_buffer_offset + memory_buffer_storage_offset_offset,
                     );
-                    $builder.def_var(default_memory_storage_offset_var, storage_offset);
+                    let mask = $builder
+                        .ins()
+                        .iconst(types::I64, primitive_storage_cage_offset_mask);
+                    let masked_offset = $builder.ins().band(storage_offset, mask);
+                    let masked_offset = if ptr_type == types::I64 {
+                        masked_offset
+                    } else {
+                        $builder.ins().ireduce(ptr_type, masked_offset)
+                    };
+                    let cage_base = $builder.use_var(primitive_storage_cage_base_var);
+                    let memory_base = $builder.ins().iadd(cage_base, masked_offset);
+                    $builder.def_var(default_memory_base_var, memory_base);
                 }
             }};
         }
@@ -1140,43 +1164,42 @@ impl CraneliftCompiler {
             }};
         }
         macro_rules! inline_default_memory_address {
-            ($builder:expr, $addr:expr, $access_size:expr) => {{
-                let memory_size = $builder.use_var(default_memory_size_var);
+            ($builder:expr, $addr:expr, $access_size:expr, $static_offset:expr) => {{
+                // A u32 index plus an in-guard static offset cannot escape the memory's
+                // reservation, so only over-guard offsets need the explicit bounds check;
+                // everything else traps through the guard pages.
+                if ($static_offset as u64).saturating_add($access_size as u64) > default_memory_guard_size {
+                    let memory_size = $builder.use_var(default_memory_size_var);
 
-                let addr_too_large = $builder
-                    .ins()
-                    .icmp(IntCC::UnsignedGreaterThan, $addr, memory_size);
-                let addr_in_bounds = $builder.create_block();
-                $builder
-                    .ins()
-                    .brif(addr_too_large, memory_oob_block, &[], addr_in_bounds, &[]);
-                $builder.switch_to_block(addr_in_bounds);
-                $builder.seal_block(addr_in_bounds);
+                    let addr_too_large = $builder
+                        .ins()
+                        .icmp(IntCC::UnsignedGreaterThan, $addr, memory_size);
+                    let addr_in_bounds = $builder.create_block();
+                    $builder
+                        .ins()
+                        .brif(addr_too_large, memory_oob_block, &[], addr_in_bounds, &[]);
+                    $builder.switch_to_block(addr_in_bounds);
+                    $builder.seal_block(addr_in_bounds);
 
-                let remaining = $builder.ins().isub(memory_size, $addr);
-                let access_too_large = $builder
-                    .ins()
-                    .icmp_imm(IntCC::UnsignedLessThan, remaining, $access_size);
-                let access_in_bounds = $builder.create_block();
-                $builder
-                    .ins()
-                    .brif(access_too_large, memory_oob_block, &[], access_in_bounds, &[]);
-                $builder.switch_to_block(access_in_bounds);
-                $builder.seal_block(access_in_bounds);
+                    let remaining = $builder.ins().isub(memory_size, $addr);
+                    let access_too_large = $builder
+                        .ins()
+                        .icmp_imm(IntCC::UnsignedLessThan, remaining, $access_size);
+                    let access_in_bounds = $builder.create_block();
+                    $builder
+                        .ins()
+                        .brif(access_too_large, memory_oob_block, &[], access_in_bounds, &[]);
+                    $builder.switch_to_block(access_in_bounds);
+                    $builder.seal_block(access_in_bounds);
+                }
 
-                let storage_offset = $builder.use_var(default_memory_storage_offset_var);
-                let unmasked_caged_offset = $builder.ins().iadd(storage_offset, $addr);
-                let cage_offset_mask = $builder
-                    .ins()
-                    .iconst(types::I64, primitive_storage_cage_offset_mask);
-                let caged_offset = $builder.ins().band(unmasked_caged_offset, cage_offset_mask);
-                let cage_base = $builder.use_var(primitive_storage_cage_base_var);
-                let caged_offset = if ptr_type == types::I64 {
-                    caged_offset
+                let memory_base = $builder.use_var(default_memory_base_var);
+                let addr = if ptr_type == types::I64 {
+                    $addr
                 } else {
-                    $builder.ins().ireduce(ptr_type, caged_offset)
+                    $builder.ins().ireduce(ptr_type, $addr)
                 };
-                $builder.ins().iadd(cage_base, caged_offset)
+                $builder.ins().iadd(memory_base, addr)
             }};
         }
 
@@ -2101,7 +2124,7 @@ impl CraneliftCompiler {
                             op::I64_LOAD | op::F64_LOAD => 8,
                             _ => unreachable!(),
                         };
-                        let address = inline_default_memory_address!(builder, addr, access_size);
+                        let address = inline_default_memory_address!(builder, addr, access_size, insn.imm1);
                         if opc == op::F64_LOAD {
                             let result = builder.ins().load(types::F64, wasm_memory_flags, address, 0);
                             write_dst_f64!(builder, insn.destination, result);
@@ -2210,7 +2233,7 @@ impl CraneliftCompiler {
                             op::I64_STORE | op::F64_STORE => 8,
                             _ => unreachable!(),
                         };
-                        let address = inline_default_memory_address!(builder, addr, access_size);
+                        let address = inline_default_memory_address!(builder, addr, access_size, insn.imm1);
                         let value = if is_f32_inline {
                             val
                         } else {
@@ -2545,7 +2568,7 @@ impl CraneliftCompiler {
                     let mem_idx = insn.imm3 & 0x7fff_ffff;
                     if mem_idx == 0 {
                         let access_size = if opc == op::SYNTHETIC_I32_STORELOCAL { 4 } else { 8 };
-                        let address = inline_default_memory_address!(builder, addr, access_size);
+                        let address = inline_default_memory_address!(builder, addr, access_size, insn.imm1);
                         let value = if opc == op::SYNTHETIC_I32_STORELOCAL {
                             builder.ins().ireduce(types::I32, val)
                         } else {

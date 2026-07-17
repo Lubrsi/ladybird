@@ -13,36 +13,35 @@ static size_t memory_capacity(Wasm::MemoryInstance const& memory)
     return GC::PrimitiveStorage::the().capacity(memory.data().primitive_storage_handle());
 }
 
-TEST_CASE(wasm32_memory_without_max_uses_default_reservation)
+TEST_CASE(wasm32_memory_without_max_reserves_full_index_space)
 {
+    constexpr auto full_index_space = static_cast<size_t>(Wasm::Constants::wasm32_max_pages) * Wasm::Constants::page_size;
+
     auto memory = MUST(Wasm::MemoryInstance::create(Wasm::MemoryType { Wasm::Limits(Wasm::AddressType::I32, 1) }));
     auto* data_before_grow = memory.data().data();
 
     EXPECT_EQ(memory.size(), Wasm::Constants::page_size);
-    EXPECT_EQ(memory_capacity(memory), static_cast<size_t>(Wasm::Constants::wasm32_default_memory_reservation_size));
+    EXPECT_EQ(memory_capacity(memory), full_index_space);
 
     EXPECT(memory.grow(Wasm::Constants::page_size));
 
     EXPECT_EQ(memory.size(), 2uz * Wasm::Constants::page_size);
-    EXPECT_EQ(memory_capacity(memory), static_cast<size_t>(Wasm::Constants::wasm32_default_memory_reservation_size));
+    EXPECT_EQ(memory_capacity(memory), full_index_space);
     EXPECT_EQ(memory.data().data(), data_before_grow);
 }
 
-TEST_CASE(wasm32_memory_without_max_grows_reservation_geometrically)
+TEST_CASE(memory_reservation_covers_index_space_and_guard_region)
 {
-    constexpr auto default_reservation_size = static_cast<size_t>(Wasm::Constants::wasm32_default_memory_reservation_size);
-    constexpr auto default_reservation_pages = default_reservation_size / Wasm::Constants::page_size;
-    static_assert(default_reservation_pages * Wasm::Constants::page_size == default_reservation_size);
+    constexpr auto full_index_space = static_cast<size_t>(Wasm::Constants::wasm32_max_pages) * Wasm::Constants::page_size;
+    constexpr auto full_reservation_size = full_index_space + Wasm::Constants::memory_guard_region_size;
 
-    auto memory = MUST(Wasm::MemoryInstance::create(Wasm::MemoryType { Wasm::Limits(Wasm::AddressType::I32, default_reservation_pages) }));
+    auto memory = MUST(Wasm::MemoryInstance::create(Wasm::MemoryType { Wasm::Limits(Wasm::AddressType::I32, 1, 3) }));
+    auto const* data = memory.data().data();
 
-    EXPECT_EQ(memory.size(), default_reservation_size);
-    EXPECT_EQ(memory_capacity(memory), default_reservation_size);
-
-    EXPECT(memory.grow(Wasm::Constants::page_size));
-
-    EXPECT_EQ(memory.size(), default_reservation_size + Wasm::Constants::page_size);
-    EXPECT_EQ(memory_capacity(memory), 2uz * default_reservation_size);
+    EXPECT(memory.contains_virtual_address(data + 3uz * Wasm::Constants::page_size));
+    EXPECT(memory.contains_virtual_address(data + full_index_space));
+    EXPECT(memory.contains_virtual_address(data + full_reservation_size - 1));
+    EXPECT(!memory.contains_virtual_address(data + full_reservation_size));
 }
 
 TEST_CASE(wasm32_memory_with_max_reserves_explicit_max)
