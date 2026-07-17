@@ -419,7 +419,7 @@ i32 wasm_cl_call_function(void* interp_ptr, void* config_ptr, i32 func_index)
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& functions = module.functions();
     if (static_cast<size_t>(func_index) >= functions.size())
         return 1;
@@ -453,7 +453,7 @@ static inline MemoryInstance* wasm_cl_get_memory(void* config_ptr, i32 mem_idx)
         if (auto* memory = config.default_memory())
             return memory;
     }
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& mem_address = module.memories().data()[mem_idx];
     return config.store().unsafe_get(mem_address);
 }
@@ -625,7 +625,7 @@ i64 wasm_cl_memory_size(void* config_ptr, i32 mem_idx);
 i64 wasm_cl_memory_size(void* config_ptr, i32 mem_idx)
 {
     auto& config = *static_cast<Configuration*>(config_ptr);
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& mem_address = module.memories().data()[mem_idx];
     auto* memory = config.store().unsafe_get(mem_address);
     return static_cast<i64>(memory->size() / Constants::page_size);
@@ -635,7 +635,7 @@ i32 wasm_cl_memory_grow(void* config_ptr, i32 mem_idx, i32 pages);
 i32 wasm_cl_memory_grow(void* config_ptr, i32 mem_idx, i32 pages)
 {
     auto& config = *static_cast<Configuration*>(config_ptr);
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& mem_address = module.memories().data()[mem_idx];
     auto* memory = config.store().unsafe_get(mem_address);
     auto old_pages = memory->size() / Constants::page_size;
@@ -648,7 +648,7 @@ i64 wasm_cl_read_global(void* config_ptr, i32 index);
 i64 wasm_cl_read_global(void* config_ptr, i32 index)
 {
     auto& config = *static_cast<Configuration*>(config_ptr);
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto global_address = module.globals().data()[index];
     auto* global = config.store().get(global_address);
     return global->value().to<i64>();
@@ -658,7 +658,7 @@ void wasm_cl_write_global(void* config_ptr, i32 index, i64 value);
 void wasm_cl_write_global(void* config_ptr, i32 index, i64 value)
 {
     auto& config = *static_cast<Configuration*>(config_ptr);
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto global_address = module.globals().data()[index];
     auto* global = config.store().get(global_address);
     global->set_value(Value(value));
@@ -670,7 +670,7 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto table_address = module.tables()[table_idx];
     auto* table_instance = config.store().get(table_address);
     if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
@@ -708,7 +708,7 @@ i32 wasm_cl_memory_copy(void* interp_ptr, void* config_ptr, i32 dst_mem, i32 src
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto* src_instance = config.store().unsafe_get(module.memories().data()[src_mem]);
     auto* dst_instance = config.store().unsafe_get(module.memories().data()[dst_mem]);
 
@@ -729,7 +729,7 @@ i32 wasm_cl_memory_fill(void* interp_ptr, void* config_ptr, i32 mem_idx, i32 off
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto* instance = config.store().unsafe_get(module.memories().data()[mem_idx]);
 
     auto end = static_cast<u64>(static_cast<u32>(offset)) + static_cast<u32>(count);
@@ -818,7 +818,7 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& functions = module.functions();
     if (static_cast<size_t>(func_index) >= functions.size())
         return 1;
@@ -840,13 +840,13 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
 // Not Cranelift-compiled, fall back to the full call path.
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
 {
-    return wasm_cl_finish_call(interpreter, config, config.frame().module().functions()[func_index], args, arg_count);
+    return wasm_cl_finish_call(interpreter, config, config.current_module()->functions()[func_index], args, arg_count);
 }
 
 // Direct compiled-to-compiled call. Falls back to wasm_cl_finish_call for non-compiled targets.
 static ALWAYS_INLINE i32 wasm_cl_direct_call_impl(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value* args, size_t arg_count)
 {
-    auto const* table = config.frame().compiled_fn_table();
+    auto const* table = config.current_compiled_fn_table();
     auto index = static_cast<size_t>(func_index);
     if (!table || index >= table->size() || !(*table)[index].module) [[unlikely]]
         return wasm_cl_direct_call_fallback(interpreter, config, func_index, args, arg_count);

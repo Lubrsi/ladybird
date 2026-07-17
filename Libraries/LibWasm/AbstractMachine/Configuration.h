@@ -52,6 +52,8 @@ public:
         auto const& memories = frame.module().memories();
         m_default_memory = memories.is_empty() ? nullptr : m_store.unsafe_get(memories[0]);
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
+        m_current_module = &frame.module();
+        m_current_compiled_fn_table = frame.compiled_fn_table();
 
         auto continuation = frame.expression().instructions().size() - 1;
         if (auto size = frame.expression().compiled_instructions.dispatches.size(); size > 0)
@@ -82,11 +84,13 @@ public:
     {
         VERIFY(bit_cast<FlatPtr>(&module) != 0);
 
-        // For the (common) same-module call case, we already have the compiled-fn-table pointer cached on the caller's frame, so reuse it instead of re-resolving through the store on every call.
-        bool const same_module = !m_frame_stack.is_empty() && &m_frame_stack.last().module() == &module;
-        auto const* table = same_module ? m_frame_stack.last().compiled_fn_table() : &module.compiled_fn_table(m_store);
+        // For the (common) same-module call case, we already have the compiled-fn-table pointer cached, so reuse it instead of re-resolving through the store on every call.
+        bool const same_module = m_current_module == &module;
+        auto const* table = same_module ? m_current_compiled_fn_table : &module.compiled_fn_table(m_store);
         m_frame_stack.empend(module, locals_ptr, expression, arity);
         m_frame_stack.last().set_compiled_fn_table(table);
+        m_current_module = &module;
+        m_current_compiled_fn_table = table;
         m_locals_base = locals_ptr;
         if (!same_module) {
             auto const& memories = module.memories();
@@ -123,6 +127,9 @@ public:
     ALWAYS_INLINE Value& local(LocalIndex index) { return m_locals_base[index.value()]; }
     ALWAYS_INLINE Value* locals_base() const { return m_locals_base; }
     ALWAYS_INLINE void set_locals_base(Value* base) { m_locals_base = base; }
+
+    ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
+    ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
     static constexpr size_t default_memory_offset() { return __builtin_offsetof(Configuration, m_default_memory); }
@@ -319,6 +326,10 @@ public:
     Value* m_call_record_base { nullptr };
     MemoryInstance* m_default_memory { nullptr };
     Value m_compiled_call_result_scratch;
+    // The innermost frame's module and compiled-function table, mirrored here so the
+    // Cranelift bridge helpers can resolve them without reaching into the frame stack.
+    ModuleInstance const* m_current_module { nullptr };
+    Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
 };
 
 }
