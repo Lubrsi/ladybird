@@ -251,6 +251,7 @@ impl CraneliftCompiler {
         let h_write_global = decl_helper!(write_global_sig, HelperId::write_global);
         let h_call_wr = decl_helper!(call_wr_sig, HelperId::call_with_record);
         let h_call_indirect = decl_helper!(call_indirect_sig, HelperId::call_indirect);
+        let h_call_indirect_wr = decl_helper!(call_indirect_sig, HelperId::call_indirect_with_record);
         let h_memory_copy = decl_helper!(memory_copy_sig, HelperId::memory_copy);
         let h_memory_fill = decl_helper!(memory_fill_sig, HelperId::memory_fill);
         let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
@@ -2419,6 +2420,32 @@ impl CraneliftCompiler {
                     }
                 }
 
+                op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_0 | op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1 => {
+                    let element_index = read_src!(builder, insn.sources[0]);
+                    let element_index = builder.ins().ireduce(types::I32, element_index);
+                    let type_idx = builder.ins().iconst(types::I32, insn.imm1);
+                    let table_idx = builder.ins().iconst(types::I32, insn.imm2);
+                    let cwp = builder.ins().func_addr(ptr_type, h_call_indirect_wr);
+                    let iv = builder.use_var(interp_var);
+                    let cv = builder.use_var(config_var);
+                    do_call_and_check!(
+                        builder,
+                        call_indirect_sig,
+                        cwp,
+                        &[iv, cv, table_idx, type_idx, element_index]
+                    );
+                    if opc == op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1 {
+                        let cv2 = builder.use_var(config_var);
+                        let result = builder.ins().load(
+                            types::I64,
+                            MemFlags::trusted(),
+                            cv2,
+                            compiled_call_result_scratch_offset,
+                        );
+                        write_dst!(builder, insn.destination, result);
+                    }
+                }
+
                 op::SYNTHETIC_LOCAL_SETI32_CONST | op::SYNTHETIC_LOCAL_SETI64_CONST => {
                     let val = builder.ins().iconst(types::I64, insn.imm1);
                     write_local_inline!(builder, insn.imm2, val);
@@ -2730,6 +2757,8 @@ impl CraneliftCompiler {
                 | op::SYNTHETIC_LOCAL_SETI32_CONST
                 | op::SYNTHETIC_CALL_WITH_RECORD_0
                 | op::SYNTHETIC_CALL_WITH_RECORD_1
+                | op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_0
+                | op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1
                 | op::SYNTHETIC_ARGUMENT_GET
                 | op::SYNTHETIC_ARGUMENT_SET
                 | op::SYNTHETIC_ARGUMENT_TEE

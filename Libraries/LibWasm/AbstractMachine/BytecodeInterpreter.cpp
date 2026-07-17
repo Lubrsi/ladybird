@@ -305,6 +305,14 @@ struct InstructionOperandCounts {
 
 static InstructionOperandCounts instruction_operand_counts(OpCode opcode)
 {
+    // The opcode table's counts describe operand-stack arity, which for calls is genuinely
+    // type-dependent (-1). This function instead reports how many dispatch source slots the
+    // handler reads, and the two only diverge for the indirect call family: variadic on the
+    // operand stack, but always exactly one source (the table element index or function
+    // reference) in `sources[0]`.
+    if (first_is_one_of(opcode, Instructions::call_indirect, Instructions::return_call_indirect, Instructions::call_ref, Instructions::return_call_ref))
+        return { 1, -1 };
+
     switch (opcode.value()) {
 #define XM(name, _, ins, outs)             \
     case Wasm::Instructions::name.value(): \
@@ -2431,6 +2439,70 @@ HANDLE_INSTRUCTION(synthetic_call_with_record_1)
     auto index = instruction->arguments().get<FunctionIndex>();
     auto address = configuration.frame().module().functions()[index.value()];
     dbgln_if(WASM_TRACE_DEBUG, "call.with_record.1({})", address.value());
+    switch (auto const outcome = interpreter.call_address(configuration, address, addresses, BytecodeInterpreter::CallAddressSource::DirectCall, BytecodeInterpreter::CallType::UsingCallRecord)) {
+    case Outcome::Return:
+        return Outcome::Return;
+    default:
+        // A callee's thrown exception was caught by a try_table in this frame; continue at the catch's branch target.
+        short_ip.current_ip_value = to_underlying(outcome) - 1;
+        [[fallthrough]];
+    case Outcome::Continue:
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+    }
+}
+
+HANDLE_INSTRUCTION(synthetic_call_indirect_with_record_0)
+{
+    LOG_INSN;
+    LOAD_ADDRESSES();
+    auto& args = instruction->arguments().get<Instruction::IndirectCallArgs>();
+    auto table_address = configuration.frame().module().tables()[args.table.value()];
+    auto table_instance = configuration.store().get(table_address);
+    // bounds checked by verifier.
+    auto index = configuration.take_source<source_address_mix>(0, addresses.sources).template to<i32>();
+    TRAP_IN_LOOP_IF_NOT(index >= 0);
+    TRAP_IN_LOOP_IF_NOT(static_cast<size_t>(index) < table_instance->elements().size());
+    auto& element = table_instance->elements()[index];
+    TRAP_IN_LOOP_IF_NOT(element.ref().template has<Reference::Func>());
+    auto address = element.ref().template get<Reference::Func>().address;
+    // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-call-indirect-x-y
+    auto const* type_actual = configuration.store().get(address)->visit([](auto& f) { return f.defined_type(); });
+    auto const* type_expected = configuration.frame().module().canonical_types()[args.type.value()];
+    TRAP_IN_LOOP_IF_NOT(type_actual && matches_defined_type(*type_actual, *type_expected));
+
+    dbgln_if(WASM_TRACE_DEBUG, "call_indirect.with_record.0({} -> {})", index, address.value());
+    switch (auto const outcome = interpreter.call_address(configuration, address, addresses, BytecodeInterpreter::CallAddressSource::DirectCall, BytecodeInterpreter::CallType::UsingCallRecord)) {
+    case Outcome::Return:
+        return Outcome::Return;
+    default:
+        // A callee's thrown exception was caught by a try_table in this frame; continue at the catch's branch target.
+        short_ip.current_ip_value = to_underlying(outcome) - 1;
+        [[fallthrough]];
+    case Outcome::Continue:
+        TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
+    }
+}
+
+HANDLE_INSTRUCTION(synthetic_call_indirect_with_record_1)
+{
+    LOG_INSN;
+    LOAD_ADDRESSES();
+    auto& args = instruction->arguments().get<Instruction::IndirectCallArgs>();
+    auto table_address = configuration.frame().module().tables()[args.table.value()];
+    auto table_instance = configuration.store().get(table_address);
+    // bounds checked by verifier.
+    auto index = configuration.take_source<source_address_mix>(0, addresses.sources).template to<i32>();
+    TRAP_IN_LOOP_IF_NOT(index >= 0);
+    TRAP_IN_LOOP_IF_NOT(static_cast<size_t>(index) < table_instance->elements().size());
+    auto& element = table_instance->elements()[index];
+    TRAP_IN_LOOP_IF_NOT(element.ref().template has<Reference::Func>());
+    auto address = element.ref().template get<Reference::Func>().address;
+    // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-call-indirect-x-y
+    auto const* type_actual = configuration.store().get(address)->visit([](auto& f) { return f.defined_type(); });
+    auto const* type_expected = configuration.frame().module().canonical_types()[args.type.value()];
+    TRAP_IN_LOOP_IF_NOT(type_actual && matches_defined_type(*type_actual, *type_expected));
+
+    dbgln_if(WASM_TRACE_DEBUG, "call_indirect.with_record.1({} -> {})", index, address.value());
     switch (auto const outcome = interpreter.call_address(configuration, address, addresses, BytecodeInterpreter::CallAddressSource::DirectCall, BytecodeInterpreter::CallType::UsingCallRecord)) {
     case Outcome::Return:
         return Outcome::Return;
@@ -6904,7 +6976,7 @@ Instruction& InstructionStorage::append(Instruction instruction)
     return slot.value();
 }
 
-CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
+CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count, Span<TypeSection::Type const> types)
 {
     CompiledInstructions result;
 
@@ -7778,12 +7850,25 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
 
         Vector<ValueID> input_ids;
 
-        if (opcode == Instructions::call) {
-            auto& type = functions[dispatch.instruction->arguments().get<FunctionIndex>().value()];
+        if (opcode == Instructions::call || opcode == Instructions::call_indirect) {
+            bool const is_indirect = opcode == Instructions::call_indirect;
+            FunctionType const* maybe_type = nullptr;
+            if (is_indirect) {
+                auto type_index = dispatch.instruction->arguments().get<Instruction::IndirectCallArgs>().type.value();
+                if (type_index < types.size() && types[type_index].is_function())
+                    maybe_type = &types[type_index].function();
+            } else {
+                maybe_type = &functions[dispatch.instruction->arguments().get<FunctionIndex>().value()];
+            }
+            // For call_indirect, the table element index on top of the stack stays a regular
+            // dispatch source; only the arguments below it move into the call record.
+            size_t const arg_base = is_indirect ? 1 : 0;
 
-            if (type.parameters().size() <= (Dispatch::LastCallRecord - Dispatch::CallRecord + 1)
-                && type.results().size() <= 1
-                && type.parameters().size() <= value_stack.size()) {
+            if (maybe_type
+                && maybe_type->parameters().size() <= (Dispatch::LastCallRecord - Dispatch::CallRecord + 1)
+                && maybe_type->results().size() <= 1
+                && maybe_type->parameters().size() + arg_base <= value_stack.size()) {
+                auto const& type = *maybe_type;
 
                 inputs = type.parameters().size();
                 outputs = type.results().size();
@@ -7791,6 +7876,15 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 requires_aliased_destination = false;
 
                 auto value_stack_copy = value_stack;
+
+                if (is_indirect) {
+                    auto element_value = value_stack.take_last();
+                    auto& value = values.get(element_value).value();
+                    input_ids.append(element_value);
+                    dependent_ids.append(element_value);
+                    value.uses.append(i);
+                    value.last_use = max(value.last_use, i);
+                }
 
                 for (size_t j = 0; j < inputs; ++j) {
                     auto input_value = value_stack.take_last();
@@ -7812,7 +7906,11 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                     value.last_use = max(value.last_use, i);
                     forced_stack_values.append(input_value);
                 }
-                instr_to_input_values.set(i, input_ids);
+                // Only the element index may be a dispatch source; the record args have forced slots.
+                if (is_indirect)
+                    instr_to_input_values.set(i, Vector<ValueID> { input_ids.first() });
+                else
+                    instr_to_input_values.set(i, input_ids);
                 instr_to_dependent_values.set(i, dependent_ids);
 
                 for (size_t j = 0; j < outputs; ++j) {
@@ -7825,7 +7923,8 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
 
                 size_t earliest = i;
                 ValueID earliest_arg_value = NumericLimits<size_t>::max();
-                for (auto value_id : input_ids) {
+                for (size_t j = arg_base; j < input_ids.size(); ++j) {
+                    auto value_id = input_ids[j];
                     auto& value = values.get(value_id).value();
                     if (earliest > value.definition_index.value()) {
                         earliest = value.definition_index.value();
@@ -7836,12 +7935,12 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 // Reverse the input_ids to match stack order
                 Vector<ValueID> reversed_args;
                 for (size_t j = 0; j < inputs; ++j) {
-                    reversed_args.append(input_ids[inputs - 1 - j]);
+                    reversed_args.append(input_ids[arg_base + inputs - 1 - j]);
                 }
 
                 // Follow the alias root of the earliest arg value to find the first instruction that produced it.
                 auto new_earliest = earliest;
-                while (true) {
+                while (inputs > 0) {
                     auto maybe_inputs = instr_to_input_values.get(new_earliest);
                     if (!maybe_inputs.has_value())
                         break;
@@ -8032,9 +8131,14 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
             value_to_callrec_slot.set(call_info->arg_values[j], Dispatch::CallRecord + j);
         }
 
-        auto new_call_opcode = call_info->result_count == 0
-            ? Instructions::synthetic_call_with_record_0
-            : Instructions::synthetic_call_with_record_1;
+        auto const is_indirect = result.dispatches[call_info->call_index].instruction->opcode() == Instructions::call_indirect;
+        auto new_call_opcode = is_indirect
+            ? (call_info->result_count == 0
+                      ? Instructions::synthetic_call_indirect_with_record_0
+                      : Instructions::synthetic_call_indirect_with_record_1)
+            : (call_info->result_count == 0
+                      ? Instructions::synthetic_call_with_record_0
+                      : Instructions::synthetic_call_with_record_1);
 
         auto new_call_insn = Instruction(
             new_call_opcode,
@@ -8452,16 +8556,15 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 VERIFY_NOT_REACHED();
             }
         }
-        // If the instruction is a call with a callrec, clear used[] for the callrec registers.
-        if (dispatch.instruction->opcode() == Instructions::synthetic_call_with_record_0 || dispatch.instruction->opcode() == Instructions::synthetic_call_with_record_1) {
-            for (size_t j = to_underlying(Dispatch::CallRecord); j <= to_underlying(Dispatch::LastCallRecord); ++j)
-                used[j] = false;
-        }
-
         auto& addr = result.src_dst_mappings[i];
 
         // for each input, ensure it's not reading from a register that is not marked as used (unless stack).
         auto [in_count, out_count] = instruction_operand_counts(dispatch.instruction->opcode());
+        // A raw call_indirect has a variadic operand count, but still consumes its table
+        // element index through sources[0], which may hold a register since it stays a
+        // regular dispatch source even when the call is not converted to the record form.
+        if (dispatch.instruction->opcode() == Instructions::call_indirect)
+            in_count = 1;
         for (ssize_t j = 0; j < in_count; ++j) {
             auto src = addr.sources[j];
             if (src == Dispatch::Stack)
@@ -8473,6 +8576,13 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 VERIFY_NOT_REACHED();
             }
             used[to_underlying(src)] = false;
+        }
+        // If the instruction is a call with a callrec, the call consumes the record: clear
+        // used[] for the callrec registers (after its own source reads, before its result write).
+        if (first_is_one_of(dispatch.instruction->opcode(), Instructions::synthetic_call_with_record_0, Instructions::synthetic_call_with_record_1,
+                Instructions::synthetic_call_indirect_with_record_0, Instructions::synthetic_call_indirect_with_record_1)) {
+            for (size_t j = to_underlying(Dispatch::CallRecord); j <= to_underlying(Dispatch::LastCallRecord); ++j)
+                used[j] = false;
         }
         // if the instruction has an output, ensure it's not writing to a register that is marked used.
         if (out_count == 1 || first_is_one_of(dispatch.instruction->opcode(), Instructions::call, Instructions::call_indirect, Instructions::call_ref)) {

@@ -81,6 +81,8 @@ pub struct RuntimeHelpers {
     pub memory_fill: usize,
     // Address of the process-global primitive storage cage base.
     pub primitive_storage_cage_base: usize,
+    // i32 fn(interp, config, table_idx, type_idx, element_index); call using call record args
+    pub call_indirect_with_record: usize,
 
     pub primitive_storage_cage_offset_mask: usize,
 
@@ -136,9 +138,10 @@ pub enum HelperId {
     memory_copy = 29,
     memory_fill = 30,
     primitive_storage_cage_base = 31,
+    call_indirect_with_record = 32,
 }
 
-pub const HELPER_COUNT: u32 = 32;
+pub const HELPER_COUNT: u32 = 33;
 
 /// One relocation slot in the generated machine code. `code_offset` is the byte offset
 /// from the start of the function where 8 contiguous bytes hold the absolute helper

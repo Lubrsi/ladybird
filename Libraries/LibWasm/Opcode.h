@@ -521,70 +521,72 @@ namespace Instructions {
     /* Synthetic fused insns */                               \
     ENUMERATE_SYNTHETIC_INSTRUCTION_OPCODES(M)
 
-#define ENUMERATE_SYNTHETIC_INSTRUCTION_OPCODES(M)     \
-    M(synthetic_i32_add2local, 0xfe000000u, 0, 1)      \
-    M(synthetic_i32_addconstlocal, 0xfe000001u, 0, 1)  \
-    M(synthetic_i32_andconstlocal, 0xfe000002u, 0, 1)  \
-    M(synthetic_i32_storelocal, 0xfe000003u, 1, 0)     \
-    M(synthetic_local_seti32_const, 0xfe000005u, 0, 0) \
-    M(synthetic_call_00, 0xfe000006u, 0, 0)            \
-    M(synthetic_call_01, 0xfe000007u, 0, 1)            \
-    M(synthetic_call_10, 0xfe000008u, 1, 0)            \
-    M(synthetic_call_11, 0xfe000009u, 1, 1)            \
-    M(synthetic_call_20, 0xfe00000au, 2, 0)            \
-    M(synthetic_call_21, 0xfe00000bu, 2, 1)            \
-    M(synthetic_call_30, 0xfe00000cu, 3, 0)            \
-    M(synthetic_call_31, 0xfe00000du, 3, 1)            \
-    M(synthetic_end_expression, 0xfe00000eu, 0, 0)     \
-    M(synthetic_argument_get, 0xfe00000fu, 0, 1)       \
-    M(synthetic_argument_set, 0xfe000010u, 1, 0)       \
-    M(synthetic_argument_tee, 0xfe000011u, 1, 1)       \
-    M(synthetic_call_with_record_0, 0xfe000012u, 0, 0) \
-    M(synthetic_call_with_record_1, 0xfe000013u, 0, 1) \
-    M(synthetic_local_get_0, 0xfe000014u, 0, 1)        \
-    M(synthetic_local_get_1, 0xfe000015u, 0, 1)        \
-    M(synthetic_local_get_2, 0xfe000016u, 0, 1)        \
-    M(synthetic_local_get_3, 0xfe000017u, 0, 1)        \
-    M(synthetic_local_get_4, 0xfe000018u, 0, 1)        \
-    M(synthetic_local_get_5, 0xfe000019u, 0, 1)        \
-    M(synthetic_local_get_6, 0xfe00001au, 0, 1)        \
-    M(synthetic_local_get_7, 0xfe00001bu, 0, 1)        \
-    M(synthetic_br_nostack, 0xfe00001cu, 0, -1)        \
-    M(synthetic_br_if_nostack, 0xfe00001du, 1, -1)     \
-    M(synthetic_local_set_0, 0xfe00001eu, 1, 0)        \
-    M(synthetic_local_set_1, 0xfe00001fu, 1, 0)        \
-    M(synthetic_local_set_2, 0xfe000020u, 1, 0)        \
-    M(synthetic_local_set_3, 0xfe000021u, 1, 0)        \
-    M(synthetic_local_set_4, 0xfe000022u, 1, 0)        \
-    M(synthetic_local_set_5, 0xfe000023u, 1, 0)        \
-    M(synthetic_local_set_6, 0xfe000024u, 1, 0)        \
-    M(synthetic_local_set_7, 0xfe000025u, 1, 0)        \
-    M(synthetic_local_copy, 0xfe000026u, 0, 0)         \
-    M(synthetic_i32_sub2local, 0xfe000027u, 0, 1)      \
-    M(synthetic_i32_mul2local, 0xfe000028u, 0, 1)      \
-    M(synthetic_i32_and2local, 0xfe000029u, 0, 1)      \
-    M(synthetic_i32_or2local, 0xfe00002au, 0, 1)       \
-    M(synthetic_i32_xor2local, 0xfe00002bu, 0, 1)      \
-    M(synthetic_i32_shl2local, 0xfe00002cu, 0, 1)      \
-    M(synthetic_i32_shru2local, 0xfe00002du, 0, 1)     \
-    M(synthetic_i32_shrs2local, 0xfe00002eu, 0, 1)     \
-    M(synthetic_i64_add2local, 0xfe00002fu, 0, 1)      \
-    M(synthetic_i64_addconstlocal, 0xfe000030u, 0, 1)  \
-    M(synthetic_i64_andconstlocal, 0xfe000031u, 0, 1)  \
-    M(synthetic_i64_storelocal, 0xfe000032u, 1, 0)     \
-    M(synthetic_i64_sub2local, 0xfe000033u, 0, 1)      \
-    M(synthetic_i64_mul2local, 0xfe000034u, 0, 1)      \
-    M(synthetic_i64_and2local, 0xfe000035u, 0, 1)      \
-    M(synthetic_i64_or2local, 0xfe000036u, 0, 1)       \
-    M(synthetic_i64_xor2local, 0xfe000037u, 0, 1)      \
-    M(synthetic_i64_shl2local, 0xfe000038u, 0, 1)      \
-    M(synthetic_i64_shru2local, 0xfe000039u, 0, 1)     \
-    M(synthetic_i64_shrs2local, 0xfe00003au, 0, 1)     \
-    M(synthetic_local_seti64_const, 0xfe00003bu, 0, 0) \
-    /* Continuation data for br_table with >8 labels.  \
-     * Only consumed by the Cranelift compiler; */     \
-    M(synthetic_br_table_cont, 0xfe00003cu, 0, 0)      \
-    M(synthetic_tier_up, 0xfe00003du, 0, 0)
+#define ENUMERATE_SYNTHETIC_INSTRUCTION_OPCODES(M)              \
+    M(synthetic_i32_add2local, 0xfe000000u, 0, 1)               \
+    M(synthetic_i32_addconstlocal, 0xfe000001u, 0, 1)           \
+    M(synthetic_i32_andconstlocal, 0xfe000002u, 0, 1)           \
+    M(synthetic_i32_storelocal, 0xfe000003u, 1, 0)              \
+    M(synthetic_local_seti32_const, 0xfe000005u, 0, 0)          \
+    M(synthetic_call_00, 0xfe000006u, 0, 0)                     \
+    M(synthetic_call_01, 0xfe000007u, 0, 1)                     \
+    M(synthetic_call_10, 0xfe000008u, 1, 0)                     \
+    M(synthetic_call_11, 0xfe000009u, 1, 1)                     \
+    M(synthetic_call_20, 0xfe00000au, 2, 0)                     \
+    M(synthetic_call_21, 0xfe00000bu, 2, 1)                     \
+    M(synthetic_call_30, 0xfe00000cu, 3, 0)                     \
+    M(synthetic_call_31, 0xfe00000du, 3, 1)                     \
+    M(synthetic_end_expression, 0xfe00000eu, 0, 0)              \
+    M(synthetic_argument_get, 0xfe00000fu, 0, 1)                \
+    M(synthetic_argument_set, 0xfe000010u, 1, 0)                \
+    M(synthetic_argument_tee, 0xfe000011u, 1, 1)                \
+    M(synthetic_call_with_record_0, 0xfe000012u, 0, 0)          \
+    M(synthetic_call_with_record_1, 0xfe000013u, 0, 1)          \
+    M(synthetic_local_get_0, 0xfe000014u, 0, 1)                 \
+    M(synthetic_local_get_1, 0xfe000015u, 0, 1)                 \
+    M(synthetic_local_get_2, 0xfe000016u, 0, 1)                 \
+    M(synthetic_local_get_3, 0xfe000017u, 0, 1)                 \
+    M(synthetic_local_get_4, 0xfe000018u, 0, 1)                 \
+    M(synthetic_local_get_5, 0xfe000019u, 0, 1)                 \
+    M(synthetic_local_get_6, 0xfe00001au, 0, 1)                 \
+    M(synthetic_local_get_7, 0xfe00001bu, 0, 1)                 \
+    M(synthetic_br_nostack, 0xfe00001cu, 0, -1)                 \
+    M(synthetic_br_if_nostack, 0xfe00001du, 1, -1)              \
+    M(synthetic_local_set_0, 0xfe00001eu, 1, 0)                 \
+    M(synthetic_local_set_1, 0xfe00001fu, 1, 0)                 \
+    M(synthetic_local_set_2, 0xfe000020u, 1, 0)                 \
+    M(synthetic_local_set_3, 0xfe000021u, 1, 0)                 \
+    M(synthetic_local_set_4, 0xfe000022u, 1, 0)                 \
+    M(synthetic_local_set_5, 0xfe000023u, 1, 0)                 \
+    M(synthetic_local_set_6, 0xfe000024u, 1, 0)                 \
+    M(synthetic_local_set_7, 0xfe000025u, 1, 0)                 \
+    M(synthetic_local_copy, 0xfe000026u, 0, 0)                  \
+    M(synthetic_i32_sub2local, 0xfe000027u, 0, 1)               \
+    M(synthetic_i32_mul2local, 0xfe000028u, 0, 1)               \
+    M(synthetic_i32_and2local, 0xfe000029u, 0, 1)               \
+    M(synthetic_i32_or2local, 0xfe00002au, 0, 1)                \
+    M(synthetic_i32_xor2local, 0xfe00002bu, 0, 1)               \
+    M(synthetic_i32_shl2local, 0xfe00002cu, 0, 1)               \
+    M(synthetic_i32_shru2local, 0xfe00002du, 0, 1)              \
+    M(synthetic_i32_shrs2local, 0xfe00002eu, 0, 1)              \
+    M(synthetic_i64_add2local, 0xfe00002fu, 0, 1)               \
+    M(synthetic_i64_addconstlocal, 0xfe000030u, 0, 1)           \
+    M(synthetic_i64_andconstlocal, 0xfe000031u, 0, 1)           \
+    M(synthetic_i64_storelocal, 0xfe000032u, 1, 0)              \
+    M(synthetic_i64_sub2local, 0xfe000033u, 0, 1)               \
+    M(synthetic_i64_mul2local, 0xfe000034u, 0, 1)               \
+    M(synthetic_i64_and2local, 0xfe000035u, 0, 1)               \
+    M(synthetic_i64_or2local, 0xfe000036u, 0, 1)                \
+    M(synthetic_i64_xor2local, 0xfe000037u, 0, 1)               \
+    M(synthetic_i64_shl2local, 0xfe000038u, 0, 1)               \
+    M(synthetic_i64_shru2local, 0xfe000039u, 0, 1)              \
+    M(synthetic_i64_shrs2local, 0xfe00003au, 0, 1)              \
+    M(synthetic_local_seti64_const, 0xfe00003bu, 0, 0)          \
+    /* Continuation data for br_table with >8 labels.           \
+     * Only consumed by the Cranelift compiler; */              \
+    M(synthetic_br_table_cont, 0xfe00003cu, 0, 0)               \
+    M(synthetic_tier_up, 0xfe00003du, 0, 0)                     \
+    M(synthetic_call_indirect_with_record_0, 0xfe00003eu, 1, 0) \
+    M(synthetic_call_indirect_with_record_1, 0xfe00003fu, 1, 1)
 
 #define ENUMERATE_WASM_OPCODES(M)         \
     ENUMERATE_SINGLE_BYTE_WASM_OPCODES(M) \
