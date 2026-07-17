@@ -285,19 +285,60 @@ static bool install_compiled_function(CompiledInstructions& target, ReadonlyByte
 
 }
 
+// Compiled functions have no Frame on the frame stack; their context lives in Configuration
+// scalars that callees and interpreter unwinds clobber. Every bridge helper that can run
+// other functions restores the caller's context through this before returning to its code.
+// The call record and depth are excluded: the paths that change them restore them themselves.
+class CompiledCallerContext {
+    AK_MAKE_NONCOPYABLE(CompiledCallerContext);
+    AK_MAKE_NONMOVABLE(CompiledCallerContext);
+
+public:
+    explicit CompiledCallerContext(Configuration& config)
+        : m_config(config)
+        , m_locals_base(config.locals_base())
+        , m_current_module(config.current_module())
+        , m_current_compiled_fn_table(config.current_compiled_fn_table())
+        , m_default_memory(config.default_memory())
+    {
+    }
+
+    ~CompiledCallerContext()
+    {
+        m_config.m_locals_base = m_locals_base;
+        m_config.m_current_module = m_current_module;
+        m_config.m_current_compiled_fn_table = m_current_compiled_fn_table;
+        m_config.m_default_memory = m_default_memory;
+    }
+
+private:
+    Configuration& m_config;
+    Value* m_locals_base;
+    ModuleInstance const* m_current_module;
+    Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table;
+    MemoryInstance* m_default_memory;
+};
+
 extern "C" {
 
-// Shared tail of a compiled-to-compiled call: lightweight non-owning frame push + direct handler call.
+// Shared tail of a compiled-to-compiled call: swap the callee's context into the
+// Configuration scalars and call its native code directly.
 static ALWAYS_INLINE i32 wasm_cl_run_compiled(BytecodeInterpreter& interpreter, Configuration& config, CompiledFunctionEntry const& entry, Value* callee_locals)
 {
-    BytecodeInterpreter::CallFrameHandle handle { interpreter, config };
-    config.set_frame_lightweight(*entry.module, callee_locals, *entry.expression, entry.arity, entry.max_call_rec_size);
+    auto* caller_record_base = config.call_record_base();
+    auto* caller_record_mark = config.m_call_record_stack.mark();
+    config.depth()++;
+    config.set_callee_context(*entry.module, callee_locals, *entry.expression, entry.max_call_rec_size);
     config.ip() = 0;
 
     interpreter.clear_trap();
     using HandlerFn = Outcome (*)(BytecodeInterpreter&, Configuration&, Instruction const*, u32, Dispatch const*, SourcesAndDestination const*);
     auto const handler = bit_cast<HandlerFn>(entry.handler_ptr);
     auto outcome = handler(interpreter, config, entry.first_insn, 0, bit_cast<Dispatch const*>(entry.dispatches_ptr), bit_cast<SourcesAndDestination const*>(entry.src_dst_ptr));
+
+    config.m_call_record_stack.release_to(caller_record_mark);
+    config.set_call_record_base(caller_record_base);
+    config.depth()--;
 
     if (outcome != Outcome::Return) {
         interpreter.set_trap("Compiled function returned unexpectedly"sv);
@@ -307,7 +348,6 @@ static ALWAYS_INLINE i32 wasm_cl_run_compiled(BytecodeInterpreter& interpreter, 
         return 1;
     if (entry.arity == 1)
         config.compiled_call_result_scratch() = config.value_stack().unsafe_take_last();
-    // No label pop: set_frame_lightweight doesn't push labels.
     return 0;
 }
 
@@ -418,6 +458,7 @@ i32 wasm_cl_call_function(void* interp_ptr, void* config_ptr, i32 func_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
 
     auto const& module = *config.current_module();
     auto const& functions = module.functions();
@@ -433,7 +474,7 @@ i32 wasm_cl_call_function(void* interp_ptr, void* config_ptr, i32 func_index)
     addrs.destination = Dispatch::RegisterOrStack::Stack;
 
     auto outcome = interpreter.call_address(config, address, addrs,
-        BytecodeInterpreter::CallAddressSource::DirectCall,
+        BytecodeInterpreter::CallAddressSource::CompiledDirectCall,
         BytecodeInterpreter::CallType::UsingStack);
 
     return outcome == Outcome::Return && interpreter.did_trap() ? 1 : 0;
@@ -669,6 +710,7 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
 
     auto const& module = *config.current_module();
     auto table_address = module.tables()[table_idx];
@@ -697,7 +739,7 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     addrs.sources[2] = Dispatch::RegisterOrStack::Stack;
     addrs.destination = Dispatch::RegisterOrStack::Stack;
 
-    auto outcome = interpreter.call_address(config, address, addrs, BytecodeInterpreter::CallAddressSource::IndirectCall, BytecodeInterpreter::CallType::UsingStack);
+    auto outcome = interpreter.call_address(config, address, addrs, BytecodeInterpreter::CallAddressSource::CompiledIndirectCall, BytecodeInterpreter::CallType::UsingStack);
 
     return outcome == Outcome::Return && interpreter.did_trap() ? 1 : 0;
 }
@@ -817,6 +859,7 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
 
     auto const& module = *config.current_module();
     auto const& functions = module.functions();
@@ -873,6 +916,7 @@ i32 wasm_cl_direct_call_0(void* interp_ptr, void* config_ptr, i32 func_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
     return wasm_cl_direct_call_impl(interpreter, config, func_index, nullptr, 0);
 }
 
@@ -881,6 +925,7 @@ i32 wasm_cl_direct_call_1(void* interp_ptr, void* config_ptr, i32 func_index, i6
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
     Value args[] = { Value(arg0) };
     return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 1);
 }
@@ -890,6 +935,7 @@ i32 wasm_cl_direct_call_2(void* interp_ptr, void* config_ptr, i32 func_index, i6
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
     Value args[] = { Value(arg0), Value(arg1) };
     return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 2);
 }
@@ -899,37 +945,9 @@ i32 wasm_cl_direct_call_3(void* interp_ptr, void* config_ptr, i32 func_index, i6
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
     Value args[] = { Value(arg0), Value(arg1), Value(arg2) };
     return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 3);
-}
-
-// Thin frame push for direct compiled-to-compiled calls. Returns 1 on trap, 0 on success.
-i32 wasm_cl_push_frame(void* interp_ptr, void* config_ptr, Value* locals_ptr, u32, void const* module_ptr, void const* expression_ptr, u32 arity, u32 max_call_rec_size);
-i32 wasm_cl_push_frame(void* interp_ptr, void* config_ptr, Value* locals_ptr, u32 /* total_locals */, void const* module_ptr, void const* expression_ptr, u32 arity, u32 max_call_rec_size)
-{
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    auto& config = *static_cast<Configuration*>(config_ptr);
-    auto const& module = *static_cast<ModuleInstance const*>(module_ptr);
-    auto const& expression = *static_cast<Expression const*>(expression_ptr);
-
-    if (interpreter.trap_if_insufficient_native_stack_space())
-        return 1;
-
-    config.set_frame_lightweight(module, locals_ptr, expression, arity, max_call_rec_size);
-    config.depth()++;
-    return 0;
-}
-
-// Thin frame pop for direct compiled-to-compiled calls.
-void wasm_cl_pop_frame(void* config_ptr, u32 arity);
-void wasm_cl_pop_frame(void* config_ptr, u32 arity)
-{
-    auto& config = *static_cast<Configuration*>(config_ptr);
-    if (arity == 1)
-        config.compiled_call_result_scratch() = config.value_stack().unsafe_take_last();
-    if (!config.label_stack().is_empty())
-        config.label_stack().take_last();
-    config.unwind_impl();
 }
 }
 

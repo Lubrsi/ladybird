@@ -78,33 +78,25 @@ public:
         else
             m_call_record_base = nullptr;
     }
-    // Lightweight set_frame for direct Cranelift-to-Cranelift calls.
-    void set_frame_lightweight(ModuleInstance const& module, Value* locals_ptr,
-        Expression const& expression, size_t arity, size_t max_call_rec_size)
+    // Direct Cranelift-to-Cranelift calls don't push a Frame; the callee's context lives
+    // entirely in these scalars, and the bridge restores the caller's copy on return.
+    void set_callee_context(ModuleInstance const& module, Value* locals_ptr,
+        Expression const& expression, size_t max_call_rec_size)
     {
-        VERIFY(bit_cast<FlatPtr>(&module) != 0);
-
-        // For the (common) same-module call case, we already have the compiled-fn-table pointer cached, so reuse it instead of re-resolving through the store on every call.
-        bool const same_module = m_current_module == &module;
-        auto const* table = same_module ? m_current_compiled_fn_table : &module.compiled_fn_table(m_store);
-        m_frame_stack.empend(module, locals_ptr, expression, arity);
-        m_frame_stack.last().set_compiled_fn_table(table);
-        m_current_module = &module;
-        m_current_compiled_fn_table = table;
-        m_locals_base = locals_ptr;
-        if (!same_module) {
+        if (m_current_module != &module) {
+            m_current_module = &module;
+            m_current_compiled_fn_table = &module.compiled_fn_table(m_store);
             auto const& memories = module.memories();
             m_default_memory = memories.is_empty() ? nullptr : m_store.unsafe_get(memories[0]);
         }
+        m_locals_base = locals_ptr;
         // Compiled code pushes to the value stack without bounds checks, so the frame's
         // whole stack usage must be verified to fit here.
         if (auto hint = expression.stack_usage_hint(); hint.has_value())
             m_value_stack.ensure_capacity(m_value_stack.size() + *hint);
         // Compiled code writes call-record entries without null checks, so allocate eagerly
-        // (heavy set_frame does the same).
-        if (max_call_rec_size > 0)
-            m_call_record_base = m_call_record_stack.allocate(max_call_rec_size);
-        // Skip the label push (Cranelift uses its own structured control flow).
+        // (set_frame does the same).
+        m_call_record_base = max_call_rec_size > 0 ? m_call_record_stack.allocate(max_call_rec_size) : nullptr;
     }
 
     ALWAYS_INLINE auto& frame() const { return m_frame_stack.last(); }
@@ -307,7 +299,6 @@ public:
         Value(0),
     };
 
-    // Public for CraneliftBridge direct call pop_frame.
     void unwind_impl();
 
     Store& m_store;

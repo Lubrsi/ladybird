@@ -6665,7 +6665,7 @@ Outcome BytecodeInterpreter::call_address(Configuration& configuration, Function
         auto instance = configuration.store().get(address);
         FunctionType const* type { nullptr };
         instance->visit([&](auto const& function) { type = &function.type(); });
-        if (source == CallAddressSource::IndirectCall || source == CallAddressSource::IndirectTailCall) {
+        if (source == CallAddressSource::IndirectCall || source == CallAddressSource::IndirectTailCall || source == CallAddressSource::CompiledIndirectCall) {
             TRAP_IF_NOT(type->parameters().size() <= configuration.value_stack().size());
         }
         Vector<Value, ArgumentsStaticSize> args;
@@ -6725,7 +6725,10 @@ Outcome BytecodeInterpreter::call_address(Configuration& configuration, Function
 
         if (result.is_trap()) {
             // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-throw-ref
-            if (auto const* uncaught_exception = result.trap().data.get_pointer<UncaughtException>(); uncaught_exception && final_outcome == Outcome::Continue) {
+            // A compiled caller has no Frame or labels to search, so let the exception propagate
+            // outward as a trap until it reaches an interpreter frame that can look for a handler.
+            bool const caller_may_catch = source != CallAddressSource::CompiledDirectCall && source != CallAddressSource::CompiledIndirectCall;
+            if (auto const* uncaught_exception = result.trap().data.get_pointer<UncaughtException>(); uncaught_exception && final_outcome == Outcome::Continue && caller_may_catch) {
                 if (auto continuation = unwind_to_throw_handler(configuration, uncaught_exception->address); continuation.has_value()) {
                     // The callee's interpret() left the exception in m_trap; it's handled now.
                     m_trap = Empty {};
