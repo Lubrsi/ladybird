@@ -690,7 +690,7 @@ static RuntimeHelpers make_runtime_helpers()
     };
 }
 
-static CraneliftInsn serialize_insn(Dispatch const& dispatch, SourcesAndDestination const& addr)
+static CraneliftInsn serialize_insn(Dispatch const& dispatch, SourcesAndDestination const& addr, ReadonlySpan<u8> global_types)
 {
     CraneliftInsn out {};
     auto const* insn = dispatch.instruction;
@@ -714,10 +714,19 @@ static CraneliftInsn serialize_insn(Dispatch const& dispatch, SourcesAndDestinat
         out.imm1 = static_cast<i64>(bit_cast<i32>(args.get<float>()));
     } else if (opc == Instructions::f64_const.value()) {
         out.imm1 = bit_cast<i64>(args.get<double>());
+    } else if (opc == Instructions::v128_const.value()) {
+        auto value = args.get<u128>();
+        out.imm1 = bit_cast<i64>(value.low());
+        out.imm2 = bit_cast<i64>(value.high());
     } else if (opc == Instructions::local_get.value() || opc == Instructions::local_set.value() || opc == Instructions::local_tee.value()) {
         out.imm1 = static_cast<i64>(insn->local_index().value());
     } else if (opc == Instructions::global_get.value() || opc == Instructions::global_set.value()) {
-        out.imm1 = static_cast<i64>(args.get<GlobalIndex>().value());
+        auto index = args.get<GlobalIndex>().value();
+        out.imm1 = static_cast<i64>(index);
+        if (index < global_types.size())
+            out.imm3 = global_types[index];
+    } else if (opc == Instructions::i64x2_extract_lane.value()) {
+        out.imm1 = static_cast<i64>(args.get<Instruction::LaneIndex>().lane);
     } else if (opc == Instructions::br.value() || opc == Instructions::br_if.value()) {
         auto const& br_args = args.get<Instruction::BranchArgs>();
         out.imm1 = static_cast<i64>(br_args.label.value());
@@ -1180,7 +1189,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
     Vector<CraneliftInsn> flat;
     flat.ensure_capacity(dispatches.size());
     for (size_t i = 0; i < dispatches.size(); ++i) {
-        flat.append(serialize_insn(dispatches[i], addresses[i]));
+        flat.append(serialize_insn(dispatches[i], addresses[i], compiled.cranelift_global_types.span()));
 
         if (dispatches[i].instruction->opcode().value() == Instructions::synthetic_tier_up.value())
             flat.last().imm1 = static_cast<i64>(i);

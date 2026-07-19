@@ -9,9 +9,10 @@ pub mod compiler;
 use compiler::CraneliftCompiler;
 
 /// Immediates:
-///   constants:    imm1 = value (i32 sign-extended, i64, or f32/f64 bits)
+///   constants:    imm1 = value (i32 sign-extended, i64, or f32/f64 bits); v128 uses imm1/imm2
 ///   local ops:    imm1 = local index
-///   global ops:   imm1 = global index
+///   global ops:   imm1 = global index, imm3 = value type
+///   lane ops:     imm1 = lane index
 ///   branch:       imm1 = label index (from control stack)
 ///   block/loop:   imm1 = end_ip, imm2 = else_ip (-1 if none), imm3 = arity | (param_count << 16)
 ///   call:         imm1 = function index

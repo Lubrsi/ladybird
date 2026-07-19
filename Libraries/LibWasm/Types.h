@@ -988,6 +988,7 @@ struct CompiledInstructions {
     InstructionStorage extra_instruction_storage;
 
     Vector<u8> cranelift_local_types;
+    Vector<u8> cranelift_global_types;
 
     // Pointer/size_t-sized members first, then the u32, then the bools, so the trailing scalars pack
     // into one word instead of scattering padding between them.

@@ -5123,14 +5123,44 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
     if (expression.compiled_instructions.direct && !is_constant_expression) {
         bool has_unsupported_types = false;
         for (auto& type : m_context.locals) {
-            if (type.is_reference() || type.kind() == ValueType::V128) {
+            if (type.is_reference()) {
                 has_unsupported_types = true;
                 break;
             }
         }
         if (!has_unsupported_types) {
             for (auto& type : result_types) {
-                if (type.is_reference() || type.kind() == ValueType::V128) {
+                if (type.is_reference()) {
+                    has_unsupported_types = true;
+                    break;
+                }
+            }
+        }
+        bool has_v128_values = any_of(m_context.locals, [](auto const& type) { return type.kind() == ValueType::V128; })
+            || any_of(result_types, [](auto const& type) { return type.kind() == ValueType::V128; });
+        if (!has_v128_values) {
+            for (auto const& insn : expression.instructions()) {
+                if (insn.opcode() == Instructions::v128_const || insn.opcode() == Instructions::i64x2_extract_lane) {
+                    has_v128_values = true;
+                    break;
+                }
+                if (insn.opcode() == Instructions::global_get || insn.opcode() == Instructions::global_set) {
+                    auto index = insn.arguments().get<GlobalIndex>().value();
+                    if (m_context.globals[index].type().kind() == ValueType::V128) {
+                        has_v128_values = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // V128 call arguments/results and select need typed call and instruction metadata that
+        // the first V128 compiler slice does not carry yet.
+        if (!has_unsupported_types && has_v128_values) {
+            for (auto const& insn : expression.instructions()) {
+                if (insn.opcode() == Instructions::call
+                    || insn.opcode() == Instructions::call_indirect
+                    || insn.opcode() == Instructions::select
+                    || insn.opcode() == Instructions::select_typed) {
                     has_unsupported_types = true;
                     break;
                 }
@@ -5166,6 +5196,9 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
             expression.compiled_instructions.cranelift_local_types.ensure_capacity(m_context.locals.size());
             for (auto& type : m_context.locals)
                 expression.compiled_instructions.cranelift_local_types.unchecked_append(to_underlying(type.kind()));
+            expression.compiled_instructions.cranelift_global_types.ensure_capacity(m_context.globals.size());
+            for (auto const& global : m_context.globals)
+                expression.compiled_instructions.cranelift_global_types.unchecked_append(to_underlying(global.type().kind()));
         }
     }
 
