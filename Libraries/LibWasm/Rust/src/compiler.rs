@@ -163,8 +163,10 @@ impl CraneliftCompiler {
         const V128_KIND: u8 = 4;
         let uses_v128 = local_types.contains(&V128_KIND)
             || insns.iter().any(|insn| {
-                matches!(insn.opcode, op::V128_CONST | op::I64X2_EXTRACT_LANE)
-                    || matches!(insn.opcode, op::GLOBAL_GET | op::GLOBAL_SET) && insn.imm3 == u32::from(V128_KIND)
+                matches!(
+                    insn.opcode,
+                    op::V128_CONST | op::V128_AND | op::V128_OR | op::V128_XOR | op::V128_NOT | op::I64X2_EXTRACT_LANE
+                ) || matches!(insn.opcode, op::GLOBAL_GET | op::GLOBAL_SET) && insn.imm3 == u32::from(V128_KIND)
             });
 
         // Load regs[0..7] from configuration. regs is at offset `regs_offset` from Configuration*.
@@ -971,6 +973,21 @@ impl CraneliftCompiler {
                 let lhs = read_src!($builder, $insn.sources[1]);
                 let result = $builder.ins().$op(lhs, rhs);
                 write_dst!($builder, $insn.destination, result);
+            }};
+        }
+        macro_rules! v128_binop {
+            ($builder:expr, $insn:expr, $op:ident) => {{
+                let rhs = read_src_v128!($builder, $insn.sources[0]);
+                let lhs = read_src_v128!($builder, $insn.sources[1]);
+                let result = $builder.ins().$op(lhs, rhs);
+                write_dst_v128!($builder, $insn.destination, result);
+            }};
+        }
+        macro_rules! v128_unop {
+            ($builder:expr, $insn:expr, $op:ident) => {{
+                let val = read_src_v128!($builder, $insn.sources[0]);
+                let result = $builder.ins().$op(val);
+                write_dst_v128!($builder, $insn.destination, result);
             }};
         }
         macro_rules! i32_unop {
@@ -1859,6 +1876,11 @@ impl CraneliftCompiler {
                     let result = builder.ins().extractlane(val, insn.imm1 as u8);
                     write_dst!(builder, insn.destination, result);
                 }
+
+                op::V128_AND => v128_binop!(builder, insn, band),
+                op::V128_OR => v128_binop!(builder, insn, bor),
+                op::V128_XOR => v128_binop!(builder, insn, bxor),
+                op::V128_NOT => v128_unop!(builder, insn, bnot),
 
                 op::BR_TABLE => {
                     let inline_count = (insn.imm3 & 0xff) as usize;
@@ -2816,6 +2838,10 @@ impl CraneliftCompiler {
                 | op::I32_TRUNC_SAT_F32_S..=op::I64_TRUNC_SAT_F64_U
                 | op::MEMORY_COPY
                 | op::MEMORY_FILL
+                | op::V128_AND
+                | op::V128_OR
+                | op::V128_XOR
+                | op::V128_NOT
                 | op::I64X2_EXTRACT_LANE
                 | op::SYNTHETIC_END_EXPRESSION
                 | op::SYNTHETIC_LOCAL_GET_0..=op::SYNTHETIC_LOCAL_GET_7

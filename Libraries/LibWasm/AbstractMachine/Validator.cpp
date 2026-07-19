@@ -5140,7 +5140,12 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
             || any_of(result_types, [](auto const& type) { return type.kind() == ValueType::V128; });
         if (!has_v128_values) {
             for (auto const& insn : expression.instructions()) {
-                if (insn.opcode() == Instructions::v128_const || insn.opcode() == Instructions::i64x2_extract_lane) {
+                if (insn.opcode() == Instructions::v128_const
+                    || insn.opcode() == Instructions::v128_and
+                    || insn.opcode() == Instructions::v128_or
+                    || insn.opcode() == Instructions::v128_xor
+                    || insn.opcode() == Instructions::v128_not
+                    || insn.opcode() == Instructions::i64x2_extract_lane) {
                     has_v128_values = true;
                     break;
                 }

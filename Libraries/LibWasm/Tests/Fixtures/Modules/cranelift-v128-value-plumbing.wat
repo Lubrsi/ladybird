@@ -1,5 +1,7 @@
 (module
   (global $value (mut v128) (v128.const i64x2 0 0))
+  (global $bitwise-lhs v128 (v128.const i64x2 0x0123456789abcdef 0x0f0ff0f00ff00ff0))
+  (global $bitwise-rhs v128 (v128.const i64x2 0xfedcba9876543210 0x33cc55aaaa55cc33))
 
   (func $produce (export "produce") (result v128)
     (local $temporary v128)
@@ -48,6 +50,29 @@
     v128.const i64x2 0x7777777777777777 0x0123456789abcdef
     local.set $value
     local.get $value
+    i64x2.extract_lane 1)
+
+  (func (export "bitwise_and_high") (result i64)
+    global.get $bitwise-lhs
+    global.get $bitwise-rhs
+    v128.and
+    i64x2.extract_lane 1)
+
+  (func (export "bitwise_or_high") (result i64)
+    global.get $bitwise-lhs
+    global.get $bitwise-rhs
+    v128.or
+    i64x2.extract_lane 1)
+
+  (func (export "bitwise_xor_high") (result i64)
+    global.get $bitwise-lhs
+    global.get $bitwise-rhs
+    v128.xor
+    i64x2.extract_lane 1)
+
+  (func (export "bitwise_not_high") (result i64)
+    global.get $bitwise-lhs
+    v128.not
     i64x2.extract_lane 1)
 
   (func (export "tiered_high") (param $iterations i32) (result i64)
