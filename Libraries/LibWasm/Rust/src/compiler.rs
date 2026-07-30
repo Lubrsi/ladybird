@@ -467,20 +467,31 @@ impl CraneliftCompiler {
         let mut incoming_locals = vec![vec![false; block_cached_locals.len()]; local_liveness.blocks.len()];
 
         for (successor_index, successor) in local_liveness.blocks.iter().enumerate() {
-            let [predecessor_index] = successor.predecessors.as_slice() else {
-                continue;
-            };
-            if successor.is_loop_header || *predecessor_index >= successor_index {
+            if successor.predecessors.is_empty()
+                || successor.is_loop_header
+                || successor
+                    .predecessors
+                    .iter()
+                    .any(|&predecessor_index| predecessor_index >= successor_index)
+            {
                 continue;
             }
 
-            let predecessor = &local_liveness.blocks[*predecessor_index];
-            if predecessor.has_branch_table_successors {
+            if successor
+                .predecessors
+                .iter()
+                .any(|&predecessor_index| local_liveness.blocks[predecessor_index].has_branch_table_successors)
+            {
                 continue;
             }
             for (local_index, &cached) in block_cached_locals.iter().enumerate() {
-                incoming_locals[successor_index][local_index] =
-                    cached && predecessor.definitions.contains(local_index) && successor.live_in.contains(local_index);
+                incoming_locals[successor_index][local_index] = cached
+                    && successor.live_in.contains(local_index)
+                    && successor.predecessors.iter().all(|&predecessor_index| {
+                        local_liveness.blocks[predecessor_index]
+                            .definitions
+                            .contains(local_index)
+                    });
             }
         }
 
@@ -1653,15 +1664,14 @@ impl CraneliftCompiler {
                         let value = $builder.use_var(variable);
                         local_cache[local_index] = Some(value);
 
-                        let [predecessor_index] = block.predecessors.as_slice() else {
-                            unreachable!("edge-cached block must have one predecessor");
-                        };
-                        let predecessor = &local_liveness.blocks[*predecessor_index];
-                        local_cache_dirty[local_index] = !predecessor.successors.iter().any(|&successor_index| {
-                            local_liveness.blocks[successor_index]
-                                .live_in
-                                .contains(local_index)
-                                && edge_cache_vars[successor_index][local_index].is_none()
+                        local_cache_dirty[local_index] = block.predecessors.iter().any(|&predecessor_index| {
+                            let predecessor = &local_liveness.blocks[predecessor_index];
+                            !predecessor.successors.iter().any(|&successor_index| {
+                                local_liveness.blocks[successor_index]
+                                    .live_in
+                                    .contains(local_index)
+                                    && edge_cache_vars[successor_index][local_index].is_none()
+                            })
                         });
                     }
                 }
@@ -3414,12 +3424,29 @@ mod tests {
     }
 
     #[test]
-    fn edge_cache_rejects_control_flow_joins() {
+    fn edge_cache_selects_fully_defined_control_flow_joins() {
         let insns = [
             insn(op::IF),
             local_insn(op::LOCAL_SET, 0),
             insn(op::ELSE),
             local_insn(op::LOCAL_SET, 0),
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        let edge_cached_locals = CraneliftCompiler::select_locals_for_edge_cache(&liveness, &[true]);
+        assert!(edge_cached_locals[liveness.block_index_at(5)][0]);
+    }
+
+    #[test]
+    fn edge_cache_rejects_partially_defined_control_flow_joins() {
+        let insns = [
+            insn(op::IF),
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::ELSE),
+            insn(op::NOP),
             insn(op::END),
             local_insn(op::LOCAL_GET, 0),
             insn(op::SYNTHETIC_END_EXPRESSION),
