@@ -52,6 +52,8 @@ public:
         m_memory_instances = frame.module().resolved_memories(m_store);
         m_global_instances = frame.module().resolved_globals(m_store);
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
+        m_current_module = &frame.module();
+        m_current_compiled_fn_table = frame.compiled_fn_table();
 
         auto continuation = frame.expression().instructions().size() - 1;
         if (auto size = frame.expression().compiled_instructions.dispatches.size(); size > 0)
@@ -80,11 +82,14 @@ public:
     {
         VERIFY(bit_cast<FlatPtr>(&module) != 0);
 
-        // For the (common) same-module call case, we already have the compiled-fn-table pointer cached on the caller's frame, so reuse it instead of re-resolving through the store on every call.
-        bool const same_module = !m_frame_stack.is_empty() && &m_frame_stack.last().module() == &module;
-        auto const* table = same_module ? m_frame_stack.last().compiled_fn_table() : &module.compiled_fn_table(m_store);
+        // For the (common) same-module call case, reuse the compiled-function table already
+        // cached for the active function instead of resolving it through the store again.
+        bool const same_module = m_current_module == &module;
+        auto const* table = same_module ? m_current_compiled_fn_table : &module.compiled_fn_table(m_store);
         m_frame_stack.empend(module, locals_ptr, expression, arity);
         m_frame_stack.last().set_compiled_fn_table(table);
+        m_current_module = &module;
+        m_current_compiled_fn_table = table;
         m_locals_base = locals_ptr;
         if (!same_module) {
             m_memory_instances = module.resolved_memories(m_store);
@@ -121,6 +126,8 @@ public:
     ALWAYS_INLINE Value& local(LocalIndex index) { return m_locals_base[index.value()]; }
     ALWAYS_INLINE Value* locals_base() const { return m_locals_base; }
     ALWAYS_INLINE void set_locals_base(Value* base) { m_locals_base = base; }
+    ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
+    ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
     static constexpr size_t memory_instances_offset() { return __builtin_offsetof(Configuration, m_memory_instances); }
@@ -319,6 +326,8 @@ public:
     MemoryInstanceTable m_memory_instances { nullptr };
     GlobalInstanceTable m_global_instances { nullptr };
     Value m_compiled_call_result_scratch;
+    ModuleInstance const* m_current_module { nullptr };
+    Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
 };
 
 }
