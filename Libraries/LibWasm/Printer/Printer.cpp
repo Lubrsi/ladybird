@@ -1389,6 +1389,8 @@ HashMap<Wasm::OpCode, ByteString>& Wasm::Names::instruction_names = *new HashMap
     { Instructions::synthetic_end_expression, "synthetic:expression.end" },
     { Instructions::synthetic_call_with_record_0, "synthetic:call.with_record.0" },
     { Instructions::synthetic_call_with_record_1, "synthetic:call.with_record.1" },
+    { Instructions::synthetic_call_indirect_with_record_0, "synthetic:call_indirect.with_record.0" },
+    { Instructions::synthetic_call_indirect_with_record_1, "synthetic:call_indirect.with_record.1" },
     { Instructions::synthetic_local_get_0, "synthetic:local.get.0" },
     { Instructions::synthetic_local_get_1, "synthetic:local.get.1" },
     { Instructions::synthetic_local_get_2, "synthetic:local.get.2" },
