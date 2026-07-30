@@ -6905,7 +6905,7 @@ Instruction& InstructionStorage::append(Instruction instruction)
     return slot.value();
 }
 
-CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
+CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
 {
     CompiledInstructions result;
 
@@ -8504,6 +8504,32 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 used[to_underlying(dest)] = true;
             }
         }
+    }
+
+    for (size_t i = 0; i < result.dispatches.size(); ++i) {
+        auto const& instruction = *result.dispatches[i].instruction;
+        FunctionType const* function_type = nullptr;
+        if (instruction.opcode() == Instructions::call) {
+            auto function_index = instruction.arguments().get<FunctionIndex>().value();
+            VERIFY(function_index < functions.size());
+            function_type = &functions[function_index];
+        } else if (instruction.opcode() == Instructions::call_indirect) {
+            auto type_index = instruction.arguments().get<Instruction::IndirectCallArgs>().type.value();
+            VERIFY(type_index < types.size());
+            VERIFY(types[type_index].is_function());
+            function_type = &types[type_index].function();
+        } else {
+            continue;
+        }
+
+        VERIFY(i <= NumericLimits<u32>::max());
+        VERIFY(function_type->parameters().size() <= NumericLimits<u32>::max());
+        VERIFY(function_type->results().size() <= NumericLimits<u32>::max());
+        result.cranelift_raw_calls.append({
+            .instruction_index = static_cast<u32>(i),
+            .parameter_count = static_cast<u32>(function_type->parameters().size()),
+            .result_count = static_cast<u32>(function_type->results().size()),
+        });
     }
 
     return result;
