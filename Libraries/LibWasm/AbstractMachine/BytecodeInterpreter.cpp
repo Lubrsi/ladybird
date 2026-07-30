@@ -87,7 +87,11 @@ static StringView cranelift_trap_message(u8 trap_code)
 
 static bool is_wasm_memory_fault(Wasm::Configuration& configuration, void* address)
 {
-    auto const& memories = configuration.frame().module().memories();
+    // The faulting function may be a frameless compiled callee.
+    auto const* module = configuration.current_module();
+    if (!module)
+        return false;
+    auto const& memories = module->memories();
     for (auto const& memory_address : memories) {
         auto* memory = configuration.store().unsafe_get(memory_address);
         if (memory && memory->contains_virtual_address(address))
@@ -220,21 +224,24 @@ static void compiled_fault_signal_handler(int signal, siginfo_t* info, void* con
 #            endif
 #        endif
 
-        auto const& compiled = recovery->configuration->frame().expression().compiled_instructions;
-        auto const code_start = compiled.cranelift_entry;
-        auto const code_size = compiled.cranelift_code_size;
-        if (compiled.cranelift_compiled && code_start != 0 && pc >= code_start && pc < code_start + code_size) {
-            auto const offset = static_cast<u32>(pc - code_start);
-            for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
-                auto const& trap = compiled.cranelift_traps[i];
-                if (trap.offset != offset)
-                    continue;
+        // The faulting function may be a frameless compiled callee.
+        if (auto const* expression = recovery->configuration->current_expression()) {
+            auto const& compiled = expression->compiled_instructions;
+            auto const code_start = compiled.cranelift_entry;
+            auto const code_size = compiled.cranelift_code_size;
+            if (compiled.cranelift_compiled && code_start != 0 && pc >= code_start && pc < code_start + code_size) {
+                auto const offset = static_cast<u32>(pc - code_start);
+                for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
+                    auto const& trap = compiled.cranelift_traps[i];
+                    if (trap.offset != offset)
+                        continue;
 
-                recovery->faulted = true;
-                recovery->fault_kind = CompiledFaultKind::CraneliftTrap;
-                recovery->cranelift_trap_code = trap.code;
-                redirect_to_trampoline();
-                return;
+                    recovery->faulted = true;
+                    recovery->fault_kind = CompiledFaultKind::CraneliftTrap;
+                    recovery->cranelift_trap_code = trap.code;
+                    redirect_to_trampoline();
+                    return;
+                }
             }
         }
     }
@@ -6667,7 +6674,7 @@ Outcome BytecodeInterpreter::call_address(Configuration& configuration, Function
         auto instance = configuration.store().get(address);
         FunctionType const* type { nullptr };
         instance->visit([&](auto const& function) { type = &function.type(); });
-        if (source == CallAddressSource::IndirectCall || source == CallAddressSource::IndirectTailCall) {
+        if (source == CallAddressSource::IndirectCall || source == CallAddressSource::IndirectTailCall || source == CallAddressSource::CompiledIndirectCall) {
             TRAP_IF_NOT(type->parameters().size() <= configuration.value_stack().size());
         }
         Vector<Value, ArgumentsStaticSize> args;
@@ -6727,7 +6734,10 @@ Outcome BytecodeInterpreter::call_address(Configuration& configuration, Function
 
         if (result.is_trap()) {
             // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-throw-ref
-            if (auto const* uncaught_exception = result.trap().data.get_pointer<UncaughtException>(); uncaught_exception && final_outcome == Outcome::Continue) {
+            // A compiled caller has no Frame or labels to search, so let the exception propagate
+            // outward as a trap until it reaches an interpreter frame that can look for a handler.
+            bool const caller_may_catch = source != CallAddressSource::CompiledDirectCall && source != CallAddressSource::CompiledIndirectCall;
+            if (auto const* uncaught_exception = result.trap().data.get_pointer<UncaughtException>(); uncaught_exception && final_outcome == Outcome::Continue && caller_may_catch) {
                 if (auto continuation = unwind_to_throw_handler(configuration, uncaught_exception->address); continuation.has_value()) {
                     // The callee's interpret() left the exception in m_trap; it's handled now.
                     m_trap = Empty {};

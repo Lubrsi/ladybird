@@ -54,6 +54,7 @@ public:
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
         m_current_module = &frame.module();
         m_current_compiled_fn_table = frame.compiled_fn_table();
+        m_current_expression = &frame.expression();
 
         auto continuation = frame.expression().instructions().size() - 1;
         if (auto size = frame.expression().compiled_instructions.dispatches.size(); size > 0)
@@ -78,34 +79,26 @@ public:
         else
             m_call_record_base = nullptr;
     }
-    // Lightweight set_frame for direct Cranelift-to-Cranelift calls.
-    void set_frame_lightweight(ModuleInstance const& module, Value* locals_ptr,
-        Expression const& expression, size_t arity, size_t max_call_rec_size)
+    // Direct Cranelift-to-Cranelift calls don't push a Frame; the callee's context lives
+    // entirely in these scalars, and the bridge restores the caller's copy on return.
+    void set_callee_context(ModuleInstance const& module, Value* locals_ptr,
+        Expression const& expression, size_t max_call_rec_size)
     {
-        VERIFY(bit_cast<FlatPtr>(&module) != 0);
-
-        // For the (common) same-module call case, reuse the compiled-function table already
-        // cached for the active function instead of resolving it through the store again.
-        bool const same_module = m_current_module == &module;
-        auto const* table = same_module ? m_current_compiled_fn_table : &module.compiled_fn_table(m_store);
-        m_frame_stack.empend(module, locals_ptr, expression, arity);
-        m_frame_stack.last().set_compiled_fn_table(table);
-        m_current_module = &module;
-        m_current_compiled_fn_table = table;
-        m_locals_base = locals_ptr;
-        if (!same_module) {
+        if (m_current_module != &module) {
+            m_current_module = &module;
+            m_current_compiled_fn_table = &module.compiled_fn_table(m_store);
             m_memory_instances = module.resolved_memories(m_store);
             m_global_instances = module.resolved_globals(m_store);
         }
+        m_locals_base = locals_ptr;
+        m_current_expression = &expression;
         // Compiled code pushes to the value stack without bounds checks, so verify here that the
         // frame's whole stack usage fits the reservation.
         if (auto hint = expression.stack_usage_hint(); hint.has_value())
             m_value_stack.ensure_capacity(m_value_stack.size() + *hint);
         // Compiled code writes call-record entries without null checks, so allocate eagerly
-        // (heavy set_frame does the same).
-        if (max_call_rec_size > 0)
-            m_call_record_base = m_call_record_stack.allocate(max_call_rec_size);
-        // Skip the label push (Cranelift uses its own structured control flow).
+        // (set_frame does the same).
+        m_call_record_base = max_call_rec_size > 0 ? m_call_record_stack.allocate(max_call_rec_size) : nullptr;
     }
 
     ALWAYS_INLINE auto& frame() const { return m_frame_stack.last(); }
@@ -130,6 +123,7 @@ public:
     ALWAYS_INLINE void set_locals_base(Value* base) { m_locals_base = base; }
     ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
     ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
+    ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
     static constexpr size_t memory_instances_offset() { return __builtin_offsetof(Configuration, m_memory_instances); }
@@ -308,7 +302,6 @@ public:
         Value(0),
     };
 
-    // Public for CraneliftBridge direct call pop_frame.
     void unwind_impl();
 
     Store& m_store;
@@ -328,6 +321,7 @@ public:
     Value m_compiled_call_result_scratch;
     ModuleInstance const* m_current_module { nullptr };
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
+    Expression const* m_current_expression { nullptr };
 };
 
 }
