@@ -135,6 +135,9 @@ struct LocalAccesses {
 struct LocalLivenessBlock {
     start: usize,
     end: usize,
+    is_loop_header: bool,
+    has_branch_table_successors: bool,
+    predecessors: Vec<usize>,
     successors: Vec<usize>,
     uses: LocalSet,
     definitions: LocalSet,
@@ -150,6 +153,10 @@ struct LocalLiveness {
 impl LocalLiveness {
     fn block_at(&self, instruction_index: usize) -> &LocalLivenessBlock {
         &self.blocks[self.instruction_blocks[instruction_index]]
+    }
+
+    fn block_index_at(&self, instruction_index: usize) -> usize {
+        self.instruction_blocks[instruction_index]
     }
 }
 
@@ -394,6 +401,9 @@ impl CraneliftCompiler {
             blocks.push(LocalLivenessBlock {
                 start,
                 end,
+                is_loop_header: start > 0 && insns[start - 1].opcode == op::LOOP,
+                has_branch_table_successors: insns[end - 1].opcode == op::BR_TABLE,
+                predecessors: Vec::new(),
                 successors: Vec::new(),
                 uses: LocalSet::new(num_locals),
                 definitions: LocalSet::new(num_locals),
@@ -421,6 +431,12 @@ impl CraneliftCompiler {
                 }
             }
         }
+        for predecessor in 0..blocks.len() {
+            let block_successors = blocks[predecessor].successors.clone();
+            for successor in block_successors {
+                blocks[successor].predecessors.push(predecessor);
+            }
+        }
 
         loop {
             let previous_live_ins: Vec<LocalSet> = blocks.iter().map(|block| block.live_in.clone()).collect();
@@ -445,6 +461,30 @@ impl CraneliftCompiler {
             blocks,
             instruction_blocks,
         })
+    }
+
+    fn select_locals_for_edge_cache(local_liveness: &LocalLiveness, block_cached_locals: &[bool]) -> Vec<Vec<bool>> {
+        let mut incoming_locals = vec![vec![false; block_cached_locals.len()]; local_liveness.blocks.len()];
+
+        for (successor_index, successor) in local_liveness.blocks.iter().enumerate() {
+            let [predecessor_index] = successor.predecessors.as_slice() else {
+                continue;
+            };
+            if successor.is_loop_header || *predecessor_index >= successor_index {
+                continue;
+            }
+
+            let predecessor = &local_liveness.blocks[*predecessor_index];
+            if predecessor.has_branch_table_successors {
+                continue;
+            }
+            for (local_index, &cached) in block_cached_locals.iter().enumerate() {
+                incoming_locals[successor_index][local_index] =
+                    cached && predecessor.definitions.contains(local_index) && successor.live_in.contains(local_index);
+            }
+        }
+
+        incoming_locals
     }
 
     fn select_locals_for_promotion(insns: &[CraneliftInsn], num_locals: usize, budget: usize) -> Vec<bool> {
@@ -905,6 +945,10 @@ impl CraneliftCompiler {
         } else {
             None
         };
+        let edge_cached_locals = local_liveness
+            .as_ref()
+            .map(|local_liveness| Self::select_locals_for_edge_cache(local_liveness, &block_cached_locals))
+            .unwrap_or_default();
         let local_vars: Vec<Option<Variable>> = promoted_locals
             .iter()
             .map(|&promoted| {
@@ -930,6 +974,23 @@ impl CraneliftCompiler {
             };
             builder.declare_var(*var, ty);
         }
+        let edge_cache_vars: Vec<Vec<Option<Variable>>> = edge_cached_locals
+            .iter()
+            .map(|incoming_locals| {
+                incoming_locals
+                    .iter()
+                    .map(|&cached| {
+                        if !cached {
+                            return None;
+                        }
+                        let variable = Variable::from_u32(next_var_id);
+                        next_var_id += 1;
+                        builder.declare_var(variable, types::I64);
+                        Some(variable)
+                    })
+                    .collect()
+            })
+            .collect();
         let mut local_cache: Vec<Option<Value>> = vec![None; num_locals];
         let mut local_cache_dirty = vec![false; num_locals];
 
@@ -1575,24 +1636,77 @@ impl CraneliftCompiler {
                 }
             }};
         }
+        macro_rules! begin_local_cache_block {
+            ($builder:expr, $instruction_index:expr) => {{
+                if block_local_cache_enabled {
+                    let local_liveness = local_liveness
+                        .as_ref()
+                        .expect("block-local caching requires local liveness");
+                    let block_index = local_liveness.block_index_at($instruction_index);
+                    let block = &local_liveness.blocks[block_index];
+                    debug_assert_eq!(block.start, $instruction_index);
+
+                    for local_index in 0..num_locals {
+                        let Some(variable) = edge_cache_vars[block_index][local_index] else {
+                            continue;
+                        };
+                        let value = $builder.use_var(variable);
+                        local_cache[local_index] = Some(value);
+
+                        let [predecessor_index] = block.predecessors.as_slice() else {
+                            unreachable!("edge-cached block must have one predecessor");
+                        };
+                        let predecessor = &local_liveness.blocks[*predecessor_index];
+                        local_cache_dirty[local_index] = !predecessor.successors.iter().any(|&successor_index| {
+                            local_liveness.blocks[successor_index]
+                                .live_in
+                                .contains(local_index)
+                                && edge_cache_vars[successor_index][local_index].is_none()
+                        });
+                    }
+                }
+            }};
+        }
         macro_rules! finish_local_cache_block {
             ($builder:expr, $instruction_index:expr) => {{
                 if block_local_cache_enabled {
-                    let block = local_liveness
+                    let local_liveness = local_liveness
                         .as_ref()
-                        .expect("block-local caching requires local liveness")
-                        .block_at($instruction_index);
+                        .expect("block-local caching requires local liveness");
+                    let block = local_liveness.block_at($instruction_index);
                     debug_assert_eq!(block.end, $instruction_index + 1);
 
-                    if local_cache_dirty
-                        .iter()
-                        .enumerate()
-                        .any(|(local_index, &dirty)| dirty && block.live_out.contains(local_index))
-                    {
+                    for local_index in 0..num_locals {
+                        if !local_cache_dirty[local_index] || !block.live_out.contains(local_index) {
+                            continue;
+                        }
+                        let value = local_cache[local_index].expect("dirty local must be cached");
+                        for &successor_index in &block.successors {
+                            let Some(variable) = edge_cache_vars[successor_index][local_index] else {
+                                continue;
+                            };
+                            $builder.def_var(variable, value);
+                        }
+                    }
+
+                    let local_needs_store = |local_index| {
+                        block.successors.iter().any(|&successor_index| {
+                            local_liveness.blocks[successor_index]
+                                .live_in
+                                .contains(local_index)
+                                && edge_cache_vars[successor_index][local_index].is_none()
+                        })
+                    };
+                    if local_cache_dirty.iter().enumerate().any(|(local_index, &dirty)| {
+                        dirty && block.live_out.contains(local_index) && local_needs_store(local_index)
+                    }) {
                         let lb = $builder.use_var(locals_base_var);
                         let zero = $builder.ins().iconst(types::I64, 0);
                         for local_index in 0..num_locals {
-                            if !local_cache_dirty[local_index] || !block.live_out.contains(local_index) {
+                            if !local_cache_dirty[local_index]
+                                || !block.live_out.contains(local_index)
+                                || !local_needs_store(local_index)
+                            {
                                 continue;
                             }
                             let value = local_cache[local_index].expect("dirty local must be cached");
@@ -1768,6 +1882,17 @@ impl CraneliftCompiler {
 
         let mut ip = 0usize;
         while ip < insns.len() {
+            if block_local_cache_enabled
+                && local_liveness
+                    .as_ref()
+                    .expect("block-local caching requires local liveness")
+                    .block_at(ip)
+                    .start
+                    == ip
+            {
+                begin_local_cache_block!(builder, ip);
+            }
+
             let insn = &insns[ip];
             let opc = insn.opcode;
 
@@ -3265,6 +3390,58 @@ mod tests {
         ];
 
         let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
-        assert!(liveness.block_at(3).live_out.contains(0));
+        let branch_table_block = liveness.block_at(3);
+        assert!(branch_table_block.live_out.contains(0));
+        assert!(branch_table_block.has_branch_table_successors);
+    }
+
+    #[test]
+    fn edge_cache_selects_single_predecessor_forward_edges() {
+        let insns = [
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::IF),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::ELSE),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::END),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        let edge_cached_locals = CraneliftCompiler::select_locals_for_edge_cache(&liveness, &[true]);
+        assert!(edge_cached_locals[liveness.block_index_at(2)][0]);
+        assert!(edge_cached_locals[liveness.block_index_at(4)][0]);
+    }
+
+    #[test]
+    fn edge_cache_rejects_control_flow_joins() {
+        let insns = [
+            insn(op::IF),
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::ELSE),
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        let edge_cached_locals = CraneliftCompiler::select_locals_for_edge_cache(&liveness, &[true]);
+        assert!(!edge_cached_locals[liveness.block_index_at(5)][0]);
+    }
+
+    #[test]
+    fn edge_cache_rejects_loop_headers() {
+        let insns = [
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::LOOP),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::END),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        let edge_cached_locals = CraneliftCompiler::select_locals_for_edge_cache(&liveness, &[true]);
+        assert!(!edge_cached_locals[liveness.block_index_at(2)][0]);
     }
 }
