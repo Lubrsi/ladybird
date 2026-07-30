@@ -63,6 +63,9 @@ struct WASM_API BytecodeInterpreter final : public Interpreter {
         IndirectCall,
         DirectTailCall,
         IndirectTailCall,
+        // Raw calls out of Cranelift-compiled code, whose caller has no Frame on the frame stack.
+        CompiledDirectCall,
+        CompiledIndirectCall,
     };
 
     enum class CallType {
