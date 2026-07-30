@@ -67,9 +67,10 @@ pub enum HelperId {
     memory_copy = 10,
     memory_fill = 11,
     primitive_storage_cage_base = 12,
+    call_indirect_with_record = 13,
 }
 
-pub const HELPER_COUNT: u32 = 13;
+pub const HELPER_COUNT: u32 = 14;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// One relocation slot in the generated machine code. `code_offset` is the byte offset

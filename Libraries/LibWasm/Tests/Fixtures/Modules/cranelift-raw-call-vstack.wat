@@ -1,6 +1,7 @@
 (module
   (type $unary (func (param i32) (result i32)))
   (type $pair (func (param i32) (result i32 i32)))
+  (type $sink (func (param i32)))
 
   (global $last (mut i32) (i32.const 0))
 
@@ -61,8 +62,14 @@
     i32.add
   )
 
-  (table 2 funcref)
+  (func $remember (type $sink) (local v128)
+    local.get 0
+    global.set $last
+  )
+
+  (table 4 funcref)
   (elem (i32.const 0) $double $make_pair)
+  (elem (i32.const 3) $remember)
 
   (func (export "direct") (param i32 i32) (result i32)
     i32.const 1000
@@ -131,6 +138,19 @@
     call_indirect (type $pair)
     i32.add
     i32.add
+  )
+
+  (func (export "indirect_index") (param i32 i32) (result i32)
+    local.get 0
+    local.get 1
+    call_indirect (type $unary)
+  )
+
+  (func (export "indirect_void") (param i32) (result i32)
+    local.get 0
+    i32.const 3
+    call_indirect (type $sink)
+    global.get $last
   )
 
   (func (export "drive") (param i32) (result i32)
