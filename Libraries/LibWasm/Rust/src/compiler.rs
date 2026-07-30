@@ -871,11 +871,19 @@ impl CraneliftCompiler {
         let has_raw_call = insns
             .iter()
             .any(|i| i.opcode == op::CALL || i.opcode == op::CALL_INDIRECT);
-        let max_stack_depth = match has_raw_call {
-            true => 0,
-            // We can't easily track across control flow merges, so count dests instead.
-            false => insns.iter().filter(|i| i.destination == STACK_MARKER).count().max(16),
-        };
+        // We can't easily track across control flow merges, so count destinations instead. Raw
+        // calls are variadic in the bytecode representation and may produce multiple stack slots.
+        let raw_call_result_slots = insns
+            .iter()
+            .filter(|i| i.opcode == op::CALL || i.opcode == op::CALL_INDIRECT)
+            .map(|i| i.call_result_count as usize)
+            .sum::<usize>();
+        let max_stack_depth = insns
+            .iter()
+            .filter(|i| i.destination == STACK_MARKER)
+            .count()
+            .saturating_add(raw_call_result_slots)
+            .max(16);
         let mut is_unreachable = false;
         let mut dirty_regs = [false; REG_COUNT];
         let mut stack_vars: Vec<Variable> = Vec::with_capacity(max_stack_depth);
@@ -1116,14 +1124,15 @@ impl CraneliftCompiler {
             }};
         }
 
-        // flush virtual stack slots 0..sp to the real value stack
-        macro_rules! flush_vstack_to_real {
+        // Temporarily materialize virtual stack slots 0..sp for an opaque runtime call. The saved
+        // top remains valid because ValueStack storage cannot move while a frame is active.
+        macro_rules! materialize_vstack_to_real {
             ($builder:expr) => {{
-                if max_stack_depth > 0 && sp > 0 {
-                    let cfg = $builder.use_var(config_var);
-                    let top = $builder
-                        .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                let cfg = $builder.use_var(config_var);
+                let top = $builder
+                    .ins()
+                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                if sp > 0 {
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
                     for i in 0..sp {
                         let val = $builder.use_var(stack_vars[i]);
@@ -1138,7 +1147,49 @@ impl CraneliftCompiler {
                         .ins()
                         .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
                 }
-                sp = 0;
+                top
+            }};
+        }
+        // Rebuild the virtual stack from the results left by an opaque runtime call, then discard
+        // the temporary real-stack materialization.
+        macro_rules! restore_vstack_after_raw_call {
+            ($builder:expr, $original_top:expr, $stack_base:expr, $result_count:expr, $destination:expr) => {{
+                let stack_base = $stack_base;
+                let result_count = $result_count;
+                let destination = $destination;
+                debug_assert!(stack_base + result_count <= max_stack_depth);
+
+                let cfg = $builder.use_var(config_var);
+                let helper_top = $builder
+                    .ins()
+                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                let result_bytes = (result_count as i64) * i64::from(value_size);
+                let mut result_address = $builder.ins().iadd_imm(helper_top, -result_bytes);
+
+                sp = stack_base;
+                if destination == STACK_MARKER {
+                    for i in 0..result_count {
+                        let result = $builder
+                            .ins()
+                            .load(types::I64, MemFlags::trusted(), result_address, 0);
+                        $builder.def_var(stack_vars[stack_base + i], result);
+                        stack_ty[stack_base + i] = Bank::Int;
+                        result_address = $builder.ins().iadd_imm(result_address, i64::from(value_size));
+                    }
+                    sp += result_count;
+                } else {
+                    debug_assert!(result_count <= 1);
+                    if result_count == 1 {
+                        let result = $builder
+                            .ins()
+                            .load(types::I64, MemFlags::trusted(), result_address, 0);
+                        write_dst!($builder, destination, result);
+                    }
+                }
+
+                $builder
+                    .ins()
+                    .store(MemFlags::trusted(), $original_top, cfg, value_stack_top_offset);
             }};
         }
         // push only the top n values from vstack to real stack
@@ -2880,25 +2931,37 @@ impl CraneliftCompiler {
                     );
                 }
 
-                // For CALL and CALL_INDIRECT, we have no extra information and have to use the interpreter stack for args and returns.
+                // Raw calls use the interpreter stack ABI for arguments and results. Materialize
+                // the live vstack only for the duration of the call, then resume using it.
                 op::CALL => {
-                    // Flush virtual stack, args are already on it from previous instructions.
-                    flush_vstack_to_real!(builder);
+                    let original_top = materialize_vstack_to_real!(builder);
+                    debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
+                    let stack_base = sp.saturating_sub(insn.imm3 as usize);
                     let func_idx = builder.ins().iconst(types::I32, insn.imm1);
                     let cfp = builder.ins().func_addr(ptr_type, h_call_fn);
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
                     do_call_and_check!(builder, call_fn_sig, cfp, &[iv, cv, func_idx]);
-                    // The helper pushes results to value_stack; pop to the actual destination.
-                    if insn.destination != STACK_MARKER {
-                        let result = emit_stack_pop!(builder);
-                        write_dst!(builder, insn.destination, result);
-                    }
+                    restore_vstack_after_raw_call!(
+                        builder,
+                        original_top,
+                        stack_base,
+                        insn.call_result_count as usize,
+                        insn.destination
+                    );
                 }
 
                 op::CALL_INDIRECT => {
-                    flush_vstack_to_real!(builder);
-                    let element_index = read_src!(builder, insn.sources[0]);
+                    let original_top = materialize_vstack_to_real!(builder);
+                    let element_index = if insn.sources[0] == STACK_MARKER {
+                        debug_assert!(is_unreachable || sp > 0);
+                        sp = sp.saturating_sub(1);
+                        emit_stack_pop!(builder)
+                    } else {
+                        read_src!(builder, insn.sources[0])
+                    };
+                    debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
+                    let stack_base = sp.saturating_sub(insn.imm3 as usize);
                     let element_index = builder.ins().ireduce(types::I32, element_index);
                     let type_idx = builder.ins().iconst(types::I32, insn.imm1);
                     let table_idx = builder.ins().iconst(types::I32, insn.imm2);
@@ -2911,10 +2974,13 @@ impl CraneliftCompiler {
                         cfp,
                         &[iv, cv, table_idx, type_idx, element_index]
                     );
-                    if insn.destination != STACK_MARKER {
-                        let result = emit_stack_pop!(builder);
-                        write_dst!(builder, insn.destination, result);
-                    }
+                    restore_vstack_after_raw_call!(
+                        builder,
+                        original_top,
+                        stack_base,
+                        insn.call_result_count as usize,
+                        insn.destination
+                    );
                 }
 
                 opc if (op::SYNTHETIC_CALL_00..=op::SYNTHETIC_CALL_31).contains(&opc) => {
@@ -3306,7 +3372,7 @@ mod tests {
             imm1: 0,
             imm2: 0,
             imm3: 0,
-            _pad: 0,
+            call_result_count: 0,
         }
     }
 
