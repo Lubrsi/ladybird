@@ -26,6 +26,7 @@ use cranelift_codegen::ir::StackSlotData;
 use cranelift_codegen::ir::StackSlotKind;
 use cranelift_codegen::ir::UserExternalName;
 use cranelift_codegen::ir::UserFuncName;
+use cranelift_codegen::ir::Value;
 use cranelift_codegen::ir::condcodes::FloatCC;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::Ieee32;
@@ -86,9 +87,366 @@ enum ControlKind {
     If,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalSet {
+    words: Vec<u64>,
+}
+
+impl LocalSet {
+    fn new(local_count: usize) -> Self {
+        Self {
+            words: vec![0; local_count.div_ceil(u64::BITS as usize)],
+        }
+    }
+
+    fn contains(&self, local_index: usize) -> bool {
+        let Some(word) = self.words.get(local_index / u64::BITS as usize) else {
+            return false;
+        };
+        word & (1 << (local_index % u64::BITS as usize)) != 0
+    }
+
+    fn insert(&mut self, local_index: usize) {
+        let Some(word) = self.words.get_mut(local_index / u64::BITS as usize) else {
+            return;
+        };
+        *word |= 1 << (local_index % u64::BITS as usize);
+    }
+
+    fn union_with(&mut self, other: &Self) {
+        for (word, other_word) in self.words.iter_mut().zip(&other.words) {
+            *word |= other_word;
+        }
+    }
+
+    fn union_without(&mut self, included: &Self, excluded: &Self) {
+        for ((word, included_word), excluded_word) in self.words.iter_mut().zip(&included.words).zip(&excluded.words) {
+            *word |= included_word & !excluded_word;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LocalAccesses {
+    reads: [Option<usize>; 2],
+    write: Option<usize>,
+}
+
+struct LocalLivenessBlock {
+    start: usize,
+    end: usize,
+    successors: Vec<usize>,
+    uses: LocalSet,
+    definitions: LocalSet,
+    live_in: LocalSet,
+    live_out: LocalSet,
+}
+
+struct LocalLiveness {
+    blocks: Vec<LocalLivenessBlock>,
+    instruction_blocks: Vec<usize>,
+}
+
+impl LocalLiveness {
+    fn block_at(&self, instruction_index: usize) -> &LocalLivenessBlock {
+        &self.blocks[self.instruction_blocks[instruction_index]]
+    }
+}
+
 pub struct CraneliftCompiler;
 
 impl CraneliftCompiler {
+    fn local_accesses(insn: &CraneliftInsn) -> LocalAccesses {
+        let local_index = |index| usize::try_from(index).ok();
+        match insn.opcode {
+            op::LOCAL_GET | op::SYNTHETIC_ARGUMENT_GET => LocalAccesses {
+                reads: [local_index(insn.imm1), None],
+                write: None,
+            },
+            op::LOCAL_SET | op::LOCAL_TEE | op::SYNTHETIC_ARGUMENT_SET | op::SYNTHETIC_ARGUMENT_TEE => LocalAccesses {
+                reads: [None, None],
+                write: local_index(insn.imm1),
+            },
+            opcode if (op::SYNTHETIC_LOCAL_GET_0..=op::SYNTHETIC_LOCAL_GET_7).contains(&opcode) => LocalAccesses {
+                reads: [Some((opcode - op::SYNTHETIC_LOCAL_GET_0) as usize), None],
+                write: None,
+            },
+            opcode if (op::SYNTHETIC_LOCAL_SET_0..=op::SYNTHETIC_LOCAL_SET_7).contains(&opcode) => LocalAccesses {
+                reads: [None, None],
+                write: Some((opcode - op::SYNTHETIC_LOCAL_SET_0) as usize),
+            },
+            op::SYNTHETIC_LOCAL_COPY => LocalAccesses {
+                reads: [local_index(insn.imm1), None],
+                write: local_index(insn.imm2),
+            },
+            op::SYNTHETIC_LOCAL_SETI32_CONST | op::SYNTHETIC_LOCAL_SETI64_CONST => LocalAccesses {
+                reads: [None, None],
+                write: local_index(insn.imm2),
+            },
+            op::SYNTHETIC_I32_ADD2LOCAL | op::SYNTHETIC_I64_ADD2LOCAL => LocalAccesses {
+                reads: [local_index(insn.imm1), local_index(insn.imm2)],
+                write: None,
+            },
+            op::SYNTHETIC_I32_ADDCONSTLOCAL
+            | op::SYNTHETIC_I32_ANDCONSTLOCAL
+            | op::SYNTHETIC_I64_ADDCONSTLOCAL
+            | op::SYNTHETIC_I64_ANDCONSTLOCAL
+            | op::SYNTHETIC_I32_STORELOCAL
+            | op::SYNTHETIC_I64_STORELOCAL => LocalAccesses {
+                reads: [local_index(insn.imm2), None],
+                write: None,
+            },
+            opcode
+                if (op::SYNTHETIC_I32_SUB2LOCAL..=op::SYNTHETIC_I32_SHRS2LOCAL).contains(&opcode)
+                    || (op::SYNTHETIC_I64_SUB2LOCAL..=op::SYNTHETIC_I64_SHRS2LOCAL).contains(&opcode) =>
+            {
+                LocalAccesses {
+                    reads: [local_index(insn.imm1), local_index(insn.imm2)],
+                    write: None,
+                }
+            }
+            _ => LocalAccesses::default(),
+        }
+    }
+
+    fn analyze_local_liveness(insns: &[CraneliftInsn], num_locals: usize) -> Result<LocalLiveness, &'static str> {
+        if insns.is_empty() {
+            return Ok(LocalLiveness {
+                blocks: Vec::new(),
+                instruction_blocks: Vec::new(),
+            });
+        }
+
+        let mut matching_else = vec![None; insns.len()];
+        let mut matching_end = vec![None; insns.len()];
+        let mut control_stack = Vec::new();
+        for (instruction_index, insn) in insns.iter().enumerate() {
+            match insn.opcode {
+                op::BLOCK | op::LOOP | op::IF => control_stack.push(instruction_index),
+                op::ELSE => {
+                    let Some(&start) = control_stack.last() else {
+                        return Err("else without matching if");
+                    };
+                    if insns[start].opcode != op::IF || matching_else[start].is_some() {
+                        return Err("else without matching if");
+                    }
+                    matching_else[start] = Some(instruction_index);
+                }
+                op::END => {
+                    if let Some(start) = control_stack.pop() {
+                        matching_end[start] = Some(instruction_index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !control_stack.is_empty() {
+            return Err("unterminated structured control instruction");
+        }
+
+        let branch_target = |label_index: usize, active_controls: &[usize]| -> Result<Option<usize>, &'static str> {
+            if label_index >= active_controls.len() {
+                return Ok(None);
+            }
+            let control_start = active_controls[active_controls.len() - 1 - label_index];
+            let target = if insns[control_start].opcode == op::LOOP {
+                control_start + 1
+            } else {
+                matching_end[control_start].ok_or("structured control instruction without matching end")? + 1
+            };
+            Ok((target < insns.len()).then_some(target))
+        };
+
+        let mut successors = vec![Vec::new(); insns.len()];
+        let mut active_controls = Vec::new();
+        for (instruction_index, insn) in insns.iter().enumerate() {
+            let fallthrough = (instruction_index + 1 < insns.len()).then_some(instruction_index + 1);
+            match insn.opcode {
+                op::BLOCK | op::LOOP => {
+                    if let Some(fallthrough) = fallthrough {
+                        successors[instruction_index].push(fallthrough);
+                    }
+                    active_controls.push(instruction_index);
+                }
+                op::IF => {
+                    if let Some(then_target) = fallthrough {
+                        successors[instruction_index].push(then_target);
+                    }
+                    let false_target = if let Some(else_index) = matching_else[instruction_index] {
+                        else_index + 1
+                    } else {
+                        matching_end[instruction_index].ok_or("if without matching end")? + 1
+                    };
+                    if false_target < insns.len() {
+                        successors[instruction_index].push(false_target);
+                    }
+                    active_controls.push(instruction_index);
+                }
+                op::ELSE => {
+                    let Some(&if_start) = active_controls.last() else {
+                        return Err("else without active if");
+                    };
+                    let after_if = matching_end[if_start].ok_or("if without matching end")? + 1;
+                    if after_if < insns.len() {
+                        successors[instruction_index].push(after_if);
+                    }
+                }
+                op::END => {
+                    if active_controls.pop().is_some()
+                        && let Some(fallthrough) = fallthrough
+                    {
+                        successors[instruction_index].push(fallthrough);
+                    }
+                }
+                op::BR | op::SYNTHETIC_BR_NOSTACK => {
+                    let label_index = usize::try_from(insn.imm1).map_err(|_| "invalid branch label")?;
+                    if let Some(target) = branch_target(label_index, &active_controls)? {
+                        successors[instruction_index].push(target);
+                    }
+                }
+                op::BR_IF | op::SYNTHETIC_BR_IF_NOSTACK => {
+                    let label_index = usize::try_from(insn.imm1).map_err(|_| "invalid branch label")?;
+                    if let Some(target) = branch_target(label_index, &active_controls)? {
+                        successors[instruction_index].push(target);
+                    }
+                    if let Some(fallthrough) = fallthrough {
+                        successors[instruction_index].push(fallthrough);
+                    }
+                }
+                op::BR_TABLE => {
+                    let inline_count = (insn.imm3 & 0xff) as usize;
+                    if inline_count == 0xff {
+                        return Err("br_table too large for inline encoding");
+                    }
+
+                    let mut labels = Vec::with_capacity(inline_count + 1);
+                    for label_index in 0..inline_count {
+                        let packed = if label_index < 4 {
+                            insn.imm1 as u64
+                        } else {
+                            insn.imm2 as u64
+                        };
+                        labels.push(((packed >> ((label_index % 4) * 16)) & 0xffff) as usize);
+                    }
+                    let mut continuation_index = instruction_index + 1;
+                    while continuation_index < insns.len()
+                        && insns[continuation_index].opcode == op::SYNTHETIC_BR_TABLE_CONT
+                    {
+                        let continuation = &insns[continuation_index];
+                        let count = (continuation.imm3 & 0xff) as usize;
+                        for label_index in 0..count {
+                            let packed = if label_index < 4 {
+                                continuation.imm1 as u64
+                            } else {
+                                continuation.imm2 as u64
+                            };
+                            labels.push(((packed >> ((label_index % 4) * 16)) & 0xffff) as usize);
+                        }
+                        continuation_index += 1;
+                    }
+                    labels.push(((insn.imm3 >> 8) & 0xffff) as usize);
+
+                    for label_index in labels {
+                        if let Some(target) = branch_target(label_index, &active_controls)?
+                            && !successors[instruction_index].contains(&target)
+                        {
+                            successors[instruction_index].push(target);
+                        }
+                    }
+                }
+                op::UNREACHABLE | op::RETURN | op::SYNTHETIC_END_EXPRESSION | op::SYNTHETIC_BR_TABLE_CONT => {}
+                _ => {
+                    if let Some(fallthrough) = fallthrough {
+                        successors[instruction_index].push(fallthrough);
+                    }
+                }
+            }
+        }
+
+        let mut is_block_start = vec![false; insns.len()];
+        is_block_start[0] = true;
+        for (instruction_index, instruction_successors) in successors.iter().enumerate() {
+            for &successor in instruction_successors {
+                if successor != instruction_index + 1 {
+                    is_block_start[successor] = true;
+                }
+            }
+            let next_instruction = instruction_index + 1;
+            if next_instruction < insns.len()
+                && (matches!(insns[instruction_index].opcode, op::LOOP | op::END)
+                    || instruction_successors.len() != 1
+                    || instruction_successors[0] != next_instruction)
+            {
+                is_block_start[next_instruction] = true;
+            }
+        }
+
+        let block_starts: Vec<usize> = is_block_start
+            .iter()
+            .enumerate()
+            .filter_map(|(instruction_index, &is_start)| is_start.then_some(instruction_index))
+            .collect();
+        let mut instruction_blocks = vec![0; insns.len()];
+        let mut blocks = Vec::with_capacity(block_starts.len());
+        for (block_index, &start) in block_starts.iter().enumerate() {
+            let end = block_starts.get(block_index + 1).copied().unwrap_or(insns.len());
+            instruction_blocks[start..end].fill(block_index);
+            blocks.push(LocalLivenessBlock {
+                start,
+                end,
+                successors: Vec::new(),
+                uses: LocalSet::new(num_locals),
+                definitions: LocalSet::new(num_locals),
+                live_in: LocalSet::new(num_locals),
+                live_out: LocalSet::new(num_locals),
+            });
+        }
+
+        for block in &mut blocks {
+            for &successor in &successors[block.end - 1] {
+                let successor_block = instruction_blocks[successor];
+                if !block.successors.contains(&successor_block) {
+                    block.successors.push(successor_block);
+                }
+            }
+            for insn in &insns[block.start..block.end] {
+                let accesses = Self::local_accesses(insn);
+                for local_index in accesses.reads.into_iter().flatten() {
+                    if !block.definitions.contains(local_index) {
+                        block.uses.insert(local_index);
+                    }
+                }
+                if let Some(local_index) = accesses.write {
+                    block.definitions.insert(local_index);
+                }
+            }
+        }
+
+        loop {
+            let previous_live_ins: Vec<LocalSet> = blocks.iter().map(|block| block.live_in.clone()).collect();
+            let mut changed = false;
+            for block in &mut blocks {
+                let mut live_out = LocalSet::new(num_locals);
+                for &successor in &block.successors {
+                    live_out.union_with(&previous_live_ins[successor]);
+                }
+                let mut live_in = block.uses.clone();
+                live_in.union_without(&live_out, &block.definitions);
+                changed |= live_in != block.live_in || live_out != block.live_out;
+                block.live_in = live_in;
+                block.live_out = live_out;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        Ok(LocalLiveness {
+            blocks,
+            instruction_blocks,
+        })
+    }
+
     fn select_locals_for_promotion(insns: &[CraneliftInsn], num_locals: usize, budget: usize) -> Vec<bool> {
         if budget >= num_locals {
             return vec![true; num_locals];
@@ -96,10 +454,7 @@ impl CraneliftCompiler {
 
         let mut read_counts = vec![0u32; num_locals];
         let mut write_counts = vec![0u32; num_locals];
-        let record_access = |counts: &mut [u32], local_index: i64| {
-            let Ok(local_index) = usize::try_from(local_index) else {
-                return;
-            };
+        let record_access = |counts: &mut [u32], local_index: usize| {
             let Some(access_count) = counts.get_mut(local_index) else {
                 return;
             };
@@ -107,42 +462,12 @@ impl CraneliftCompiler {
         };
 
         for insn in insns {
-            match insn.opcode {
-                op::LOCAL_GET | op::SYNTHETIC_ARGUMENT_GET => record_access(&mut read_counts, insn.imm1),
-                op::LOCAL_SET | op::LOCAL_TEE | op::SYNTHETIC_ARGUMENT_SET | op::SYNTHETIC_ARGUMENT_TEE => {
-                    record_access(&mut write_counts, insn.imm1);
-                }
-                opcode if (op::SYNTHETIC_LOCAL_GET_0..=op::SYNTHETIC_LOCAL_GET_7).contains(&opcode) => {
-                    record_access(&mut read_counts, (opcode - op::SYNTHETIC_LOCAL_GET_0) as i64);
-                }
-                opcode if (op::SYNTHETIC_LOCAL_SET_0..=op::SYNTHETIC_LOCAL_SET_7).contains(&opcode) => {
-                    record_access(&mut write_counts, (opcode - op::SYNTHETIC_LOCAL_SET_0) as i64);
-                }
-                op::SYNTHETIC_LOCAL_COPY => {
-                    record_access(&mut read_counts, insn.imm1);
-                    record_access(&mut write_counts, insn.imm2);
-                }
-                op::SYNTHETIC_LOCAL_SETI32_CONST | op::SYNTHETIC_LOCAL_SETI64_CONST => {
-                    record_access(&mut write_counts, insn.imm2);
-                }
-                op::SYNTHETIC_I32_ADD2LOCAL | op::SYNTHETIC_I64_ADD2LOCAL => {
-                    record_access(&mut read_counts, insn.imm1);
-                    record_access(&mut read_counts, insn.imm2);
-                }
-                op::SYNTHETIC_I32_ADDCONSTLOCAL
-                | op::SYNTHETIC_I32_ANDCONSTLOCAL
-                | op::SYNTHETIC_I64_ADDCONSTLOCAL
-                | op::SYNTHETIC_I64_ANDCONSTLOCAL
-                | op::SYNTHETIC_I32_STORELOCAL
-                | op::SYNTHETIC_I64_STORELOCAL => record_access(&mut read_counts, insn.imm2),
-                opcode
-                    if (op::SYNTHETIC_I32_SUB2LOCAL..=op::SYNTHETIC_I32_SHRS2LOCAL).contains(&opcode)
-                        || (op::SYNTHETIC_I64_SUB2LOCAL..=op::SYNTHETIC_I64_SHRS2LOCAL).contains(&opcode) =>
-                {
-                    record_access(&mut read_counts, insn.imm1);
-                    record_access(&mut read_counts, insn.imm2);
-                }
-                _ => {}
+            let accesses = Self::local_accesses(insn);
+            for local_index in accesses.reads.into_iter().flatten() {
+                record_access(&mut read_counts, local_index);
+            }
+            if let Some(local_index) = accesses.write {
+                record_access(&mut write_counts, local_index);
             }
         }
 
@@ -173,6 +498,45 @@ impl CraneliftCompiler {
             promoted[index] = true;
         }
         promoted
+    }
+
+    fn select_locals_for_block_cache(insns: &[CraneliftInsn], promoted: &[bool], budget: usize) -> Vec<bool> {
+        let mut read_counts = vec![0u32; promoted.len()];
+        let mut write_counts = vec![0u32; promoted.len()];
+        for insn in insns {
+            let accesses = Self::local_accesses(insn);
+            for local_index in accesses.reads.into_iter().flatten() {
+                if let Some(count) = read_counts.get_mut(local_index) {
+                    *count = count.saturating_add(1);
+                }
+            }
+            if let Some(local_index) = accesses.write
+                && let Some(count) = write_counts.get_mut(local_index)
+            {
+                *count = count.saturating_add(1);
+            }
+        }
+
+        // Function-wide promotion favors stable locals. Within a block, repeatedly mutated locals
+        // are more valuable because intermediate definitions can stay cached without crossing a
+        // control-flow edge.
+        let mut candidates: Vec<usize> = (0..promoted.len())
+            .filter(|&local_index| {
+                !promoted[local_index] && (read_counts[local_index] > 0 || write_counts[local_index] > 0)
+            })
+            .collect();
+        candidates.sort_unstable_by(|&lhs, &rhs| {
+            write_counts[rhs]
+                .cmp(&write_counts[lhs])
+                .then_with(|| read_counts[rhs].cmp(&read_counts[lhs]))
+                .then_with(|| lhs.cmp(&rhs))
+        });
+
+        let mut cached = vec![false; promoted.len()];
+        for local_index in candidates.into_iter().take(budget) {
+            cached[local_index] = true;
+        }
+        cached
     }
 
     pub fn compile_to_bytes(
@@ -524,6 +888,23 @@ impl CraneliftCompiler {
 
         let selective_promotion_budget = if cfg!(target_arch = "aarch64") { 10 } else { 8 };
         let promoted_locals = Self::select_locals_for_promotion(insns, num_locals, selective_promotion_budget);
+        // Keep this budget below the function-wide promotion budget. Caching more locals in large
+        // blocks recreates the same register-pressure cliff that selective promotion avoids.
+        let block_local_cache_budget = if cfg!(target_arch = "aarch64") {
+            6
+        } else if cfg!(target_arch = "x86_64") {
+            2
+        } else {
+            0
+        };
+        let block_cached_locals =
+            Self::select_locals_for_block_cache(insns, &promoted_locals, block_local_cache_budget);
+        let block_local_cache_enabled = block_cached_locals.iter().any(|&cached| cached);
+        let local_liveness = if block_local_cache_enabled {
+            Some(Self::analyze_local_liveness(insns, num_locals)?)
+        } else {
+            None
+        };
         let local_vars: Vec<Option<Variable>> = promoted_locals
             .iter()
             .map(|&promoted| {
@@ -549,6 +930,8 @@ impl CraneliftCompiler {
             };
             builder.declare_var(*var, ty);
         }
+        let mut local_cache: Vec<Option<Value>> = vec![None; num_locals];
+        let mut local_cache_dirty = vec![false; num_locals];
 
         // set_frame_lightweight verifies the stack-usage hint before these unchecked operations.
         macro_rules! emit_stack_push {
@@ -1009,6 +1392,17 @@ impl CraneliftCompiler {
                     } else {
                         v
                     }
+                } else if block_cached_locals[idx] {
+                    if let Some(value) = local_cache[idx] {
+                        value
+                    } else {
+                        let lb = $builder.use_var(locals_base_var);
+                        let value = $builder
+                            .ins()
+                            .load(types::I64, MemFlags::trusted(), lb, (idx as i32) * value_size);
+                        local_cache[idx] = Some(value);
+                        value
+                    }
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     $builder
@@ -1027,6 +1421,9 @@ impl CraneliftCompiler {
                         let v = $builder.use_var(var);
                         $builder.ins().bitcast(types::F64, MemFlags::new(), v)
                     }
+                } else if block_cached_locals[idx] {
+                    let bits = read_local_inline!($builder, $idx_imm);
+                    $builder.ins().bitcast(types::F64, MemFlags::new(), bits)
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     $builder
@@ -1046,6 +1443,10 @@ impl CraneliftCompiler {
                         let v32 = $builder.ins().ireduce(types::I32, v);
                         $builder.ins().bitcast(types::F32, MemFlags::new(), v32)
                     }
+                } else if block_cached_locals[idx] {
+                    let bits = read_local_inline!($builder, $idx_imm);
+                    let bits32 = $builder.ins().ireduce(types::I32, bits);
+                    $builder.ins().bitcast(types::F32, MemFlags::new(), bits32)
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     $builder
@@ -1069,6 +1470,9 @@ impl CraneliftCompiler {
                     };
                     $builder.def_var(var, stored);
                     dirty_locals[idx] = true;
+                } else if block_cached_locals[idx] {
+                    local_cache[idx] = Some(v);
+                    local_cache_dirty[idx] = true;
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     let offset = (idx as i32) * value_size;
@@ -1090,6 +1494,10 @@ impl CraneliftCompiler {
                         $builder.def_var(var, bits);
                     }
                     dirty_locals[idx] = true;
+                } else if block_cached_locals[idx] {
+                    let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), v);
+                    local_cache[idx] = Some(bits);
+                    local_cache_dirty[idx] = true;
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     let offset = (idx as i32) * value_size;
@@ -1164,6 +1572,38 @@ impl CraneliftCompiler {
                     $builder.ins().store(MemFlags::trusted(), stored, lb, offset);
                     let zero = $builder.ins().iconst(types::I64, 0);
                     $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                }
+            }};
+        }
+        macro_rules! finish_local_cache_block {
+            ($builder:expr, $instruction_index:expr) => {{
+                if block_local_cache_enabled {
+                    let block = local_liveness
+                        .as_ref()
+                        .expect("block-local caching requires local liveness")
+                        .block_at($instruction_index);
+                    debug_assert_eq!(block.end, $instruction_index + 1);
+
+                    if local_cache_dirty
+                        .iter()
+                        .enumerate()
+                        .any(|(local_index, &dirty)| dirty && block.live_out.contains(local_index))
+                    {
+                        let lb = $builder.use_var(locals_base_var);
+                        let zero = $builder.ins().iconst(types::I64, 0);
+                        for local_index in 0..num_locals {
+                            if !local_cache_dirty[local_index] || !block.live_out.contains(local_index) {
+                                continue;
+                            }
+                            let value = local_cache[local_index].expect("dirty local must be cached");
+                            let offset = (local_index as i32) * value_size;
+                            $builder.ins().store(MemFlags::trusted(), value, lb, offset);
+                            $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                        }
+                    }
+
+                    local_cache.fill(None);
+                    local_cache_dirty.fill(false);
                 }
             }};
         }
@@ -1335,6 +1775,7 @@ impl CraneliftCompiler {
                 op::NOP => {}
 
                 op::UNREACHABLE => {
+                    finish_local_cache_block!(builder, ip);
                     Self::sync_regs_to_config(
                         &mut builder,
                         &reg_vars,
@@ -1380,6 +1821,7 @@ impl CraneliftCompiler {
                 }
 
                 op::LOOP => {
+                    finish_local_cache_block!(builder, ip);
                     let arity = insn.imm3 & 0xffff;
                     let param_count = (insn.imm3 >> 16) as usize;
                     let header = builder.create_block();
@@ -1412,6 +1854,7 @@ impl CraneliftCompiler {
                 }
 
                 op::IF => {
+                    finish_local_cache_block!(builder, ip);
                     let arity = insn.imm3 & 0xffff;
                     let _param_count = (insn.imm3 >> 16) as usize;
                     let has_else = insn.imm2 >= 0;
@@ -1454,6 +1897,7 @@ impl CraneliftCompiler {
                 }
 
                 op::ELSE => {
+                    finish_local_cache_block!(builder, ip);
                     if let Some(frame) = control_stack.last() {
                         let else_block = frame.after_block;
                         let after = frame.branch_target;
@@ -1476,6 +1920,7 @@ impl CraneliftCompiler {
                 }
 
                 op::END | op::SYNTHETIC_END_EXPRESSION => {
+                    finish_local_cache_block!(builder, ip);
                     if let Some(frame) = control_stack.pop() {
                         let after = if frame.kind == ControlKind::If && frame.after_block != frame.branch_target {
                             // If without else: the after_block is the branch_target.
@@ -1507,6 +1952,7 @@ impl CraneliftCompiler {
                 }
 
                 op::BR | op::SYNTHETIC_BR_NOSTACK => {
+                    finish_local_cache_block!(builder, ip);
                     let label_idx = insn.imm1 as usize;
                     if label_idx < control_stack.len() {
                         let target_idx = control_stack.len() - 1 - label_idx;
@@ -1550,6 +1996,7 @@ impl CraneliftCompiler {
                 }
 
                 op::BR_IF | op::SYNTHETIC_BR_IF_NOSTACK => {
+                    finish_local_cache_block!(builder, ip);
                     let label_idx = insn.imm1 as usize;
                     let cond_raw = read_src!(builder, insn.sources[0]);
                     let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond_raw, 0);
@@ -1622,6 +2069,7 @@ impl CraneliftCompiler {
                 }
 
                 op::RETURN => {
+                    finish_local_cache_block!(builder, ip);
                     push_top_n_to_real!(builder, result_arity);
                     builder.ins().jump(epilogue_block, &[]);
                     sp = 0;
@@ -1718,6 +2166,7 @@ impl CraneliftCompiler {
                 }
 
                 op::BR_TABLE => {
+                    finish_local_cache_block!(builder, ip);
                     let inline_count = (insn.imm3 & 0xff) as usize;
                     if inline_count == 0xff {
                         return Err("br_table too large for inline encoding");
@@ -2707,5 +3156,115 @@ impl CraneliftCompiler {
             let zero = builder.ins().iconst(types::I64, 0);
             builder.ins().store(MemFlags::trusted(), zero, config, offset + 8);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn insn(opcode: u64) -> CraneliftInsn {
+        CraneliftInsn {
+            opcode,
+            sources: [0; 3],
+            destination: 0,
+            imm1: 0,
+            imm2: 0,
+            imm3: 0,
+            _pad: 0,
+        }
+    }
+
+    fn local_insn(opcode: u64, local_index: i64) -> CraneliftInsn {
+        let mut insn = insn(opcode);
+        insn.imm1 = local_index;
+        insn
+    }
+
+    #[test]
+    fn local_liveness_merges_if_branches() {
+        let insns = [
+            insn(op::IF),
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::ELSE),
+            local_insn(op::LOCAL_SET, 1),
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            local_insn(op::LOCAL_GET, 1),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 2).unwrap();
+        let then_block = liveness.block_at(1);
+        assert!(!then_block.live_in.contains(0));
+        assert!(then_block.live_in.contains(1));
+        assert!(then_block.live_out.contains(0));
+        assert!(then_block.live_out.contains(1));
+
+        let else_block = liveness.block_at(3);
+        assert!(else_block.live_in.contains(0));
+        assert!(!else_block.live_in.contains(1));
+        assert!(else_block.live_out.contains(0));
+        assert!(else_block.live_out.contains(1));
+    }
+
+    #[test]
+    fn local_liveness_reaches_loop_backedge() {
+        let mut branch = insn(op::BR_IF);
+        branch.imm1 = 0;
+        let insns = [
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::LOOP),
+            local_insn(op::LOCAL_GET, 0),
+            local_insn(op::LOCAL_SET, 0),
+            branch,
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        let loop_block = liveness.block_at(2);
+        assert!(loop_block.live_in.contains(0));
+        assert!(loop_block.live_out.contains(0));
+    }
+
+    #[test]
+    fn local_liveness_reaches_outer_branch_target() {
+        let mut branch = insn(op::BR);
+        branch.imm1 = 1;
+        let insns = [
+            insn(op::BLOCK),
+            local_insn(op::LOCAL_SET, 0),
+            insn(op::LOOP),
+            branch,
+            insn(op::END),
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        assert!(liveness.block_at(3).live_out.contains(0));
+    }
+
+    #[test]
+    fn local_liveness_unions_branch_table_targets() {
+        let mut branch_table = insn(op::BR_TABLE);
+        branch_table.imm1 = 0;
+        branch_table.imm3 = 1 | (1 << 8);
+        let insns = [
+            insn(op::BLOCK),
+            insn(op::LOOP),
+            local_insn(op::LOCAL_SET, 0),
+            branch_table,
+            insn(op::END),
+            insn(op::END),
+            local_insn(op::LOCAL_GET, 0),
+            insn(op::SYNTHETIC_END_EXPRESSION),
+        ];
+
+        let liveness = CraneliftCompiler::analyze_local_liveness(&insns, 1).unwrap();
+        assert!(liveness.block_at(3).live_out.contains(0));
     }
 }
