@@ -89,6 +89,92 @@ enum ControlKind {
 pub struct CraneliftCompiler;
 
 impl CraneliftCompiler {
+    fn select_locals_for_promotion(insns: &[CraneliftInsn], num_locals: usize, budget: usize) -> Vec<bool> {
+        if budget >= num_locals {
+            return vec![true; num_locals];
+        }
+
+        let mut read_counts = vec![0u32; num_locals];
+        let mut write_counts = vec![0u32; num_locals];
+        let record_access = |counts: &mut [u32], local_index: i64| {
+            let Ok(local_index) = usize::try_from(local_index) else {
+                return;
+            };
+            let Some(access_count) = counts.get_mut(local_index) else {
+                return;
+            };
+            *access_count = access_count.saturating_add(1);
+        };
+
+        for insn in insns {
+            match insn.opcode {
+                op::LOCAL_GET | op::SYNTHETIC_ARGUMENT_GET => record_access(&mut read_counts, insn.imm1),
+                op::LOCAL_SET | op::LOCAL_TEE | op::SYNTHETIC_ARGUMENT_SET | op::SYNTHETIC_ARGUMENT_TEE => {
+                    record_access(&mut write_counts, insn.imm1);
+                }
+                opcode if (op::SYNTHETIC_LOCAL_GET_0..=op::SYNTHETIC_LOCAL_GET_7).contains(&opcode) => {
+                    record_access(&mut read_counts, (opcode - op::SYNTHETIC_LOCAL_GET_0) as i64);
+                }
+                opcode if (op::SYNTHETIC_LOCAL_SET_0..=op::SYNTHETIC_LOCAL_SET_7).contains(&opcode) => {
+                    record_access(&mut write_counts, (opcode - op::SYNTHETIC_LOCAL_SET_0) as i64);
+                }
+                op::SYNTHETIC_LOCAL_COPY => {
+                    record_access(&mut read_counts, insn.imm1);
+                    record_access(&mut write_counts, insn.imm2);
+                }
+                op::SYNTHETIC_LOCAL_SETI32_CONST | op::SYNTHETIC_LOCAL_SETI64_CONST => {
+                    record_access(&mut write_counts, insn.imm2);
+                }
+                op::SYNTHETIC_I32_ADD2LOCAL | op::SYNTHETIC_I64_ADD2LOCAL => {
+                    record_access(&mut read_counts, insn.imm1);
+                    record_access(&mut read_counts, insn.imm2);
+                }
+                op::SYNTHETIC_I32_ADDCONSTLOCAL
+                | op::SYNTHETIC_I32_ANDCONSTLOCAL
+                | op::SYNTHETIC_I64_ADDCONSTLOCAL
+                | op::SYNTHETIC_I64_ANDCONSTLOCAL
+                | op::SYNTHETIC_I32_STORELOCAL
+                | op::SYNTHETIC_I64_STORELOCAL => record_access(&mut read_counts, insn.imm2),
+                opcode
+                    if (op::SYNTHETIC_I32_SUB2LOCAL..=op::SYNTHETIC_I32_SHRS2LOCAL).contains(&opcode)
+                        || (op::SYNTHETIC_I64_SUB2LOCAL..=op::SYNTHETIC_I64_SHRS2LOCAL).contains(&opcode) =>
+                {
+                    record_access(&mut read_counts, insn.imm1);
+                    record_access(&mut read_counts, insn.imm2);
+                }
+                _ => {}
+            }
+        }
+
+        // Each mutation of a promoted local introduces another SSA definition. Promoting every
+        // local in functions with many mutations can therefore create enough simultaneous live
+        // values at control-flow merges to cause excessive register-allocation work and spilling.
+        const MAX_UNCONDITIONAL_LOCAL_SSA_DEFINITIONS: usize = 256;
+        let estimated_ssa_definitions =
+            num_locals.saturating_add(write_counts.iter().map(|&count| count as usize).sum::<usize>());
+        if estimated_ssa_definitions <= MAX_UNCONDITIONAL_LOCAL_SSA_DEFINITIONS {
+            return vec![true; num_locals];
+        }
+
+        // Prefer locals with fewer definitions, then use read frequency to choose between equally
+        // stable locals. Locals outside the budget remain in their canonical frame slots.
+        let mut candidates: Vec<usize> = (0..num_locals)
+            .filter(|&index| read_counts[index] > 0 || write_counts[index] > 0)
+            .collect();
+        candidates.sort_unstable_by(|&lhs, &rhs| {
+            write_counts[lhs]
+                .cmp(&write_counts[rhs])
+                .then_with(|| read_counts[rhs].cmp(&read_counts[lhs]))
+                .then_with(|| lhs.cmp(&rhs))
+        });
+
+        let mut promoted = vec![false; num_locals];
+        for index in candidates.into_iter().take(budget) {
+            promoted[index] = true;
+        }
+        promoted
+    }
+
     pub fn compile_to_bytes(
         insns: &[CraneliftInsn],
         helpers: &RuntimeHelpers,
@@ -436,32 +522,24 @@ impl CraneliftCompiler {
             .map(|i| local_types.get(i).copied() == Some(F32_KIND))
             .collect();
 
-        // Promoting wasm locals to SSA variables keeps them in registers, which is a win only
-        // as long as they actually fit. Functions with more locals than the machine has usable
-        // registers make cranelift spill, and the spill traffic is both larger and slower than
-        // just leaving the locals in the frame and loading them on use.
-        // Set the cap according to the target's usable GPR count; the read/write macros fall back
-        // to the in-memory path for any index we don't promote.
-        let max_promote_locals = if cfg!(target_arch = "aarch64") {
-            24
-        } else if cfg!(target_arch = "x86_64") {
-            12
-        } else {
-            8
-        };
-        let local_vars: Vec<Variable> = if num_locals <= max_promote_locals {
-            (0..num_locals)
-                .map(|_| {
-                    let v = Variable::from_u32(next_var_id);
-                    next_var_id += 1;
-                    v
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let selective_promotion_budget = if cfg!(target_arch = "aarch64") { 10 } else { 8 };
+        let promoted_locals = Self::select_locals_for_promotion(insns, num_locals, selective_promotion_budget);
+        let local_vars: Vec<Option<Variable>> = promoted_locals
+            .iter()
+            .map(|&promoted| {
+                if !promoted {
+                    return None;
+                }
+                let v = Variable::from_u32(next_var_id);
+                next_var_id += 1;
+                Some(v)
+            })
+            .collect();
         let mut dirty_locals = vec![false; num_locals];
         for (i, var) in local_vars.iter().enumerate() {
+            let Some(var) = var else {
+                continue;
+            };
             let ty = if local_is_f64[i] {
                 types::F64
             } else if local_is_f32[i] {
@@ -921,8 +999,8 @@ impl CraneliftCompiler {
         macro_rules! read_local_inline {
             ($builder:expr, $idx_imm:expr) => {{
                 let idx = ($idx_imm) as usize;
-                if idx < local_vars.len() {
-                    let v = $builder.use_var(local_vars[idx]);
+                if let Some(var) = local_vars.get(idx).copied().flatten() {
+                    let v = $builder.use_var(var);
                     if local_is_f64[idx] {
                         $builder.ins().bitcast(types::I64, MemFlags::new(), v)
                     } else if local_is_f32[idx] {
@@ -942,11 +1020,13 @@ impl CraneliftCompiler {
         macro_rules! read_local_f64 {
             ($builder:expr, $idx_imm:expr) => {{
                 let idx = ($idx_imm) as usize;
-                if idx < local_vars.len() && local_is_f64[idx] {
-                    $builder.use_var(local_vars[idx])
-                } else if idx < local_vars.len() {
-                    let v = $builder.use_var(local_vars[idx]);
-                    $builder.ins().bitcast(types::F64, MemFlags::new(), v)
+                if let Some(var) = local_vars.get(idx).copied().flatten() {
+                    if local_is_f64[idx] {
+                        $builder.use_var(var)
+                    } else {
+                        let v = $builder.use_var(var);
+                        $builder.ins().bitcast(types::F64, MemFlags::new(), v)
+                    }
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     $builder
@@ -958,12 +1038,14 @@ impl CraneliftCompiler {
         macro_rules! read_local_f32 {
             ($builder:expr, $idx_imm:expr) => {{
                 let idx = ($idx_imm) as usize;
-                if idx < local_vars.len() && local_is_f32[idx] {
-                    $builder.use_var(local_vars[idx])
-                } else if idx < local_vars.len() {
-                    let v = $builder.use_var(local_vars[idx]);
-                    let v32 = $builder.ins().ireduce(types::I32, v);
-                    $builder.ins().bitcast(types::F32, MemFlags::new(), v32)
+                if let Some(var) = local_vars.get(idx).copied().flatten() {
+                    if local_is_f32[idx] {
+                        $builder.use_var(var)
+                    } else {
+                        let v = $builder.use_var(var);
+                        let v32 = $builder.ins().ireduce(types::I32, v);
+                        $builder.ins().bitcast(types::F32, MemFlags::new(), v32)
+                    }
                 } else {
                     let lb = $builder.use_var(locals_base_var);
                     $builder
@@ -976,7 +1058,7 @@ impl CraneliftCompiler {
             ($builder:expr, $idx_imm:expr, $val:expr) => {{
                 let idx = ($idx_imm) as usize;
                 let v = $val;
-                if idx < local_vars.len() {
+                if let Some(var) = local_vars.get(idx).copied().flatten() {
                     let stored = if local_is_f64[idx] {
                         $builder.ins().bitcast(types::F64, MemFlags::new(), v)
                     } else if local_is_f32[idx] {
@@ -985,7 +1067,7 @@ impl CraneliftCompiler {
                     } else {
                         v
                     };
-                    $builder.def_var(local_vars[idx], stored);
+                    $builder.def_var(var, stored);
                     dirty_locals[idx] = true;
                 } else {
                     let lb = $builder.use_var(locals_base_var);
@@ -1000,12 +1082,13 @@ impl CraneliftCompiler {
             ($builder:expr, $idx_imm:expr, $val:expr) => {{
                 let idx = ($idx_imm) as usize;
                 let v = $val;
-                if idx < local_vars.len() && local_is_f64[idx] {
-                    $builder.def_var(local_vars[idx], v);
-                    dirty_locals[idx] = true;
-                } else if idx < local_vars.len() {
-                    let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), v);
-                    $builder.def_var(local_vars[idx], bits);
+                if let Some(var) = local_vars.get(idx).copied().flatten() {
+                    if local_is_f64[idx] {
+                        $builder.def_var(var, v);
+                    } else {
+                        let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), v);
+                        $builder.def_var(var, bits);
+                    }
                     dirty_locals[idx] = true;
                 } else {
                     let lb = $builder.use_var(locals_base_var);
@@ -1020,8 +1103,8 @@ impl CraneliftCompiler {
             ($builder:expr, $idx_imm:expr, $val:expr) => {{
                 let idx = ($idx_imm) as usize;
                 let v = $val;
-                if idx < local_vars.len() && local_is_f32[idx] {
-                    $builder.def_var(local_vars[idx], v);
+                if local_vars.get(idx).is_some_and(Option::is_some) && local_is_f32[idx] {
+                    $builder.def_var(local_vars[idx].expect("promoted local"), v);
                     dirty_locals[idx] = true;
                 } else {
                     let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), v);
@@ -1033,10 +1116,11 @@ impl CraneliftCompiler {
         macro_rules! local_get {
             ($builder:expr, $idx_imm:expr, $dst:expr) => {{
                 let idx = ($idx_imm) as usize;
-                if idx < local_vars.len() && local_is_f64[idx] {
+                let is_promoted = local_vars.get(idx).is_some_and(Option::is_some);
+                if is_promoted && local_is_f64[idx] {
                     let result = read_local_f64!($builder, $idx_imm);
                     write_dst_f64!($builder, $dst, result);
-                } else if idx < local_vars.len() && local_is_f32[idx] {
+                } else if is_promoted && local_is_f32[idx] {
                     let result = read_local_f32!($builder, $idx_imm);
                     write_dst_f32!($builder, $dst, result);
                 } else {
@@ -1048,10 +1132,11 @@ impl CraneliftCompiler {
         macro_rules! local_set {
             ($builder:expr, $idx_imm:expr, $src:expr) => {{
                 let idx = ($idx_imm) as usize;
-                if idx < local_vars.len() && local_is_f64[idx] {
+                let is_promoted = local_vars.get(idx).is_some_and(Option::is_some);
+                if is_promoted && local_is_f64[idx] {
                     let val = read_src_f64!($builder, $src);
                     write_local_f64!($builder, $idx_imm, val);
-                } else if idx < local_vars.len() && local_is_f32[idx] {
+                } else if is_promoted && local_is_f32[idx] {
                     let val = read_src_f32!($builder, $src);
                     write_local_f32!($builder, $idx_imm, val);
                 } else {
@@ -1062,24 +1147,23 @@ impl CraneliftCompiler {
         }
         macro_rules! flush_locals {
             ($builder:expr) => {{
-                if !local_vars.is_empty() {
-                    let lb = $builder.use_var(locals_base_var);
-                    for i in 0..local_vars.len() {
-                        if !dirty_locals[i] {
-                            continue;
-                        }
-                        let v = $builder.use_var(local_vars[i]);
-                        let stored = if local_is_f32[i] {
-                            let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), v);
-                            $builder.ins().sextend(types::I64, bits32)
-                        } else {
-                            v
-                        };
-                        let offset = (i as i32) * value_size;
-                        $builder.ins().store(MemFlags::trusted(), stored, lb, offset);
-                        let zero = $builder.ins().iconst(types::I64, 0);
-                        $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                let lb = $builder.use_var(locals_base_var);
+                for i in 0..local_vars.len() {
+                    if !dirty_locals[i] {
+                        continue;
                     }
+                    let var = local_vars[i].expect("dirty local must be promoted");
+                    let v = $builder.use_var(var);
+                    let stored = if local_is_f32[i] {
+                        let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), v);
+                        $builder.ins().sextend(types::I64, bits32)
+                    } else {
+                        v
+                    };
+                    let offset = (i as i32) * value_size;
+                    $builder.ins().store(MemFlags::trusted(), stored, lb, offset);
+                    let zero = $builder.ins().iconst(types::I64, 0);
+                    $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
                 }
             }};
         }
@@ -1152,19 +1236,14 @@ impl CraneliftCompiler {
         // On a fresh call only the parameters are initialized by the caller.
         macro_rules! init_locals_fresh {
             ($builder:expr) => {{
-                if local_vars.is_empty() {
-                    if num_locals > num_params {
-                        let lb = $builder.use_var(locals_base_var);
-                        let zero = $builder.ins().iconst(types::I64, 0);
-                        for i in num_params..num_locals {
-                            let offset = (i as i32) * value_size;
-                            $builder.ins().store(MemFlags::trusted(), zero, lb, offset);
-                            $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
-                        }
-                    }
+                let lb = $builder.use_var(locals_base_var);
+                let memory_zero = if local_vars[num_params..].iter().any(Option::is_none) {
+                    Some($builder.ins().iconst(types::I64, 0))
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    for (i, var) in local_vars.iter().enumerate() {
+                    None
+                };
+                for (i, var) in local_vars.iter().enumerate() {
+                    if let Some(var) = var {
                         if i < num_params {
                             let ty = if local_is_f64[i] {
                                 types::F64
@@ -1186,26 +1265,32 @@ impl CraneliftCompiler {
                             let zero = $builder.ins().iconst(types::I64, 0);
                             $builder.def_var(*var, zero);
                         }
+                    } else if i >= num_params {
+                        let zero = memory_zero.expect("unpromoted non-parameter local needs memory initialization");
+                        let offset = (i as i32) * value_size;
+                        $builder.ins().store(MemFlags::trusted(), zero, lb, offset);
+                        $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
                     }
                 }
             }};
         }
         macro_rules! init_locals_resume {
             ($builder:expr) => {{
-                if !local_vars.is_empty() {
-                    let lb = $builder.use_var(locals_base_var);
-                    for (i, var) in local_vars.iter().enumerate() {
-                        let ty = if local_is_f64[i] {
-                            types::F64
-                        } else if local_is_f32[i] {
-                            types::F32
-                        } else {
-                            types::I64
-                        };
-                        let offset = (i as i32) * value_size;
-                        let val = $builder.ins().load(ty, MemFlags::trusted(), lb, offset);
-                        $builder.def_var(*var, val);
-                    }
+                let lb = $builder.use_var(locals_base_var);
+                for (i, var) in local_vars.iter().enumerate() {
+                    let Some(var) = var else {
+                        continue;
+                    };
+                    let ty = if local_is_f64[i] {
+                        types::F64
+                    } else if local_is_f32[i] {
+                        types::F32
+                    } else {
+                        types::I64
+                    };
+                    let offset = (i as i32) * value_size;
+                    let val = $builder.ins().load(ty, MemFlags::trusted(), lb, offset);
+                    $builder.def_var(*var, val);
                 }
             }};
         }
@@ -1567,11 +1652,12 @@ impl CraneliftCompiler {
                 }
                 op::LOCAL_TEE | op::SYNTHETIC_ARGUMENT_TEE => {
                     let idx = insn.imm1 as usize;
-                    if idx < local_vars.len() && local_is_f64[idx] {
+                    let is_promoted = local_vars.get(idx).is_some_and(Option::is_some);
+                    if is_promoted && local_is_f64[idx] {
                         let val = read_src_f64!(builder, insn.sources[0]);
                         write_local_f64!(builder, insn.imm1, val);
                         write_dst_f64!(builder, insn.destination, val);
-                    } else if idx < local_vars.len() && local_is_f32[idx] {
+                    } else if is_promoted && local_is_f32[idx] {
                         let val = read_src_f32!(builder, insn.sources[0]);
                         write_local_f32!(builder, insn.imm1, val);
                         write_dst_f32!(builder, insn.destination, val);
