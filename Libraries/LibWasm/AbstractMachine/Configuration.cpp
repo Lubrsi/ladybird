@@ -25,9 +25,13 @@ void Configuration::unwind_impl()
         m_locals_base = nullptr;
         m_memory_instances = nullptr;
         m_global_instances = nullptr;
+        m_current_module = nullptr;
+        m_current_compiled_fn_table = nullptr;
     } else {
         auto& caller = m_frame_stack.last();
         m_locals_base = caller.owns_locals() ? m_owned_locals_stack.last().data() : caller.locals_data();
+        m_current_module = &caller.module();
+        m_current_compiled_fn_table = caller.compiled_fn_table();
         if (&caller.module() != popped_module) {
             m_memory_instances = caller.module().resolved_memories(m_store);
             m_global_instances = caller.module().resolved_globals(m_store);

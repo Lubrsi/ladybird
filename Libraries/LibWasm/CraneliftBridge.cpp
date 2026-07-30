@@ -415,7 +415,7 @@ i32 wasm_cl_call_function(void* interp_ptr, void* config_ptr, i32 func_index)
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& functions = module.functions();
     if (static_cast<size_t>(func_index) >= functions.size())
         return 1;
@@ -471,7 +471,7 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto table_address = module.tables()[table_idx];
     auto* table_instance = config.store().get(table_address);
     if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
@@ -543,7 +543,7 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
 
-    auto const& module = config.frame().module();
+    auto const& module = *config.current_module();
     auto const& functions = module.functions();
     if (static_cast<size_t>(func_index) >= functions.size())
         return 1;
@@ -563,13 +563,13 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
 
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
 {
-    return wasm_cl_finish_call(interpreter, config, config.frame().module().functions()[func_index], args, arg_count);
+    return wasm_cl_finish_call(interpreter, config, config.current_module()->functions()[func_index], args, arg_count);
 }
 
 // Direct compiled-to-compiled call. Falls back to wasm_cl_finish_call for non-compiled targets.
 static ALWAYS_INLINE i32 wasm_cl_direct_call_impl(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value* args, size_t arg_count)
 {
-    auto const* table = config.frame().compiled_fn_table();
+    auto const* table = config.current_compiled_fn_table();
     auto index = static_cast<size_t>(func_index);
     if (!table || index >= table->size() || !(*table)[index].module) [[unlikely]]
         return wasm_cl_direct_call_fallback(interpreter, config, func_index, args, arg_count);
