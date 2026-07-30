@@ -103,7 +103,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 13;
+constexpr u32 cache_blob_format_version = 14;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -188,7 +188,8 @@ static u64 compute_layout_hash(RuntimeHelpers const& h)
 static_assert(offsetof(RuntimeHelpers, call_function) == 0);
 static_assert(offsetof(RuntimeHelpers, memory_fill) == sizeof(size_t) * 11);
 static_assert(offsetof(RuntimeHelpers, primitive_storage_cage_base) == sizeof(size_t) * 12);
-static_assert(HELPER_COUNT == 13);
+static_assert(offsetof(RuntimeHelpers, call_indirect_with_record) == sizeof(size_t) * 13);
+static_assert(HELPER_COUNT == 14);
 
 static bool apply_helper_relocs(u8* code_bytes, size_t code_size, HelperReloc const* relocs, size_t reloc_count, RuntimeHelpers const& helpers)
 {
@@ -609,6 +610,41 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
     return wasm_cl_finish_call(interpreter, config, address, config.call_record_base(), type->parameters().size());
 }
 
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index);
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index)
+{
+    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
+    auto& config = *static_cast<Configuration*>(config_ptr);
+    CompiledCallerContext caller_context { config };
+
+    auto const& module = *config.current_module();
+    auto table_address = module.tables()[table_idx];
+    auto* table_instance = config.store().get(table_address);
+    if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
+        return interpreter.set_trap(Trap::from_string("Table index out of bounds"));
+
+    auto& element = table_instance->elements()[element_index];
+    if (!element.ref().has<Reference::Func>())
+        return interpreter.set_trap(Trap::from_string("Table element is not a function reference"));
+
+    auto address = element.ref().get<Reference::Func>().address;
+    auto* function = config.store().get(address);
+    if (!function)
+        return interpreter.set_trap(Trap::from_string("Indirect call to freed function"));
+
+    // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-call-indirect-x-y
+    // call_indirect's runtime check is a defined-type match (a downcast), not structural equality.
+    auto const* type_actual = function->visit([](auto& f) { return f.defined_type(); });
+    auto const* type_expected = module.canonical_types()[type_idx];
+    if (!type_actual || !matches_defined_type(*type_actual, *type_expected))
+        return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
+
+    FunctionType const* type { nullptr };
+    function->visit([&](auto const& f) { type = &f.type(); });
+
+    return wasm_cl_finish_call(interpreter, config, address, config.call_record_base(), type->parameters().size());
+}
+
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
 {
     return wasm_cl_finish_call(interpreter, config, config.current_module()->functions()[func_index], args, arg_count);
@@ -698,6 +734,7 @@ static RuntimeHelpers make_runtime_helpers()
         .memory_copy = bit_cast<uintptr_t>(&wasm_cl_memory_copy),
         .memory_fill = bit_cast<uintptr_t>(&wasm_cl_memory_fill),
         .primitive_storage_cage_base = bit_cast<uintptr_t>(&js_primitive_storage_cage_base),
+        .call_indirect_with_record = bit_cast<uintptr_t>(&wasm_cl_call_indirect_with_record),
         .regs_offset = static_cast<u32>(offsetof(Configuration, regs)),
         .value_size = static_cast<u32>(sizeof(Value)),
         .locals_base_offset = static_cast<u32>(Configuration::locals_base_offset()),
@@ -810,6 +847,10 @@ static CraneliftInsn serialize_insn(Dispatch const& dispatch, SourcesAndDestinat
             out.imm1 = static_cast<i64>(args.get<FunctionIndex>().value());
         } else if (is_syn(Instructions::synthetic_call_with_record_0) || is_syn(Instructions::synthetic_call_with_record_1)) {
             out.imm1 = static_cast<i64>(args.get<FunctionIndex>().value());
+        } else if (is_syn(Instructions::synthetic_call_indirect_with_record_0) || is_syn(Instructions::synthetic_call_indirect_with_record_1)) {
+            auto const& indirect_args = args.get<Instruction::IndirectCallArgs>();
+            out.imm1 = static_cast<i64>(indirect_args.type.value());
+            out.imm2 = static_cast<i64>(indirect_args.table.value());
         } else if (is_syn(Instructions::synthetic_br_nostack) || is_syn(Instructions::synthetic_br_if_nostack)) {
             auto const& br_args = args.get<Instruction::BranchArgs>();
             out.imm1 = static_cast<i64>(br_args.label.value());
