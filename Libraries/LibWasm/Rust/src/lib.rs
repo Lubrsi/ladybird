@@ -14,7 +14,8 @@ use compiler::CraneliftCompiler;
 ///   global ops:   imm1 = global index
 ///   branch:       imm1 = label index (from control stack)
 ///   block/loop:   imm1 = end_ip, imm2 = else_ip (-1 if none), imm3 = arity | (param_count << 16)
-///   call:         imm1 = function index
+///   call:         imm1 = function index, imm3 = parameter count, call_result_count = result count
+///   call_indirect: imm1 = type index, imm2 = table index, imm3 = parameter count, call_result_count = result count
 ///   memory ops:   imm1 = offset, imm3 = memory index
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -25,7 +26,7 @@ pub struct CraneliftInsn {
     pub imm1: i64,
     pub imm2: i64,
     pub imm3: u32,
-    pub _pad: u32,
+    pub call_result_count: u32,
 }
 
 #[repr(C)]

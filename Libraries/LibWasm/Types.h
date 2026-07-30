@@ -982,12 +982,19 @@ struct CraneliftTrap {
 };
 static_assert(sizeof(CraneliftTrap) == 8);
 
+struct CraneliftRawCallMetadata {
+    u32 instruction_index { 0 };
+    u32 parameter_count { 0 };
+    u32 result_count { 0 };
+};
+
 struct CompiledInstructions {
     Vector<Dispatch> dispatches;
     Vector<SourcesAndDestination> src_dst_mappings;
     InstructionStorage extra_instruction_storage;
 
     Vector<u8> cranelift_local_types;
+    Vector<CraneliftRawCallMetadata> cranelift_raw_calls;
 
     // Pointer/size_t-sized members first, then the u32, then the bools, so the trailing scalars pack
     // into one word instead of scattering padding between them.
@@ -1792,7 +1799,7 @@ private:
     size_t m_minimum_call_record_allocation_size { 0 };
 };
 
-CompiledInstructions try_compile_instructions(Expression const&, Span<FunctionType const> functions, Span<CodeSection::Func const* const> callee_bodies = {}, size_t current_function_index = 0, size_t caller_local_count = 0, size_t imported_function_count = 0);
+CompiledInstructions try_compile_instructions(Expression const&, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<CodeSection::Func const* const> callee_bodies = {}, size_t current_function_index = 0, size_t caller_local_count = 0, size_t imported_function_count = 0);
 ErrorOr<void, ValidationError> ensure_cranelift_compiled(Module&);
 WASM_API void start_cranelift_compilation(Module&);
 bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity = 0);

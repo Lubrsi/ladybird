@@ -1179,8 +1179,18 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
 
     Vector<CraneliftInsn> flat;
     flat.ensure_capacity(dispatches.size());
+    size_t raw_call_index = 0;
     for (size_t i = 0; i < dispatches.size(); ++i) {
         flat.append(serialize_insn(dispatches[i], addresses[i]));
+
+        auto opcode = dispatches[i].instruction->opcode();
+        if (opcode == Instructions::call || opcode == Instructions::call_indirect) {
+            VERIFY(raw_call_index < compiled.cranelift_raw_calls.size());
+            auto const& metadata = compiled.cranelift_raw_calls[raw_call_index++];
+            VERIFY(metadata.instruction_index == i);
+            flat.last().imm3 = metadata.parameter_count;
+            flat.last().call_result_count = metadata.result_count;
+        }
 
         if (dispatches[i].instruction->opcode().value() == Instructions::synthetic_tier_up.value())
             flat.last().imm1 = static_cast<i64>(i);
@@ -1204,6 +1214,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
             }
         }
     }
+    VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
 
     cranelift_cache_state().pending_batch.append({ move(flat), result_arity, s_active_function_index, &compiled, compiled.cranelift_local_count, compiled.cranelift_param_count });
     return false; // Not compiled yet, will be compiled in flush.
