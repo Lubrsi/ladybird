@@ -6,8 +6,8 @@
 
 use crate::CompiledFunction;
 use crate::CraneliftInsn;
+use crate::CraneliftRelocation;
 use crate::CraneliftTrap;
-use crate::HelperReloc;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
 use crate::compile_to_bytes;
@@ -175,7 +175,7 @@ fn select_compiled_functions(
         let Some(function_reloc_size) = compiled
             .relocs
             .len()
-            .checked_mul(size_of::<HelperReloc>())
+            .checked_mul(size_of::<CraneliftRelocation>())
             .and_then(|size| {
                 compiled
                     .traps
@@ -194,7 +194,7 @@ fn select_compiled_functions(
         };
         let Some(candidate_total_size) = code_base_offset
             .checked_add(candidate_code_size)
-            .and_then(|offset| align_up(offset, align_of::<HelperReloc>()).ok())
+            .and_then(|offset| align_up(offset, align_of::<CraneliftRelocation>()).ok())
             .and_then(|offset| offset.checked_add(candidate_reloc_size))
         else {
             continue;
@@ -316,7 +316,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
         code_base_offset
             .checked_add(code_size)
             .ok_or("relocation region offset overflow")?,
-        align_of::<HelperReloc>(),
+        align_of::<CraneliftRelocation>(),
     )?;
     let total_size = reloc_region_start
         .checked_add(reloc_size)
@@ -349,7 +349,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
         let aligned = align_up(code.len(), SERIALIZED_CODE_ALIGNMENT).map_err(|_| "code alignment overflow")?;
         let reloc_bytes_len = relocs
             .len()
-            .checked_mul(size_of::<HelperReloc>())
+            .checked_mul(size_of::<CraneliftRelocation>())
             .ok_or("relocation size overflow")?;
         let trap_bytes_len = traps
             .len()

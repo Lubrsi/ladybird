@@ -6,9 +6,11 @@
 
 use crate::CompiledFunction;
 use crate::CraneliftInsn;
+use crate::CraneliftRelocation;
+use crate::CraneliftRelocationKind;
+use crate::CraneliftRelocationTargetKind;
 use crate::CraneliftTrap;
 use crate::HelperId;
-use crate::HelperReloc;
 use crate::RuntimeLayout;
 
 use cranelift_codegen::Context;
@@ -49,6 +51,8 @@ mod op {
 const REG_COUNT: usize = 8;
 const STACK_MARKER: u8 = 8;
 const CALLREC_BASE: u8 = 9;
+const HELPER_EXTERNAL_NAMESPACE: u32 = 0;
+const WASM_FUNCTION_EXTERNAL_NAMESPACE: u32 = 1;
 
 /// The `Int` bank is always defined.
 /// The `F64` bank is trusted only until the next control-flow merge, where it may be undefined on an incoming edge.
@@ -163,6 +167,40 @@ impl LocalLiveness {
 pub struct CraneliftCompiler;
 
 impl CraneliftCompiler {
+    fn serialize_relocation(
+        kind: Reloc,
+        code_offset: u32,
+        addend: i64,
+        target: &UserExternalName,
+    ) -> Result<CraneliftRelocation, &'static str> {
+        let kind = match kind {
+            Reloc::Abs8 => CraneliftRelocationKind::Abs8,
+            Reloc::Arm64Call => CraneliftRelocationKind::Arm64Call,
+            Reloc::X86CallPCRel4 => CraneliftRelocationKind::X86CallPCRel4,
+            _ => return Err("unsupported relocation kind"),
+        };
+        let target_kind = match target.namespace {
+            HELPER_EXTERNAL_NAMESPACE => {
+                if target.index >= crate::HELPER_COUNT {
+                    return Err("relocation refers to an unknown helper id");
+                }
+                if kind != CraneliftRelocationKind::Abs8 {
+                    return Err("helper relocation is not Abs8");
+                }
+                CraneliftRelocationTargetKind::Helper
+            }
+            WASM_FUNCTION_EXTERNAL_NAMESPACE => CraneliftRelocationTargetKind::WasmFunction,
+            _ => return Err("relocation refers to an unknown target namespace"),
+        };
+        Ok(CraneliftRelocation {
+            code_offset,
+            kind,
+            target_kind,
+            target_index: target.index,
+            addend,
+        })
+    }
+
     fn local_accesses(insn: &CraneliftInsn) -> LocalAccesses {
         let local_index = |index| usize::try_from(index).ok();
         match insn.opcode {
@@ -714,7 +752,7 @@ impl CraneliftCompiler {
         macro_rules! decl_helper {
             ($sig:expr, $id:expr) => {{
                 let user_ref = builder.func.declare_imported_user_function(UserExternalName {
-                    namespace: 0,
+                    namespace: HELPER_EXTERNAL_NAMESPACE,
                     index: $id as u32,
                 });
                 builder.func.import_function(ExtFuncData {
@@ -3269,27 +3307,14 @@ impl CraneliftCompiler {
             (bytes, raw, traps)
         };
 
-        let mut relocs: Vec<HelperReloc> = Vec::with_capacity(raw_relocs.len());
+        let mut relocs: Vec<CraneliftRelocation> = Vec::with_capacity(raw_relocs.len());
         let user_names = ctx.func.params.user_named_funcs();
         for r in &raw_relocs {
-            // We only ever ask cranelift to relocate helper-function addresses, so any
-            // other reloc means it lowered something we didn't expect -- bail rather than
-            // produce machine code that the cache layer can't faithfully reproduce.
-            if r.kind != Reloc::Abs8 {
-                return Err("unexpected non-Abs8 relocation");
-            }
             let name = match &r.target {
                 FinalizedRelocTarget::ExternalName(ExternalName::User(user_ref)) => &user_names[*user_ref],
                 _ => return Err("unexpected relocation target"),
             };
-            if name.namespace != 0 || name.index >= crate::HELPER_COUNT {
-                return Err("relocation refers to an unknown helper id");
-            }
-            relocs.push(HelperReloc {
-                code_offset: r.offset,
-                helper_id: name.index,
-                addend: r.addend,
-            });
+            relocs.push(Self::serialize_relocation(r.kind, r.offset, r.addend, name)?);
         }
 
         Ok(CompiledFunction {
@@ -3409,6 +3434,52 @@ mod tests {
         let mut insn = insn(opcode);
         insn.imm1 = local_index;
         insn
+    }
+
+    #[test]
+    fn serializes_helper_and_wasm_function_relocations() {
+        let helper = UserExternalName {
+            namespace: HELPER_EXTERNAL_NAMESPACE,
+            index: HelperId::memory_size as u32,
+        };
+        let helper_relocation = CraneliftCompiler::serialize_relocation(Reloc::Abs8, 12, -4, &helper).unwrap();
+        assert_eq!(helper_relocation.code_offset, 12);
+        assert_eq!(helper_relocation.kind, CraneliftRelocationKind::Abs8);
+        assert_eq!(helper_relocation.target_kind, CraneliftRelocationTargetKind::Helper);
+        assert_eq!(helper_relocation.target_index, HelperId::memory_size as u32);
+        assert_eq!(helper_relocation.addend, -4);
+
+        let wasm_function = UserExternalName {
+            namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
+            index: 42,
+        };
+        let direct_call = CraneliftCompiler::serialize_relocation(Reloc::Arm64Call, 24, 0, &wasm_function).unwrap();
+        assert_eq!(direct_call.kind, CraneliftRelocationKind::Arm64Call);
+        assert_eq!(direct_call.target_kind, CraneliftRelocationTargetKind::WasmFunction);
+        assert_eq!(direct_call.target_index, 42);
+
+        let x86_direct_call =
+            CraneliftCompiler::serialize_relocation(Reloc::X86CallPCRel4, 32, -4, &wasm_function).unwrap();
+        assert_eq!(x86_direct_call.kind, CraneliftRelocationKind::X86CallPCRel4);
+        assert_eq!(x86_direct_call.addend, -4);
+
+        assert!(CraneliftCompiler::serialize_relocation(Reloc::Arm64Call, 0, 0, &helper).is_err());
+        assert!(
+            CraneliftCompiler::serialize_relocation(
+                Reloc::Abs8,
+                0,
+                0,
+                &UserExternalName {
+                    namespace: HELPER_EXTERNAL_NAMESPACE,
+                    index: crate::HELPER_COUNT,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            CraneliftCompiler::serialize_relocation(Reloc::Abs8, 0, 0, &UserExternalName { namespace: 2, index: 0 },)
+                .is_err()
+        );
     }
 
     #[test]
