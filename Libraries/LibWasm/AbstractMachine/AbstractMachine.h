@@ -873,7 +873,7 @@ public:
 
 private:
     Vector<FunctionInstance> m_functions;
-    Vector<TableInstance> m_tables;
+    Vector<NonnullOwnPtr<TableInstance>> m_tables;
     Vector<NonnullOwnPtr<MemoryInstance>> m_memories;
     Vector<NonnullOwnPtr<GlobalInstance>> m_globals;
     Vector<ElementInstance> m_elements;
