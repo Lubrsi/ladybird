@@ -40,6 +40,8 @@
 using namespace Wasm;
 using namespace Cranelift;
 
+extern "C" u64 wasm_cl_direct_call_with_record_fallback(void*, void*, void const*, u32, void const*, void const*);
+
 namespace {
 
 struct InputHeader {
@@ -57,10 +59,12 @@ struct InputFunctionEntry {
     u32 num_locals;
     u32 locals_offset;
     u32 num_params;
+    u32 function_index;
+    u32 max_call_rec_size;
 };
 
 static_assert(sizeof(InputHeader) == 32);
-static_assert(sizeof(InputFunctionEntry) == 24);
+static_assert(sizeof(InputFunctionEntry) == 32);
 
 struct OutputHeader {
     u32 function_count;
@@ -115,6 +119,7 @@ struct PendingCompiledFunction {
     OwnPtr<CodeMapping> mapping;
     Vector<CraneliftRelocation> relocs;
     size_t code_size;
+    size_t next_veneer_offset;
 };
 
 static constexpr size_t oop_code_region_min_size = 256 * KiB;
@@ -193,7 +198,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 15;
+constexpr u32 cache_blob_format_version = 16;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -286,35 +291,173 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 14);
+static_assert(HELPER_COUNT == 15);
 static_assert(sizeof(CraneliftRelocation) == 24);
 
-static bool apply_relocations(u8* code_bytes, size_t code_size, ReadonlySpan<CraneliftRelocation> relocs, RuntimeHelperAddresses const& helper_addresses)
+static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
 {
-    for (auto const& r : relocs) {
-        if (r.kind != CraneliftRelocationKind::Abs8 || r.target_kind != CraneliftRelocationTargetKind::Helper)
+    Checked<FlatPtr> address { target };
+    if (addend >= 0) {
+        address += static_cast<FlatPtr>(addend);
+    } else {
+        auto const magnitude = static_cast<u64>(-(addend + 1)) + 1;
+        if (!AK::is_within_range<FlatPtr>(magnitude))
+            return {};
+        address -= static_cast<FlatPtr>(magnitude);
+    }
+    if (address.has_overflow())
+        return {};
+    return address.value();
+}
+
+static Optional<i64> address_delta(FlatPtr target, FlatPtr source)
+{
+    if (target >= source) {
+        auto const delta = target - source;
+        if (delta > static_cast<FlatPtr>(NumericLimits<i64>::max()))
+            return {};
+        return static_cast<i64>(delta);
+    }
+
+    auto const magnitude = source - target;
+    auto const i64_min_magnitude = static_cast<FlatPtr>(NumericLimits<i64>::max()) + 1;
+    if (magnitude > i64_min_magnitude)
+        return {};
+    if (magnitude == i64_min_magnitude)
+        return NumericLimits<i64>::min();
+    return -static_cast<i64>(magnitude);
+}
+
+static Optional<FlatPtr> append_call_veneer(PendingCompiledFunction& pending, FlatPtr target)
+{
+    constexpr size_t veneer_size = 16;
+    if (pending.next_veneer_offset > pending.mapping->size || veneer_size > pending.mapping->size - pending.next_veneer_offset)
+        return {};
+
+    auto* veneer = static_cast<u8*>(pending.mapping->mapping) + pending.next_veneer_offset;
+#if ARCH(AARCH64)
+    // ldr x16, #8; br x16; .quad target
+    constexpr u32 load_target = 0x58000050;
+    constexpr u32 branch_target = 0xD61F0200;
+    __builtin_memcpy(veneer, &load_target, sizeof(load_target));
+    __builtin_memcpy(veneer + sizeof(load_target), &branch_target, sizeof(branch_target));
+    __builtin_memcpy(veneer + 8, &target, sizeof(target));
+#elif ARCH(X86_64)
+    // jmp qword ptr [rip]; .quad target
+    constexpr u8 jump_target[] = { 0xff, 0x25, 0, 0, 0, 0 };
+    __builtin_memcpy(veneer, jump_target, sizeof(jump_target));
+    __builtin_memcpy(veneer + sizeof(jump_target), &target, sizeof(target));
+#else
+    (void)target;
+    return {};
+#endif
+
+    pending.next_veneer_offset += veneer_size;
+    return bit_cast<FlatPtr>(veneer);
+}
+
+static bool patch_direct_call(PendingCompiledFunction& pending, CraneliftRelocation const& relocation, FlatPtr target, bool apply_relocation_addend)
+{
+    auto* code_bytes = static_cast<u8*>(pending.mapping->mapping);
+    auto resolved_target = apply_relocation_addend ? apply_addend(target, relocation.addend) : Optional<FlatPtr> { target };
+    if (!resolved_target.has_value())
+        return false;
+
+#if ARCH(AARCH64)
+    if (relocation.kind != CraneliftRelocationKind::Arm64Call)
+        return false;
+    if (static_cast<size_t>(relocation.code_offset) + sizeof(u32) > pending.code_size)
+        return false;
+
+    u32 instruction;
+    __builtin_memcpy(&instruction, code_bytes + relocation.code_offset, sizeof(instruction));
+    if ((instruction & 0xfc000000) != 0x94000000)
+        return false;
+
+    auto const patch_address = bit_cast<FlatPtr>(code_bytes + relocation.code_offset);
+    auto delta = address_delta(resolved_target.value(), patch_address);
+    if (!delta.has_value() || delta.value() % 4 != 0 || delta.value() < -(1 << 27) || delta.value() >= (1 << 27))
+        return false;
+
+    auto const immediate = static_cast<u32>(delta.value() >> 2) & 0x03ffffff;
+    instruction = (instruction & 0xfc000000) | immediate;
+    __builtin_memcpy(code_bytes + relocation.code_offset, &instruction, sizeof(instruction));
+    return true;
+#elif ARCH(X86_64)
+    if (relocation.kind != CraneliftRelocationKind::X86CallPCRel4)
+        return false;
+    if (relocation.code_offset == 0 || static_cast<size_t>(relocation.code_offset) + sizeof(i32) > pending.code_size)
+        return false;
+    if (code_bytes[relocation.code_offset - 1] != 0xe8)
+        return false;
+
+    auto const patch_address = bit_cast<FlatPtr>(code_bytes + relocation.code_offset);
+    auto delta = address_delta(resolved_target.value(), patch_address);
+    if (!delta.has_value() || !AK::is_within_range<i32>(delta.value()))
+        return false;
+
+    auto const displacement = static_cast<i32>(delta.value());
+    __builtin_memcpy(code_bytes + relocation.code_offset, &displacement, sizeof(displacement));
+    return true;
+#else
+    (void)pending;
+    (void)relocation;
+    (void)target;
+    (void)apply_relocation_addend;
+    return false;
+#endif
+}
+
+static bool apply_relocations(PendingCompiledFunction& pending, RuntimeHelperAddresses const& helper_addresses, HashMap<u32, FlatPtr> const& native_targets)
+{
+    auto* code_bytes = static_cast<u8*>(pending.mapping->mapping);
+    for (auto const& relocation : pending.relocs) {
+        if (relocation.target_kind == CraneliftRelocationTargetKind::Helper) {
+            if (relocation.kind != CraneliftRelocationKind::Abs8 || relocation.target_index >= HELPER_COUNT)
+                return false;
+            if (static_cast<size_t>(relocation.code_offset) + sizeof(u64) > pending.code_size)
+                return false;
+            auto address = apply_addend(helper_addresses[relocation.target_index], relocation.addend);
+            if (!address.has_value())
+                return false;
+            auto const resolved_address = address.value();
+            __builtin_memcpy(code_bytes + relocation.code_offset, &resolved_address, sizeof(resolved_address));
+            continue;
+        }
+
+        if (relocation.target_kind != CraneliftRelocationTargetKind::WasmFunction)
             return false;
-        if (r.target_index >= HELPER_COUNT)
+
+        auto const fallback = bit_cast<FlatPtr>(&wasm_cl_direct_call_with_record_fallback);
+        auto target = native_targets.get(relocation.target_index).value_or(fallback);
+        if (patch_direct_call(pending, relocation, target, true))
+            continue;
+
+        auto veneer = append_call_veneer(pending, target);
+        if (!veneer.has_value() || !patch_direct_call(pending, relocation, veneer.value(), true))
             return false;
-        if (static_cast<size_t>(r.code_offset) + sizeof(u64) > code_size)
-            return false;
-        u64 addr = static_cast<u64>(helper_addresses[r.target_index]) + static_cast<u64>(r.addend);
-        __builtin_memcpy(code_bytes + r.code_offset, &addr, sizeof(addr));
     }
     return true;
 }
 
-static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes)
+static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes, size_t veneer_count)
 {
     auto const code_size = code_bytes.size();
     if (code_size == 0)
+        return {};
+
+    Checked<size_t> veneer_size { veneer_count };
+    veneer_size *= 16;
+    Checked<size_t> writable_size { align_up(code_size, 16) };
+    writable_size += veneer_size;
+    if (writable_size.has_overflow())
         return {};
 
 #if defined(AK_OS_WINDOWS)
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     auto const page_size = static_cast<size_t>(si.dwPageSize);
-    auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
+    auto const rx_aligned_size = align_up(writable_size.value(), page_size);
     auto* jit_mem = VirtualAlloc(nullptr, rx_aligned_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!jit_mem)
         return {};
@@ -322,7 +465,7 @@ static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes)
     return make<CodeMapping>(jit_mem, rx_aligned_size);
 #elif defined(AK_OS_MACOS)
     auto const page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
+    auto const rx_aligned_size = align_up(writable_size.value(), page_size);
     auto* jit_mapping = mmap(nullptr, rx_aligned_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (jit_mapping == MAP_FAILED)
         return {};
@@ -333,7 +476,7 @@ static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes)
     return make<CodeMapping>(jit_mapping, rx_aligned_size);
 #else
     auto const page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
+    auto const rx_aligned_size = align_up(writable_size.value(), page_size);
     auto* rw_mapping = mmap(nullptr, rx_aligned_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rw_mapping == MAP_FAILED)
         return {};
@@ -347,7 +490,7 @@ static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_
     if (target.dispatches.is_empty())
         return {};
 
-    auto mapping = allocate_code_mapping(code_bytes);
+    auto mapping = allocate_code_mapping(code_bytes, relocs.size());
     if (!mapping)
         return {};
 
@@ -366,17 +509,18 @@ static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_
         .mapping = move(mapping),
         .relocs = move(copied_relocs),
         .code_size = code_bytes.size(),
+        .next_veneer_offset = align_up(code_bytes.size(), 16),
     };
 }
 
-static bool link_compiled_function(PendingCompiledFunction& pending, RuntimeHelperAddresses const& helper_addresses)
+static bool link_compiled_function(PendingCompiledFunction& pending, RuntimeHelperAddresses const& helper_addresses, HashMap<u32, FlatPtr> const& native_targets)
 {
 #if defined(AK_OS_MACOS)
     pthread_jit_write_protect_np(0);
     ScopeGuard restore_write_protection = [] { pthread_jit_write_protect_np(1); };
 #endif
 
-    return apply_relocations(static_cast<u8*>(pending.mapping->mapping), pending.code_size, pending.relocs.span(), helper_addresses);
+    return apply_relocations(pending, helper_addresses, native_targets);
 }
 
 static bool finalize_compiled_function(PendingCompiledFunction& pending)
@@ -385,13 +529,13 @@ static bool finalize_compiled_function(PendingCompiledFunction& pending)
     DWORD old_protect;
     if (!VirtualProtect(pending.mapping->mapping, pending.mapping->size, PAGE_EXECUTE_READ, &old_protect))
         return false;
-    FlushInstructionCache(GetCurrentProcess(), pending.mapping->mapping, pending.code_size);
+    FlushInstructionCache(GetCurrentProcess(), pending.mapping->mapping, pending.mapping->size);
 #elif defined(AK_OS_MACOS)
-    sys_icache_invalidate(pending.mapping->mapping, pending.code_size);
+    sys_icache_invalidate(pending.mapping->mapping, pending.mapping->size);
 #else
     if (mprotect(pending.mapping->mapping, pending.mapping->size, PROT_READ | PROT_EXEC) != 0)
         return false;
-    __builtin___clear_cache(static_cast<char*>(pending.mapping->mapping), static_cast<char*>(pending.mapping->mapping) + pending.code_size);
+    __builtin___clear_cache(static_cast<char*>(pending.mapping->mapping), static_cast<char*>(pending.mapping->mapping) + pending.mapping->size);
 #endif
     return true;
 }
@@ -411,9 +555,18 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
 
 static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelperAddresses const& helper_addresses)
 {
+    HashMap<u32, FlatPtr> native_targets;
+    for (auto const& pending : pending_functions)
+        native_targets.set(pending.function_index, bit_cast<FlatPtr>(pending.mapping->mapping));
+
     for (auto& pending : pending_functions) {
-        if (!link_compiled_function(pending, helper_addresses) || !finalize_compiled_function(pending))
-            pending.mapping = nullptr;
+        if (!link_compiled_function(pending, helper_addresses, native_targets))
+            return;
+    }
+
+    for (auto& pending : pending_functions) {
+        if (!finalize_compiled_function(pending))
+            return;
     }
 
     for (auto& pending : pending_functions) {
@@ -780,6 +933,23 @@ i32 wasm_cl_call_with_record(void* interp_ptr, void* config_ptr, i32 func_index)
     return wasm_cl_finish_call(interpreter, config, address, config.call_record_base(), type->parameters().size());
 }
 
+void wasm_cl_stack_exhaustion(void* interp_ptr);
+void wasm_cl_stack_exhaustion(void* interp_ptr)
+{
+    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
+    interpreter.set_trap(Constants::stack_exhaustion_message);
+}
+
+u64 wasm_cl_direct_call_with_record_fallback(void* interp_ptr, void* config_ptr, void const*, u32 func_index, void const* result_count, void const*)
+{
+    auto status = wasm_cl_call_with_record(interp_ptr, config_ptr, static_cast<i32>(func_index));
+    if (status == 0 && bit_cast<FlatPtr>(result_count) != 0) {
+        auto& config = *static_cast<Configuration*>(config_ptr);
+        config.value_stack().unchecked_append(config.compiled_call_result_scratch());
+    }
+    return static_cast<u64>(status);
+}
+
 i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index);
 i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index)
 {
@@ -905,6 +1075,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::memory_fill)] = bit_cast<uintptr_t>(&wasm_cl_memory_fill);
     addresses[to_underlying(HelperId::primitive_storage_cage_base)] = bit_cast<uintptr_t>(&js_primitive_storage_cage_base);
     addresses[to_underlying(HelperId::call_indirect_with_record)] = bit_cast<uintptr_t>(&wasm_cl_call_indirect_with_record);
+    addresses[to_underlying(HelperId::stack_exhaustion)] = bit_cast<uintptr_t>(&wasm_cl_stack_exhaustion);
     return addresses;
 }
 
@@ -1330,6 +1501,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch)
             .num_locals = input.num_locals,
             .locals_offset = static_cast<u32>(locals_cursor),
             .num_params = input.num_params,
+            .function_index = input.function_index,
+            .max_call_rec_size = static_cast<u32>(input.target->max_call_rec_size),
         };
         __builtin_memcpy(base + insn_cursor, input.insns.data(), input.insns.size() * sizeof(CraneliftInsn));
         insn_cursor += input.insns.size() * sizeof(CraneliftInsn);

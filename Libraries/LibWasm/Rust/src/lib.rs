@@ -74,9 +74,10 @@ pub enum HelperId {
     memory_fill = 11,
     primitive_storage_cage_base = 12,
     call_indirect_with_record = 13,
+    stack_exhaustion = 14,
 }
 
-pub const HELPER_COUNT: u32 = 14;
+pub const HELPER_COUNT: u32 = 15;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
@@ -125,22 +126,21 @@ pub struct CompiledFunction {
     pub traps: Vec<CraneliftTrap>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionCompilationOptions {
+    pub outcome_return_value: u64,
+    pub result_arity: u32,
+    pub num_locals: u32,
+    pub num_params: u32,
+    pub function_index: u32,
+    pub max_call_rec_size: u32,
+}
+
 pub fn compile_to_bytes(
     insns: &[CraneliftInsn],
     layout: &RuntimeLayout,
-    outcome_return_value: u64,
-    result_arity: u32,
-    num_locals: u32,
-    num_params: u32,
+    options: FunctionCompilationOptions,
     local_types: &[u8],
 ) -> Result<CompiledFunction, &'static str> {
-    CraneliftCompiler::compile_to_bytes(
-        insns,
-        layout,
-        outcome_return_value,
-        result_arity,
-        num_locals,
-        num_params,
-        local_types,
-    )
+    CraneliftCompiler::compile_to_bytes(insns, layout, options, local_types)
 }

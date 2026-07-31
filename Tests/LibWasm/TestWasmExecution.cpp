@@ -229,3 +229,109 @@ TEST_CASE(call_record_reserves_forward_callee_inlined_locals)
     EXPECT(callee.cranelift_inlined_locals > 0);
     EXPECT(caller.max_call_rec_size >= 4 + callee.cranelift_inlined_locals);
 }
+
+TEST_CASE(native_direct_call_uses_call_record)
+{
+    auto file = MUST(Core::File::open("Fixtures/call-record-forward-inlined-locals.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    auto const& functions = module->code_section().functions();
+    auto const& caller = functions[1].func().body().compiled_instructions;
+    auto const& callee = functions[2].func().body().compiled_instructions;
+    EXPECT(caller.cranelift_compiled);
+    EXPECT(callee.cranelift_compiled);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 1);
+}
+
+TEST_CASE(native_direct_call_falls_back_for_imported_callee)
+{
+    auto file = MUST(Core::File::open("Fixtures/call-record-import-fallback.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    auto const& caller = module->code_section().functions()[0].func().body().compiled_instructions;
+    EXPECT(caller.cranelift_compiled);
+
+    Wasm::FunctionType sum_type {
+        { Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32) },
+        { Wasm::ValueType(Wasm::ValueType::I32) }
+    };
+    auto sum = machine.store().allocate(Wasm::HostFunction {
+        [](Wasm::Configuration&, Span<Wasm::Value> arguments) -> Wasm::Result {
+            i32 result = 0;
+            for (auto const& argument : arguments)
+                result += argument.to<i32>();
+            return Wasm::Result { Vector<Wasm::Value> { Wasm::Value(result) } };
+        },
+        sum_type,
+        "sum4" });
+    VERIFY(sum.has_value());
+
+    auto instance = MUST(machine.instantiate(*module, { *sum }));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 10);
+}
+
+TEST_CASE(native_direct_call_restores_context_after_trap)
+{
+    auto file = MUST(Core::File::open("Fixtures/call-record-native-trap.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    for (auto const& function : module->code_section().functions())
+        EXPECT(function.func().body().compiled_instructions.cranelift_compiled);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto find_export = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        return *address;
+    };
+
+    auto trapped = machine.invoke(find_export("trap"sv), {});
+    EXPECT(trapped.is_trap());
+    EXPECT_EQ(trapped.trap().format(), "Integer division overflow"sv);
+
+    auto recovered = machine.invoke(find_export("recover"sv), {});
+    EXPECT(!recovered.is_trap());
+    EXPECT_EQ(recovered.values().size(), 1u);
+    EXPECT_EQ(recovered.values()[0].to<i32>(), 4);
+}
