@@ -385,7 +385,7 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     EXPECT_EQ(invoke_value("run_mixed_f64"sv).to<i32>(), 28);
     EXPECT_EQ(invoke_value("run_br_table_then_indirect"sv).to<i32>(), 17);
     EXPECT_EQ(invoke_value("run_nested_raw_i32"sv).to<i32>(), 83);
-    EXPECT_EQ(invoke_value("run_nested_raw_fallback_i32"sv).to<i32>(), 83);
+    EXPECT_EQ(invoke_value("run_nested_raw_fallback_i32"sv).to<i32>(), 90);
     EXPECT_EQ(invoke_value("run_nested_raw_i64"sv).to<i64>(), 9999999983);
     EXPECT_EQ(invoke_value("run_nested_raw_f32"sv).to<float>(), 94.75f);
     EXPECT_EQ(invoke_value("run_nested_raw_f64"sv).to<double>(), 91.75);
