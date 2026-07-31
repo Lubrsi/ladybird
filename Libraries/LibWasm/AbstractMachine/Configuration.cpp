@@ -23,11 +23,13 @@ void Configuration::unwind_impl()
 
     if (m_frame_stack.is_empty()) {
         m_locals_base = nullptr;
+        m_table_instances = nullptr;
         m_memory_instances = nullptr;
         m_global_instances = nullptr;
         m_current_module = nullptr;
         m_current_compiled_fn_table = nullptr;
         m_current_compiled_fn_table_data = nullptr;
+        m_current_canonical_types = nullptr;
         m_current_expression = nullptr;
     } else {
         auto& caller = m_frame_stack.last();
@@ -35,8 +37,10 @@ void Configuration::unwind_impl()
         m_current_module = &caller.module();
         m_current_compiled_fn_table = caller.compiled_fn_table();
         m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
+        m_current_canonical_types = caller.module().canonical_types().data();
         m_current_expression = &caller.expression();
         if (&caller.module() != popped_module) {
+            m_table_instances = caller.module().resolved_tables(m_store);
             m_memory_instances = caller.module().resolved_memories(m_store);
             m_global_instances = caller.module().resolved_globals(m_store);
         }
