@@ -2108,34 +2108,9 @@ impl CraneliftCompiler {
             }};
         }
 
-        // Temporarily materialize virtual stack slots 0..sp for an opaque runtime call. The saved
-        // top remains valid because ValueStack storage cannot move while a frame is active.
-        macro_rules! materialize_vstack_to_real {
-            ($builder:expr) => {{
-                let cfg = $builder.use_var(config_var);
-                let top = $builder
-                    .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
-                if sp > 0 {
-                    let zero_tag = $builder.ins().iconst(types::I64, 0);
-                    for i in 0..sp {
-                        let val = $builder.use_var(stack_vars[i]);
-                        let offset = (i as i32) * value_size;
-                        $builder.ins().store(MemFlags::trusted(), val, top, offset);
-                        $builder
-                            .ins()
-                            .store(MemFlags::trusted(), zero_tag, top, offset + 8);
-                    }
-                    let new_top = $builder.ins().iadd_imm(top, i64::from(sp as i32 * value_size));
-                    $builder
-                        .ins()
-                        .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
-                }
-                top
-            }};
-        }
         // Temporarily materialize only the top `count` virtual values for a runtime call whose
-        // stack ABI consumes exactly that argument suffix.
+        // stack ABI consumes exactly that argument suffix. The saved top remains valid because
+        // ValueStack storage cannot move while a frame is active.
         macro_rules! materialize_vstack_suffix_to_real {
             ($builder:expr, $count:expr) => {{
                 let count = $count as usize;
@@ -4016,7 +3991,7 @@ impl CraneliftCompiler {
                             }
                         }
                     } else {
-                        let original_top = materialize_vstack_to_real!(builder);
+                        let original_top = materialize_vstack_suffix_to_real!(builder, insn.imm3);
                         debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
                         let stack_base = sp.saturating_sub(insn.imm3 as usize);
                         let func_idx = builder.ins().iconst(types::I32, insn.imm1);
