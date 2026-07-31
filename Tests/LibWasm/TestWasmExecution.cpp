@@ -400,3 +400,45 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     expect_trap("run_null"sv, "Table element is not a function reference"sv);
     expect_trap("run_out_of_bounds"sv, "Table index out of bounds"sv);
 }
+
+TEST_CASE(native_indirect_call_restores_context_after_cross_module_fallback)
+{
+    auto parse_module = [](StringView path) {
+        auto file = MUST(Core::File::open(path, Core::File::OpenMode::Read));
+        auto bytes = MUST(file->read_until_eof());
+        FixedMemoryStream stream { bytes.bytes() };
+        return MUST(Wasm::Module::parse(stream));
+    };
+
+    auto provider_module = parse_module("Fixtures/native-call-indirect-context-provider.wasm"sv);
+    auto caller_module = parse_module("Fixtures/native-call-indirect-context-caller.wasm"sv);
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*provider_module));
+    MUST(machine.validate(*caller_module));
+
+    EXPECT(provider_module->code_section().functions()[0].func().body().compiled_instructions.cranelift_compiled);
+    for (auto const& function : caller_module->code_section().functions())
+        EXPECT(function.func().body().compiled_instructions.cranelift_compiled);
+
+    auto provider_instance = MUST(machine.instantiate(*provider_module, {}));
+    Optional<Wasm::FunctionAddress> provider_value;
+    for (auto const& export_ : provider_instance->exports()) {
+        if (export_.name() == "value"sv)
+            provider_value = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(provider_value.has_value());
+
+    auto caller_instance = MUST(machine.instantiate(*caller_module, { *provider_value }));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : caller_instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
+}

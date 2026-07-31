@@ -131,7 +131,7 @@ public:
     ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
     ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
     ALWAYS_INLINE CompiledFunctionEntry const* current_compiled_fn_table_data() const { return m_current_compiled_fn_table_data; }
-    ALWAYS_INLINE DefinedType const* const* current_canonical_types() const { return m_current_canonical_types; }
+    ALWAYS_INLINE CanonicalTypeTable current_canonical_types() const { return m_current_canonical_types; }
     ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
@@ -339,7 +339,7 @@ public:
     ModuleInstance const* m_current_module { nullptr };
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
     CompiledFunctionEntry const* m_current_compiled_fn_table_data { nullptr };
-    DefinedType const* const* m_current_canonical_types { nullptr };
+    CanonicalTypeTable m_current_canonical_types { nullptr };
     Expression const* m_current_expression { nullptr };
 };
 

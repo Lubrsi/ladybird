@@ -391,6 +391,7 @@ class GlobalInstance;
 using TableInstanceTable = TableInstance**;
 using MemoryInstanceTable = MemoryInstance**;
 using GlobalInstanceTable = GlobalInstance**;
+using CanonicalTypeTable = DefinedType const* const*;
 
 struct CompiledFunctionEntry {
     FlatPtr handler_ptr { 0 };    // 0 = not compiled, use slow path

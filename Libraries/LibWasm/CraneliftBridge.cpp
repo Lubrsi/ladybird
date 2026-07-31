@@ -581,8 +581,10 @@ public:
         , m_current_compiled_fn_table(config.current_compiled_fn_table())
         , m_current_compiled_fn_table_data(config.current_compiled_fn_table_data())
         , m_current_expression(config.current_expression())
+        , m_table_instances(config.m_table_instances)
         , m_memory_instances(config.m_memory_instances)
         , m_global_instances(config.m_global_instances)
+        , m_current_canonical_types(config.m_current_canonical_types)
     {
     }
 
@@ -593,8 +595,10 @@ public:
         m_config.m_current_compiled_fn_table = m_current_compiled_fn_table;
         m_config.m_current_compiled_fn_table_data = m_current_compiled_fn_table_data;
         m_config.m_current_expression = m_current_expression;
+        m_config.m_table_instances = m_table_instances;
         m_config.m_memory_instances = m_memory_instances;
         m_config.m_global_instances = m_global_instances;
+        m_config.m_current_canonical_types = m_current_canonical_types;
     }
 
 private:
@@ -604,8 +608,10 @@ private:
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table;
     CompiledFunctionEntry const* m_current_compiled_fn_table_data;
     Expression const* m_current_expression;
+    TableInstanceTable m_table_instances;
     MemoryInstanceTable m_memory_instances;
     GlobalInstanceTable m_global_instances;
+    CanonicalTypeTable m_current_canonical_types;
 };
 
 extern "C" {
