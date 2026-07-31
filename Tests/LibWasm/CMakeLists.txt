@@ -1,4 +1,5 @@
 ladybird_test(TestWasmMemory.cpp LibWasm LIBS LibGC LibWasm)
+ladybird_test(TestWasmTable.cpp LibWasm LIBS LibGC LibWasm)
 ladybird_test(TestWasmExecution.cpp LibWasm LIBS LibGC LibWasm)
 
 add_executable(test-wasm test-wasm.cpp)

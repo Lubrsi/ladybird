@@ -546,6 +546,8 @@ using FunctionInstance = Variant<WasmFunction, HostFunction>;
 
 class TableInstance {
 public:
+    AK_ALLOC_WITH_KMALLOC;
+
     explicit TableInstance(TableType const& type, Vector<Reference> elements)
         : m_elements(move(elements))
         , m_type(type)
@@ -877,7 +879,7 @@ public:
 
 private:
     Vector<FunctionInstance> m_functions;
-    Vector<TableInstance> m_tables;
+    Vector<NonnullOwnPtr<TableInstance>> m_tables;
     Vector<NonnullOwnPtr<MemoryInstance>> m_memories;
     Vector<NonnullOwnPtr<GlobalInstance>> m_globals;
     Vector<ElementInstance> m_elements;
