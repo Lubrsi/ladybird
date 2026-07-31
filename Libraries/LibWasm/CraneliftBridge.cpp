@@ -41,6 +41,7 @@ using namespace Wasm;
 using namespace Cranelift;
 
 extern "C" u64 wasm_cl_direct_call_with_record_fallback(void*, void*, void const*, u32, void const*, void const*);
+extern "C" [[noreturn]] void wasm_cl_raise_trap();
 
 namespace {
 
@@ -209,7 +210,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 17;
+constexpr u32 cache_blob_format_version = 18;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -305,8 +306,8 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 15);
-static_assert(sizeof(CraneliftRelocation) == 24);
+static_assert(HELPER_COUNT == 16);
+static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
 {
@@ -442,8 +443,18 @@ static bool apply_relocations(PendingCompiledFunction& pending, RuntimeHelperAdd
         if (relocation.target_kind != CraneliftRelocationTargetKind::WasmFunction)
             return false;
 
-        auto const fallback = bit_cast<FlatPtr>(&wasm_cl_direct_call_with_record_fallback);
-        auto target = native_targets.get(relocation.target_index).value_or(fallback);
+        FlatPtr target;
+        if (auto native_target = native_targets.get(relocation.target_index); native_target.has_value()) {
+            target = native_target.value();
+        } else {
+            if (relocation.fallback_offset != NumericLimits<u32>::max()) {
+                if (relocation.fallback_offset >= pending.code_size)
+                    return false;
+                target = bit_cast<FlatPtr>(code_bytes + relocation.fallback_offset);
+            } else {
+                target = bit_cast<FlatPtr>(&wasm_cl_direct_call_with_record_fallback);
+            }
+        }
         if (patch_direct_call(pending, relocation, target, true))
             continue;
 
@@ -1095,6 +1106,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::primitive_storage_cage_base)] = bit_cast<uintptr_t>(&js_primitive_storage_cage_base);
     addresses[to_underlying(HelperId::call_indirect_with_record)] = bit_cast<uintptr_t>(&wasm_cl_call_indirect_with_record);
     addresses[to_underlying(HelperId::stack_exhaustion)] = bit_cast<uintptr_t>(&wasm_cl_stack_exhaustion);
+    addresses[to_underlying(HelperId::raise_trap)] = bit_cast<uintptr_t>(&wasm_cl_raise_trap);
     return addresses;
 }
 

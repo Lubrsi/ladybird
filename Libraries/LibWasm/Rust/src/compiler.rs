@@ -28,6 +28,7 @@ use cranelift_codegen::ir::MemFlags;
 use cranelift_codegen::ir::Signature;
 use cranelift_codegen::ir::StackSlotData;
 use cranelift_codegen::ir::StackSlotKind;
+use cranelift_codegen::ir::Type;
 use cranelift_codegen::ir::UserExternalName;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::ir::Value;
@@ -57,6 +58,11 @@ const STACK_MARKER: u8 = 8;
 const CALLREC_BASE: u8 = 9;
 const HELPER_EXTERNAL_NAMESPACE: u32 = 0;
 const WASM_FUNCTION_EXTERNAL_NAMESPACE: u32 = 1;
+const I32_KIND: u8 = 0;
+const I64_KIND: u8 = 1;
+const F32_KIND: u8 = 2;
+const F64_KIND: u8 = 3;
+const NO_FALLBACK_OFFSET: u32 = u32::MAX;
 
 struct CompiledCodeParts {
     code: Vec<u8>,
@@ -177,6 +183,193 @@ impl LocalLiveness {
 pub struct CraneliftCompiler;
 
 impl CraneliftCompiler {
+    // At higher arities, platform-ABI stack marshalling duplicates values that are already in
+    // call-record storage and produces a clear benchmark cliff.
+    const NATIVE_REGISTER_ABI_PARAMETER_LIMIT: usize = 8;
+
+    fn uses_register_native_abi(function_type: WasmFunctionType<'_>) -> bool {
+        function_type.parameters.len() <= Self::NATIVE_REGISTER_ABI_PARAMETER_LIMIT
+    }
+
+    fn wasm_abi_type(kind: u8) -> Result<Type, &'static str> {
+        match kind {
+            I32_KIND => Ok(types::I32),
+            I64_KIND => Ok(types::I64),
+            F32_KIND => Ok(types::F32),
+            F64_KIND => Ok(types::F64),
+            _ => Err("unsupported native Wasm ABI type"),
+        }
+    }
+
+    fn native_signature(isa: &dyn TargetIsa, function_type: WasmFunctionType<'_>) -> Result<Signature, &'static str> {
+        if function_type.results.len() > 1 {
+            return Err("multi-value native Wasm ABI is not supported");
+        }
+
+        let mut signature = Signature::new(isa.default_call_conv());
+        signature.params.push(AbiParam::new(isa.pointer_type())); // interpreter
+        signature.params.push(AbiParam::new(isa.pointer_type())); // configuration
+        signature.params.push(AbiParam::new(types::I32)); // interpreter resume IP plus one, or zero for native calls
+        if Self::uses_register_native_abi(function_type) {
+            for &parameter in function_type.parameters {
+                signature.params.push(AbiParam::new(Self::wasm_abi_type(parameter)?));
+            }
+        } else {
+            signature.params.push(AbiParam::new(isa.pointer_type())); // call-record locals
+        }
+        for &result in function_type.results {
+            signature.returns.push(AbiParam::new(Self::wasm_abi_type(result)?));
+        }
+        Ok(signature)
+    }
+
+    fn value_to_payload(builder: &mut FunctionBuilder<'_>, value: Value, kind: u8) -> Result<Value, &'static str> {
+        match kind {
+            I32_KIND => Ok(builder.ins().uextend(types::I64, value)),
+            I64_KIND => Ok(value),
+            F32_KIND => {
+                let bits = builder.ins().bitcast(types::I32, MemFlags::new(), value);
+                Ok(builder.ins().uextend(types::I64, bits))
+            }
+            F64_KIND => Ok(builder.ins().bitcast(types::I64, MemFlags::new(), value)),
+            _ => Err("unsupported native Wasm ABI type"),
+        }
+    }
+
+    fn payload_to_value(builder: &mut FunctionBuilder<'_>, payload: Value, kind: u8) -> Result<Value, &'static str> {
+        match kind {
+            I32_KIND => Ok(builder.ins().ireduce(types::I32, payload)),
+            I64_KIND => Ok(payload),
+            F32_KIND => {
+                let bits = builder.ins().ireduce(types::I32, payload);
+                Ok(builder.ins().bitcast(types::F32, MemFlags::new(), bits))
+            }
+            F64_KIND => Ok(builder.ins().bitcast(types::F64, MemFlags::new(), payload)),
+            _ => Err("unsupported native Wasm ABI type"),
+        }
+    }
+
+    fn compile_interpreter_fallback(
+        isa: &dyn TargetIsa,
+        function_index: u32,
+        function_type: WasmFunctionType<'_>,
+        layout: &RuntimeLayout,
+    ) -> Result<CompiledCodeParts, &'static str> {
+        let ptr_type = isa.pointer_type();
+        let host_cc = isa.default_call_conv();
+        let signature = Self::native_signature(isa, function_type)?;
+        let mut function = Function::with_name_signature(UserFuncName::user(2, function_index), signature);
+        let mut builder_context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+
+        let interpreter = builder.block_params(entry)[0];
+        let configuration = builder.block_params(entry)[1];
+        let original_top = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            configuration,
+            layout.value_stack_top_offset as i32,
+        );
+        let zero_tag = builder.ins().iconst(types::I64, 0);
+        let uses_register_native_abi = Self::uses_register_native_abi(function_type);
+        for (index, &kind) in function_type.parameters.iter().enumerate() {
+            let offset = i32::try_from(index * layout.value_size as usize).map_err(|_| "argument offset overflow")?;
+            let payload = if uses_register_native_abi {
+                let value = builder.block_params(entry)[3 + index];
+                Self::value_to_payload(&mut builder, value, kind)?
+            } else {
+                let locals = builder.block_params(entry)[3];
+                builder.ins().load(types::I64, MemFlags::trusted(), locals, offset)
+            };
+            builder.ins().store(MemFlags::trusted(), payload, original_top, offset);
+            builder
+                .ins()
+                .store(MemFlags::trusted(), zero_tag, original_top, offset + 8);
+        }
+        let arguments_size = i64::try_from(function_type.parameters.len() * layout.value_size as usize)
+            .map_err(|_| "argument size overflow")?;
+        let arguments_top = builder.ins().iadd_imm(original_top, arguments_size);
+        builder.ins().store(
+            MemFlags::trusted(),
+            arguments_top,
+            configuration,
+            layout.value_stack_top_offset as i32,
+        );
+
+        let mut call_signature = Signature::new(host_cc);
+        call_signature.params.push(AbiParam::new(ptr_type));
+        call_signature.params.push(AbiParam::new(ptr_type));
+        call_signature.params.push(AbiParam::new(types::I32));
+        call_signature.returns.push(AbiParam::new(types::I32));
+        let call_signature = builder.import_signature(call_signature);
+        let call_name = builder.func.declare_imported_user_function(UserExternalName {
+            namespace: HELPER_EXTERNAL_NAMESPACE,
+            index: HelperId::call_function as u32,
+        });
+        let call_function = builder.func.import_function(ExtFuncData {
+            name: ExternalName::user(call_name),
+            signature: call_signature,
+            colocated: false,
+        });
+        let call_address = builder.ins().func_addr(ptr_type, call_function);
+        let target_index = builder.ins().iconst(types::I32, i64::from(function_index));
+        let call = builder.ins().call_indirect(
+            call_signature,
+            call_address,
+            &[interpreter, configuration, target_index],
+        );
+        let status = builder.inst_results(call)[0];
+        let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        let trap_block = builder.create_block();
+        let return_block = builder.create_block();
+        builder.ins().brif(trapped, trap_block, &[], return_block, &[]);
+
+        builder.switch_to_block(trap_block);
+        builder.seal_block(trap_block);
+        let raise_signature = builder.import_signature(Signature::new(host_cc));
+        let raise_name = builder.func.declare_imported_user_function(UserExternalName {
+            namespace: HELPER_EXTERNAL_NAMESPACE,
+            index: HelperId::raise_trap as u32,
+        });
+        let raise_function = builder.func.import_function(ExtFuncData {
+            name: ExternalName::user(raise_name),
+            signature: raise_signature,
+            colocated: false,
+        });
+        let raise_address = builder.ins().func_addr(ptr_type, raise_function);
+        builder.ins().call_indirect(raise_signature, raise_address, &[]);
+        if let Some(&result_kind) = function_type.results.first() {
+            let zero = builder.ins().iconst(types::I64, 0);
+            let zero = Self::payload_to_value(&mut builder, zero, result_kind)?;
+            builder.ins().return_(&[zero]);
+        } else {
+            builder.ins().return_(&[]);
+        }
+
+        builder.switch_to_block(return_block);
+        builder.seal_block(return_block);
+        builder.ins().store(
+            MemFlags::trusted(),
+            original_top,
+            configuration,
+            layout.value_stack_top_offset as i32,
+        );
+        if let Some(&result_kind) = function_type.results.first() {
+            let result = builder.ins().load(types::I64, MemFlags::trusted(), original_top, 0);
+            let result = Self::payload_to_value(&mut builder, result, result_kind)?;
+            builder.ins().return_(&[result]);
+        } else {
+            builder.ins().return_(&[]);
+        }
+
+        builder.finalize();
+        Self::compile_function(isa, function)
+    }
+
     fn serialize_relocation(
         kind: Reloc,
         code_offset: u32,
@@ -207,6 +400,8 @@ impl CraneliftCompiler {
             kind,
             target_kind,
             target_index: target.index,
+            fallback_offset: NO_FALLBACK_OFFSET,
+            _padding: 0,
             addend,
         })
     }
@@ -695,7 +890,7 @@ impl CraneliftCompiler {
             max_call_rec_size,
         } = options;
 
-        let function_type = function_types
+        let function_type = *function_types
             .get(function_index as usize)
             .ok_or("missing function type")?;
         if function_type.parameters.len() != num_params as usize || function_type.results.len() != result_arity as usize
@@ -739,8 +934,9 @@ impl CraneliftCompiler {
         sig.params.push(AbiParam::new(ptr_type)); // addresses_ptr (unused)
         sig.returns.push(AbiParam::new(types::I64)); // Outcome
 
-        let handler_signature = sig.clone();
-        let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), sig);
+        let handler_signature = sig;
+        let native_signature = Self::native_signature(&*isa, function_type)?;
+        let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), native_signature.clone());
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
@@ -799,9 +995,6 @@ impl CraneliftCompiler {
 
         sig! {
             call_fn_sig:       i32 fn(ptr, ptr, i32);
-            call_fn1_sig:      i32 fn(ptr, ptr, i32, i64);
-            call_fn2_sig:      i32 fn(ptr, ptr, i32, i64, i64);
-            call_fn3_sig:      i32 fn(ptr, ptr, i32, i64, i64, i64);
             call_indirect_sig: i32 fn(ptr, ptr, i32, i32, i32);
             memory_copy_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32, i32);
             memory_fill_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32);
@@ -811,6 +1004,7 @@ impl CraneliftCompiler {
             set_trap_sig:      void fn(ptr, ptr, i32);
             stack_exhaustion_sig: void fn(ptr);
         }
+        let raise_trap_sig = builder.import_signature(Signature::new(host_cc));
 
         // Declare each runtime helper as an imported external function. At every use site
         // we emit `func_addr` which lowers (with is_pic=false) to a load from an inline
@@ -830,10 +1024,6 @@ impl CraneliftCompiler {
             }};
         }
         let h_call_fn = decl_helper!(call_fn_sig, HelperId::call_function);
-        let h_direct_call_0 = decl_helper!(call_fn_sig, HelperId::direct_call_0);
-        let h_direct_call_1 = decl_helper!(call_fn1_sig, HelperId::direct_call_1);
-        let h_direct_call_2 = decl_helper!(call_fn2_sig, HelperId::direct_call_2);
-        let h_direct_call_3 = decl_helper!(call_fn3_sig, HelperId::direct_call_3);
         let h_set_trap = decl_helper!(set_trap_sig, HelperId::set_trap);
         let h_mem_size = decl_helper!(mem_size_sig, HelperId::memory_size);
         let h_mem_grow = decl_helper!(mem_grow_sig, HelperId::memory_grow);
@@ -843,26 +1033,41 @@ impl CraneliftCompiler {
         let h_memory_fill = decl_helper!(memory_fill_sig, HelperId::memory_fill);
         let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
         let h_stack_exhaustion = decl_helper!(stack_exhaustion_sig, HelperId::stack_exhaustion);
-        let direct_call_sig = builder.import_signature(handler_signature.clone());
+        let h_raise_trap = decl_helper!(raise_trap_sig, HelperId::raise_trap);
         let mut direct_call_targets = HashMap::new();
         for insn in insns.iter().filter(|insn| {
-            matches!(
-                insn.opcode,
-                op::SYNTHETIC_CALL_WITH_RECORD_0 | op::SYNTHETIC_CALL_WITH_RECORD_1
-            )
+            insn.opcode == op::CALL
+                || (op::SYNTHETIC_CALL_00..=op::SYNTHETIC_CALL_31).contains(&insn.opcode)
+                || matches!(
+                    insn.opcode,
+                    op::SYNTHETIC_CALL_WITH_RECORD_0 | op::SYNTHETIC_CALL_WITH_RECORD_1
+                )
         }) {
             let target_index = u32::try_from(insn.imm1).map_err(|_| "invalid direct-call target")?;
-            direct_call_targets.entry(target_index).or_insert_with(|| {
+            if let std::collections::hash_map::Entry::Vacant(entry) = direct_call_targets.entry(target_index) {
+                let target_type = *function_types
+                    .get(target_index as usize)
+                    .ok_or("missing direct-call function type")?;
+                if insn.opcode == op::CALL && !Self::uses_register_native_abi(target_type) {
+                    continue;
+                }
+                let target_signature = match Self::native_signature(&*isa, target_type) {
+                    Ok(signature) => signature,
+                    Err(_) if insn.opcode == op::CALL => continue,
+                    Err(error) => return Err(error),
+                };
+                let target_signature = builder.import_signature(target_signature);
                 let user_ref = builder.func.declare_imported_user_function(UserExternalName {
                     namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
                     index: target_index,
                 });
-                builder.func.import_function(ExtFuncData {
+                let target = builder.func.import_function(ExtFuncData {
                     name: ExternalName::user(user_ref),
-                    signature: direct_call_sig,
+                    signature: target_signature,
                     colocated: true,
-                })
-            });
+                });
+                entry.insert(target);
+            }
         }
         let locals_base_offset = layout.locals_base_offset as i32;
         let memory_instances_offset = layout.memory_instances_offset as i32;
@@ -880,6 +1085,16 @@ impl CraneliftCompiler {
         let current_expression_offset = layout.current_expression_offset as i32;
         let compiled_function_entry_size = i64::from(layout.compiled_function_entry_size);
         let compiled_function_entry_expression_offset = layout.compiled_function_entry_expression_offset as i32;
+        let num_locals = num_locals as usize;
+        let num_params = num_params as usize;
+        let local_is_f64: Vec<bool> = (0..num_locals)
+            .map(|i| local_types.get(i).copied() == Some(F64_KIND))
+            .collect();
+        let local_is_f32: Vec<bool> = (0..num_locals)
+            .map(|i| local_types.get(i).copied() == Some(F32_KIND))
+            .collect();
+        let selective_promotion_budget = if cfg!(target_arch = "aarch64") { 10 } else { 8 };
+        let promoted_locals = Self::select_locals_for_promotion(insns, num_locals, selective_promotion_budget);
         // Accesses to memory32 are unchecked and may fault; the fault handler turns
         // faults inside a memory's guarded reservation into wasm traps.
         let wasm_memory_flags = MemFlags::new();
@@ -892,8 +1107,8 @@ impl CraneliftCompiler {
 
         let direct_call_mode_var = Variable::from_u32(11);
         builder.declare_var(direct_call_mode_var, types::I8);
-        let entry_instruction = builder.block_params(entry_block)[2];
-        let direct_call_mode = builder.ins().icmp_imm(IntCC::Equal, entry_instruction, 0);
+        let entry_token = builder.block_params(entry_block)[2];
+        let direct_call_mode = builder.ins().icmp_imm(IntCC::Equal, entry_token, 0);
         builder.def_var(direct_call_mode_var, direct_call_mode);
 
         let saved_locals_base_var = Variable::from_u32(12);
@@ -961,16 +1176,45 @@ impl CraneliftCompiler {
 
         builder.switch_to_block(direct_setup_body);
         builder.seal_block(direct_setup_body);
+        let uses_register_native_abi = Self::uses_register_native_abi(function_type);
+        let direct_locals = if uses_register_native_abi {
+            let direct_locals_size = num_locals
+                .checked_mul(value_size as usize)
+                .and_then(|size| u32::try_from(size.max(1)).ok())
+                .ok_or("native locals size overflow")?;
+            let direct_locals_slot =
+                builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, direct_locals_size, 4));
+            builder.ins().stack_addr(ptr_type, direct_locals_slot, 0)
+        } else {
+            builder.block_params(entry_block)[3]
+        };
         builder
             .ins()
-            .store(MemFlags::trusted(), saved_call_record, cfg, locals_base_offset);
+            .store(MemFlags::trusted(), direct_locals, cfg, locals_base_offset);
+        let zero = builder.ins().iconst(types::I64, 0);
+        for (local_index, &promoted) in promoted_locals.iter().enumerate() {
+            let offset = i32::try_from(local_index * value_size as usize).map_err(|_| "local offset overflow")?;
+            let payload = if local_index < num_params {
+                if !uses_register_native_abi || promoted {
+                    continue;
+                }
+                let parameter = builder.block_params(entry_block)[3 + local_index];
+                Self::value_to_payload(&mut builder, parameter, function_type.parameters[local_index])?
+            } else {
+                zero
+            };
+            builder.ins().store(MemFlags::trusted(), payload, direct_locals, offset);
+            builder
+                .ins()
+                .store(MemFlags::trusted(), zero, direct_locals, offset + 8);
+        }
         let table_data = builder.ins().load(
             ptr_type,
             MemFlags::trusted(),
             cfg,
             current_compiled_fn_table_data_offset,
         );
-        let entry_function_index = builder.block_params(entry_block)[3];
+        let entry_function_index = builder.ins().iconst(types::I32, i64::from(function_index));
         let target_index = if ptr_type == types::I64 {
             builder.ins().uextend(types::I64, entry_function_index)
         } else {
@@ -1196,19 +1440,6 @@ impl CraneliftCompiler {
         let mut reg_ty = [Bank::Int; REG_COUNT];
         let mut stack_ty = vec![Bank::Int; max_stack_depth];
 
-        const F32_KIND: u8 = 2;
-        const F64_KIND: u8 = 3;
-        let num_locals = num_locals as usize;
-        let num_params = num_params as usize;
-        let local_is_f64: Vec<bool> = (0..num_locals)
-            .map(|i| local_types.get(i).copied() == Some(F64_KIND))
-            .collect();
-        let local_is_f32: Vec<bool> = (0..num_locals)
-            .map(|i| local_types.get(i).copied() == Some(F32_KIND))
-            .collect();
-
-        let selective_promotion_budget = if cfg!(target_arch = "aarch64") { 10 } else { 8 };
-        let promoted_locals = Self::select_locals_for_promotion(insns, num_locals, selective_promotion_budget);
         // Keep this budget below the function-wide promotion budget. Caching more locals in large
         // blocks recreates the same register-pressure cliff that selective promotion avoids.
         let block_local_cache_budget = if cfg!(target_arch = "aarch64") {
@@ -2110,7 +2341,8 @@ impl CraneliftCompiler {
             }};
         }
 
-        // On a fresh call only the parameters are initialized by the caller.
+        // The adapter has already loaded parameters into the native ABI before calling the body.
+        // A direct native caller supplies the same values without going through locals memory.
         macro_rules! init_locals_fresh {
             ($builder:expr) => {{
                 let lb = $builder.use_var(locals_base_var);
@@ -2122,15 +2354,24 @@ impl CraneliftCompiler {
                 for (i, var) in local_vars.iter().enumerate() {
                     if let Some(var) = var {
                         if i < num_params {
-                            let ty = if local_is_f64[i] {
-                                types::F64
-                            } else if local_is_f32[i] {
-                                types::F32
+                            let val = if uses_register_native_abi {
+                                let parameter = $builder.block_params(entry_block)[3 + i];
+                                if local_is_f64[i] || local_is_f32[i] {
+                                    parameter
+                                } else {
+                                    Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
+                                }
                             } else {
-                                types::I64
+                                let ty = if local_is_f64[i] {
+                                    types::F64
+                                } else if local_is_f32[i] {
+                                    types::F32
+                                } else {
+                                    types::I64
+                                };
+                                let offset = (i as i32) * value_size;
+                                $builder.ins().load(ty, MemFlags::trusted(), lb, offset)
                             };
-                            let offset = (i as i32) * value_size;
-                            let val = $builder.ins().load(ty, MemFlags::trusted(), lb, offset);
                             $builder.def_var(*var, val);
                         } else if local_is_f64[i] {
                             let zero = $builder.ins().f64const(0.0);
@@ -2158,15 +2399,24 @@ impl CraneliftCompiler {
                     let Some(var) = var else {
                         continue;
                     };
-                    let ty = if local_is_f64[i] {
-                        types::F64
-                    } else if local_is_f32[i] {
-                        types::F32
+                    let val = if i < num_params && uses_register_native_abi {
+                        let parameter = $builder.block_params(entry_block)[3 + i];
+                        if local_is_f64[i] || local_is_f32[i] {
+                            parameter
+                        } else {
+                            Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
+                        }
                     } else {
-                        types::I64
+                        let ty = if local_is_f64[i] {
+                            types::F64
+                        } else if local_is_f32[i] {
+                            types::F32
+                        } else {
+                            types::I64
+                        };
+                        let offset = (i as i32) * value_size;
+                        $builder.ins().load(ty, MemFlags::trusted(), lb, offset)
                     };
-                    let offset = (i as i32) * value_size;
-                    let val = $builder.ins().load(ty, MemFlags::trusted(), lb, offset);
                     $builder.def_var(*var, val);
                 }
             }};
@@ -2175,7 +2425,7 @@ impl CraneliftCompiler {
         // If we have any tier-up checkpoints, the interpreter will eventually need to jump to some point in the function other than the entry block, so prepare dispatch blocks for that.
         // Note that the initial block will already have the correct register state loaded, so we don't need to sync registers for the tier-up dispatch targets.
         let has_tier_up = insns.iter().any(|i| i.opcode == op::SYNTHETIC_TIER_UP);
-        let tier_up_target_ip = builder.block_params(entry_block)[3];
+        let tier_up_target_ip = builder.ins().iadd_imm(entry_token, -1);
         let mut tier_up_dispatch_tail: Option<Block> = None;
         let tier_up_body_start: Option<Block> = if has_tier_up {
             let body_start = builder.create_block();
@@ -3196,24 +3446,73 @@ impl CraneliftCompiler {
                     );
                 }
 
-                // Raw calls use the interpreter stack ABI for arguments and results. Materialize
-                // the live vstack only for the duration of the call, then resume using it.
+                // Use the typed native ABI for supported direct calls. Otherwise, materialize the
+                // live vstack only for the duration of the opaque runtime call, then resume using it.
                 op::CALL => {
-                    let original_top = materialize_vstack_to_real!(builder);
-                    debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
-                    let stack_base = sp.saturating_sub(insn.imm3 as usize);
-                    let func_idx = builder.ins().iconst(types::I32, insn.imm1);
-                    let cfp = builder.ins().func_addr(ptr_type, h_call_fn);
-                    let iv = builder.use_var(interp_var);
-                    let cv = builder.use_var(config_var);
-                    do_call_and_check!(builder, call_fn_sig, cfp, &[iv, cv, func_idx]);
-                    restore_vstack_after_raw_call!(
-                        builder,
-                        original_top,
-                        stack_base,
-                        insn.call_result_count as usize,
-                        insn.destination
-                    );
+                    let target_index = u32::try_from(insn.imm1).map_err(|_| "invalid direct-call target")?;
+                    let target_type = *function_types
+                        .get(target_index as usize)
+                        .ok_or("missing direct-call function type")?;
+                    if Self::uses_register_native_abi(target_type)
+                        && let Some(&target) = direct_call_targets.get(&target_index)
+                    {
+                        let param_count = insn.imm3 as usize;
+                        if target_type.parameters.len() != param_count
+                            || target_type.results.len() != insn.call_result_count as usize
+                        {
+                            return Err("raw call does not match target type");
+                        }
+                        let mut reversed_arguments = Vec::with_capacity(param_count);
+                        for source_index in 0..param_count {
+                            let parameter_index = param_count - source_index - 1;
+                            let argument = match target_type.parameters[parameter_index] {
+                                I32_KIND => {
+                                    let raw = read_src!(builder, STACK_MARKER);
+                                    builder.ins().ireduce(types::I32, raw)
+                                }
+                                I64_KIND => read_src!(builder, STACK_MARKER),
+                                F32_KIND => read_src_f32!(builder, STACK_MARKER),
+                                F64_KIND => read_src_f64!(builder, STACK_MARKER),
+                                _ => return Err("unsupported native Wasm ABI type"),
+                            };
+                            reversed_arguments.push(argument);
+                        }
+                        let iv = builder.use_var(interp_var);
+                        let cv = builder.use_var(config_var);
+                        let entry_token = builder.ins().iconst(types::I32, 0);
+                        let mut arguments = Vec::with_capacity(3 + param_count);
+                        arguments.extend([iv, cv, entry_token]);
+                        arguments.extend(reversed_arguments.into_iter().rev());
+                        let call = builder.ins().call(target, &arguments);
+                        if let Some(&result_kind) = target_type.results.first() {
+                            let result = builder.inst_results(call)[0];
+                            match result_kind {
+                                F32_KIND => write_dst_f32!(builder, insn.destination, result),
+                                F64_KIND => write_dst_f64!(builder, insn.destination, result),
+                                I32_KIND | I64_KIND => {
+                                    let result = Self::value_to_payload(&mut builder, result, result_kind)?;
+                                    write_dst!(builder, insn.destination, result);
+                                }
+                                _ => return Err("unsupported native Wasm ABI type"),
+                            }
+                        }
+                    } else {
+                        let original_top = materialize_vstack_to_real!(builder);
+                        debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
+                        let stack_base = sp.saturating_sub(insn.imm3 as usize);
+                        let func_idx = builder.ins().iconst(types::I32, insn.imm1);
+                        let cfp = builder.ins().func_addr(ptr_type, h_call_fn);
+                        let iv = builder.use_var(interp_var);
+                        let cv = builder.use_var(config_var);
+                        do_call_and_check!(builder, call_fn_sig, cfp, &[iv, cv, func_idx]);
+                        restore_vstack_after_raw_call!(
+                            builder,
+                            original_top,
+                            stack_base,
+                            insn.call_result_count as usize,
+                            insn.destination
+                        );
+                    }
                 }
 
                 op::CALL_INDIRECT => {
@@ -3252,70 +3551,106 @@ impl CraneliftCompiler {
                     let variant = (opc - op::SYNTHETIC_CALL_00) as usize;
                     let param_count = variant / 2;
                     let result_count = variant % 2;
-                    let func_idx = builder.ins().iconst(types::I32, insn.imm1);
+                    let target_index = u32::try_from(insn.imm1).map_err(|_| "invalid direct-call target")?;
+                    let target_type = *function_types
+                        .get(target_index as usize)
+                        .ok_or("missing direct-call function type")?;
+                    if target_type.parameters.len() != param_count || target_type.results.len() != result_count {
+                        return Err("synthetic call does not match target type");
+                    }
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
-                    match param_count {
-                        0 => {
-                            let cfp = builder.ins().func_addr(ptr_type, h_direct_call_0);
-                            do_call_and_check!(builder, call_fn_sig, cfp, &[iv, cv, func_idx]);
-                        }
-                        1 => {
-                            let arg0 = read_src!(builder, insn.sources[0]);
-                            let cfp = builder.ins().func_addr(ptr_type, h_direct_call_1);
-                            do_call_and_check!(builder, call_fn1_sig, cfp, &[iv, cv, func_idx, arg0]);
-                        }
-                        2 => {
-                            let s0 = read_src!(builder, insn.sources[0]); // last param (top)
-                            let s1 = read_src!(builder, insn.sources[1]); // first param
-                            let cfp = builder.ins().func_addr(ptr_type, h_direct_call_2);
-                            do_call_and_check!(builder, call_fn2_sig, cfp, &[iv, cv, func_idx, s1, s0]);
-                        }
-                        3 => {
-                            let s0 = read_src!(builder, insn.sources[0]); // last param (top)
-                            let s1 = read_src!(builder, insn.sources[1]); // middle param
-                            let s2 = read_src!(builder, insn.sources[2]); // first param
-                            let cfp = builder.ins().func_addr(ptr_type, h_direct_call_3);
-                            do_call_and_check!(builder, call_fn3_sig, cfp, &[iv, cv, func_idx, s2, s1, s0]);
-                        }
-                        _ => unreachable!(),
+                    let entry_token = builder.ins().iconst(types::I32, 0);
+                    let mut reversed_arguments = Vec::with_capacity(param_count);
+                    for source_index in 0..param_count {
+                        let parameter_index = param_count - source_index - 1;
+                        let source = insn.sources[source_index];
+                        let argument = match target_type.parameters[parameter_index] {
+                            I32_KIND => {
+                                let raw = read_src!(builder, source);
+                                builder.ins().ireduce(types::I32, raw)
+                            }
+                            I64_KIND => read_src!(builder, source),
+                            F32_KIND => read_src_f32!(builder, source),
+                            F64_KIND => read_src_f64!(builder, source),
+                            _ => return Err("unsupported native Wasm ABI type"),
+                        };
+                        reversed_arguments.push(argument);
                     }
+                    let mut arguments = Vec::with_capacity(3 + param_count);
+                    arguments.extend([iv, cv, entry_token]);
+                    arguments.extend(reversed_arguments.into_iter().rev());
+                    let target = direct_call_targets
+                        .get(&target_index)
+                        .copied()
+                        .expect("direct-call target must be declared");
+                    let call = builder.ins().call(target, &arguments);
 
-                    if result_count > 0 {
-                        let cv = builder.use_var(config_var);
-                        let result = builder.ins().load(
-                            types::I64,
-                            MemFlags::trusted(),
-                            cv,
-                            compiled_call_result_scratch_offset,
-                        );
-                        write_dst!(builder, insn.destination, result);
+                    if let Some(&result_kind) = target_type.results.first() {
+                        let result = builder.inst_results(call)[0];
+                        match result_kind {
+                            F32_KIND => write_dst_f32!(builder, insn.destination, result),
+                            F64_KIND => write_dst_f64!(builder, insn.destination, result),
+                            I32_KIND | I64_KIND => {
+                                let result = Self::value_to_payload(&mut builder, result, result_kind)?;
+                                write_dst!(builder, insn.destination, result);
+                            }
+                            _ => return Err("unsupported native Wasm ABI type"),
+                        }
                     }
                 }
 
                 op::SYNTHETIC_CALL_WITH_RECORD_0 | op::SYNTHETIC_CALL_WITH_RECORD_1 => {
-                    let func_idx = builder.ins().iconst(types::I32, insn.imm1);
+                    let target_index = u32::try_from(insn.imm1).map_err(|_| "invalid direct-call target")?;
+                    let target_type = *function_types
+                        .get(target_index as usize)
+                        .ok_or("missing direct-call function type")?;
+                    let result_count = if opc == op::SYNTHETIC_CALL_WITH_RECORD_1 { 1 } else { 0 };
+                    if target_type.results.len() != result_count {
+                        return Err("call-record call does not match target type");
+                    }
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
-                    let null = builder.ins().iconst(ptr_type, 0);
-                    let result_count = if opc == op::SYNTHETIC_CALL_WITH_RECORD_1 { 1 } else { 0 };
-                    let result_count_arg = builder.ins().iconst(ptr_type, result_count);
+                    let entry_token = builder.ins().iconst(types::I32, 0);
+                    let call_record = builder
+                        .ins()
+                        .load(ptr_type, MemFlags::trusted(), cv, call_record_base_offset);
+                    let uses_register_native_abi = Self::uses_register_native_abi(target_type);
+                    let mut arguments = Vec::with_capacity(if uses_register_native_abi {
+                        3 + target_type.parameters.len()
+                    } else {
+                        4
+                    });
+                    arguments.extend([iv, cv, entry_token]);
+                    if uses_register_native_abi {
+                        for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
+                            let offset = i32::try_from(parameter_index * value_size as usize)
+                                .map_err(|_| "call-record argument offset overflow")?;
+                            let argument_type = Self::wasm_abi_type(parameter_kind)?;
+                            let argument = builder
+                                .ins()
+                                .load(argument_type, MemFlags::trusted(), call_record, offset);
+                            arguments.push(argument);
+                        }
+                    } else {
+                        arguments.push(call_record);
+                    }
                     let target = direct_call_targets
-                        .get(&(insn.imm1 as u32))
+                        .get(&target_index)
                         .copied()
                         .expect("direct-call target must be declared");
-                    let call = builder
-                        .ins()
-                        .call(target, &[iv, cv, null, func_idx, result_count_arg, null]);
-                    let status = builder.inst_results(call)[0];
-                    let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
-                    let cont = builder.create_block();
-                    builder.ins().brif(trapped, trap_block, &[], cont, &[]);
-                    builder.switch_to_block(cont);
-                    builder.seal_block(cont);
-                    if opc == op::SYNTHETIC_CALL_WITH_RECORD_1 {
-                        let result = emit_stack_pop!(builder);
-                        write_dst!(builder, insn.destination, result);
+                    let call = builder.ins().call(target, &arguments);
+                    if let Some(&result_kind) = target_type.results.first() {
+                        let result = builder.inst_results(call)[0];
+                        match result_kind {
+                            F32_KIND => write_dst_f32!(builder, insn.destination, result),
+                            F64_KIND => write_dst_f64!(builder, insn.destination, result),
+                            I32_KIND | I64_KIND => {
+                                let result = Self::value_to_payload(&mut builder, result, result_kind)?;
+                                write_dst!(builder, insn.destination, result);
+                            }
+                            _ => return Err("unsupported native Wasm ABI type"),
+                        }
                     }
                 }
 
@@ -3529,24 +3864,17 @@ impl CraneliftCompiler {
 
         builder.switch_to_block(trap_block);
         builder.seal_block(trap_block);
-        // The helper already set the trap for us.
-        let direct_trap_return = builder.create_block();
-        let handler_trap_return = builder.create_block();
-        let direct_call_mode = builder.use_var(direct_call_mode_var);
-        builder
-            .ins()
-            .brif(direct_call_mode, direct_trap_return, &[], handler_trap_return, &[]);
-
-        builder.switch_to_block(direct_trap_return);
-        builder.seal_block(direct_trap_return);
-        restore_direct_call_context!(builder);
-        let direct_trap_ret = builder.ins().iconst(types::I64, 1);
-        builder.ins().return_(&[direct_trap_ret]);
-
-        builder.switch_to_block(handler_trap_return);
-        builder.seal_block(handler_trap_return);
-        let handler_trap_ret = builder.ins().iconst(types::I64, outcome_return_value as i64);
-        builder.ins().return_(&[handler_trap_ret]);
+        // The helper already stored the trap on the interpreter. Propagate it after the helper's
+        // C++ cleanup has completed, without adding a status result to the native Wasm ABI.
+        let raise_trap = builder.ins().func_addr(ptr_type, h_raise_trap);
+        builder.ins().call_indirect(raise_trap_sig, raise_trap, &[]);
+        if let Some(&result_kind) = function_type.results.first() {
+            let zero = builder.ins().iconst(types::I64, 0);
+            let zero = Self::payload_to_value(&mut builder, zero, result_kind)?;
+            builder.ins().return_(&[zero]);
+        } else {
+            builder.ins().return_(&[]);
+        }
 
         builder.switch_to_block(epilogue_block);
         builder.seal_block(epilogue_block);
@@ -3555,6 +3883,12 @@ impl CraneliftCompiler {
             let init_size = builder.use_var(initial_stack_size_var);
             emit_stack_cleanup!(builder, init_size, result_arity);
         }
+        let native_result = if let Some(&result_kind) = function_type.results.first() {
+            let payload = emit_stack_pop!(builder);
+            Some(Self::payload_to_value(&mut builder, payload, result_kind)?)
+        } else {
+            None
+        };
         Self::sync_regs_to_config(
             &mut builder,
             &reg_vars,
@@ -3565,29 +3899,40 @@ impl CraneliftCompiler {
         );
         flush_locals!(builder);
         let direct_return = builder.create_block();
-        let handler_return = builder.create_block();
+        let native_return = builder.create_block();
         let direct_call_mode = builder.use_var(direct_call_mode_var);
         builder
             .ins()
-            .brif(direct_call_mode, direct_return, &[], handler_return, &[]);
+            .brif(direct_call_mode, direct_return, &[], native_return, &[]);
 
         builder.switch_to_block(direct_return);
         builder.seal_block(direct_return);
         restore_direct_call_context!(builder);
-        let direct_ret = builder.ins().iconst(types::I64, 0);
-        builder.ins().return_(&[direct_ret]);
+        builder.ins().jump(native_return, &[]);
 
-        builder.switch_to_block(handler_return);
-        builder.seal_block(handler_return);
-        let handler_ret = builder.ins().iconst(types::I64, outcome_return_value as i64);
-        builder.ins().return_(&[handler_ret]);
+        builder.switch_to_block(native_return);
+        builder.seal_block(native_return);
+        if let Some(result) = native_result {
+            builder.ins().return_(&[result]);
+        } else {
+            builder.ins().return_(&[]);
+        }
 
         builder.finalize();
 
         let body = Self::compile_function(&*isa, func)?;
+        let mut fallback_target_indices: Vec<u32> = direct_call_targets.keys().copied().collect();
+        fallback_target_indices.sort_unstable();
+        let mut fallback_functions = Vec::with_capacity(fallback_target_indices.len());
+        for target_index in fallback_target_indices {
+            let target_type = *function_types
+                .get(target_index as usize)
+                .ok_or("missing fallback function type")?;
+            let fallback = Self::compile_interpreter_fallback(&*isa, target_index, target_type, layout)?;
+            fallback_functions.push((target_index, fallback));
+        }
 
-        let mut adapter =
-            Function::with_name_signature(UserFuncName::user(1, function_index), handler_signature.clone());
+        let mut adapter = Function::with_name_signature(UserFuncName::user(1, function_index), handler_signature);
         let mut adapter_builder_context = FunctionBuilderContext::new();
         let mut adapter_builder = FunctionBuilder::new(&mut adapter, &mut adapter_builder_context);
         let adapter_entry = adapter_builder.create_block();
@@ -3595,7 +3940,32 @@ impl CraneliftCompiler {
         adapter_builder.switch_to_block(adapter_entry);
         adapter_builder.seal_block(adapter_entry);
         let adapter_params = adapter_builder.block_params(adapter_entry).to_vec();
-        let body_signature = adapter_builder.import_signature(handler_signature);
+        let locals_base =
+            adapter_builder
+                .ins()
+                .load(ptr_type, MemFlags::trusted(), adapter_params[1], locals_base_offset);
+        let entry_token = adapter_builder.ins().iadd_imm(adapter_params[3], 1);
+        let uses_register_native_abi = Self::uses_register_native_abi(function_type);
+        let mut body_arguments = Vec::with_capacity(if uses_register_native_abi {
+            3 + function_type.parameters.len()
+        } else {
+            4
+        });
+        body_arguments.extend([adapter_params[0], adapter_params[1], entry_token]);
+        if uses_register_native_abi {
+            for (parameter_index, &parameter_kind) in function_type.parameters.iter().enumerate() {
+                let offset = i32::try_from(parameter_index * value_size as usize)
+                    .map_err(|_| "adapter parameter offset overflow")?;
+                let parameter_type = Self::wasm_abi_type(parameter_kind)?;
+                let parameter = adapter_builder
+                    .ins()
+                    .load(parameter_type, MemFlags::trusted(), locals_base, offset);
+                body_arguments.push(parameter);
+            }
+        } else {
+            body_arguments.push(locals_base);
+        }
+        let body_signature = adapter_builder.import_signature(native_signature);
         let body_name = adapter_builder.func.declare_imported_user_function(UserExternalName {
             namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
             index: function_index,
@@ -3605,9 +3975,24 @@ impl CraneliftCompiler {
             signature: body_signature,
             colocated: true,
         });
-        let call = adapter_builder.ins().call(body_function, &adapter_params);
-        let results = adapter_builder.inst_results(call).to_vec();
-        adapter_builder.ins().return_(&results);
+        let call = adapter_builder.ins().call(body_function, &body_arguments);
+        if let Some(&result_kind) = function_type.results.first() {
+            let result = adapter_builder.inst_results(call)[0];
+            let payload = Self::value_to_payload(&mut adapter_builder, result, result_kind)?;
+            let top =
+                adapter_builder
+                    .ins()
+                    .load(ptr_type, MemFlags::trusted(), adapter_params[1], value_stack_top_offset);
+            adapter_builder.ins().store(MemFlags::trusted(), payload, top, 0);
+            let zero_tag = adapter_builder.ins().iconst(types::I64, 0);
+            adapter_builder.ins().store(MemFlags::trusted(), zero_tag, top, 8);
+            let new_top = adapter_builder.ins().iadd_imm(top, i64::from(value_size));
+            adapter_builder
+                .ins()
+                .store(MemFlags::trusted(), new_top, adapter_params[1], value_stack_top_offset);
+        }
+        let outcome = adapter_builder.ins().iconst(types::I64, outcome_return_value as i64);
+        adapter_builder.ins().return_(&[outcome]);
         adapter_builder.finalize();
         let adapter = Self::compile_function(&*isa, adapter)?;
 
@@ -3617,24 +4002,66 @@ impl CraneliftCompiler {
         code.resize(native_entry_offset as usize, 0);
         code.extend_from_slice(&body.code);
 
+        let mut positioned_fallbacks = Vec::with_capacity(fallback_functions.len());
+        let mut fallback_offsets = HashMap::with_capacity(fallback_functions.len());
+        for (target_index, fallback) in fallback_functions {
+            let fallback_offset = code.len().div_ceil(16) * 16;
+            code.resize(fallback_offset, 0);
+            let fallback_offset = u32::try_from(fallback_offset).map_err(|_| "fallback entry offset overflow")?;
+            fallback_offsets.insert(target_index, fallback_offset);
+            code.extend_from_slice(&fallback.code);
+            positioned_fallbacks.push((fallback_offset, fallback));
+        }
+
         let mut relocs = adapter.relocs;
-        relocs.reserve(body.relocs.len());
+        let fallback_reloc_count: usize = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.relocs.len())
+            .sum();
+        relocs.reserve(body.relocs.len() + fallback_reloc_count);
         for mut relocation in body.relocs {
             relocation.code_offset = relocation
                 .code_offset
                 .checked_add(native_entry_offset)
                 .ok_or("relocation offset overflow")?;
+            if relocation.target_kind == CraneliftRelocationTargetKind::WasmFunction {
+                relocation.fallback_offset = *fallback_offsets
+                    .get(&relocation.target_index)
+                    .ok_or("missing direct-call fallback")?;
+            }
             relocs.push(relocation);
+        }
+        for (fallback_offset, fallback) in &positioned_fallbacks {
+            for mut relocation in fallback.relocs.iter().copied() {
+                relocation.code_offset = relocation
+                    .code_offset
+                    .checked_add(*fallback_offset)
+                    .ok_or("fallback relocation offset overflow")?;
+                relocs.push(relocation);
+            }
         }
 
         let mut traps = adapter.traps;
-        traps.reserve(body.traps.len());
+        let fallback_trap_count: usize = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.traps.len())
+            .sum();
+        traps.reserve(body.traps.len() + fallback_trap_count);
         for mut trap in body.traps {
             trap.offset = trap
                 .offset
                 .checked_add(native_entry_offset)
                 .ok_or("trap offset overflow")?;
             traps.push(trap);
+        }
+        for (fallback_offset, fallback) in positioned_fallbacks {
+            for mut trap in fallback.traps {
+                trap.offset = trap
+                    .offset
+                    .checked_add(fallback_offset)
+                    .ok_or("fallback trap offset overflow")?;
+                traps.push(trap);
+            }
         }
 
         Ok(CompiledFunction {

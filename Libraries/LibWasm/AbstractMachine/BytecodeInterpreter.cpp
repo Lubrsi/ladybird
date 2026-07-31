@@ -44,12 +44,15 @@
 
 using namespace AK::SIMD;
 
+extern "C" [[noreturn]] void wasm_cl_raise_trap();
+
 namespace {
 
 enum class CompiledFaultKind : u8 {
     None,
     Memory,
     CraneliftTrap,
+    ExplicitTrap,
 };
 
 struct CompiledFaultRecoveryContext {
@@ -281,6 +284,14 @@ static void install_compiled_fault_handlers() { }
 
 }
 
+extern "C" [[noreturn]] void wasm_cl_raise_trap()
+{
+    auto* recovery = s_compiled_fault_recovery;
+    VERIFY(recovery);
+    recovery->fault_kind = CompiledFaultKind::ExplicitTrap;
+    longjmp(recovery->jump_buffer, 1);
+}
+
 #ifdef AK_COMPILER_CLANG
 #    define TAILCALL [[clang::musttail]]
 #    define HAS_TAILCALL
@@ -440,8 +451,10 @@ void BytecodeInterpreter::interpret(Configuration& configuration)
             s_compiled_fault_recovery = compiled_fault_recovery.previous;
             if (compiled_fault_recovery.fault_kind == CompiledFaultKind::CraneliftTrap)
                 m_trap = Trap::from_string(cranelift_trap_message(compiled_fault_recovery.cranelift_trap_code));
-            else
+            else if (compiled_fault_recovery.fault_kind == CompiledFaultKind::Memory)
                 m_trap = Trap::from_string("Memory access out of bounds");
+            else
+                VERIFY(compiled_fault_recovery.fault_kind == CompiledFaultKind::ExplicitTrap);
             return;
         }
     }
