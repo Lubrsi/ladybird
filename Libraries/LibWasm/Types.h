@@ -999,13 +999,14 @@ struct CompiledInstructions {
     // Pointer/size_t-sized members first, then the u32, then the bools, so the trailing scalars pack
     // into one word instead of scattering padding between them.
 
-    // Native entry point for this function (conforms to the interpreter handler ABI). Zero until
-    // the background/AOT compile has fully installed the code. Published with an atomic store-release
-    // as the LAST step of install_compiled_function() and read with an atomic load-acquire at every
-    // execution-decision site, so a function can tier up to JIT concurrently with execution without
-    // a reader ever observing a half-installed function. dispatches[0].handler_ptr always stays the
-    // C++ interpreter handler, so the interpreter path is valid regardless of compilation state.
+    // Native adapter and body entry points for this function. Both are zero until the background/AOT
+    // compile has fully installed the code. The adapter conforms to the interpreter handler ABI;
+    // compiled callers use the body entry to skip it. Both are published with atomic store-release
+    // and read with atomic load-acquire, so a function can tier up concurrently with execution without
+    // a reader ever observing half-installed code. dispatches[0].handler_ptr always stays the C++
+    // interpreter handler, so the interpreter path is valid regardless of compilation state.
     FlatPtr cranelift_entry = 0;
+    FlatPtr cranelift_native_entry = 0;
     void* cranelift_code_handle = nullptr; // Owned; freed when the owning Module is destroyed.
     size_t cranelift_code_size = 0;
     CraneliftTrap const* cranelift_traps = nullptr; // Owned by cranelift_code_handle.
@@ -1031,10 +1032,20 @@ inline FlatPtr cranelift_entry_acquire(CompiledInstructions const& ci)
     return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_entry), AK::MemoryOrder::memory_order_acquire);
 }
 
+inline FlatPtr cranelift_native_entry_acquire(CompiledInstructions const& ci)
+{
+    return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_native_entry), AK::MemoryOrder::memory_order_acquire);
+}
+
 // Publish the native entry with release ordering. Must be the LAST write of install.
 inline void publish_cranelift_entry(CompiledInstructions& ci, FlatPtr entry)
 {
     AK::atomic_store(&ci.cranelift_entry, entry, AK::MemoryOrder::memory_order_release);
+}
+
+inline void publish_cranelift_native_entry(CompiledInstructions& ci, FlatPtr entry)
+{
+    AK::atomic_store(&ci.cranelift_native_entry, entry, AK::MemoryOrder::memory_order_release);
 }
 
 template<Enum auto... Vs>

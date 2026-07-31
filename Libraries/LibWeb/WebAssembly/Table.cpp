@@ -111,14 +111,15 @@ WebIDL::ExceptionOr<GC::Ref<Table>> Table::construct_impl(JS::Realm& realm, Bind
     auto& cache = Detail::get_cache(realm);
 
     // 11. Let (store, tableaddr) be table_alloc(store, type, ref). If allocation fails, throw a RangeError exception.
-    auto address = cache.abstract_machine().store().allocate(table_type);
+    auto& store = cache.abstract_machine().store();
+    auto address = store.allocate(table_type);
     if (!address.has_value())
         return vm.throw_completion<JS::RangeError>("Wasm Table allocation failed"_utf16);
 
     auto const& reference = reference_value.to<Wasm::Reference>();
-    auto& table = *cache.abstract_machine().store().get(*address);
-    for (auto& element : table.elements())
-        element = reference;
+    auto& table = *store.get(*address);
+    for (size_t index = 0; index < table.elements().size(); ++index)
+        table.set_element(store, index, reference);
 
     // 12. Set the surrounding agent's associated store to store.
     // NOTE: The store is updated in-place.
@@ -184,7 +185,7 @@ WebIDL::ExceptionOr<JS::Value> Table::grow(JS::Value delta_value, Optional<JS::V
 
     // 8. Let result be table_grow(store, tableaddr, delta64, ref).
     // 9. If result is error, throw a RangeError exception.
-    if (!table->grow(delta, reference))
+    if (!table->grow(cache.abstract_machine().store(), delta, reference))
         return vm.throw_completion<JS::RangeError>("Failed to grow table"_utf16);
 
     // 10. Set the surrounding agent's associated store to result.
@@ -264,7 +265,7 @@ WebIDL::ExceptionOr<void> Table::set(JS::Value index_value, Optional<JS::Value> 
 
     // 8. Let store be table_write(store, tableaddr, index64, ref).
     // 9. If store is error, throw a RangeError exception.
-    table->elements()[index] = reference;
+    table->set_element(cache.abstract_machine().store(), index, reference);
 
     // 10. Set the surrounding agent's associated store to store.
     // NOTE: The store is updated in-place.

@@ -249,6 +249,10 @@ TEST_CASE(native_direct_call_uses_typed_abi)
     for (size_t index = 7; index < functions.size(); ++index)
         EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
 
+    auto const& sum4_compiled = functions[16].func().body().compiled_instructions;
+    EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), 0u);
+    EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), Wasm::cranelift_entry_acquire(sum4_compiled));
+
     Optional<Wasm::FunctionIndex> raw_caller_index;
     for (auto const& export_ : module->export_section().entries()) {
         if (export_.name() == "run_raw_i32"sv)

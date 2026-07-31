@@ -504,12 +504,14 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
 {
     auto* handle = pending.mapping.leak_ptr();
     auto* func_ptr = static_cast<u8 const*>(handle->mapping);
+    auto* native_func_ptr = func_ptr + pending.native_entry_offset;
 
     pending.target->cranelift_code_handle = handle;
     pending.target->cranelift_code_size = pending.code_size;
     pending.target->cranelift_traps = handle->traps.data();
     pending.target->cranelift_trap_count = handle->traps.size();
     pending.target->cranelift_compiled = true;
+    publish_cranelift_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
     publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
 }
 
@@ -796,19 +798,19 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
         return interpreter.set_trap(Trap::from_string("Table index out of bounds"));
 
-    auto& element = table_instance->elements()[element_index];
+    auto const& element = table_instance->elements()[element_index];
     if (!element.ref().has<Reference::Func>())
         return interpreter.set_trap(Trap::from_string("Table element is not a function reference"));
 
-    auto address = element.ref().get<Reference::Func>().address;
-    auto* function = config.store().get(address);
-    if (!function)
+    auto const* callable = table_instance->callable_at(element_index);
+    if (!callable)
         return interpreter.set_trap(Trap::from_string("Indirect call to freed function"));
+
+    auto address = callable->address;
     // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-call-indirect-x-y
     // call_indirect's runtime check is a defined-type match (a downcast), not structural equality.
-    auto const* type_actual = function->visit([](auto& f) { return f.defined_type(); });
     auto const* type_expected = module.canonical_types()[type_idx];
-    if (!type_actual || !matches_defined_type(*type_actual, *type_expected))
+    if (!callable->defined_type || !matches_defined_type(*callable->defined_type, *type_expected))
         return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 
     SourcesAndDestination addrs {};
@@ -911,26 +913,21 @@ i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 ta
     if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
         return interpreter.set_trap(Trap::from_string("Table index out of bounds"));
 
-    auto& element = table_instance->elements()[element_index];
+    auto const& element = table_instance->elements()[element_index];
     if (!element.ref().has<Reference::Func>())
         return interpreter.set_trap(Trap::from_string("Table element is not a function reference"));
 
-    auto address = element.ref().get<Reference::Func>().address;
-    auto* function = config.store().get(address);
-    if (!function)
+    auto const* callable = table_instance->callable_at(element_index);
+    if (!callable)
         return interpreter.set_trap(Trap::from_string("Indirect call to freed function"));
 
     // https://webassembly.github.io/spec/core/exec/instructions.html#xref-syntax-instructions-syntax-instr-control-mathsf-call-indirect-x-y
     // call_indirect's runtime check is a defined-type match (a downcast), not structural equality.
-    auto const* type_actual = function->visit([](auto& f) { return f.defined_type(); });
     auto const* type_expected = module.canonical_types()[type_idx];
-    if (!type_actual || !matches_defined_type(*type_actual, *type_expected))
+    if (!callable->defined_type || !matches_defined_type(*callable->defined_type, *type_expected))
         return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 
-    FunctionType const* type { nullptr };
-    function->visit([&](auto const& f) { type = &f.type(); });
-
-    return wasm_cl_finish_call(interpreter, config, address, config.call_record_base(), type->parameters().size());
+    return wasm_cl_finish_call(interpreter, config, callable->address, config.call_record_base(), callable->parameter_count);
 }
 
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)

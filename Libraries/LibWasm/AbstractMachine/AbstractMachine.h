@@ -542,25 +542,31 @@ private:
 
 using FunctionInstance = Variant<WasmFunction, HostFunction>;
 
+struct CallableMetadata {
+    FunctionAddress address;
+    DefinedType const* defined_type { nullptr };
+    ModuleInstance const* module { nullptr };
+    CompiledInstructions const* compiled_instructions { nullptr };
+    u32 parameter_count { 0 };
+    u32 result_count { 0 };
+};
+
 class TableInstance {
 public:
     static ErrorOr<NonnullOwnPtr<TableInstance>> create(TableType const&);
     WASM_API ~TableInstance();
 
     ReadonlySpan<Reference> elements() const { return m_storage.elements(); }
-    Span<Reference> elements() { return m_storage.elements(); }
     auto& type() const { return m_type; }
 
     // MUST use this if a function reference can be stored in the table
-    void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor = {})
-    {
-        m_storage.set_element(index, move(ref), move(module_anchor));
-    }
+    WASM_API void set_element(Store&, size_t index, Reference ref);
 
     // Strong ref pinning the element's defining ModuleInstance (null for non-Func).
     RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_storage.module_anchor_at(index); }
+    CallableMetadata const* callable_at(size_t index) const { return m_storage.callable_at(index); }
 
-    WASM_API bool grow(u64 size_to_grow, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor = {});
+    WASM_API bool grow(Store&, u64 size_to_grow, Reference const& fill_value);
 
 private:
     class Storage {
@@ -572,26 +578,30 @@ private:
         ~Storage();
 
         ErrorOr<void> try_reserve(size_t capacity);
-        ErrorOr<void> try_grow(size_t count, Reference const&, RefPtr<ModuleInstance const>);
+        ErrorOr<void> try_grow(size_t count, Reference const&, RefPtr<ModuleInstance const>, CallableMetadata const*);
 
         ReadonlySpan<Reference> elements() const { return { m_elements, m_size }; }
         Span<Reference> elements() { return { m_elements, m_size }; }
 
-        void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor)
+        void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor, CallableMetadata const* callable)
         {
             m_elements[index] = move(ref);
             m_module_anchors[index] = move(module_anchor);
+            m_callables[index] = callable;
         }
 
         RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_module_anchors[index]; }
+        CallableMetadata const* callable_at(size_t index) const { return m_callables[index]; }
 
     private:
         using ModuleAnchor = RefPtr<ModuleInstance const>;
 
         GC::PrimitiveStorageHandle m_elements_handle;
         GC::PrimitiveStorageHandle m_module_anchors_handle;
+        GC::PrimitiveStorageHandle m_callables_handle;
         Reference* m_elements { nullptr };
         ModuleAnchor* m_module_anchors { nullptr };
+        CallableMetadata const** m_callables { nullptr };
         size_t m_size { 0 };
         size_t m_capacity { 0 };
     };
@@ -851,6 +861,7 @@ public:
 
     Module const* get_module_for(FunctionAddress);
     RefPtr<ModuleInstance const> get_module_instance_for(FunctionAddress); // Obtains strong ref for module.
+    CallableMetadata const* get_callable(FunctionAddress);
     FunctionInstance* get(FunctionAddress);
     TableInstance* get(TableAddress);
     MemoryInstance* get(MemoryAddress);
@@ -861,6 +872,7 @@ public:
     ExceptionInstance* get(ExceptionAddress);
 
     ALWAYS_INLINE FunctionInstance* unsafe_get(FunctionAddress address) { return &m_functions.data()[address.value()]; }
+    ALWAYS_INLINE CallableMetadata const* unsafe_get_callable(FunctionAddress address) { return m_callable_metadata[address.value()].ptr(); }
     ALWAYS_INLINE MemoryInstance* unsafe_get(MemoryAddress address) { return m_memories.data()[address.value()].ptr(); }
     ALWAYS_INLINE GlobalInstance* unsafe_get(GlobalAddress address) { return m_globals.data()[address.value()].ptr(); }
 
@@ -878,6 +890,7 @@ public:
 
 private:
     Vector<FunctionInstance> m_functions;
+    Vector<NonnullOwnPtr<CallableMetadata>> m_callable_metadata;
     Vector<NonnullOwnPtr<TableInstance>> m_tables;
     Vector<NonnullOwnPtr<MemoryInstance>> m_memories;
     Vector<NonnullOwnPtr<GlobalInstance>> m_globals;
