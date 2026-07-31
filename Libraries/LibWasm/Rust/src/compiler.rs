@@ -22,9 +22,11 @@ use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::Block;
 use cranelift_codegen::ir::ExtFuncData;
 use cranelift_codegen::ir::ExternalName;
+use cranelift_codegen::ir::FuncRef;
 use cranelift_codegen::ir::Function;
 use cranelift_codegen::ir::InstBuilder;
 use cranelift_codegen::ir::MemFlags;
+use cranelift_codegen::ir::SigRef;
 use cranelift_codegen::ir::Signature;
 use cranelift_codegen::ir::StackSlotData;
 use cranelift_codegen::ir::StackSlotKind;
@@ -63,11 +65,69 @@ const I64_KIND: u8 = 1;
 const F32_KIND: u8 = 2;
 const F64_KIND: u8 = 3;
 const NO_FALLBACK_OFFSET: u32 = u32::MAX;
+const INDIRECT_CALL_RESULT_TYPE_SHIFT: u32 = 16;
+const INDIRECT_CALL_TABLE64: u32 = 1 << 18;
+const INDIRECT_CALL_TYPE_VALID: u32 = 1 << 19;
 
 struct CompiledCodeParts {
     code: Vec<u8>,
     relocs: Vec<CraneliftRelocation>,
     traps: Vec<CraneliftTrap>,
+}
+
+#[derive(Clone, Copy)]
+struct NativeIndirectCallLayout {
+    table_instances: i32,
+    current_module: i32,
+    current_canonical_types: i32,
+    table_instance_size: i32,
+    table_instance_callables: i32,
+    callable_defined_type: i32,
+    callable_module: i32,
+    callable_compiled_instructions: i32,
+    compiled_instructions_native_entry: i32,
+}
+
+struct NativeIndirectCallTarget {
+    native_call: Block,
+    fallback_call: Block,
+}
+
+#[derive(Clone, Copy)]
+struct IndirectCallLoweringContext {
+    ptr_type: Type,
+    bridge_signature: SigRef,
+    bridge_helper: FuncRef,
+    set_trap_signature: SigRef,
+    set_trap_helper: FuncRef,
+    check_type_signature: SigRef,
+    check_type_helper: FuncRef,
+    trap_block: Block,
+    locals_base: Variable,
+    locals_base_offset: i32,
+    result_scratch_offset: i32,
+    call_record_base_offset: i32,
+    value_size: i32,
+    native_layout: NativeIndirectCallLayout,
+}
+
+struct IndirectCallResult {
+    payload: Value,
+    kind: Option<u8>,
+}
+
+struct IndirectCallType {
+    parameters: Vec<u8>,
+    results: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+struct IndirectCallOperands {
+    interpreter: Value,
+    configuration: Value,
+    table_index: Value,
+    type_index: Value,
+    element_index: Value,
 }
 
 /// The `Int` bank is always defined.
@@ -247,6 +307,397 @@ impl CraneliftCompiler {
             F64_KIND => Ok(builder.ins().bitcast(types::F64, MemFlags::new(), payload)),
             _ => Err("unsupported native Wasm ABI type"),
         }
+    }
+
+    fn decode_indirect_call_type(insn: &CraneliftInsn) -> Result<Option<IndirectCallType>, &'static str> {
+        if insn.call_type_encoding & INDIRECT_CALL_TYPE_VALID == 0 {
+            return Ok(None);
+        }
+
+        let result_count = insn.call_result_count as usize;
+        if result_count > 1 {
+            return Err("multi-value native indirect call is not supported");
+        }
+
+        let parameter_types = (0..insn.imm3 as usize)
+            .map(|index| {
+                if index < Self::NATIVE_REGISTER_ABI_PARAMETER_LIMIT {
+                    ((insn.call_type_encoding >> (index * 2)) & 0x3) as u8
+                } else {
+                    I64_KIND
+                }
+            })
+            .collect();
+        let result_types = if result_count == 1 {
+            vec![((insn.call_type_encoding >> INDIRECT_CALL_RESULT_TYPE_SHIFT) & 0x3) as u8]
+        } else {
+            Vec::new()
+        };
+
+        Ok(Some(IndirectCallType {
+            parameters: parameter_types,
+            results: result_types,
+        }))
+    }
+
+    fn emit_trap_message(
+        builder: &mut FunctionBuilder<'_>,
+        ptr_type: Type,
+        interpreter: Value,
+        set_trap: FuncRef,
+        set_trap_signature: SigRef,
+        message: &'static str,
+    ) {
+        let message = message.as_bytes();
+        let slot =
+            builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, message.len() as u32, 0));
+        for (index, &byte) in message.iter().enumerate() {
+            let byte = builder.ins().iconst(types::I8, i64::from(byte));
+            builder.ins().stack_store(byte, slot, index as i32);
+        }
+        let message_pointer = builder.ins().stack_addr(ptr_type, slot, 0);
+        let message_length = builder.ins().iconst(types::I32, message.len() as i64);
+        let set_trap = builder.ins().func_addr(ptr_type, set_trap);
+        builder.ins().call_indirect(
+            set_trap_signature,
+            set_trap,
+            &[interpreter, message_pointer, message_length],
+        );
+    }
+
+    fn emit_native_indirect_call_target(
+        builder: &mut FunctionBuilder<'_>,
+        insn: &CraneliftInsn,
+        operands: IndirectCallOperands,
+        context: IndirectCallLoweringContext,
+    ) -> Result<NativeIndirectCallTarget, &'static str> {
+        let ptr_type = context.ptr_type;
+        let layout = context.native_layout;
+        let bounds_ok = builder.create_block();
+        let bounds_trap = builder.create_block();
+        let callable_ok = builder.create_block();
+        let null_trap = builder.create_block();
+        let exact_type = builder.create_block();
+        let subtype_check = builder.create_block();
+        let native_entry_check = builder.create_block();
+        let native_call = builder.create_block();
+        let fallback_call = builder.create_block();
+        builder.append_block_param(native_call, ptr_type);
+
+        let table_instances = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            layout.table_instances,
+        );
+        let table_offset = insn
+            .imm2
+            .checked_mul(i64::from(ptr_type.bytes()))
+            .ok_or("table index offset overflow")?;
+        let table_offset = builder.ins().iconst(ptr_type, table_offset);
+        let table_address = builder.ins().iadd(table_instances, table_offset);
+        let table = builder.ins().load(ptr_type, MemFlags::trusted(), table_address, 0);
+        let table_size = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), table, layout.table_instance_size);
+        let table_size = if ptr_type == types::I64 {
+            table_size
+        } else {
+            builder.ins().uextend(types::I64, table_size)
+        };
+        let in_bounds = builder
+            .ins()
+            .icmp(IntCC::UnsignedLessThan, operands.element_index, table_size);
+        builder.ins().brif(in_bounds, bounds_ok, &[], bounds_trap, &[]);
+
+        builder.switch_to_block(bounds_trap);
+        builder.seal_block(bounds_trap);
+        Self::emit_trap_message(
+            builder,
+            ptr_type,
+            operands.interpreter,
+            context.set_trap_helper,
+            context.set_trap_signature,
+            "Table index out of bounds",
+        );
+        builder.ins().jump(context.trap_block, &[]);
+
+        builder.switch_to_block(bounds_ok);
+        builder.seal_block(bounds_ok);
+        let callables = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), table, layout.table_instance_callables);
+        let element_offset = if ptr_type == types::I64 {
+            builder
+                .ins()
+                .imul_imm(operands.element_index, i64::from(ptr_type.bytes()))
+        } else {
+            let element_index = builder.ins().ireduce(types::I32, operands.element_index);
+            builder.ins().imul_imm(element_index, i64::from(ptr_type.bytes()))
+        };
+        let callable_address = builder.ins().iadd(callables, element_offset);
+        let callable = builder.ins().load(ptr_type, MemFlags::trusted(), callable_address, 0);
+        let is_callable = builder.ins().icmp_imm(IntCC::NotEqual, callable, 0);
+        builder.ins().brif(is_callable, callable_ok, &[], null_trap, &[]);
+
+        builder.switch_to_block(null_trap);
+        builder.seal_block(null_trap);
+        Self::emit_trap_message(
+            builder,
+            ptr_type,
+            operands.interpreter,
+            context.set_trap_helper,
+            context.set_trap_signature,
+            "Table element is not a function reference",
+        );
+        builder.ins().jump(context.trap_block, &[]);
+
+        builder.switch_to_block(callable_ok);
+        builder.seal_block(callable_ok);
+        let actual_type = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), callable, layout.callable_defined_type);
+        let canonical_types = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            layout.current_canonical_types,
+        );
+        let type_offset = insn
+            .imm1
+            .checked_mul(i64::from(ptr_type.bytes()))
+            .ok_or("type index offset overflow")?;
+        let type_offset = builder.ins().iconst(ptr_type, type_offset);
+        let expected_type_address = builder.ins().iadd(canonical_types, type_offset);
+        let expected_type = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), expected_type_address, 0);
+        let is_exact_type = builder.ins().icmp(IntCC::Equal, actual_type, expected_type);
+        builder.ins().brif(is_exact_type, exact_type, &[], subtype_check, &[]);
+
+        builder.switch_to_block(subtype_check);
+        builder.seal_block(subtype_check);
+        let type_check = builder.ins().func_addr(ptr_type, context.check_type_helper);
+        let type_check_call = builder.ins().call_indirect(
+            context.check_type_signature,
+            type_check,
+            &[operands.interpreter, actual_type, expected_type],
+        );
+        let type_mismatch = builder.inst_results(type_check_call)[0];
+        let type_matches = builder.ins().icmp_imm(IntCC::Equal, type_mismatch, 0);
+        builder
+            .ins()
+            .brif(type_matches, exact_type, &[], context.trap_block, &[]);
+
+        builder.switch_to_block(exact_type);
+        builder.seal_block(exact_type);
+        let callable_module = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), callable, layout.callable_module);
+        let current_module = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            layout.current_module,
+        );
+        let is_same_module = builder.ins().icmp(IntCC::Equal, callable_module, current_module);
+        builder
+            .ins()
+            .brif(is_same_module, native_entry_check, &[], fallback_call, &[]);
+
+        builder.switch_to_block(native_entry_check);
+        builder.seal_block(native_entry_check);
+        let compiled_instructions = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            callable,
+            layout.callable_compiled_instructions,
+        );
+        let native_entry_address = builder.ins().iadd_imm(
+            compiled_instructions,
+            i64::from(layout.compiled_instructions_native_entry),
+        );
+        let native_entry = builder
+            .ins()
+            .atomic_load(ptr_type, MemFlags::trusted(), native_entry_address);
+        let has_native_entry = builder.ins().icmp_imm(IntCC::NotEqual, native_entry, 0);
+        builder
+            .ins()
+            .brif(has_native_entry, native_call, &[native_entry], fallback_call, &[]);
+
+        builder.seal_block(fallback_call);
+        builder.switch_to_block(native_call);
+        builder.seal_block(native_call);
+
+        Ok(NativeIndirectCallTarget {
+            native_call,
+            fallback_call,
+        })
+    }
+
+    fn emit_native_call_from_record(
+        builder: &mut FunctionBuilder<'_>,
+        native_signature: SigRef,
+        native_entry: Value,
+        operands: IndirectCallOperands,
+        target_type: WasmFunctionType<'_>,
+        context: IndirectCallLoweringContext,
+    ) -> Result<Option<Value>, &'static str> {
+        let entry_token = builder.ins().iconst(types::I32, 0);
+        let call_record = builder.ins().load(
+            context.ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            context.call_record_base_offset,
+        );
+        let uses_register_native_abi = Self::uses_register_native_abi(target_type);
+        let mut arguments = Vec::with_capacity(if uses_register_native_abi {
+            3 + target_type.parameters.len()
+        } else {
+            4
+        });
+        arguments.extend([operands.interpreter, operands.configuration, entry_token]);
+        if uses_register_native_abi {
+            for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
+                let offset = i32::try_from(parameter_index * context.value_size as usize)
+                    .map_err(|_| "call-record argument offset overflow")?;
+                let argument_type = Self::wasm_abi_type(parameter_kind)?;
+                let argument = builder
+                    .ins()
+                    .load(argument_type, MemFlags::trusted(), call_record, offset);
+                arguments.push(argument);
+            }
+        } else {
+            arguments.push(call_record);
+        }
+
+        let call = builder.ins().call_indirect(native_signature, native_entry, &arguments);
+        let Some(&result_kind) = target_type.results.first() else {
+            return Ok(None);
+        };
+        let result = builder.inst_results(call)[0];
+        Ok(Some(Self::value_to_payload(builder, result, result_kind)?))
+    }
+
+    fn emit_indirect_bridge_call(
+        builder: &mut FunctionBuilder<'_>,
+        operands: IndirectCallOperands,
+        context: IndirectCallLoweringContext,
+        has_result: bool,
+    ) -> Option<Value> {
+        let call_helper = builder.ins().func_addr(context.ptr_type, context.bridge_helper);
+        let call = builder.ins().call_indirect(
+            context.bridge_signature,
+            call_helper,
+            &[
+                operands.interpreter,
+                operands.configuration,
+                operands.table_index,
+                operands.type_index,
+                operands.element_index,
+            ],
+        );
+        let status = builder.inst_results(call)[0];
+        let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        let continuation = builder.create_block();
+        builder.ins().brif(trapped, context.trap_block, &[], continuation, &[]);
+        builder.switch_to_block(continuation);
+        builder.seal_block(continuation);
+
+        let new_locals_base = builder.ins().load(
+            context.ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            context.locals_base_offset,
+        );
+        builder.def_var(context.locals_base, new_locals_base);
+
+        has_result.then(|| {
+            builder.ins().load(
+                types::I64,
+                MemFlags::trusted(),
+                operands.configuration,
+                context.result_scratch_offset,
+            )
+        })
+    }
+
+    fn emit_indirect_call_with_record(
+        builder: &mut FunctionBuilder<'_>,
+        isa: &dyn TargetIsa,
+        insn: &CraneliftInsn,
+        interpreter: Value,
+        configuration: Value,
+        element_index: Value,
+        context: IndirectCallLoweringContext,
+    ) -> Result<Option<IndirectCallResult>, &'static str> {
+        let type_index = builder.ins().iconst(types::I32, insn.imm1);
+        let table_index = builder.ins().iconst(types::I32, insn.imm2);
+        let has_result = insn.opcode == op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1;
+        let operands = IndirectCallOperands {
+            interpreter,
+            configuration,
+            table_index,
+            type_index,
+            element_index,
+        };
+
+        let Some(call_type) = Self::decode_indirect_call_type(insn)? else {
+            let result = Self::emit_indirect_bridge_call(builder, operands, context, has_result);
+            return Ok(result.map(|payload| IndirectCallResult { payload, kind: None }));
+        };
+
+        if call_type.results.len() != usize::from(has_result) {
+            return Err("call-record call does not match target type");
+        }
+
+        let target_type = WasmFunctionType {
+            parameters: &call_type.parameters,
+            results: &call_type.results,
+        };
+        let native_signature = builder.import_signature(Self::native_signature(isa, target_type)?);
+        let continuation = builder.create_block();
+        if has_result {
+            builder.append_block_param(continuation, types::I64);
+        }
+
+        // https://webassembly.github.io/spec/core/exec/instructions.html#exec-call-indirect
+        // (CALL_INDIRECT x yy) ~> (TABLE.GET x) (REF.CAST (REF NULL yy)) (CALL_REF yy)
+        // (TABLE.GET x)
+        // (REF.CAST (REF NULL yy))
+        let target = Self::emit_native_indirect_call_target(builder, insn, operands, context)?;
+
+        // https://webassembly.github.io/spec/core/exec/instructions.html#exec-call-indirect
+        // (CALL_REF yy)
+        let native_entry = builder.block_params(target.native_call)[0];
+        let native_result = Self::emit_native_call_from_record(
+            builder,
+            native_signature,
+            native_entry,
+            operands,
+            target_type,
+            context,
+        )?;
+        if let Some(result) = native_result {
+            builder.ins().jump(continuation, &[result]);
+        } else {
+            builder.ins().jump(continuation, &[]);
+        }
+
+        builder.switch_to_block(target.fallback_call);
+        let fallback_result = Self::emit_indirect_bridge_call(builder, operands, context, has_result);
+        if let Some(result) = fallback_result {
+            builder.ins().jump(continuation, &[result]);
+        } else {
+            builder.ins().jump(continuation, &[]);
+        }
+
+        builder.switch_to_block(continuation);
+        builder.seal_block(continuation);
+        Ok(call_type.results.first().map(|&kind| IndirectCallResult {
+            payload: builder.block_params(continuation)[0],
+            kind: Some(kind),
+        }))
     }
 
     fn compile_interpreter_fallback(
@@ -995,7 +1446,7 @@ impl CraneliftCompiler {
 
         sig! {
             call_fn_sig:       i32 fn(ptr, ptr, i32);
-            call_indirect_sig: i32 fn(ptr, ptr, i32, i32, i32);
+            call_indirect_sig: i32 fn(ptr, ptr, i32, i32, i64);
             memory_copy_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32, i32);
             memory_fill_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32);
             cage_base_sig:     i64 fn();
@@ -1003,6 +1454,7 @@ impl CraneliftCompiler {
             mem_grow_sig:      i32 fn(ptr, i32, i32);
             set_trap_sig:      void fn(ptr, ptr, i32);
             stack_exhaustion_sig: void fn(ptr);
+            check_indirect_type_sig: i32 fn(ptr, ptr, ptr);
         }
         let raise_trap_sig = builder.import_signature(Signature::new(host_cc));
 
@@ -1034,6 +1486,7 @@ impl CraneliftCompiler {
         let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
         let h_stack_exhaustion = decl_helper!(stack_exhaustion_sig, HelperId::stack_exhaustion);
         let h_raise_trap = decl_helper!(raise_trap_sig, HelperId::raise_trap);
+        let h_check_indirect_type = decl_helper!(check_indirect_type_sig, HelperId::check_indirect_type);
         let mut direct_call_targets = HashMap::new();
         for insn in insns.iter().filter(|insn| {
             insn.opcode == op::CALL
@@ -1070,6 +1523,7 @@ impl CraneliftCompiler {
             }
         }
         let locals_base_offset = layout.locals_base_offset as i32;
+        let table_instances_offset = layout.table_instances_offset as i32;
         let memory_instances_offset = layout.memory_instances_offset as i32;
         let global_instances_offset = layout.global_instances_offset as i32;
         let global_instance_value_offset = layout.global_instance_value_offset as i32;
@@ -1082,9 +1536,28 @@ impl CraneliftCompiler {
         let call_record_stack_top_offset = layout.call_record_stack_top_offset as i32;
         let depth_offset = layout.depth_offset as i32;
         let current_compiled_fn_table_data_offset = layout.current_compiled_fn_table_data_offset as i32;
+        let current_module_offset = layout.current_module_offset as i32;
+        let current_canonical_types_offset = layout.current_canonical_types_offset as i32;
         let current_expression_offset = layout.current_expression_offset as i32;
         let compiled_function_entry_size = i64::from(layout.compiled_function_entry_size);
         let compiled_function_entry_expression_offset = layout.compiled_function_entry_expression_offset as i32;
+        let table_instance_size_offset = layout.table_instance_size_offset as i32;
+        let table_instance_callables_offset = layout.table_instance_callables_offset as i32;
+        let callable_defined_type_offset = layout.callable_defined_type_offset as i32;
+        let callable_module_offset = layout.callable_module_offset as i32;
+        let callable_compiled_instructions_offset = layout.callable_compiled_instructions_offset as i32;
+        let compiled_instructions_native_entry_offset = layout.compiled_instructions_native_entry_offset as i32;
+        let native_indirect_call_layout = NativeIndirectCallLayout {
+            table_instances: table_instances_offset,
+            current_module: current_module_offset,
+            current_canonical_types: current_canonical_types_offset,
+            table_instance_size: table_instance_size_offset,
+            table_instance_callables: table_instance_callables_offset,
+            callable_defined_type: callable_defined_type_offset,
+            callable_module: callable_module_offset,
+            callable_compiled_instructions: callable_compiled_instructions_offset,
+            compiled_instructions_native_entry: compiled_instructions_native_entry_offset,
+        };
         let num_locals = num_locals as usize;
         let num_params = num_params as usize;
         let local_is_f64: Vec<bool> = (0..num_locals)
@@ -1269,6 +1742,22 @@ impl CraneliftCompiler {
                 .ins()
                 .load(ptr_type, MemFlags::trusted(), configuration_val, locals_base_offset);
         builder.def_var(locals_base_var, initial_locals_base);
+        let indirect_call_lowering_context = IndirectCallLoweringContext {
+            ptr_type,
+            bridge_signature: call_indirect_sig,
+            bridge_helper: h_call_indirect_wr,
+            set_trap_signature: set_trap_sig,
+            set_trap_helper: h_set_trap,
+            check_type_signature: check_indirect_type_sig,
+            check_type_helper: h_check_indirect_type,
+            trap_block,
+            locals_base: locals_base_var,
+            locals_base_offset,
+            result_scratch_offset: compiled_call_result_scratch_offset,
+            call_record_base_offset,
+            value_size,
+            native_layout: native_indirect_call_layout,
+        };
         let is_scalar_memory_access = |opcode: u64| {
             matches!(
                 opcode,
@@ -3526,7 +4015,12 @@ impl CraneliftCompiler {
                     };
                     debug_assert!(is_unreachable || sp >= insn.imm3 as usize);
                     let stack_base = sp.saturating_sub(insn.imm3 as usize);
-                    let element_index = builder.ins().ireduce(types::I32, element_index);
+                    let element_index = if insn.call_type_encoding & INDIRECT_CALL_TABLE64 != 0 {
+                        element_index
+                    } else {
+                        let element_index = builder.ins().ireduce(types::I32, element_index);
+                        builder.ins().uextend(types::I64, element_index)
+                    };
                     let type_idx = builder.ins().iconst(types::I32, insn.imm1);
                     let table_idx = builder.ins().iconst(types::I32, insn.imm2);
                     let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
@@ -3656,27 +4150,39 @@ impl CraneliftCompiler {
 
                 op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_0 | op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1 => {
                     let element_index = read_src!(builder, insn.sources[0]);
-                    let element_index = builder.ins().ireduce(types::I32, element_index);
-                    let type_idx = builder.ins().iconst(types::I32, insn.imm1);
-                    let table_idx = builder.ins().iconst(types::I32, insn.imm2);
-                    let cwp = builder.ins().func_addr(ptr_type, h_call_indirect_wr);
-                    let iv = builder.use_var(interp_var);
-                    let cv = builder.use_var(config_var);
-                    do_call_and_check!(
-                        builder,
-                        call_indirect_sig,
-                        cwp,
-                        &[iv, cv, table_idx, type_idx, element_index]
-                    );
-                    if opc == op::SYNTHETIC_CALL_INDIRECT_WITH_RECORD_1 {
-                        let cv2 = builder.use_var(config_var);
-                        let result = builder.ins().load(
-                            types::I64,
-                            MemFlags::trusted(),
-                            cv2,
-                            compiled_call_result_scratch_offset,
-                        );
-                        write_dst!(builder, insn.destination, result);
+                    let element_index = if insn.call_type_encoding & INDIRECT_CALL_TABLE64 != 0 {
+                        element_index
+                    } else {
+                        let element_index = builder.ins().ireduce(types::I32, element_index);
+                        builder.ins().uextend(types::I64, element_index)
+                    };
+                    let interpreter = builder.use_var(interp_var);
+                    let configuration = builder.use_var(config_var);
+
+                    let result = Self::emit_indirect_call_with_record(
+                        &mut builder,
+                        &*isa,
+                        insn,
+                        interpreter,
+                        configuration,
+                        element_index,
+                        indirect_call_lowering_context,
+                    )?;
+                    if let Some(result) = result {
+                        match result.kind {
+                            Some(F32_KIND) => {
+                                let value = Self::payload_to_value(&mut builder, result.payload, F32_KIND)?;
+                                write_dst_f32!(builder, insn.destination, value);
+                            }
+                            Some(F64_KIND) => {
+                                let value = Self::payload_to_value(&mut builder, result.payload, F64_KIND)?;
+                                write_dst_f64!(builder, insn.destination, value);
+                            }
+                            Some(I32_KIND | I64_KIND) | None => {
+                                write_dst!(builder, insn.destination, result.payload);
+                            }
+                            _ => return Err("unsupported native Wasm ABI type"),
+                        }
                     }
                 }
 
@@ -4175,6 +4681,7 @@ mod tests {
             imm2: 0,
             imm3: 0,
             call_result_count: 0,
+            call_type_encoding: 0,
         }
     }
 

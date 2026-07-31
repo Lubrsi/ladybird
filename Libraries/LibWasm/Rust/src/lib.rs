@@ -28,6 +28,7 @@ pub struct CraneliftInsn {
     pub imm2: i64,
     pub imm3: u32,
     pub call_result_count: u32,
+    pub call_type_encoding: u32,
 }
 
 #[repr(C)]
@@ -36,6 +37,7 @@ pub struct RuntimeLayout {
     pub regs_offset: u32,
     pub value_size: u32,
     pub locals_base_offset: u32,
+    pub table_instances_offset: u32,
     pub memory_instances_offset: u32,
     pub global_instances_offset: u32,
     pub global_instance_value_offset: u32,
@@ -48,9 +50,17 @@ pub struct RuntimeLayout {
     pub call_record_stack_top_offset: u32,
     pub depth_offset: u32,
     pub current_compiled_fn_table_data_offset: u32,
+    pub current_module_offset: u32,
+    pub current_canonical_types_offset: u32,
     pub current_expression_offset: u32,
     pub compiled_function_entry_size: u32,
     pub compiled_function_entry_expression_offset: u32,
+    pub table_instance_size_offset: u32,
+    pub table_instance_callables_offset: u32,
+    pub callable_defined_type_offset: u32,
+    pub callable_module_offset: u32,
+    pub callable_compiled_instructions_offset: u32,
+    pub compiled_instructions_native_entry_offset: u32,
 }
 
 /// Stable index assigned to each runtime helper. Embedded in cranelift `ExternalName`
@@ -76,9 +86,10 @@ pub enum HelperId {
     call_indirect_with_record = 13,
     stack_exhaustion = 14,
     raise_trap = 15,
+    check_indirect_type = 16,
 }
 
-pub const HELPER_COUNT: u32 = 16;
+pub const HELPER_COUNT: u32 = 17;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.

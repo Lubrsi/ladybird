@@ -421,3 +421,86 @@ TEST_CASE(native_direct_call_uses_typed_abi)
     EXPECT(trapped.is_trap());
     EXPECT_EQ(trapped.trap().format(), "Unreachable"sv);
 }
+
+TEST_CASE(native_indirect_call_uses_typed_abi)
+{
+    auto file = MUST(Core::File::open("Fixtures/native-call-indirect-abi.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    auto const& functions = module->code_section().functions();
+    EXPECT_EQ(functions.size(), 20u);
+    Optional<Wasm::FunctionIndex> fallback_target_index;
+    for (auto const& export_ : module->export_section().entries()) {
+        if (export_.name() == "target_fallback_i32"sv)
+            fallback_target_index = export_.description().get<Wasm::FunctionIndex>();
+        if (!export_.name().starts_with("run_"sv))
+            continue;
+        auto function_index = export_.description().get<Wasm::FunctionIndex>().value();
+        auto const& compiled = functions[function_index].func().body().compiled_instructions;
+        EXPECT(compiled.cranelift_compiled);
+        EXPECT_EQ(compiled.cranelift_indirect_calls.size(), 1u);
+    }
+    VERIFY(fallback_target_index.has_value());
+    EXPECT(!functions[fallback_target_index->value()].func().body().compiled_instructions.cranelift_compiled);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto find_export = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        return *address;
+    };
+    auto invoke = [&](StringView name) {
+        return machine.invoke(find_export(name), {});
+    };
+    auto invoke_value = [&](StringView name) {
+        auto result = invoke(name);
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        return result.values().take_first();
+    };
+
+    EXPECT_EQ(invoke_value("run_i32"sv).to<i32>(), 17);
+    EXPECT_EQ(invoke_value("run_i64"sv).to<i64>(), 9999999997);
+    EXPECT_EQ(invoke_value("run_f32"sv).to<float>(), 5.25f);
+    EXPECT_EQ(invoke_value("run_f64"sv).to<double>(), 8.25);
+    EXPECT_EQ(invoke_value("run_sum9_i32"sv).to<i32>(), 10);
+    EXPECT_EQ(invoke_value("run_fallback_i32"sv).to<i32>(), 42);
+
+    Optional<Wasm::TableAddress> table_address;
+    Optional<Wasm::FunctionAddress> replacement_address;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "table"sv)
+            table_address = export_.value().get<Wasm::TableAddress>();
+        if (export_.name() == "target_add_i32"sv)
+            replacement_address = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(table_address.has_value());
+    VERIFY(replacement_address.has_value());
+    auto* table = machine.store().get(*table_address);
+    VERIFY(table);
+    table->set_element(machine.store(), 0, Wasm::Reference { Wasm::Reference::Func { *replacement_address, nullptr } });
+    EXPECT_EQ(invoke_value("run_i32"sv).to<i32>(), 23);
+
+    auto void_result = invoke("run_void"sv);
+    EXPECT(!void_result.is_trap());
+    EXPECT(void_result.values().is_empty());
+
+    auto expect_trap = [&](StringView name, StringView message) {
+        auto result = invoke(name);
+        EXPECT(result.is_trap());
+        EXPECT_EQ(result.trap().format(), message);
+    };
+    expect_trap("run_trap"sv, "unreachable executed"sv);
+    expect_trap("run_type_mismatch"sv, "Indirect call type mismatch"sv);
+    expect_trap("run_null"sv, "Table element is not a function reference"sv);
+    expect_trap("run_out_of_bounds"sv, "Table index out of bounds"sv);
+}

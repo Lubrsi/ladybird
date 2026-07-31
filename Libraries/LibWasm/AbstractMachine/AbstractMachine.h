@@ -386,9 +386,11 @@ using ExternValue = Variant<FunctionAddress, TableAddress, MemoryAddress, Global
 
 class Store;
 class ModuleInstance;
+class TableInstance;
 class MemoryInstance;
 class GlobalInstance;
 
+using TableInstanceTable = TableInstance**;
 using MemoryInstanceTable = MemoryInstance**;
 using GlobalInstanceTable = GlobalInstance**;
 
@@ -466,6 +468,7 @@ public:
 
     size_t cached_minimum_call_record_allocation_size { 0 };
 
+    TableInstanceTable resolved_tables(Store&) const;
     MemoryInstanceTable resolved_memories(Store&) const;
     GlobalInstanceTable resolved_globals(Store&) const;
     Vector<CompiledFunctionEntry> const& compiled_fn_table(Store&) const;
@@ -483,6 +486,8 @@ private:
     Vector<TagAddress> m_tags;
     Vector<ExportInstance> m_exports;
 
+    mutable Vector<TableInstance*> m_resolved_tables;
+    mutable bool m_resolved_tables_built { false };
     mutable Vector<MemoryInstance*> m_resolved_memories;
     mutable bool m_resolved_memories_built { false };
     mutable Vector<GlobalInstance*> m_resolved_globals;
@@ -551,6 +556,10 @@ struct CallableMetadata {
     CompiledInstructions const* compiled_instructions { nullptr };
     u32 parameter_count { 0 };
     u32 result_count { 0 };
+
+    static constexpr size_t defined_type_offset() { return __builtin_offsetof(CallableMetadata, defined_type); }
+    static constexpr size_t module_offset() { return __builtin_offsetof(CallableMetadata, module); }
+    static constexpr size_t compiled_instructions_offset() { return __builtin_offsetof(CallableMetadata, compiled_instructions); }
 };
 
 class TableInstance {
@@ -559,6 +568,7 @@ public:
     WASM_API ~TableInstance();
 
     ReadonlySpan<Reference> elements() const { return m_storage.elements(); }
+    size_t size() const { return m_storage.size(); }
     auto& type() const { return m_type; }
 
     // MUST use this if a function reference can be stored in the table
@@ -584,6 +594,7 @@ private:
 
         ReadonlySpan<Reference> elements() const { return { m_elements, m_size }; }
         Span<Reference> elements() { return { m_elements, m_size }; }
+        size_t size() const { return m_size; }
 
         void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor, CallableMetadata const* callable)
         {
@@ -594,6 +605,9 @@ private:
 
         RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_module_anchors[index]; }
         CallableMetadata const* callable_at(size_t index) const { return m_callables[index]; }
+
+        static constexpr size_t callables_offset() { return __builtin_offsetof(Storage, m_callables); }
+        static constexpr size_t size_offset() { return __builtin_offsetof(Storage, m_size); }
 
     private:
         using ModuleAnchor = RefPtr<ModuleInstance const>;
@@ -615,6 +629,10 @@ private:
 
     Storage m_storage;
     TableType m_type;
+
+public:
+    static constexpr size_t callables_offset() { return __builtin_offsetof(TableInstance, m_storage) + Storage::callables_offset(); }
+    static constexpr size_t size_offset() { return __builtin_offsetof(TableInstance, m_storage) + Storage::size_offset(); }
 };
 
 class WASM_API MemoryBuffer {
@@ -875,6 +893,7 @@ public:
 
     ALWAYS_INLINE FunctionInstance* unsafe_get(FunctionAddress address) { return &m_functions.data()[address.value()]; }
     ALWAYS_INLINE CallableMetadata const* unsafe_get_callable(FunctionAddress address) { return m_callable_metadata[address.value()].ptr(); }
+    ALWAYS_INLINE TableInstance* unsafe_get(TableAddress address) { return m_tables.data()[address.value()].ptr(); }
     ALWAYS_INLINE MemoryInstance* unsafe_get(MemoryAddress address) { return m_memories.data()[address.value()].ptr(); }
     ALWAYS_INLINE GlobalInstance* unsafe_get(GlobalAddress address) { return m_globals.data()[address.value()].ptr(); }
 

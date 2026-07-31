@@ -210,7 +210,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 18;
+constexpr u32 cache_blob_format_version = 19;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -287,6 +287,7 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
     hash = fnv1a(hash, layout.regs_offset);
     hash = fnv1a(hash, layout.value_size);
     hash = fnv1a(hash, layout.locals_base_offset);
+    hash = fnv1a(hash, layout.table_instances_offset);
     hash = fnv1a(hash, layout.memory_instances_offset);
     hash = fnv1a(hash, layout.global_instances_offset);
     hash = fnv1a(hash, layout.global_instance_value_offset);
@@ -299,14 +300,22 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
     hash = fnv1a(hash, layout.call_record_stack_top_offset);
     hash = fnv1a(hash, layout.depth_offset);
     hash = fnv1a(hash, layout.current_compiled_fn_table_data_offset);
+    hash = fnv1a(hash, layout.current_module_offset);
+    hash = fnv1a(hash, layout.current_canonical_types_offset);
     hash = fnv1a(hash, layout.current_expression_offset);
     hash = fnv1a(hash, layout.compiled_function_entry_size);
     hash = fnv1a(hash, layout.compiled_function_entry_expression_offset);
+    hash = fnv1a(hash, layout.table_instance_size_offset);
+    hash = fnv1a(hash, layout.table_instance_callables_offset);
+    hash = fnv1a(hash, layout.callable_defined_type_offset);
+    hash = fnv1a(hash, layout.callable_module_offset);
+    hash = fnv1a(hash, layout.callable_compiled_instructions_offset);
+    hash = fnv1a(hash, layout.compiled_instructions_native_entry_offset);
     return hash;
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 16);
+static_assert(HELPER_COUNT == 17);
 static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
@@ -853,8 +862,8 @@ i32 wasm_cl_memory_grow(void* config_ptr, u32 mem_idx, i32 pages)
     return static_cast<i32>(old_pages);
 }
 
-i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index);
-i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index)
+i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index);
+i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
@@ -863,7 +872,7 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     auto const& module = *config.current_module();
     auto table_address = module.tables()[table_idx];
     auto* table_instance = config.store().get(table_address);
-    if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
+    if (!table_instance || element_index >= table_instance->elements().size())
         return interpreter.set_trap(Trap::from_string("Table index out of bounds"));
 
     auto const& element = table_instance->elements()[element_index];
@@ -982,8 +991,8 @@ u64 wasm_cl_direct_call_with_record_fallback(void* interp_ptr, void* config_ptr,
     return static_cast<u64>(status);
 }
 
-i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index);
-i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, i32 element_index)
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index);
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
@@ -992,7 +1001,7 @@ i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 ta
     auto const& module = *config.current_module();
     auto table_address = module.tables()[table_idx];
     auto* table_instance = config.store().get(table_address);
-    if (!table_instance || element_index < 0 || static_cast<size_t>(element_index) >= table_instance->elements().size())
+    if (!table_instance || element_index >= table_instance->elements().size())
         return interpreter.set_trap(Trap::from_string("Table index out of bounds"));
 
     auto const& element = table_instance->elements()[element_index];
@@ -1010,6 +1019,18 @@ i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 ta
         return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 
     return wasm_cl_finish_call(interpreter, config, callable->address, config.call_record_base(), callable->parameter_count);
+}
+
+i32 wasm_cl_check_indirect_type(void* interp_ptr, void const* actual_type_ptr, void const* expected_type_ptr);
+i32 wasm_cl_check_indirect_type(void* interp_ptr, void const* actual_type_ptr, void const* expected_type_ptr)
+{
+    auto const& actual_type = *static_cast<DefinedType const*>(actual_type_ptr);
+    auto const& expected_type = *static_cast<DefinedType const*>(expected_type_ptr);
+    if (matches_defined_type(actual_type, expected_type))
+        return 0;
+
+    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
+    return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 }
 
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
@@ -1104,6 +1125,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::call_indirect_with_record)] = bit_cast<uintptr_t>(&wasm_cl_call_indirect_with_record);
     addresses[to_underlying(HelperId::stack_exhaustion)] = bit_cast<uintptr_t>(&wasm_cl_stack_exhaustion);
     addresses[to_underlying(HelperId::raise_trap)] = bit_cast<uintptr_t>(&wasm_cl_raise_trap);
+    addresses[to_underlying(HelperId::check_indirect_type)] = bit_cast<uintptr_t>(&wasm_cl_check_indirect_type);
     return addresses;
 }
 
@@ -1113,6 +1135,7 @@ static RuntimeLayout make_runtime_layout()
         .regs_offset = static_cast<u32>(offsetof(Configuration, regs)),
         .value_size = static_cast<u32>(sizeof(Value)),
         .locals_base_offset = static_cast<u32>(Configuration::locals_base_offset()),
+        .table_instances_offset = static_cast<u32>(Configuration::table_instances_offset()),
         .memory_instances_offset = static_cast<u32>(Configuration::memory_instances_offset()),
         .global_instances_offset = static_cast<u32>(Configuration::global_instances_offset()),
         .global_instance_value_offset = static_cast<u32>(GlobalInstance::value_offset()),
@@ -1125,9 +1148,17 @@ static RuntimeLayout make_runtime_layout()
         .call_record_stack_top_offset = static_cast<u32>(Configuration::call_record_stack_top_offset()),
         .depth_offset = static_cast<u32>(Configuration::depth_offset()),
         .current_compiled_fn_table_data_offset = static_cast<u32>(Configuration::current_compiled_fn_table_data_offset()),
+        .current_module_offset = static_cast<u32>(Configuration::current_module_offset()),
+        .current_canonical_types_offset = static_cast<u32>(Configuration::current_canonical_types_offset()),
         .current_expression_offset = static_cast<u32>(Configuration::current_expression_offset()),
         .compiled_function_entry_size = static_cast<u32>(sizeof(CompiledFunctionEntry)),
         .compiled_function_entry_expression_offset = static_cast<u32>(offsetof(CompiledFunctionEntry, expression)),
+        .table_instance_size_offset = static_cast<u32>(TableInstance::size_offset()),
+        .table_instance_callables_offset = static_cast<u32>(TableInstance::callables_offset()),
+        .callable_defined_type_offset = static_cast<u32>(CallableMetadata::defined_type_offset()),
+        .callable_module_offset = static_cast<u32>(CallableMetadata::module_offset()),
+        .callable_compiled_instructions_offset = static_cast<u32>(CallableMetadata::compiled_instructions_offset()),
+        .compiled_instructions_native_entry_offset = static_cast<u32>(offsetof(CompiledInstructions, cranelift_native_entry)),
     };
 }
 
@@ -1894,6 +1925,14 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
         }
     }
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
+
+    for (auto const& metadata : compiled.cranelift_indirect_calls) {
+        VERIFY(metadata.instruction_index < flat.size());
+        auto& instruction = flat[metadata.instruction_index];
+        instruction.imm3 = metadata.parameter_count;
+        instruction.call_result_count = metadata.result_count;
+        instruction.call_type_encoding = metadata.type_encoding;
+    }
 
     cranelift_cache_state().pending_batch.append({ move(flat), result_arity, s_active_function_index, &compiled, compiled.cranelift_local_count, compiled.cranelift_param_count });
     return false; // Not compiled yet, will be compiled in flush.
