@@ -1803,7 +1803,7 @@ CompiledInstructions try_compile_instructions(Expression const&, Span<FunctionTy
 ErrorOr<void, ValidationError> ensure_cranelift_compiled(Module&);
 WASM_API void start_cranelift_compilation(Module&);
 bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity = 0);
-void flush_cranelift_batch();
+void flush_cranelift_batch(Module const&);
 void discard_cranelift_batch();
 
 void compile_module_to_native(Module&);

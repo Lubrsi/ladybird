@@ -43,6 +43,8 @@ namespace {
 
 struct InputHeader {
     u32 function_count;
+    u32 function_type_count;
+    u32 function_types_offset;
     u32 helpers_offset;
     u64 outcome_return;
     u64 code_region_start;
@@ -59,6 +61,13 @@ struct InputFunctionEntry {
     u32 num_params;
     u32 function_index;
     u32 max_call_rec_size;
+};
+
+struct InputFunctionTypeEntry {
+    u32 parameters_offset;
+    u32 parameter_count;
+    u32 results_offset;
+    u32 result_count;
 };
 
 struct OutputFunctionEntry {
@@ -1189,7 +1198,7 @@ static StringView resolve_cranelift_compiler_path()
     return s_path->view();
 }
 
-static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
+static void try_cranelift_compile_batch(Vector<BatchInput>& batch, Module const& module)
 {
     if (batch.is_empty())
         return;
@@ -1201,17 +1210,44 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
     auto const entries_offset = sizeof(InputHeader);
     auto const entries_size = sizeof(InputFunctionEntry) * function_count;
 
+    Vector<FunctionType const*> function_types;
+    auto const& types = module.type_section().types();
+    for (auto const& import : module.import_section().imports()) {
+        import.description().visit(
+            [&](TypeIndex const& type_index) {
+                VERIFY(type_index.value() < types.size());
+                if (types[type_index.value()].is_function())
+                    function_types.append(&types[type_index.value()].function());
+            },
+            [&](FunctionType const& function_type) {
+                function_types.append(&function_type);
+            },
+            [&](auto const&) {});
+    }
+    for (auto const& type_index : module.function_section().types()) {
+        VERIFY(type_index.value() < types.size());
+        VERIFY(types[type_index.value()].is_function());
+        function_types.append(&types[type_index.value()].function());
+    }
+
+    auto const function_types_offset = align_up(entries_offset + entries_size, alignof(InputFunctionTypeEntry));
+    auto const function_types_size = sizeof(InputFunctionTypeEntry) * function_types.size();
+
     size_t total_insn_count = 0;
     size_t total_locals_bytes = 0;
+    size_t total_function_type_bytes = 0;
     for (auto& entry : batch) {
         total_insn_count += entry.insns.size();
         total_locals_bytes += entry.num_locals;
     }
+    for (auto const* function_type : function_types)
+        total_function_type_bytes += function_type->parameters().size() + function_type->results().size();
 
-    auto const insn_region_offset = align_up(entries_offset + entries_size, alignof(CraneliftInsn));
+    auto const insn_region_offset = align_up(function_types_offset + function_types_size, alignof(CraneliftInsn));
     auto const insn_bytes = total_insn_count * sizeof(CraneliftInsn);
-    auto const locals_region_offset = insn_region_offset + insn_bytes; // u8, no alignment needed
-    auto const helpers_offset = align_up(locals_region_offset + total_locals_bytes, alignof(RuntimeHelpers));
+    auto const locals_region_offset = insn_region_offset + insn_bytes;                  // u8, no alignment needed
+    auto const function_type_values_offset = locals_region_offset + total_locals_bytes; // u8, no alignment needed
+    auto const helpers_offset = align_up(function_type_values_offset + total_function_type_bytes, alignof(RuntimeHelpers));
     auto const code_region_start = align_up(helpers_offset + sizeof(RuntimeHelpers), alignof(OutputFunctionEntry));
     auto const code_region_size = max(oop_code_region_min_size, total_insn_count * oop_code_bytes_per_insn);
     auto const reloc_region_start = align_up(code_region_start + sizeof(OutputFunctionEntry) * function_count + code_region_size, alignof(CraneliftRelocation));
@@ -1274,6 +1310,8 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
     auto* header = reinterpret_cast<InputHeader*>(base);
     *header = InputHeader {
         .function_count = static_cast<u32>(function_count),
+        .function_type_count = static_cast<u32>(function_types.size()),
+        .function_types_offset = static_cast<u32>(function_types_offset),
         .helpers_offset = static_cast<u32>(helpers_offset),
         .outcome_return = outcome_return,
         .code_region_start = code_region_start,
@@ -1303,6 +1341,22 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
         for (u32 l = 0; l < input.num_locals; ++l)
             base[locals_cursor + l] = l < local_types.size() ? local_types[l] : static_cast<u8>(ValueType::I64);
         locals_cursor += input.num_locals;
+    }
+
+    size_t function_type_values_cursor = function_type_values_offset;
+    for (size_t i = 0; i < function_types.size(); ++i) {
+        auto const& function_type = *function_types[i];
+        auto* entry = reinterpret_cast<InputFunctionTypeEntry*>(base + function_types_offset + i * sizeof(InputFunctionTypeEntry));
+        *entry = InputFunctionTypeEntry {
+            .parameters_offset = static_cast<u32>(function_type_values_cursor),
+            .parameter_count = static_cast<u32>(function_type.parameters().size()),
+            .results_offset = static_cast<u32>(function_type_values_cursor + function_type.parameters().size()),
+            .result_count = static_cast<u32>(function_type.results().size()),
+        };
+        for (auto const& parameter : function_type.parameters())
+            base[function_type_values_cursor++] = static_cast<u8>(parameter.kind());
+        for (auto const& result : function_type.results())
+            base[function_type_values_cursor++] = static_cast<u8>(result.kind());
     }
 
     __builtin_memcpy(base + helpers_offset, &helpers, sizeof(helpers));
@@ -1567,11 +1621,11 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
 #endif
 }
 
-void flush_cranelift_batch()
+void flush_cranelift_batch(Module const& module)
 {
     if (cranelift_cache_state().pending_batch.is_empty())
         return;
-    try_cranelift_compile_batch(cranelift_cache_state().pending_batch);
+    try_cranelift_compile_batch(cranelift_cache_state().pending_batch, module);
     cranelift_cache_state().pending_batch.clear();
 }
 

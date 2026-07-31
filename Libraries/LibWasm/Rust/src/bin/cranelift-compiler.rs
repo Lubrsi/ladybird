@@ -12,6 +12,7 @@ use libwasm_cranelift::CraneliftRelocation;
 use libwasm_cranelift::CraneliftTrap;
 use libwasm_cranelift::FunctionCompilationOptions;
 use libwasm_cranelift::RuntimeHelpers;
+use libwasm_cranelift::WasmFunctionType;
 use libwasm_cranelift::compile_to_bytes;
 use std::env;
 use std::mem::size_of;
@@ -30,6 +31,8 @@ use std::os::unix::fs::FileExt;
 #[derive(Clone, Copy)]
 struct InputHeader {
     function_count: u32,
+    function_type_count: u32,
+    function_types_offset: u32,
     helpers_offset: u32,
     outcome_return: u64,
     code_region_start: u64,
@@ -48,6 +51,15 @@ struct InputFunctionEntry {
     num_params: u32,
     function_index: u32,
     max_call_rec_size: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InputFunctionTypeEntry {
+    parameters_offset: u32,
+    parameter_count: u32,
+    results_offset: u32,
+    result_count: u32,
 }
 
 #[repr(C)]
@@ -241,7 +253,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let header: InputHeader = read_pod(mapped, 0)?;
     let func_count = usize::try_from(header.function_count).map_err(|_| "function_count overflow")?;
+    let function_type_count =
+        usize::try_from(header.function_type_count).map_err(|_| "function_type_count overflow")?;
     let entries_offset = size_of::<InputHeader>();
+    let function_types_offset =
+        usize::try_from(header.function_types_offset).map_err(|_| "function_types_offset overflow")?;
     let helpers_offset = usize::try_from(header.helpers_offset).map_err(|_| "helpers_offset overflow")?;
     let code_region_start = usize::try_from(header.code_region_start).map_err(|_| "code_region_start overflow")?;
     let helpers: RuntimeHelpers = read_pod(mapped, helpers_offset)?;
@@ -260,6 +276,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         entries.push(read_pod(mapped, entry_offset)?);
     }
 
+    let mut function_types = Vec::with_capacity(function_type_count);
+    for i in 0..function_type_count {
+        let entry_offset = function_types_offset
+            .checked_add(
+                i.checked_mul(size_of::<InputFunctionTypeEntry>())
+                    .ok_or("function type entry overflow")?,
+            )
+            .ok_or("function type entry overflow")?;
+        let entry: InputFunctionTypeEntry = read_pod(mapped, entry_offset)?;
+        let parameters_offset = usize::try_from(entry.parameters_offset).map_err(|_| "parameters_offset overflow")?;
+        let parameter_count = usize::try_from(entry.parameter_count).map_err(|_| "parameter_count overflow")?;
+        let results_offset = usize::try_from(entry.results_offset).map_err(|_| "results_offset overflow")?;
+        let result_count = usize::try_from(entry.result_count).map_err(|_| "result_count overflow")?;
+        let parameters_end = parameters_offset
+            .checked_add(parameter_count)
+            .ok_or("function parameters overflow")?;
+        let results_end = results_offset
+            .checked_add(result_count)
+            .ok_or("function results overflow")?;
+        let parameters = mapped
+            .get(parameters_offset..parameters_end)
+            .ok_or("function parameters out of bounds")?;
+        let results = mapped
+            .get(results_offset..results_end)
+            .ok_or("function results out of bounds")?;
+        function_types.push(WasmFunctionType { parameters, results });
+    }
+
     let thread_count = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
@@ -268,6 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mapped_ref: &[u8] = mapped;
     let helpers_ref = &helpers;
     let outcome_return = header.outcome_return;
+    let function_types_ref = &function_types;
 
     let compiled_chunks: Vec<Vec<(usize, CompiledFunction)>> = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(thread_count);
@@ -317,6 +362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             max_call_rec_size: entry.max_call_rec_size,
                         },
                         local_types,
+                        function_types_ref,
                     ) {
                         out.push((i, compiled));
                     }
