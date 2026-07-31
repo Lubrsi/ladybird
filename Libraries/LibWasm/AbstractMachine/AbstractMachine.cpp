@@ -565,6 +565,14 @@ Optional<FunctionAddress> Store::allocate(ModuleInstance& instance, Module const
     auto& type = instance.types()[type_index.value()].function();
     auto const* defined_type = instance.canonical_types()[type_index.value()];
     m_functions.empend(WasmFunction { type, defined_type, instance, module, code });
+    m_callable_metadata.append(make<CallableMetadata>(CallableMetadata {
+        .address = address,
+        .defined_type = defined_type,
+        .module = &instance,
+        .compiled_instructions = &code.func().body().compiled_instructions,
+        .parameter_count = static_cast<u32>(type.parameters().size()),
+        .result_count = static_cast<u32>(type.results().size()),
+    }));
     return address;
 }
 
@@ -573,7 +581,16 @@ Optional<FunctionAddress> Store::allocate(HostFunction&& function)
     FunctionAddress address { m_functions.size() };
     if (!function.defined_type())
         function.set_defined_type(canonicalize_type(TypeSection::Type { FunctionType { function.type() } }, TypeContext {}));
+    auto const* defined_type = function.defined_type();
+    auto parameter_count = static_cast<u32>(function.type().parameters().size());
+    auto result_count = static_cast<u32>(function.type().results().size());
     m_functions.empend(HostFunction { move(function) });
+    m_callable_metadata.append(make<CallableMetadata>(CallableMetadata {
+        .address = address,
+        .defined_type = defined_type,
+        .parameter_count = parameter_count,
+        .result_count = result_count,
+    }));
     return address;
 }
 
@@ -602,6 +619,7 @@ TableInstance::Storage::~Storage()
     auto& primitive_storage = GC::PrimitiveStorage::the();
     primitive_storage.free(m_elements_handle);
     primitive_storage.free(m_module_anchors_handle);
+    primitive_storage.free(m_callables_handle);
 }
 
 TableInstance::~TableInstance() = default;
@@ -610,9 +628,11 @@ ErrorOr<void> TableInstance::Storage::try_reserve(size_t capacity)
 {
     VERIFY(!m_elements_handle.is_valid());
     VERIFY(!m_module_anchors_handle.is_valid());
+    VERIFY(!m_callables_handle.is_valid());
 
     auto elements_capacity = TRY(table_storage_size<Reference>(capacity));
     auto module_anchors_capacity = TRY(table_storage_size<ModuleAnchor>(capacity));
+    auto callables_capacity = TRY(table_storage_size<CallableMetadata const*>(capacity));
     auto& primitive_storage = GC::PrimitiveStorage::the();
 
     auto elements_handle = TRY(primitive_storage.try_reserve(0, elements_capacity, GC::PrimitiveStorage::ZeroFillNewBytes::No));
@@ -621,16 +641,24 @@ ErrorOr<void> TableInstance::Storage::try_reserve(size_t capacity)
         primitive_storage.free(elements_handle);
         return module_anchors_handle.release_error();
     }
+    auto callables_handle = primitive_storage.try_reserve(0, callables_capacity, GC::PrimitiveStorage::ZeroFillNewBytes::No);
+    if (callables_handle.is_error()) {
+        primitive_storage.free(elements_handle);
+        primitive_storage.free(module_anchors_handle.value());
+        return callables_handle.release_error();
+    }
 
     m_elements_handle = elements_handle;
     m_module_anchors_handle = module_anchors_handle.release_value();
+    m_callables_handle = callables_handle.release_value();
     m_elements = reinterpret_cast<Reference*>(primitive_storage.data(m_elements_handle));
     m_module_anchors = reinterpret_cast<ModuleAnchor*>(primitive_storage.data(m_module_anchors_handle));
+    m_callables = reinterpret_cast<CallableMetadata const**>(primitive_storage.data(m_callables_handle));
     m_capacity = capacity;
     return {};
 }
 
-ErrorOr<void> TableInstance::Storage::try_grow(size_t count, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor)
+ErrorOr<void> TableInstance::Storage::try_grow(size_t count, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor, CallableMetadata const* fill_callable)
 {
     Checked<size_t> new_size = m_size;
     new_size += count;
@@ -638,8 +666,10 @@ ErrorOr<void> TableInstance::Storage::try_grow(size_t count, Reference const& fi
         return Error::from_errno(ENOMEM);
 
     auto old_elements_size = TRY(table_storage_size<Reference>(m_size));
+    auto old_module_anchors_size = TRY(table_storage_size<ModuleAnchor>(m_size));
     auto new_elements_size = TRY(table_storage_size<Reference>(new_size.value()));
     auto new_module_anchors_size = TRY(table_storage_size<ModuleAnchor>(new_size.value()));
+    auto new_callables_size = TRY(table_storage_size<CallableMetadata const*>(new_size.value()));
     auto& primitive_storage = GC::PrimitiveStorage::the();
 
     TRY(primitive_storage.try_resize(m_elements_handle, new_elements_size));
@@ -648,10 +678,17 @@ ErrorOr<void> TableInstance::Storage::try_grow(size_t count, Reference const& fi
         MUST(primitive_storage.try_resize(m_elements_handle, old_elements_size));
         return resize_module_anchors.release_error();
     }
+    auto resize_callables = primitive_storage.try_resize(m_callables_handle, new_callables_size);
+    if (resize_callables.is_error()) {
+        MUST(primitive_storage.try_resize(m_elements_handle, old_elements_size));
+        MUST(primitive_storage.try_resize(m_module_anchors_handle, old_module_anchors_size));
+        return resize_callables.release_error();
+    }
 
     for (size_t i = m_size; i < new_size.value(); ++i) {
         new (&m_elements[i]) Reference(fill_value);
         new (&m_module_anchors[i]) ModuleAnchor(fill_module_anchor);
+        m_callables[i] = fill_callable;
     }
     m_size = new_size.value();
     return {};
@@ -666,11 +703,31 @@ ErrorOr<NonnullOwnPtr<TableInstance>> TableInstance::create(TableType const& typ
     auto instance = TRY(adopt_nonnull_own_or_enomem(new (nothrow) TableInstance(type)));
     TRY(instance->m_storage.try_reserve(static_cast<size_t>(maximum_size)));
     Reference initial_value { Reference::Null { type.element_type() } };
-    TRY(instance->m_storage.try_grow(static_cast<size_t>(type.limits().min()), initial_value, {}));
+    TRY(instance->m_storage.try_grow(static_cast<size_t>(type.limits().min()), initial_value, {}, nullptr));
     return instance;
 }
 
-bool TableInstance::grow(u64 size_to_grow, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor)
+static void resolve_table_function(Store& store, Reference const& reference, RefPtr<ModuleInstance const>& module_anchor, CallableMetadata const*& callable)
+{
+    auto const* function = reference.ref().get_pointer<Reference::Func>();
+    if (!function)
+        return;
+
+    module_anchor = store.get_module_instance_for(function->address);
+    callable = store.get_callable(function->address);
+    if (callable && callable->module && !module_anchor)
+        callable = nullptr;
+}
+
+void TableInstance::set_element(Store& store, size_t index, Reference reference)
+{
+    RefPtr<ModuleInstance const> module_anchor;
+    CallableMetadata const* callable { nullptr };
+    resolve_table_function(store, reference, module_anchor, callable);
+    m_storage.set_element(index, move(reference), move(module_anchor), callable);
+}
+
+bool TableInstance::grow(Store& store, u64 size_to_grow, Reference const& fill_value)
 {
     if (size_to_grow == 0)
         return true;
@@ -680,7 +737,10 @@ bool TableInstance::grow(u64 size_to_grow, Reference const& fill_value, RefPtr<M
     if (new_size.has_overflow() || new_size.value() > maximum_table_size(m_type))
         return false;
 
-    if (m_storage.try_grow(static_cast<size_t>(size_to_grow), fill_value, move(fill_module_anchor)).is_error())
+    RefPtr<ModuleInstance const> module_anchor;
+    CallableMetadata const* callable { nullptr };
+    resolve_table_function(store, fill_value, module_anchor, callable);
+    if (m_storage.try_grow(static_cast<size_t>(size_to_grow), fill_value, move(module_anchor), callable).is_error())
         return false;
 
     m_type = TableType { m_type.element_type(), Limits(m_type.limits().address_type(), m_type.limits().min() + size_to_grow, m_type.limits().max()) };
@@ -777,6 +837,14 @@ RefPtr<ModuleInstance const> Store::get_module_instance_for(FunctionAddress addr
     if (!function || function->has<HostFunction>())
         return nullptr;
     return function->get<WasmFunction>().try_module();
+}
+
+CallableMetadata const* Store::get_callable(FunctionAddress address)
+{
+    auto value = address.value();
+    if (m_callable_metadata.size() <= value)
+        return nullptr;
+    return m_callable_metadata[value].ptr();
 }
 
 TableInstance* Store::get(TableAddress address)
@@ -1084,12 +1152,8 @@ InstantiationResult AbstractMachine::instantiate(Module const& module, Vector<Ex
             return InstantiationError { "Table instantiation out of bounds" };
 
         size_t i = 0;
-        for (auto it = elem_instance->references().begin(); it < elem_instance->references().end(); ++i, ++it) {
-            RefPtr<ModuleInstance const> anchor;
-            if (auto const* func = it->ref().template get_pointer<Reference::Func>())
-                anchor = m_store.get_module_instance_for(func->address);
-            table_instance->set_element(i + d, *it, move(anchor));
-        }
+        for (auto it = elem_instance->references().begin(); it < elem_instance->references().end(); ++i, ++it)
+            table_instance->set_element(m_store, i + d, *it);
         // Drop element
         *m_store.get(main_module_instance.elements()[current_index]) = ElementInstance(elem_instance->type(), {});
     }
@@ -1189,11 +1253,8 @@ Optional<InstantiationError> AbstractMachine::allocate_all_initial_phase(Module 
         auto reference = table_initial_values[table_index].to<Reference>();
         if (!reference.ref().has<Reference::Null>()) {
             auto* table_instance = m_store.get(*table_address);
-            RefPtr<ModuleInstance const> anchor;
-            if (reference.ref().has<Reference::Func>())
-                anchor = &module_instance;
             for (size_t i = 0; i < table_instance->elements().size(); ++i)
-                table_instance->set_element(i, reference, anchor);
+                table_instance->set_element(m_store, i, reference);
         }
     }
 

@@ -32,13 +32,14 @@ WebIDL::ExceptionOr<GC::Ref<Table>> Table::create(NonnullRefPtr<Detail::WebAssem
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "Maximum should not be less than initial in table type"_utf16 };
 
     // 11. Let (store, tableaddr) be table_alloc(store, type, ref). If allocation fails, throw a RangeError exception.
-    auto address = cache->abstract_machine().store().allocate(table_type);
+    auto& store = cache->abstract_machine().store();
+    auto address = store.allocate(table_type);
     if (!address.has_value())
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "Wasm Table allocation failed"_utf16 };
 
-    auto& table = *cache->abstract_machine().store().get(*address);
-    for (auto& element : table.elements())
-        element = reference;
+    auto& table = *store.get(*address);
+    for (size_t index = 0; index < table.elements().size(); ++index)
+        table.set_element(store, index, reference);
 
     // 12. Set the surrounding agent's associated store to store.
     // NOTE: The store is updated in-place.
@@ -83,7 +84,7 @@ WebIDL::ExceptionOr<u64> Table::grow(u64 delta, Wasm::Reference reference)
     // 3. Let initialSize be table_size(store, tableaddr).
     auto initial_size = table->elements().size();
 
-    if (!table->grow(delta, reference))
+    if (!table->grow(cache().abstract_machine().store(), delta, reference))
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::RangeError, "Failed to grow table"_utf16 };
 
     // 10. Set the surrounding agent's associated store to result.
@@ -133,7 +134,7 @@ WebIDL::ExceptionOr<void> Table::set(u64 index, Wasm::Reference reference)
 
     // 8. Let store be table_write(store, tableaddr, index64, ref).
     // 9. If store is error, throw a RangeError exception.
-    table->elements()[index] = reference;
+    table->set_element(cache().abstract_machine().store(), index, reference);
 
     // 10. Set the surrounding agent's associated store to store.
     // NOTE: The store is updated in-place.
