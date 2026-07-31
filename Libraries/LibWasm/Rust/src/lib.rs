@@ -59,6 +59,8 @@ pub struct RuntimeHelpers {
     pub call_indirect_with_record: usize,
     // void fn(interp); set the standard Wasm stack-exhaustion trap
     pub stack_exhaustion: usize,
+    // noreturn void fn(); propagate the trap already stored on the interpreter
+    pub raise_trap: usize,
 
     pub regs_offset: u32,
     pub value_size: u32,
@@ -102,9 +104,10 @@ pub enum HelperId {
     primitive_storage_cage_base = 12,
     call_indirect_with_record = 13,
     stack_exhaustion = 14,
+    raise_trap = 15,
 }
 
-pub const HELPER_COUNT: u32 = 15;
+pub const HELPER_COUNT: u32 = 16;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
 /// The numeric values are part of the cache blob format.
@@ -134,6 +137,8 @@ pub struct CraneliftRelocation {
     pub kind: CraneliftRelocationKind,
     pub target_kind: CraneliftRelocationTargetKind,
     pub target_index: u32,
+    pub fallback_offset: u32,
+    pub _padding: u32,
     pub addend: i64,
 }
 

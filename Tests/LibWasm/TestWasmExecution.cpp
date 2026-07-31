@@ -35,6 +35,9 @@ TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
     imports.append(*label_stack_size);
     auto instance = MUST(machine.instantiate(*module, move(imports)));
 
+    EXPECT(!module->code_section().functions()[0].func().body().compiled_instructions.cranelift_compiled);
+    EXPECT(module->code_section().functions()[1].func().body().compiled_instructions.cranelift_compiled);
+
     Optional<Wasm::FunctionAddress> run;
     for (auto const& export_ : instance->exports()) {
         if (export_.name() == "run"sv)
@@ -224,4 +227,83 @@ TEST_CASE(native_direct_call_restores_context_after_trap)
     EXPECT(!recovered.is_trap());
     EXPECT_EQ(recovered.values().size(), 1u);
     EXPECT_EQ(recovered.values()[0].to<i32>(), 4);
+}
+
+TEST_CASE(native_direct_call_uses_typed_abi)
+{
+    auto file = MUST(Core::File::open("Fixtures/native-call-abi.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    auto const& functions = module->code_section().functions();
+    EXPECT_EQ(functions.size(), 18u);
+    for (size_t index = 0; index < 4; ++index)
+        EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
+    EXPECT(!functions[4].func().body().compiled_instructions.cranelift_compiled);
+    EXPECT(!functions[5].func().body().compiled_instructions.cranelift_compiled);
+    EXPECT(!functions[6].func().body().compiled_instructions.cranelift_compiled);
+    for (size_t index = 7; index < functions.size(); ++index)
+        EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
+
+    Optional<Wasm::FunctionIndex> raw_caller_index;
+    for (auto const& export_ : module->export_section().entries()) {
+        if (export_.name() == "run_raw_i32"sv)
+            raw_caller_index = export_.description().get<Wasm::FunctionIndex>();
+    }
+    VERIFY(raw_caller_index.has_value());
+    EXPECT(!functions[raw_caller_index->value()].func().body().compiled_instructions.cranelift_raw_calls.is_empty());
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto invoke = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        auto result = machine.invoke(*address, {});
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        return result.values().take_first();
+    };
+
+    EXPECT_EQ(invoke("run_i32"sv).to<i32>(), 17);
+    EXPECT_EQ(invoke("run_i64"sv).to<i64>(), 9999999997);
+    EXPECT_EQ(invoke("run_f32"sv).to<float>(), 5.25f);
+    EXPECT_EQ(invoke("run_f64"sv).to<double>(), 8.25);
+    EXPECT_EQ(invoke("run_fallback_f64"sv).to<double>(), 9.25);
+    EXPECT_EQ(invoke("run_raw_i32"sv).to<i32>(), 136);
+    EXPECT_EQ(invoke("run_memory_i32"sv).to<i32>(), 10);
+    EXPECT_EQ(invoke("run_memory_fallback_i32"sv).to<i32>(), 10);
+
+    Optional<Wasm::FunctionAddress> sum4_address;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "sum4_i32"sv)
+            sum4_address = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(sum4_address.has_value());
+    Vector<Wasm::Value> sum4_arguments {
+        Wasm::Value(static_cast<i32>(1)),
+        Wasm::Value(static_cast<i32>(2)),
+        Wasm::Value(static_cast<i32>(3)),
+        Wasm::Value(static_cast<i32>(4)),
+    };
+    auto sum4_result = machine.invoke(*sum4_address, move(sum4_arguments));
+    EXPECT(!sum4_result.is_trap());
+    EXPECT_EQ(sum4_result.values().size(), 1u);
+    EXPECT_EQ(sum4_result.values()[0].to<i32>(), 10);
+
+    Optional<Wasm::FunctionAddress> trap_address;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run_fallback_trap"sv)
+            trap_address = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(trap_address.has_value());
+    auto trapped = machine.invoke(*trap_address, {});
+    EXPECT(trapped.is_trap());
+    EXPECT_EQ(trapped.trap().format(), "Unreachable"sv);
 }
