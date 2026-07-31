@@ -97,15 +97,34 @@ pub enum HelperId {
 
 pub const HELPER_COUNT: u32 = 14;
 
-/// One relocation slot in the generated machine code. `code_offset` is the byte offset
-/// from the start of the function where 8 contiguous bytes hold the absolute helper
-/// address; on cache install, those bytes get rewritten to the current process's
-/// helper pointer.
+/// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
+/// The numeric values are part of the cache blob format.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraneliftRelocationKind {
+    Abs8 = 0,
+    Arm64Call = 1,
+    X86CallPCRel4 = 2,
+}
+
+/// The namespace of a relocation target. The numeric values are part of the cache blob format.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraneliftRelocationTargetKind {
+    Helper = 0,
+    WasmFunction = 1,
+}
+
+/// One relocation slot in the generated machine code. Helper relocations are resolved to
+/// current-process addresses. Wasm-function relocations are resolved by module function index
+/// after native addresses have been assigned.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct HelperReloc {
+pub struct CraneliftRelocation {
     pub code_offset: u32,
-    pub helper_id: u32,
+    pub kind: CraneliftRelocationKind,
+    pub target_kind: CraneliftRelocationTargetKind,
+    pub target_index: u32,
     pub addend: i64,
 }
 
@@ -120,7 +139,7 @@ pub struct CraneliftTrap {
 /// Output of `compile_to_bytes`: the machine code plus the patch table.
 pub struct CompiledFunction {
     pub code: Vec<u8>,
-    pub relocs: Vec<HelperReloc>,
+    pub relocs: Vec<CraneliftRelocation>,
     pub traps: Vec<CraneliftTrap>,
 }
 

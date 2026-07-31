@@ -8,8 +8,8 @@
 
 use libwasm_cranelift::CompiledFunction;
 use libwasm_cranelift::CraneliftInsn;
+use libwasm_cranelift::CraneliftRelocation;
 use libwasm_cranelift::CraneliftTrap;
-use libwasm_cranelift::HelperReloc;
 use libwasm_cranelift::RuntimeHelpers;
 use libwasm_cranelift::compile_to_bytes;
 use std::env;
@@ -328,7 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let relocs = compiled.relocs;
             let traps = compiled.traps;
             let aligned = (code.len() + 15) & !15;
-            let reloc_bytes_len = relocs.len() * size_of::<HelperReloc>();
+            let reloc_bytes_len = relocs.len() * size_of::<CraneliftRelocation>();
             let trap_bytes_len = traps.len() * size_of::<CraneliftTrap>();
             if code_cursor + aligned > code_capacity {
                 continue;

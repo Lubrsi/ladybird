@@ -61,10 +61,8 @@ struct OutputFunctionEntry {
     u64 code_offset;
     u32 code_size;
     u32 compiled;
-    // Offset (relative to the start of the reloc region) and count of `HelperReloc`
-    // entries describing the absolute helper addresses baked into this function's code.
-    // On cache install we walk these and rewrite the 8 bytes at code+code_offset+offset
-    // with the live address of helper N for the current process.
+    // Offset (relative to the start of the reloc region) and count of
+    // `CraneliftRelocation` entries describing process-specific code targets.
     u64 reloc_offset;
     u32 reloc_count;
     u64 trap_offset;
@@ -103,7 +101,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 14;
+constexpr u32 cache_blob_format_version = 15;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -127,7 +125,7 @@ static_assert(sizeof(CacheBlobFunctionEntry) == 16);
 struct CacheRecord {
     u32 function_index;
     ByteBuffer unpatched_code;
-    Vector<HelperReloc> relocs;
+    Vector<CraneliftRelocation> relocs;
     Vector<CraneliftTrap> traps;
 };
 
@@ -190,27 +188,29 @@ static_assert(offsetof(RuntimeHelpers, memory_fill) == sizeof(size_t) * 11);
 static_assert(offsetof(RuntimeHelpers, primitive_storage_cage_base) == sizeof(size_t) * 12);
 static_assert(offsetof(RuntimeHelpers, call_indirect_with_record) == sizeof(size_t) * 13);
 static_assert(HELPER_COUNT == 14);
+static_assert(sizeof(CraneliftRelocation) == 24);
 
-static bool apply_helper_relocs(u8* code_bytes, size_t code_size, HelperReloc const* relocs, size_t reloc_count, RuntimeHelpers const& helpers)
+static bool apply_relocations(u8* code_bytes, size_t code_size, ReadonlySpan<CraneliftRelocation> relocs, RuntimeHelpers const& helpers)
 {
     auto const* helper_table = reinterpret_cast<size_t const*>(&helpers);
-    for (size_t i = 0; i < reloc_count; ++i) {
-        auto const& r = relocs[i];
-        if (r.helper_id >= HELPER_COUNT)
+    for (auto const& r : relocs) {
+        if (r.kind != CraneliftRelocationKind::Abs8 || r.target_kind != CraneliftRelocationTargetKind::Helper)
+            return false;
+        if (r.target_index >= HELPER_COUNT)
             return false;
         if (static_cast<size_t>(r.code_offset) + sizeof(u64) > code_size)
             return false;
-        u64 addr = static_cast<u64>(helper_table[r.helper_id]) + static_cast<u64>(r.addend);
+        u64 addr = static_cast<u64>(helper_table[r.target_index]) + static_cast<u64>(r.addend);
         __builtin_memcpy(code_bytes + r.code_offset, &addr, sizeof(addr));
     }
     return true;
 }
 
-// Allocate an RX-able page, copy the (still unpatched) machine code into it, apply the
-// helper-address patches, and install the resulting function pointer into `target`.
+// Allocate an RX-able page, copy the unpatched machine code into it, apply its relocations,
+// and install the resulting function pointer into `target`.
 // Used by both the fresh-compile path (bytes come from the subprocess shm) and the
 // cache-install path (bytes come from a `.wasmjit` blob).
-static bool install_compiled_function(CompiledInstructions& target, ReadonlyBytes code_bytes, HelperReloc const* relocs, size_t reloc_count, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
+static bool install_compiled_function(CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
 {
     if (target.dispatches.is_empty())
         return false;
@@ -228,7 +228,7 @@ static bool install_compiled_function(CompiledInstructions& target, ReadonlyByte
     if (!jit_mem)
         return false;
     __builtin_memcpy(jit_mem, code_bytes.data(), code_size);
-    if (!apply_helper_relocs(static_cast<u8*>(jit_mem), code_size, relocs, reloc_count, helpers)) {
+    if (!apply_relocations(static_cast<u8*>(jit_mem), code_size, relocs, helpers)) {
         VirtualFree(jit_mem, 0, MEM_RELEASE);
         return false;
     }
@@ -246,7 +246,7 @@ static bool install_compiled_function(CompiledInstructions& target, ReadonlyByte
 
     pthread_jit_write_protect_np(0);
     __builtin_memcpy(jit_mapping, code_bytes.data(), code_size);
-    if (!apply_helper_relocs(static_cast<u8*>(jit_mapping), code_size, relocs, reloc_count, helpers)) {
+    if (!apply_relocations(static_cast<u8*>(jit_mapping), code_size, relocs, helpers)) {
         munmap(jit_mapping, rx_aligned_size);
         return false;
     }
@@ -261,7 +261,7 @@ static bool install_compiled_function(CompiledInstructions& target, ReadonlyByte
     if (rw_mapping == MAP_FAILED)
         return false;
     __builtin_memcpy(rw_mapping, code_bytes.data(), code_size);
-    if (!apply_helper_relocs(static_cast<u8*>(rw_mapping), code_size, relocs, reloc_count, helpers) || mprotect(rw_mapping, rx_aligned_size, PROT_READ | PROT_EXEC) != 0) {
+    if (!apply_relocations(static_cast<u8*>(rw_mapping), code_size, relocs, helpers) || mprotect(rw_mapping, rx_aligned_size, PROT_READ | PROT_EXEC) != 0) {
         munmap(rw_mapping, rx_aligned_size);
         return false;
     }
@@ -940,7 +940,7 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
     auto const helpers_offset = align_up(locals_region_offset + total_locals_bytes, alignof(RuntimeHelpers));
     auto const code_region_start = align_up(helpers_offset + sizeof(RuntimeHelpers), alignof(OutputFunctionEntry));
     auto const code_region_size = max(oop_code_region_min_size, total_insn_count * oop_code_bytes_per_insn);
-    auto const reloc_region_start = align_up(code_region_start + sizeof(OutputFunctionEntry) * function_count + code_region_size, alignof(HelperReloc));
+    auto const reloc_region_start = align_up(code_region_start + sizeof(OutputFunctionEntry) * function_count + code_region_size, alignof(CraneliftRelocation));
     auto const reloc_region_size = max(oop_reloc_region_min_size, total_insn_count * oop_reloc_bytes_per_insn);
     auto const total_size = reloc_region_start + reloc_region_size;
 
@@ -1067,8 +1067,8 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
 
         auto const reloc_offset = static_cast<size_t>(output->reloc_offset);
         auto const reloc_count = static_cast<size_t>(output->reloc_count);
-        auto const reloc_bytes = reloc_count * sizeof(HelperReloc);
-        if (reloc_count != 0 && reloc_bytes / sizeof(HelperReloc) != reloc_count)
+        auto const reloc_bytes = reloc_count * sizeof(CraneliftRelocation);
+        if (reloc_count != 0 && reloc_bytes / sizeof(CraneliftRelocation) != reloc_count)
             continue;
         if (reloc_offset > reloc_region_size || reloc_bytes > reloc_region_size - reloc_offset)
             continue;
@@ -1086,9 +1086,9 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
             continue;
 
         auto code_bytes = ReadonlyBytes { base + code_start, code_size };
-        auto const* relocs = reloc_count == 0
-            ? nullptr
-            : reinterpret_cast<HelperReloc const*>(base + reloc_region_start + reloc_offset);
+        auto relocs = reloc_count == 0
+            ? ReadonlySpan<CraneliftRelocation> {}
+            : ReadonlySpan<CraneliftRelocation> { reinterpret_cast<CraneliftRelocation const*>(base + reloc_region_start + reloc_offset), reloc_count };
         auto traps = trap_count == 0
             ? ReadonlySpan<CraneliftTrap> {}
             : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(base + reloc_region_start + trap_offset), trap_count };
@@ -1109,7 +1109,7 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
             }
         }
 
-        install_compiled_function(*batch[i].target, code_bytes, relocs, reloc_count, traps, helpers);
+        install_compiled_function(*batch[i].target, code_bytes, relocs, traps, helpers);
     }
 }
 
@@ -1143,8 +1143,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
             if (install_compiled_function(
                     compiled,
                     record->unpatched_code.bytes(),
-                    record->relocs.is_empty() ? nullptr : record->relocs.data(),
-                    record->relocs.size(),
+                    record->relocs.span(),
                     record->traps.span(),
                     cache_install_helpers)) {
                 return true;
@@ -1354,7 +1353,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
     for (auto const& r : capture.records) {
         total_size += sizeof(CacheBlobFunctionEntry);
         total_size += align_up(r.unpatched_code.size(), 16);
-        total_size += r.relocs.size() * sizeof(HelperReloc);
+        total_size += r.relocs.size() * sizeof(CraneliftRelocation);
         total_size += r.traps.size() * sizeof(CraneliftTrap);
     }
 
@@ -1384,7 +1383,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
         __builtin_memcpy(out + offset, r.unpatched_code.data(), r.unpatched_code.size());
         offset += align_up(r.unpatched_code.size(), 16);
 
-        auto reloc_bytes = r.relocs.size() * sizeof(HelperReloc);
+        auto reloc_bytes = r.relocs.size() * sizeof(CraneliftRelocation);
         if (reloc_bytes > 0)
             __builtin_memcpy(out + offset, r.relocs.data(), reloc_bytes);
         offset += reloc_bytes;
@@ -1433,7 +1432,7 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
         offset += aligned_code_size;
 
         auto reloc_off = offset;
-        auto reloc_bytes = static_cast<size_t>(entry->reloc_count) * sizeof(HelperReloc);
+        auto reloc_bytes = static_cast<size_t>(entry->reloc_count) * sizeof(CraneliftRelocation);
         if (reloc_off + reloc_bytes > blob.size())
             return false;
         offset += reloc_bytes;
@@ -1453,8 +1452,8 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
         rec.unpatched_code = code_copy.release_value();
         rec.relocs.ensure_capacity(entry->reloc_count);
         for (u32 j = 0; j < entry->reloc_count; ++j) {
-            HelperReloc reloc;
-            __builtin_memcpy(&reloc, blob.data() + reloc_off + j * sizeof(HelperReloc), sizeof(HelperReloc));
+            CraneliftRelocation reloc;
+            __builtin_memcpy(&reloc, blob.data() + reloc_off + j * sizeof(CraneliftRelocation), sizeof(CraneliftRelocation));
             rec.relocs.unchecked_append(reloc);
         }
         rec.traps.ensure_capacity(entry->trap_count);

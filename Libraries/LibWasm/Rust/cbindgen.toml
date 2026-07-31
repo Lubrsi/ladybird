@@ -14,7 +14,15 @@ sys_includes = ["stdint.h", "stddef.h"]
 usize_is_size_t = true
 
 [export]
-include = ["CraneliftInsn", "RuntimeHelpers", "HelperReloc", "HelperId", "HELPER_COUNT"]
+include = [
+    "CraneliftInsn",
+    "RuntimeHelpers",
+    "CraneliftRelocation",
+    "CraneliftRelocationKind",
+    "CraneliftRelocationTargetKind",
+    "HelperId",
+    "HELPER_COUNT",
+]
 
 [export.mangle]
 rename_types = "PascalCase"
