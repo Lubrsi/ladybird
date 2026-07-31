@@ -3560,6 +3560,7 @@ impl CraneliftCompiler {
 
         Ok(CompiledFunction {
             code: bytes,
+            native_entry_offset: 0,
             relocs,
             traps,
         })
