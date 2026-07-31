@@ -54,6 +54,7 @@ public:
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
         m_current_module = &frame.module();
         m_current_compiled_fn_table = frame.compiled_fn_table();
+        m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
         m_current_expression = &frame.expression();
 
         auto continuation = frame.expression().instructions().size() - 1;
@@ -85,6 +86,7 @@ public:
         if (m_current_module != &module) {
             m_current_module = &module;
             m_current_compiled_fn_table = &module.compiled_fn_table(m_store);
+            m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
             m_memory_instances = module.resolved_memories(m_store);
             m_global_instances = module.resolved_globals(m_store);
         }
@@ -121,6 +123,7 @@ public:
     ALWAYS_INLINE void set_locals_base(Value* base) { m_locals_base = base; }
     ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
     ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
+    ALWAYS_INLINE CompiledFunctionEntry const* current_compiled_fn_table_data() const { return m_current_compiled_fn_table_data; }
     ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
@@ -130,6 +133,10 @@ public:
     static constexpr size_t value_stack_base_offset() { return __builtin_offsetof(Configuration, m_value_stack) + ValueStack::base_offset(); }
     static constexpr size_t value_stack_top_offset() { return __builtin_offsetof(Configuration, m_value_stack) + ValueStack::top_offset(); }
     static constexpr size_t call_record_base_offset() { return __builtin_offsetof(Configuration, m_call_record_base); }
+    static constexpr size_t call_record_stack_top_offset() { return __builtin_offsetof(Configuration, m_call_record_stack) + ValueStack::top_offset(); }
+    static constexpr size_t depth_offset() { return __builtin_offsetof(Configuration, m_depth); }
+    static constexpr size_t current_compiled_fn_table_data_offset() { return __builtin_offsetof(Configuration, m_current_compiled_fn_table_data); }
+    static constexpr size_t current_expression_offset() { return __builtin_offsetof(Configuration, m_current_expression); }
 
     ALWAYS_INLINE Value& call_record_entry(size_t index) { return m_call_record_base[index]; }
     ALWAYS_INLINE Value const& call_record_entry(size_t index) const { return m_call_record_base[index]; }
@@ -321,6 +328,7 @@ public:
     Value m_compiled_call_result_scratch;
     ModuleInstance const* m_current_module { nullptr };
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
+    CompiledFunctionEntry const* m_current_compiled_fn_table_data { nullptr };
     Expression const* m_current_expression { nullptr };
 };
 

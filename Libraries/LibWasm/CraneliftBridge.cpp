@@ -276,6 +276,12 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
     hash = fnv1a(hash, layout.value_stack_base_offset);
     hash = fnv1a(hash, layout.value_stack_top_offset);
     hash = fnv1a(hash, layout.call_record_base_offset);
+    hash = fnv1a(hash, layout.call_record_stack_top_offset);
+    hash = fnv1a(hash, layout.depth_offset);
+    hash = fnv1a(hash, layout.current_compiled_fn_table_data_offset);
+    hash = fnv1a(hash, layout.current_expression_offset);
+    hash = fnv1a(hash, layout.compiled_function_entry_size);
+    hash = fnv1a(hash, layout.compiled_function_entry_expression_offset);
     return hash;
 }
 
@@ -446,6 +452,7 @@ public:
         , m_locals_base(config.locals_base())
         , m_current_module(config.current_module())
         , m_current_compiled_fn_table(config.current_compiled_fn_table())
+        , m_current_compiled_fn_table_data(config.current_compiled_fn_table_data())
         , m_current_expression(config.current_expression())
         , m_memory_instances(config.m_memory_instances)
         , m_global_instances(config.m_global_instances)
@@ -457,6 +464,7 @@ public:
         m_config.m_locals_base = m_locals_base;
         m_config.m_current_module = m_current_module;
         m_config.m_current_compiled_fn_table = m_current_compiled_fn_table;
+        m_config.m_current_compiled_fn_table_data = m_current_compiled_fn_table_data;
         m_config.m_current_expression = m_current_expression;
         m_config.m_memory_instances = m_memory_instances;
         m_config.m_global_instances = m_global_instances;
@@ -467,6 +475,7 @@ private:
     Value* m_locals_base;
     ModuleInstance const* m_current_module;
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table;
+    CompiledFunctionEntry const* m_current_compiled_fn_table_data;
     Expression const* m_current_expression;
     MemoryInstanceTable m_memory_instances;
     GlobalInstanceTable m_global_instances;
@@ -914,6 +923,12 @@ static RuntimeLayout make_runtime_layout()
         .value_stack_base_offset = static_cast<u32>(Configuration::value_stack_base_offset()),
         .value_stack_top_offset = static_cast<u32>(Configuration::value_stack_top_offset()),
         .call_record_base_offset = static_cast<u32>(Configuration::call_record_base_offset()),
+        .call_record_stack_top_offset = static_cast<u32>(Configuration::call_record_stack_top_offset()),
+        .depth_offset = static_cast<u32>(Configuration::depth_offset()),
+        .current_compiled_fn_table_data_offset = static_cast<u32>(Configuration::current_compiled_fn_table_data_offset()),
+        .current_expression_offset = static_cast<u32>(Configuration::current_expression_offset()),
+        .compiled_function_entry_size = static_cast<u32>(sizeof(CompiledFunctionEntry)),
+        .compiled_function_entry_expression_offset = static_cast<u32>(offsetof(CompiledFunctionEntry, expression)),
     };
 }
 

@@ -453,15 +453,26 @@ ErrorOr<void, ValidationError> Validator::validate(CodeSection const& section)
             return Errors::invalid("function result"sv, function_type.results(), results.result_types);
 
         callee_bodies[function_index] = &function;
+    }
 
+    // Reserve enough stable call-record storage for the arguments and locals of any direct
+    // callee. Do this after every body has been compiled so forward callees' inlined-local
+    // counts are available too.
+    for (auto& entry : section.functions()) {
+        auto& function = entry.func();
         if (function.body().compiled_instructions.max_call_rec_size != 0) {
             size_t max_callee_locals = 0;
             for (auto& insn : function.body().instructions()) {
                 if (!first_is_one_of(insn.opcode(), Instructions::call, Instructions::synthetic_call_with_record_0, Instructions::synthetic_call_with_record_1))
                     continue;
                 auto callee_index = insn.arguments().template get<FunctionIndex>();
-                if (callee_index.value() - m_context.imported_function_count < section.functions().size())
-                    max_callee_locals = max(max_callee_locals, section.functions()[callee_index.value() - m_context.imported_function_count].func().total_local_count());
+                if (callee_index.value() < m_context.imported_function_count)
+                    continue;
+                auto defined_callee_index = callee_index.value() - m_context.imported_function_count;
+                if (defined_callee_index >= section.functions().size())
+                    continue;
+                auto const& callee = section.functions()[defined_callee_index].func();
+                max_callee_locals = max(max_callee_locals, callee.total_local_count() + callee.body().compiled_instructions.cranelift_inlined_locals);
             }
 
             function.body().compiled_instructions.max_call_rec_size += max_callee_locals;
