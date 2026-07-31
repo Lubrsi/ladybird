@@ -49,12 +49,14 @@ public:
 
         auto& frame = m_frame_stack.last();
         m_locals_base = locals_ptr;
+        m_table_instances = frame.module().resolved_tables(m_store);
         m_memory_instances = frame.module().resolved_memories(m_store);
         m_global_instances = frame.module().resolved_globals(m_store);
         frame.set_compiled_fn_table(&frame.module().compiled_fn_table(m_store));
         m_current_module = &frame.module();
         m_current_compiled_fn_table = frame.compiled_fn_table();
         m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
+        m_current_canonical_types = frame.module().canonical_types().data();
         m_current_expression = &frame.expression();
 
         auto continuation = frame.expression().instructions().size() - 1;
@@ -89,6 +91,8 @@ public:
             m_current_module = &module;
             m_current_compiled_fn_table = &module.compiled_fn_table(m_store);
             m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
+            m_current_canonical_types = module.canonical_types().data();
+            m_table_instances = module.resolved_tables(m_store);
             m_memory_instances = module.resolved_memories(m_store);
             m_global_instances = module.resolved_globals(m_store);
         }
@@ -115,6 +119,7 @@ public:
     ALWAYS_INLINE auto& label_stack() { return m_label_stack; }
     ALWAYS_INLINE auto& store() const { return m_store; }
     ALWAYS_INLINE auto& store() { return m_store; }
+    ALWAYS_INLINE TableInstance* table_instance(size_t index) const { return m_table_instances[index]; }
     ALWAYS_INLINE MemoryInstance* memory_instance(size_t index) const { return m_memory_instances[index]; }
     ALWAYS_INLINE Value& compiled_call_result_scratch() { return m_compiled_call_result_scratch; }
     ALWAYS_INLINE Value const& compiled_call_result_scratch() const { return m_compiled_call_result_scratch; }
@@ -126,9 +131,11 @@ public:
     ALWAYS_INLINE ModuleInstance const* current_module() const { return m_current_module; }
     ALWAYS_INLINE Vector<CompiledFunctionEntry> const* current_compiled_fn_table() const { return m_current_compiled_fn_table; }
     ALWAYS_INLINE CompiledFunctionEntry const* current_compiled_fn_table_data() const { return m_current_compiled_fn_table_data; }
+    ALWAYS_INLINE DefinedType const* const* current_canonical_types() const { return m_current_canonical_types; }
     ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
+    static constexpr size_t table_instances_offset() { return __builtin_offsetof(Configuration, m_table_instances); }
     static constexpr size_t memory_instances_offset() { return __builtin_offsetof(Configuration, m_memory_instances); }
     static constexpr size_t global_instances_offset() { return __builtin_offsetof(Configuration, m_global_instances); }
     static constexpr size_t compiled_call_result_scratch_offset() { return __builtin_offsetof(Configuration, m_compiled_call_result_scratch); }
@@ -138,6 +145,8 @@ public:
     static constexpr size_t call_record_stack_top_offset() { return __builtin_offsetof(Configuration, m_call_record_stack) + ValueStack::top_offset(); }
     static constexpr size_t depth_offset() { return __builtin_offsetof(Configuration, m_depth); }
     static constexpr size_t current_compiled_fn_table_data_offset() { return __builtin_offsetof(Configuration, m_current_compiled_fn_table_data); }
+    static constexpr size_t current_module_offset() { return __builtin_offsetof(Configuration, m_current_module); }
+    static constexpr size_t current_canonical_types_offset() { return __builtin_offsetof(Configuration, m_current_canonical_types); }
     static constexpr size_t current_expression_offset() { return __builtin_offsetof(Configuration, m_current_expression); }
 
     ALWAYS_INLINE Value& call_record_entry(size_t index) { return m_call_record_base[index]; }
@@ -323,12 +332,14 @@ public:
     bool m_should_limit_instruction_count { false };
     Value* m_locals_base { nullptr };
     Value* m_call_record_base { nullptr };
+    TableInstanceTable m_table_instances { nullptr };
     MemoryInstanceTable m_memory_instances { nullptr };
     GlobalInstanceTable m_global_instances { nullptr };
     Value m_compiled_call_result_scratch;
     ModuleInstance const* m_current_module { nullptr };
     Vector<CompiledFunctionEntry> const* m_current_compiled_fn_table { nullptr };
     CompiledFunctionEntry const* m_current_compiled_fn_table_data { nullptr };
+    DefinedType const* const* m_current_canonical_types { nullptr };
     Expression const* m_current_expression { nullptr };
 };
 

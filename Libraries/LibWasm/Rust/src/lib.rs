@@ -27,6 +27,7 @@ pub struct CraneliftInsn {
     pub imm2: i64,
     pub imm3: u32,
     pub call_result_count: u32,
+    pub call_type_encoding: u32,
 }
 
 #[repr(C)]
@@ -47,7 +48,7 @@ pub struct RuntimeHelpers {
     pub direct_call_1: usize,
     pub direct_call_2: usize,
     pub direct_call_3: usize,
-    // i32 fn(interp, config, table_idx, type_idx, element_index)
+    // i32 fn(interp, config, table_idx, type_idx, i64 element_index)
     pub call_indirect: usize,
     // i32 fn(interp, config, dst_mem, src_mem, dst, src, count)
     pub memory_copy: usize,
@@ -55,16 +56,19 @@ pub struct RuntimeHelpers {
     pub memory_fill: usize,
     // Address of the process-global primitive storage cage base.
     pub primitive_storage_cage_base: usize,
-    // i32 fn(interp, config, table_idx, type_idx, element_index); call using call record args
+    // i32 fn(interp, config, table_idx, type_idx, i64 element_index); call using call record args
     pub call_indirect_with_record: usize,
     // void fn(interp); set the standard Wasm stack-exhaustion trap
     pub stack_exhaustion: usize,
     // noreturn void fn(); propagate the trap already stored on the interpreter
     pub raise_trap: usize,
+    // i32 fn(interp, actual_type, expected_type); returns 1 and sets a trap on mismatch
+    pub check_indirect_type: usize,
 
     pub regs_offset: u32,
     pub value_size: u32,
     pub locals_base_offset: u32,
+    pub table_instances_offset: u32,
     pub memory_instances_offset: u32,
     pub global_instances_offset: u32,
     pub global_instance_value_offset: u32,
@@ -77,9 +81,17 @@ pub struct RuntimeHelpers {
     pub call_record_stack_top_offset: u32,
     pub depth_offset: u32,
     pub current_compiled_fn_table_data_offset: u32,
+    pub current_module_offset: u32,
+    pub current_canonical_types_offset: u32,
     pub current_expression_offset: u32,
     pub compiled_function_entry_size: u32,
     pub compiled_function_entry_expression_offset: u32,
+    pub table_instance_size_offset: u32,
+    pub table_instance_callables_offset: u32,
+    pub callable_defined_type_offset: u32,
+    pub callable_module_offset: u32,
+    pub callable_compiled_instructions_offset: u32,
+    pub compiled_instructions_native_entry_offset: u32,
 }
 
 /// Stable index assigned to each runtime helper. Embedded in cranelift `ExternalName`
@@ -105,9 +117,10 @@ pub enum HelperId {
     call_indirect_with_record = 13,
     stack_exhaustion = 14,
     raise_trap = 15,
+    check_indirect_type = 16,
 }
 
-pub const HELPER_COUNT: u32 = 16;
+pub const HELPER_COUNT: u32 = 17;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
 /// The numeric values are part of the cache blob format.

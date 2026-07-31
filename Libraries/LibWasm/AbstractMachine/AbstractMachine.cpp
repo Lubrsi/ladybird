@@ -481,6 +481,18 @@ bool MemoryInstance::grow(size_t size_to_grow, GrowType grow_type, InhibitGrowCa
     return true;
 }
 
+TableInstanceTable ModuleInstance::resolved_tables(Store& store) const
+{
+    if (m_resolved_tables_built)
+        return m_resolved_tables.data();
+
+    m_resolved_tables.ensure_capacity(m_tables.size());
+    for (auto address : m_tables)
+        m_resolved_tables.unchecked_append(store.unsafe_get(address));
+    m_resolved_tables_built = true;
+    return m_resolved_tables.data();
+}
+
 MemoryInstanceTable ModuleInstance::resolved_memories(Store& store) const
 {
     if (m_resolved_memories_built)

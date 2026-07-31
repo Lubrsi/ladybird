@@ -6988,7 +6988,7 @@ Instruction& InstructionStorage::append(Instruction instruction)
     return slot.value();
 }
 
-CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
+CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<TableType const> tables, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
 {
     CompiledInstructions result;
 
@@ -8633,6 +8633,54 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
             .instruction_index = static_cast<u32>(i),
             .parameter_count = static_cast<u32>(function_type->parameters().size()),
             .result_count = static_cast<u32>(function_type->results().size()),
+        });
+    }
+
+    constexpr u32 indirect_call_result_type_shift = 16;
+    constexpr u32 indirect_call_table64 = 1 << 18;
+    constexpr u32 indirect_call_type_valid = 1 << 19;
+    for (size_t i = 0; i < result.dispatches.size(); ++i) {
+        auto const& instruction = *result.dispatches[i].instruction;
+        if (!first_is_one_of(instruction.opcode(), Instructions::call_indirect,
+                Instructions::synthetic_call_indirect_with_record_0, Instructions::synthetic_call_indirect_with_record_1))
+            continue;
+
+        auto const& indirect_args = instruction.arguments().get<Instruction::IndirectCallArgs>();
+        auto type_index = indirect_args.type.value();
+        auto table_index = indirect_args.table.value();
+        VERIFY(type_index < types.size());
+        VERIFY(types[type_index].is_function());
+        VERIFY(table_index < tables.size());
+
+        auto const& function_type = types[type_index].function();
+        u32 type_encoding = 0;
+        bool type_is_valid = function_type.results().size() <= 1;
+        for (size_t parameter_index = 0; parameter_index < function_type.parameters().size(); ++parameter_index) {
+            auto kind = function_type.parameters()[parameter_index].kind();
+            if (kind > ValueType::F64) {
+                type_is_valid = false;
+                continue;
+            }
+            if (parameter_index < 8)
+                type_encoding |= static_cast<u32>(kind) << (parameter_index * 2);
+        }
+        if (!function_type.results().is_empty()) {
+            auto kind = function_type.results().first().kind();
+            if (kind > ValueType::F64)
+                type_is_valid = false;
+            else
+                type_encoding |= static_cast<u32>(kind) << indirect_call_result_type_shift;
+        }
+        if (tables[table_index].limits().address_type() == AddressType::I64)
+            type_encoding |= indirect_call_table64;
+        if (type_is_valid)
+            type_encoding |= indirect_call_type_valid;
+
+        result.cranelift_indirect_calls.append({
+            .instruction_index = static_cast<u32>(i),
+            .parameter_count = static_cast<u32>(function_type.parameters().size()),
+            .result_count = static_cast<u32>(function_type.results().size()),
+            .type_encoding = type_encoding,
         });
     }
 
