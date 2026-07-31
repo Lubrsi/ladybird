@@ -350,7 +350,7 @@ TEST_CASE(native_direct_call_uses_typed_abi)
     MUST(machine.validate(*module));
 
     auto const& functions = module->code_section().functions();
-    EXPECT_EQ(functions.size(), 18u);
+    EXPECT_EQ(functions.size(), 19u);
     for (size_t index = 0; index < 4; ++index)
         EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
     EXPECT(!functions[4].func().body().compiled_instructions.cranelift_compiled);
@@ -359,17 +359,19 @@ TEST_CASE(native_direct_call_uses_typed_abi)
     for (size_t index = 7; index < functions.size(); ++index)
         EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
 
-    auto const& sum4_compiled = functions[16].func().body().compiled_instructions;
+    auto const& sum4_compiled = functions[17].func().body().compiled_instructions;
     EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), 0u);
     EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), Wasm::cranelift_entry_acquire(sum4_compiled));
 
-    Optional<Wasm::FunctionIndex> raw_caller_index;
+    Vector<Wasm::FunctionIndex> raw_caller_indices;
     for (auto const& export_ : module->export_section().entries()) {
-        if (export_.name() == "run_raw_i32"sv)
-            raw_caller_index = export_.description().get<Wasm::FunctionIndex>();
+        if (export_.name().starts_with("run_raw_"sv))
+            raw_caller_indices.append(export_.description().get<Wasm::FunctionIndex>());
     }
-    VERIFY(raw_caller_index.has_value());
-    EXPECT(!functions[raw_caller_index->value()].func().body().compiled_instructions.cranelift_raw_calls.is_empty());
+    EXPECT_EQ(raw_caller_indices.size(), 2u);
+    for (auto function_index : raw_caller_indices) {
+        EXPECT(!functions[function_index.value()].func().body().compiled_instructions.cranelift_raw_calls.is_empty());
+    }
 
     auto instance = MUST(machine.instantiate(*module, {}));
     auto invoke = [&](StringView name) {
@@ -393,6 +395,7 @@ TEST_CASE(native_direct_call_uses_typed_abi)
     EXPECT_EQ(invoke("run_raw_i32"sv).to<i32>(), 136);
     EXPECT_EQ(invoke("run_memory_i32"sv).to<i32>(), 10);
     EXPECT_EQ(invoke("run_memory_fallback_i32"sv).to<i32>(), 10);
+    EXPECT_EQ(invoke("run_raw_memory_i32"sv).to<i32>(), 36);
 
     Optional<Wasm::FunctionAddress> sum4_address;
     for (auto const& export_ : instance->exports()) {
