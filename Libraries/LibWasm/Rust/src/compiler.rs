@@ -2134,6 +2134,34 @@ impl CraneliftCompiler {
                 top
             }};
         }
+        // Temporarily materialize only the top `count` virtual values for a runtime call whose
+        // stack ABI consumes exactly that argument suffix.
+        macro_rules! materialize_vstack_suffix_to_real {
+            ($builder:expr, $count:expr) => {{
+                let count = $count as usize;
+                debug_assert!(sp >= count);
+                let cfg = $builder.use_var(config_var);
+                let top = $builder
+                    .ins()
+                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                if count > 0 {
+                    let zero_tag = $builder.ins().iconst(types::I64, 0);
+                    for i in 0..count {
+                        let val = $builder.use_var(stack_vars[sp - count + i]);
+                        let offset = (i as i32) * value_size;
+                        $builder.ins().store(MemFlags::trusted(), val, top, offset);
+                        $builder
+                            .ins()
+                            .store(MemFlags::trusted(), zero_tag, top, offset + 8);
+                    }
+                    let new_top = $builder.ins().iadd_imm(top, i64::from(count as i32 * value_size));
+                    $builder
+                        .ins()
+                        .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
+                }
+                top
+            }};
+        }
         // Rebuild the virtual stack from the results left by an opaque runtime call, then discard
         // the temporary real-stack materialization.
         macro_rules! restore_vstack_after_raw_call {
@@ -4007,7 +4035,6 @@ impl CraneliftCompiler {
                 }
 
                 op::CALL_INDIRECT => {
-                    let original_top = materialize_vstack_to_real!(builder);
                     let element_index = if insn.sources[0] == STACK_MARKER {
                         debug_assert!(is_unreachable || sp > 0);
                         sp = sp.saturating_sub(1);
@@ -4053,6 +4080,36 @@ impl CraneliftCompiler {
                         }
 
                         if Self::uses_register_native_abi(target_type) {
+                            let mut wasm_arguments = Vec::with_capacity(target_type.parameters.len());
+                            for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
+                                let stack_index = stack_base + parameter_index;
+                                let argument = match parameter_kind {
+                                    I32_KIND => {
+                                        let payload = builder.use_var(stack_vars[stack_index]);
+                                        builder.ins().ireduce(types::I32, payload)
+                                    }
+                                    I64_KIND => builder.use_var(stack_vars[stack_index]),
+                                    F32_KIND => {
+                                        if stack_ty[stack_index] == Bank::F32 {
+                                            builder.use_var(stack_vars_f32[stack_index])
+                                        } else {
+                                            let payload = builder.use_var(stack_vars[stack_index]);
+                                            let bits = builder.ins().ireduce(types::I32, payload);
+                                            builder.ins().bitcast(types::F32, MemFlags::new(), bits)
+                                        }
+                                    }
+                                    F64_KIND => {
+                                        if stack_ty[stack_index] == Bank::F64 {
+                                            builder.use_var(stack_vars_f64[stack_index])
+                                        } else {
+                                            let payload = builder.use_var(stack_vars[stack_index]);
+                                            builder.ins().bitcast(types::F64, MemFlags::new(), payload)
+                                        }
+                                    }
+                                    _ => return Err("unsupported native Wasm ABI type"),
+                                };
+                                wasm_arguments.push(argument);
+                            }
                             let native_signature =
                                 builder.import_signature(Self::native_signature(&*isa, target_type)?);
                             let continuation = builder.create_block();
@@ -4068,20 +4125,20 @@ impl CraneliftCompiler {
                             )?;
 
                             let native_entry = builder.block_params(target.native_call)[0];
-                            let argument_offset = i64::try_from(stack_base)
-                                .ok()
-                                .and_then(|base| base.checked_mul(i64::from(value_size)))
-                                .ok_or("raw indirect-call argument offset overflow")?;
-                            let argument_base = builder.ins().iadd_imm(original_top, argument_offset);
-                            let native_result = Self::emit_native_call_from_value_array(
-                                &mut builder,
-                                native_signature,
-                                native_entry,
-                                operands,
-                                argument_base,
-                                target_type,
-                                indirect_call_lowering_context,
-                            )?;
+                            let entry_token = builder.ins().iconst(types::I32, 0);
+                            let mut native_arguments = Vec::with_capacity(3 + wasm_arguments.len());
+                            native_arguments.extend([iv, cv, entry_token]);
+                            native_arguments.extend(wasm_arguments);
+                            let native_call =
+                                builder
+                                    .ins()
+                                    .call_indirect(native_signature, native_entry, &native_arguments);
+                            let native_result = if let Some(&result_kind) = target_type.results.first() {
+                                let result = builder.inst_results(native_call)[0];
+                                Some(Self::value_to_payload(&mut builder, result, result_kind)?)
+                            } else {
+                                None
+                            };
                             if let Some(result) = native_result {
                                 builder.ins().jump(continuation, &[result]);
                             } else {
@@ -4089,6 +4146,7 @@ impl CraneliftCompiler {
                             }
 
                             builder.switch_to_block(target.fallback_call);
+                            let original_top = materialize_vstack_suffix_to_real!(builder, insn.imm3);
                             let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
                             do_call_and_check!(
                                 builder,
@@ -4096,8 +4154,8 @@ impl CraneliftCompiler {
                                 cfp,
                                 &[iv, cv, table_idx, type_idx, element_index]
                             );
-                            if target_type.results.is_empty() {
-                                builder.ins().jump(continuation, &[]);
+                            let fallback_result = if target_type.results.is_empty() {
+                                None
                             } else {
                                 let helper_top =
                                     builder
@@ -4107,15 +4165,20 @@ impl CraneliftCompiler {
                                     builder
                                         .ins()
                                         .load(types::I64, MemFlags::trusted(), helper_top, -value_size);
+                                Some(result)
+                            };
+                            builder
+                                .ins()
+                                .store(MemFlags::trusted(), original_top, cv, value_stack_top_offset);
+                            if let Some(result) = fallback_result {
                                 builder.ins().jump(continuation, &[result]);
+                            } else {
+                                builder.ins().jump(continuation, &[]);
                             }
 
                             builder.switch_to_block(continuation);
                             builder.seal_block(continuation);
                             sp = stack_base;
-                            builder
-                                .ins()
-                                .store(MemFlags::trusted(), original_top, cv, value_stack_top_offset);
                             if let Some(&result_kind) = target_type.results.first() {
                                 let payload = builder.block_params(continuation)[0];
                                 match result_kind {
@@ -4136,6 +4199,7 @@ impl CraneliftCompiler {
                     }
 
                     if !emitted_native_call {
+                        let original_top = materialize_vstack_suffix_to_real!(builder, insn.imm3);
                         let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
                         do_call_and_check!(
                             builder,
