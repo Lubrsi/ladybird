@@ -153,7 +153,7 @@ void AbstractMachine::RootsProvider::for_each_conservative_range(AK::Function<vo
     }
 
     for (auto& table : m_store.tables())
-        report_references(table.elements().span());
+        report_references(table->elements().span());
     for (auto& element : m_store.elements())
         report_references(element.references().span());
     for (auto& global : m_store.globals())
@@ -580,7 +580,7 @@ Optional<TableAddress> Store::allocate(TableType const& type)
     for (size_t i = 0; i < type.limits().min(); i++)
         elements.append(Wasm::Reference { Wasm::Reference::Null { type.element_type() } });
     elements.resize(type.limits().min());
-    m_tables.empend(TableInstance { type, move(elements) });
+    m_tables.append(make<TableInstance>(type, move(elements)));
     return address;
 }
 
@@ -668,7 +668,7 @@ TableInstance* Store::get(TableAddress address)
     auto value = address.value();
     if (m_tables.size() <= value)
         return nullptr;
-    return &m_tables[value];
+    return m_tables[value].ptr();
 }
 
 MemoryInstance* Store::get(MemoryAddress address)
