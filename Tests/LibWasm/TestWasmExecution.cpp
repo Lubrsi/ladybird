@@ -433,7 +433,7 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     MUST(machine.validate(*module));
 
     auto const& functions = module->code_section().functions();
-    EXPECT_EQ(functions.size(), 20u);
+    EXPECT_EQ(functions.size(), 31u);
     Optional<Wasm::FunctionIndex> fallback_target_index;
     for (auto const& export_ : module->export_section().entries()) {
         if (export_.name() == "target_fallback_i32"sv)
@@ -474,6 +474,12 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     EXPECT_EQ(invoke_value("run_f64"sv).to<double>(), 8.25);
     EXPECT_EQ(invoke_value("run_sum9_i32"sv).to<i32>(), 10);
     EXPECT_EQ(invoke_value("run_fallback_i32"sv).to<i32>(), 42);
+    EXPECT_EQ(invoke_value("run_mixed_i32_f32"sv).to<i32>(), 23);
+    EXPECT_EQ(invoke_value("run_mixed_i32_i64_i32"sv).to<i32>(), 42);
+    EXPECT_EQ(invoke_value("run_mixed_six"sv).to<i32>(), 21);
+    EXPECT_EQ(invoke_value("run_mixed_f32_result"sv).to<float>(), 15.75f);
+    EXPECT_EQ(invoke_value("run_mixed_f64"sv).to<i32>(), 28);
+    EXPECT_EQ(invoke_value("run_br_table_then_indirect"sv).to<i32>(), 17);
 
     Optional<Wasm::TableAddress> table_address;
     Optional<Wasm::FunctionAddress> replacement_address;
