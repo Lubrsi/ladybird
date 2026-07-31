@@ -35,6 +35,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::Ieee32;
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::types;
+use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::Configurable;
 use cranelift_codegen::settings::{self};
 use cranelift_codegen::{self};
@@ -55,6 +56,12 @@ const STACK_MARKER: u8 = 8;
 const CALLREC_BASE: u8 = 9;
 const HELPER_EXTERNAL_NAMESPACE: u32 = 0;
 const WASM_FUNCTION_EXTERNAL_NAMESPACE: u32 = 1;
+
+struct CompiledCodeParts {
+    code: Vec<u8>,
+    relocs: Vec<CraneliftRelocation>,
+    traps: Vec<CraneliftTrap>,
+}
 
 /// The `Int` bank is always defined.
 /// The `F64` bank is trusted only until the next control-flow merge, where it may be undefined on an incoming edge.
@@ -201,6 +208,47 @@ impl CraneliftCompiler {
             target_index: target.index,
             addend,
         })
+    }
+
+    fn compile_function(isa: &dyn TargetIsa, function: Function) -> Result<CompiledCodeParts, &'static str> {
+        let mut context = Context::for_function(function);
+        let (code, raw_relocations, traps) = {
+            let compiled_code = context
+                .compile(isa, &mut Default::default())
+                .map_err(|_| "cranelift compilation failed")?;
+            let traps = compiled_code
+                .buffer
+                .traps()
+                .iter()
+                .map(|trap| CraneliftTrap {
+                    offset: trap.offset,
+                    code: trap.code.as_raw().get(),
+                    _padding: [0; 3],
+                })
+                .collect();
+            (
+                compiled_code.code_buffer().to_vec(),
+                compiled_code.buffer.relocs().to_vec(),
+                traps,
+            )
+        };
+
+        let mut relocs = Vec::with_capacity(raw_relocations.len());
+        let user_names = context.func.params.user_named_funcs();
+        for relocation in &raw_relocations {
+            let name = match &relocation.target {
+                FinalizedRelocTarget::ExternalName(ExternalName::User(user_ref)) => &user_names[*user_ref],
+                _ => return Err("unexpected relocation target"),
+            };
+            relocs.push(Self::serialize_relocation(
+                relocation.kind,
+                relocation.offset,
+                relocation.addend,
+                name,
+            )?);
+        }
+
+        Ok(CompiledCodeParts { code, relocs, traps })
     }
 
     fn local_accesses(insn: &CraneliftInsn) -> LocalAccesses {
@@ -681,7 +729,7 @@ impl CraneliftCompiler {
         sig.params.push(AbiParam::new(ptr_type)); // addresses_ptr (unused)
         sig.returns.push(AbiParam::new(types::I64)); // Outcome
 
-        let direct_call_signature = sig.clone();
+        let handler_signature = sig.clone();
         let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), sig);
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
@@ -785,7 +833,7 @@ impl CraneliftCompiler {
         let h_memory_fill = decl_helper!(memory_fill_sig, HelperId::memory_fill);
         let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
         let h_stack_exhaustion = decl_helper!(stack_exhaustion_sig, HelperId::stack_exhaustion);
-        let direct_call_sig = builder.import_signature(direct_call_signature);
+        let direct_call_sig = builder.import_signature(handler_signature.clone());
         let mut direct_call_targets = HashMap::new();
         for insn in insns.iter().filter(|insn| {
             matches!(
@@ -3526,41 +3574,62 @@ impl CraneliftCompiler {
 
         builder.finalize();
 
-        let mut ctx = Context::for_function(func);
-        // Snapshot the code bytes + raw reloc list before we drop the borrow on ctx so we
-        // can map UserExternalNameRefs back to helper ids via ctx.func.params below.
-        let (bytes, raw_relocs, traps) = {
-            let code = ctx
-                .compile(&*isa, &mut Default::default())
-                .map_err(|_| "cranelift compilation failed")?;
-            let traps = code
-                .buffer
-                .traps()
-                .iter()
-                .map(|trap| CraneliftTrap {
-                    offset: trap.offset,
-                    code: trap.code.as_raw().get(),
-                    _padding: [0; 3],
-                })
-                .collect();
-            let bytes = code.code_buffer().to_vec();
-            let raw = code.buffer.relocs().to_vec();
-            (bytes, raw, traps)
-        };
+        let body = Self::compile_function(&*isa, func)?;
 
-        let mut relocs: Vec<CraneliftRelocation> = Vec::with_capacity(raw_relocs.len());
-        let user_names = ctx.func.params.user_named_funcs();
-        for r in &raw_relocs {
-            let name = match &r.target {
-                FinalizedRelocTarget::ExternalName(ExternalName::User(user_ref)) => &user_names[*user_ref],
-                _ => return Err("unexpected relocation target"),
-            };
-            relocs.push(Self::serialize_relocation(r.kind, r.offset, r.addend, name)?);
+        let mut adapter =
+            Function::with_name_signature(UserFuncName::user(1, function_index), handler_signature.clone());
+        let mut adapter_builder_context = FunctionBuilderContext::new();
+        let mut adapter_builder = FunctionBuilder::new(&mut adapter, &mut adapter_builder_context);
+        let adapter_entry = adapter_builder.create_block();
+        adapter_builder.append_block_params_for_function_params(adapter_entry);
+        adapter_builder.switch_to_block(adapter_entry);
+        adapter_builder.seal_block(adapter_entry);
+        let adapter_params = adapter_builder.block_params(adapter_entry).to_vec();
+        let body_signature = adapter_builder.import_signature(handler_signature);
+        let body_name = adapter_builder.func.declare_imported_user_function(UserExternalName {
+            namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
+            index: function_index,
+        });
+        let body_function = adapter_builder.func.import_function(ExtFuncData {
+            name: ExternalName::user(body_name),
+            signature: body_signature,
+            colocated: true,
+        });
+        let call = adapter_builder.ins().call(body_function, &adapter_params);
+        let results = adapter_builder.inst_results(call).to_vec();
+        adapter_builder.ins().return_(&results);
+        adapter_builder.finalize();
+        let adapter = Self::compile_function(&*isa, adapter)?;
+
+        let native_entry_offset = adapter.code.len().div_ceil(16) * 16;
+        let native_entry_offset = u32::try_from(native_entry_offset).map_err(|_| "native entry offset overflow")?;
+        let mut code = adapter.code;
+        code.resize(native_entry_offset as usize, 0);
+        code.extend_from_slice(&body.code);
+
+        let mut relocs = adapter.relocs;
+        relocs.reserve(body.relocs.len());
+        for mut relocation in body.relocs {
+            relocation.code_offset = relocation
+                .code_offset
+                .checked_add(native_entry_offset)
+                .ok_or("relocation offset overflow")?;
+            relocs.push(relocation);
+        }
+
+        let mut traps = adapter.traps;
+        traps.reserve(body.traps.len());
+        for mut trap in body.traps {
+            trap.offset = trap
+                .offset
+                .checked_add(native_entry_offset)
+                .ok_or("trap offset overflow")?;
+            traps.push(trap);
         }
 
         Ok(CompiledFunction {
-            code: bytes,
-            native_entry_offset: 0,
+            code,
+            native_entry_offset,
             relocs,
             traps,
         })
