@@ -60,7 +60,7 @@ struct OutputFunctionEntry {
     _padding_after_reloc_count: u32,
     trap_offset: u64,
     trap_count: u32,
-    _padding: u32,
+    native_entry_offset: u32,
 }
 
 fn align_up(value: usize, alignment: usize) -> Result<usize, &'static str> {
@@ -350,9 +350,12 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
     let mut code_cursor = 0usize;
     let mut reloc_cursor = 0usize;
     for (i, compiled) in compiled_functions {
-        let code = compiled.code;
-        let relocs = compiled.relocs;
-        let traps = compiled.traps;
+        let CompiledFunction {
+            code,
+            native_entry_offset,
+            relocs,
+            traps,
+        } = compiled;
         let aligned = align_up(code.len(), SERIALIZED_CODE_ALIGNMENT).map_err(|_| "code alignment overflow")?;
         let reloc_bytes_len = relocs
             .len()
@@ -426,7 +429,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
             _padding_after_reloc_count: 0,
             trap_offset: u64::try_from(trap_offset).map_err(|_| "trap offset overflow")?,
             trap_count: u32::try_from(traps.len()).map_err(|_| "trap count overflow")?,
-            _padding: 0,
+            native_entry_offset,
         };
         let entry_dst = i
             .checked_mul(size_of::<OutputFunctionEntry>())
@@ -498,6 +501,7 @@ mod tests {
                 0,
                 CompiledFunction {
                     code: vec![0; 16],
+                    native_entry_offset: 0,
                     relocs: vec![],
                     traps: vec![],
                 },
@@ -506,6 +510,7 @@ mod tests {
                 1,
                 CompiledFunction {
                     code: vec![0; 64],
+                    native_entry_offset: 0,
                     relocs: vec![],
                     traps: vec![],
                 },
@@ -514,6 +519,7 @@ mod tests {
                 2,
                 CompiledFunction {
                     code: vec![0; 16],
+                    native_entry_offset: 0,
                     relocs: vec![],
                     traps: vec![],
                 },
