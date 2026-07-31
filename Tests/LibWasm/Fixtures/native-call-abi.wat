@@ -112,6 +112,31 @@
     i32.const 9
     call $fallback_sum9_i32)
 
+  ;; The inner nine-argument call wins call-record selection. The outer call
+  ;; remains raw and keeps the leading value live below its argument suffix.
+  (func (export "run_raw_memory_i32") (result i32)
+    i32.const 7
+    i32.const 1
+    i32.const 2
+    i32.const 3
+    i32.const 4
+    i32.const 5
+    i32.const 6
+    i32.const 7
+    i32.const 8
+    i32.const 10
+    i32.const 11
+    i32.const 12
+    i32.const 13
+    i32.const 14
+    i32.const 15
+    i32.const 16
+    i32.const 17
+    i32.const 18
+    call $sum9_i32
+    call $sum9_i32
+    i32.add)
+
   (func $sum4_i32 (param i32 i32 i32 i32) (result i32)
     local.get 0
     local.get 1
