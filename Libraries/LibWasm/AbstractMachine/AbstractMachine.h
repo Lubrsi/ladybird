@@ -544,57 +544,64 @@ using FunctionInstance = Variant<WasmFunction, HostFunction>;
 
 class TableInstance {
 public:
-    explicit TableInstance(TableType const& type, Vector<Reference> elements)
-        : m_elements(move(elements))
-        , m_type(type)
-    {
-        m_module_anchors.resize(m_elements.size());
-    }
+    static ErrorOr<NonnullOwnPtr<TableInstance>> create(TableType const&);
+    WASM_API ~TableInstance();
 
-    auto& elements() const { return m_elements; }
-    auto& elements() { return m_elements; }
+    ReadonlySpan<Reference> elements() const { return m_storage.elements(); }
+    Span<Reference> elements() { return m_storage.elements(); }
     auto& type() const { return m_type; }
 
     // MUST use this if a function reference can be stored in the table
     void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor = {})
     {
-        m_elements[index] = move(ref);
-        m_module_anchors[index] = move(module_anchor);
+        m_storage.set_element(index, move(ref), move(module_anchor));
     }
 
     // Strong ref pinning the element's defining ModuleInstance (null for non-Func).
-    RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_module_anchors[index]; }
+    RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_storage.module_anchor_at(index); }
 
-    bool grow(u32 size_to_grow, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor = {})
-    {
-        if (size_to_grow == 0)
-            return true;
-        size_t new_size = m_elements.size() + size_to_grow;
-        if (auto max = m_type.limits().max(); max.has_value()) {
-            if (max.value() < new_size)
-                return false;
-        }
-        if (new_size >= NumericLimits<u32>::max()) {
-            return false;
-        }
-        auto previous_size = m_elements.size();
-        if (m_elements.try_resize(new_size).is_error())
-            return false;
-        if (m_module_anchors.try_resize(new_size).is_error())
-            return false;
-        for (size_t i = previous_size; i < m_elements.size(); ++i) {
-            m_elements[i] = fill_value;
-            m_module_anchors[i] = fill_module_anchor;
-        }
-
-        m_type = TableType { m_type.element_type(), Limits(m_type.limits().address_type(), m_type.limits().min() + size_to_grow, m_type.limits().max()) };
-
-        return true;
-    }
+    WASM_API bool grow(u64 size_to_grow, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor = {});
 
 private:
-    Vector<Reference> m_elements;
-    Vector<RefPtr<ModuleInstance const>> m_module_anchors;
+    class Storage {
+        AK_MAKE_NONCOPYABLE(Storage);
+        AK_MAKE_NONMOVABLE(Storage);
+
+    public:
+        Storage() = default;
+        ~Storage();
+
+        ErrorOr<void> try_reserve(size_t capacity);
+        ErrorOr<void> try_grow(size_t count, Reference const&, RefPtr<ModuleInstance const>);
+
+        ReadonlySpan<Reference> elements() const { return { m_elements, m_size }; }
+        Span<Reference> elements() { return { m_elements, m_size }; }
+
+        void set_element(size_t index, Reference ref, RefPtr<ModuleInstance const> module_anchor)
+        {
+            m_elements[index] = move(ref);
+            m_module_anchors[index] = move(module_anchor);
+        }
+
+        RefPtr<ModuleInstance const> module_anchor_at(size_t index) const { return m_module_anchors[index]; }
+
+    private:
+        using ModuleAnchor = RefPtr<ModuleInstance const>;
+
+        GC::PrimitiveStorageHandle m_elements_handle;
+        GC::PrimitiveStorageHandle m_module_anchors_handle;
+        Reference* m_elements { nullptr };
+        ModuleAnchor* m_module_anchors { nullptr };
+        size_t m_size { 0 };
+        size_t m_capacity { 0 };
+    };
+
+    explicit TableInstance(TableType const& type)
+        : m_type(type)
+    {
+    }
+
+    Storage m_storage;
     TableType m_type;
 };
 
