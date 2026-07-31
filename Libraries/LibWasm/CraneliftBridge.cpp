@@ -71,9 +71,32 @@ struct OutputFunctionEntry {
 };
 
 struct CodeMapping {
+    CodeMapping(void* mapping, size_t size)
+        : mapping(mapping)
+        , size(size)
+    {
+    }
+
+    ~CodeMapping()
+    {
+#if defined(AK_OS_WINDOWS)
+        VirtualFree(mapping, 0, MEM_RELEASE);
+#else
+        munmap(mapping, size);
+#endif
+    }
+
     void* mapping;
     size_t size;
     Vector<CraneliftTrap> traps;
+};
+
+struct PendingCompiledFunction {
+    u32 function_index;
+    CompiledInstructions* target;
+    OwnPtr<CodeMapping> mapping;
+    Vector<CraneliftRelocation> relocs;
+    size_t code_size;
 };
 
 static constexpr size_t oop_code_region_min_size = 256 * KiB;
@@ -206,18 +229,11 @@ static bool apply_relocations(u8* code_bytes, size_t code_size, ReadonlySpan<Cra
     return true;
 }
 
-// Allocate an RX-able page, copy the unpatched machine code into it, apply its relocations,
-// and install the resulting function pointer into `target`.
-// Used by both the fresh-compile path (bytes come from the subprocess shm) and the
-// cache-install path (bytes come from a `.wasmjit` blob).
-static bool install_compiled_function(CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
+static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes)
 {
-    if (target.dispatches.is_empty())
-        return false;
-
     auto const code_size = code_bytes.size();
     if (code_size == 0)
-        return false;
+        return {};
 
 #if defined(AK_OS_WINDOWS)
     SYSTEM_INFO si;
@@ -226,61 +242,123 @@ static bool install_compiled_function(CompiledInstructions& target, ReadonlyByte
     auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
     auto* jit_mem = VirtualAlloc(nullptr, rx_aligned_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!jit_mem)
-        return false;
+        return {};
     __builtin_memcpy(jit_mem, code_bytes.data(), code_size);
-    if (!apply_relocations(static_cast<u8*>(jit_mem), code_size, relocs, helpers)) {
-        VirtualFree(jit_mem, 0, MEM_RELEASE);
-        return false;
-    }
-    DWORD old_protect;
-    VirtualProtect(jit_mem, rx_aligned_size, PAGE_EXECUTE_READ, &old_protect);
-    FlushInstructionCache(GetCurrentProcess(), jit_mem, code_size);
-    auto* func_ptr = static_cast<u8 const*>(jit_mem);
-    auto* handle = new CodeMapping { jit_mem, rx_aligned_size, {} };
+    return make<CodeMapping>(jit_mem, rx_aligned_size);
 #elif defined(AK_OS_MACOS)
     auto const page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
     auto* jit_mapping = mmap(nullptr, rx_aligned_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (jit_mapping == MAP_FAILED)
-        return false;
+        return {};
 
     pthread_jit_write_protect_np(0);
+    ScopeGuard restore_write_protection = [] { pthread_jit_write_protect_np(1); };
     __builtin_memcpy(jit_mapping, code_bytes.data(), code_size);
-    if (!apply_relocations(static_cast<u8*>(jit_mapping), code_size, relocs, helpers)) {
-        munmap(jit_mapping, rx_aligned_size);
-        return false;
-    }
-    pthread_jit_write_protect_np(1);
-    sys_icache_invalidate(jit_mapping, code_size);
-    auto* func_ptr = static_cast<u8 const*>(jit_mapping);
-    auto* handle = new CodeMapping { jit_mapping, rx_aligned_size, {} };
+    return make<CodeMapping>(jit_mapping, rx_aligned_size);
 #else
     auto const page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     auto const rx_aligned_size = (code_size + page_size - 1) & ~(page_size - 1);
     auto* rw_mapping = mmap(nullptr, rx_aligned_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rw_mapping == MAP_FAILED)
-        return false;
+        return {};
     __builtin_memcpy(rw_mapping, code_bytes.data(), code_size);
-    if (!apply_relocations(static_cast<u8*>(rw_mapping), code_size, relocs, helpers) || mprotect(rw_mapping, rx_aligned_size, PROT_READ | PROT_EXEC) != 0) {
-        munmap(rw_mapping, rx_aligned_size);
-        return false;
-    }
-    __builtin___clear_cache(static_cast<char*>(rw_mapping), static_cast<char*>(rw_mapping) + code_size);
-    auto* func_ptr = static_cast<u8 const*>(rw_mapping);
-    auto* handle = new CodeMapping { rw_mapping, rx_aligned_size, {} };
+    return make<CodeMapping>(rw_mapping, rx_aligned_size);
+#endif
+}
+
+static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps)
+{
+    if (target.dispatches.is_empty())
+        return {};
+
+    auto mapping = allocate_code_mapping(code_bytes);
+    if (!mapping)
+        return {};
+
+    mapping->traps.ensure_capacity(traps.size());
+    for (auto const& trap : traps)
+        mapping->traps.unchecked_append(trap);
+
+    Vector<CraneliftRelocation> copied_relocs;
+    copied_relocs.ensure_capacity(relocs.size());
+    for (auto const& reloc : relocs)
+        copied_relocs.unchecked_append(reloc);
+
+    return PendingCompiledFunction {
+        .function_index = function_index,
+        .target = &target,
+        .mapping = move(mapping),
+        .relocs = move(copied_relocs),
+        .code_size = code_bytes.size(),
+    };
+}
+
+static bool link_compiled_function(PendingCompiledFunction& pending, RuntimeHelpers const& helpers)
+{
+#if defined(AK_OS_MACOS)
+    pthread_jit_write_protect_np(0);
+    ScopeGuard restore_write_protection = [] { pthread_jit_write_protect_np(1); };
 #endif
 
-    handle->traps.ensure_capacity(traps.size());
-    for (auto const& trap : traps)
-        handle->traps.unchecked_append(trap);
+    return apply_relocations(static_cast<u8*>(pending.mapping->mapping), pending.code_size, pending.relocs.span(), helpers);
+}
 
-    target.cranelift_code_handle = handle;
-    target.cranelift_code_size = code_size;
-    target.cranelift_traps = handle->traps.data();
-    target.cranelift_trap_count = handle->traps.size();
-    target.cranelift_compiled = true;
-    publish_cranelift_entry(target, bit_cast<FlatPtr>(func_ptr));
+static bool finalize_compiled_function(PendingCompiledFunction& pending)
+{
+#if defined(AK_OS_WINDOWS)
+    DWORD old_protect;
+    if (!VirtualProtect(pending.mapping->mapping, pending.mapping->size, PAGE_EXECUTE_READ, &old_protect))
+        return false;
+    FlushInstructionCache(GetCurrentProcess(), pending.mapping->mapping, pending.code_size);
+#elif defined(AK_OS_MACOS)
+    sys_icache_invalidate(pending.mapping->mapping, pending.code_size);
+#else
+    if (mprotect(pending.mapping->mapping, pending.mapping->size, PROT_READ | PROT_EXEC) != 0)
+        return false;
+    __builtin___clear_cache(static_cast<char*>(pending.mapping->mapping), static_cast<char*>(pending.mapping->mapping) + pending.code_size);
+#endif
     return true;
+}
+
+static void publish_compiled_function(PendingCompiledFunction&& pending)
+{
+    auto* handle = pending.mapping.leak_ptr();
+    auto* func_ptr = static_cast<u8 const*>(handle->mapping);
+
+    pending.target->cranelift_code_handle = handle;
+    pending.target->cranelift_code_size = pending.code_size;
+    pending.target->cranelift_traps = handle->traps.data();
+    pending.target->cranelift_trap_count = handle->traps.size();
+    pending.target->cranelift_compiled = true;
+    publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+}
+
+static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelpers const& helpers)
+{
+    for (auto& pending : pending_functions) {
+        if (!link_compiled_function(pending, helpers) || !finalize_compiled_function(pending))
+            pending.mapping = nullptr;
+    }
+
+    for (auto& pending : pending_functions) {
+        if (pending.mapping)
+            publish_compiled_function(move(pending));
+    }
+}
+
+// Used by the cache-install path. Freshly compiled functions are prepared as a batch so every
+// native address exists before any relocations are applied.
+static bool install_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
+{
+    auto pending = prepare_compiled_function(function_index, target, code_bytes, relocs, traps);
+    if (!pending.has_value())
+        return false;
+
+    Vector<PendingCompiledFunction> pending_functions;
+    pending_functions.append(pending.release_value());
+    install_compiled_functions(pending_functions, helpers);
+    return target.cranelift_compiled;
 }
 
 }
@@ -1051,6 +1129,7 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
 
     // Extract results for each function.
     auto const code_base_offset = code_region_start + sizeof(OutputFunctionEntry) * function_count;
+    Vector<PendingCompiledFunction> pending_functions;
 
     for (size_t i = 0; i < function_count; ++i) {
         auto const* output = reinterpret_cast<OutputFunctionEntry const*>(base + code_region_start + i * sizeof(OutputFunctionEntry));
@@ -1109,8 +1188,11 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
             }
         }
 
-        install_compiled_function(*batch[i].target, code_bytes, relocs, traps, helpers);
+        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, code_bytes, relocs, traps); pending.has_value())
+            pending_functions.append(pending.release_value());
     }
+
+    install_compiled_functions(pending_functions, helpers);
 }
 
 bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
@@ -1141,6 +1223,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
         if (record.has_value()) {
             static auto cache_install_helpers = make_runtime_helpers();
             if (install_compiled_function(
+                    s_active_function_index,
                     compiled,
                     record->unpatched_code.bytes(),
                     record->relocs.span(),
@@ -1299,15 +1382,7 @@ void discard_cranelift_batch()
 
 void free_cranelift_code(void* handle)
 {
-    if (handle) {
-        auto* mapping = static_cast<CodeMapping*>(handle);
-#if defined(AK_OS_WINDOWS)
-        VirtualFree(mapping->mapping, 0, MEM_RELEASE);
-#else
-        munmap(mapping->mapping, mapping->size);
-#endif
-        delete mapping;
-    }
+    delete static_cast<CodeMapping*>(handle);
 }
 
 void set_cranelift_active_function_index(u32 function_index)
