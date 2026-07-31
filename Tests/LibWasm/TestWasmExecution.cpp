@@ -232,3 +232,21 @@ TEST_CASE(compiled_memory_access_traps_out_of_bounds)
     expect_oob_trap(invoke(load_high, { Wasm::Value(static_cast<i32>(0)) }));
     expect_oob_trap(invoke(load_high, { Wasm::Value(static_cast<i32>(0xffffffff)) }));
 }
+
+TEST_CASE(call_record_reserves_forward_callee_inlined_locals)
+{
+    auto file = MUST(Core::File::open("Fixtures/call-record-forward-inlined-locals.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, {}, Wasm::CompileToNative::No));
+
+    auto const& functions = module->code_section().functions();
+    auto const& caller = functions[1].func().body().compiled_instructions;
+    auto const& callee = functions[2].func().body().compiled_instructions;
+
+    EXPECT(callee.cranelift_inlined_locals > 0);
+    EXPECT(caller.max_call_rec_size >= 4 + callee.cranelift_inlined_locals);
+}

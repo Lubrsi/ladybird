@@ -27,12 +27,14 @@ void Configuration::unwind_impl()
         m_global_instances = nullptr;
         m_current_module = nullptr;
         m_current_compiled_fn_table = nullptr;
+        m_current_compiled_fn_table_data = nullptr;
         m_current_expression = nullptr;
     } else {
         auto& caller = m_frame_stack.last();
         m_locals_base = caller.owns_locals() ? m_owned_locals_stack.last().data() : caller.locals_data();
         m_current_module = &caller.module();
         m_current_compiled_fn_table = caller.compiled_fn_table();
+        m_current_compiled_fn_table_data = m_current_compiled_fn_table->data();
         m_current_expression = &caller.expression();
         if (&caller.module() != popped_module) {
             m_memory_instances = caller.module().resolved_memories(m_store);
