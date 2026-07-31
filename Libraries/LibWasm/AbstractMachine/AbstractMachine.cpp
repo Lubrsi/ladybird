@@ -161,7 +161,7 @@ void AbstractMachine::RootsProvider::for_each_conservative_range(AK::Function<vo
     }
 
     for (auto& table : m_store.tables())
-        report_references(table->elements().span());
+        report_references(table->elements());
     for (auto& element : m_store.elements())
         report_references(element.references().span());
     for (auto& global : m_store.globals())
@@ -577,18 +577,126 @@ Optional<FunctionAddress> Store::allocate(HostFunction&& function)
     return address;
 }
 
+static u64 maximum_table_size(TableType const& type)
+{
+    return min(type.limits().max().value_or(static_cast<u64>(Constants::max_allowed_table_size)), static_cast<u64>(Constants::max_allowed_table_size));
+}
+
+template<typename T>
+static ErrorOr<size_t> table_storage_size(size_t element_count)
+{
+    Checked<size_t> size = element_count;
+    size *= sizeof(T);
+    if (size.has_overflow())
+        return Error::from_errno(ENOMEM);
+    return size.value();
+}
+
+TableInstance::Storage::~Storage()
+{
+    for (size_t i = 0; i < m_size; ++i) {
+        m_elements[i].~Reference();
+        m_module_anchors[i].~ModuleAnchor();
+    }
+
+    auto& primitive_storage = GC::PrimitiveStorage::the();
+    primitive_storage.free(m_elements_handle);
+    primitive_storage.free(m_module_anchors_handle);
+}
+
+TableInstance::~TableInstance() = default;
+
+ErrorOr<void> TableInstance::Storage::try_reserve(size_t capacity)
+{
+    VERIFY(!m_elements_handle.is_valid());
+    VERIFY(!m_module_anchors_handle.is_valid());
+
+    auto elements_capacity = TRY(table_storage_size<Reference>(capacity));
+    auto module_anchors_capacity = TRY(table_storage_size<ModuleAnchor>(capacity));
+    auto& primitive_storage = GC::PrimitiveStorage::the();
+
+    auto elements_handle = TRY(primitive_storage.try_reserve(0, elements_capacity, GC::PrimitiveStorage::ZeroFillNewBytes::No));
+    auto module_anchors_handle = primitive_storage.try_reserve(0, module_anchors_capacity, GC::PrimitiveStorage::ZeroFillNewBytes::No);
+    if (module_anchors_handle.is_error()) {
+        primitive_storage.free(elements_handle);
+        return module_anchors_handle.release_error();
+    }
+
+    m_elements_handle = elements_handle;
+    m_module_anchors_handle = module_anchors_handle.release_value();
+    m_elements = reinterpret_cast<Reference*>(primitive_storage.data(m_elements_handle));
+    m_module_anchors = reinterpret_cast<ModuleAnchor*>(primitive_storage.data(m_module_anchors_handle));
+    m_capacity = capacity;
+    return {};
+}
+
+ErrorOr<void> TableInstance::Storage::try_grow(size_t count, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor)
+{
+    Checked<size_t> new_size = m_size;
+    new_size += count;
+    if (new_size.has_overflow() || new_size.value() > m_capacity)
+        return Error::from_errno(ENOMEM);
+
+    auto old_elements_size = TRY(table_storage_size<Reference>(m_size));
+    auto new_elements_size = TRY(table_storage_size<Reference>(new_size.value()));
+    auto new_module_anchors_size = TRY(table_storage_size<ModuleAnchor>(new_size.value()));
+    auto& primitive_storage = GC::PrimitiveStorage::the();
+
+    TRY(primitive_storage.try_resize(m_elements_handle, new_elements_size));
+    auto resize_module_anchors = primitive_storage.try_resize(m_module_anchors_handle, new_module_anchors_size);
+    if (resize_module_anchors.is_error()) {
+        MUST(primitive_storage.try_resize(m_elements_handle, old_elements_size));
+        return resize_module_anchors.release_error();
+    }
+
+    for (size_t i = m_size; i < new_size.value(); ++i) {
+        new (&m_elements[i]) Reference(fill_value);
+        new (&m_module_anchors[i]) ModuleAnchor(fill_module_anchor);
+    }
+    m_size = new_size.value();
+    return {};
+}
+
+ErrorOr<NonnullOwnPtr<TableInstance>> TableInstance::create(TableType const& type)
+{
+    auto maximum_size = maximum_table_size(type);
+    if (type.limits().min() > maximum_size)
+        return Error::from_errno(ENOMEM);
+
+    auto instance = TRY(adopt_nonnull_own_or_enomem(new (nothrow) TableInstance(type)));
+    TRY(instance->m_storage.try_reserve(static_cast<size_t>(maximum_size)));
+    Reference initial_value { Reference::Null { type.element_type() } };
+    TRY(instance->m_storage.try_grow(static_cast<size_t>(type.limits().min()), initial_value, {}));
+    return instance;
+}
+
+bool TableInstance::grow(u64 size_to_grow, Reference const& fill_value, RefPtr<ModuleInstance const> fill_module_anchor)
+{
+    if (size_to_grow == 0)
+        return true;
+
+    Checked<u64> new_size = m_storage.elements().size();
+    new_size += size_to_grow;
+    if (new_size.has_overflow() || new_size.value() > maximum_table_size(m_type))
+        return false;
+
+    if (m_storage.try_grow(static_cast<size_t>(size_to_grow), fill_value, move(fill_module_anchor)).is_error())
+        return false;
+
+    m_type = TableType { m_type.element_type(), Limits(m_type.limits().address_type(), m_type.limits().min() + size_to_grow, m_type.limits().max()) };
+
+    return true;
+}
+
 Optional<TableAddress> Store::allocate(TableType const& type)
 {
-    if (type.limits().min() > Constants::max_allowed_table_size)
+    auto table = TableInstance::create(type);
+    if (table.is_error())
         return {};
 
     TableAddress address { m_tables.size() };
-    Vector<Reference> elements;
-    elements.ensure_capacity(type.limits().min());
-    for (size_t i = 0; i < type.limits().min(); i++)
-        elements.append(Wasm::Reference { Wasm::Reference::Null { type.element_type() } });
-    elements.resize(type.limits().min());
-    m_tables.append(make<TableInstance>(type, move(elements)));
+    if (m_tables.try_append(table.release_value()).is_error())
+        return {};
     return address;
 }
 
