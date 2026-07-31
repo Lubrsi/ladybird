@@ -11,6 +11,7 @@ use crate::CraneliftTrap;
 use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
+use crate::WasmFunctionType;
 use crate::compile_to_bytes;
 use std::mem::align_of;
 use std::mem::size_of;
@@ -20,6 +21,8 @@ use std::mem::size_of_val;
 #[derive(Clone, Copy)]
 struct InputHeader {
     function_count: u32,
+    function_type_count: u32,
+    function_types_offset: u32,
     layout_offset: u32,
     outcome_return: u64,
     output_size: u64,
@@ -37,6 +40,15 @@ struct InputFunctionEntry {
     num_params: u32,
     function_index: u32,
     max_call_rec_size: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InputFunctionTypeEntry {
+    parameters_offset: u32,
+    parameter_count: u32,
+    results_offset: u32,
+    result_count: u32,
 }
 
 #[repr(C)]
@@ -77,10 +89,18 @@ fn read_pod<T: Copy>(base: &[u8], offset: usize) -> Result<T, &'static str> {
     Ok(unsafe { (bytes.as_ptr().cast::<T>()).read_unaligned() })
 }
 
-fn parse_input(
-    input: &[u8],
+fn parse_input<'a>(
+    input: &'a [u8],
     output_size: usize,
-) -> Result<(InputHeader, Vec<InputFunctionEntry>, RuntimeLayout), &'static str> {
+) -> Result<
+    (
+        InputHeader,
+        Vec<InputFunctionEntry>,
+        RuntimeLayout,
+        Vec<WasmFunctionType<'a>>,
+    ),
+    &'static str,
+> {
     let header: InputHeader = read_pod(input, 0)?;
     if usize::try_from(header.total_size).map_err(|_| "total_size overflow")? != input.len() {
         return Err("input buffer size mismatch");
@@ -101,6 +121,22 @@ fn parse_input(
         return Err("input entries are truncated");
     }
 
+    let function_type_count =
+        usize::try_from(header.function_type_count).map_err(|_| "function_type_count overflow")?;
+    let function_types_offset = align_up(entries_end, align_of::<InputFunctionTypeEntry>())?;
+    let function_types_size = function_type_count
+        .checked_mul(size_of::<InputFunctionTypeEntry>())
+        .ok_or("function type entries size overflow")?;
+    let function_types_end = function_types_offset
+        .checked_add(function_types_size)
+        .ok_or("function type entries size overflow")?;
+    if usize::try_from(header.function_types_offset).map_err(|_| "function_types_offset overflow")?
+        != function_types_offset
+        || function_types_end > input.len()
+    {
+        return Err("function type entries are not canonical");
+    }
+
     let mut entries = Vec::with_capacity(func_count);
     let mut total_insn_count = 0usize;
     let mut total_locals_size = 0usize;
@@ -119,16 +155,34 @@ fn parse_input(
         entries.push(entry);
     }
 
-    let insn_region_offset = align_up(entries_end, align_of::<CraneliftInsn>())?;
+    let mut function_type_entries = Vec::with_capacity(function_type_count);
+    let mut total_function_type_size = 0usize;
+    for i in 0..function_type_count {
+        let entry_offset = i
+            .checked_mul(size_of::<InputFunctionTypeEntry>())
+            .and_then(|offset| function_types_offset.checked_add(offset))
+            .ok_or("function type entry offset overflow")?;
+        let entry: InputFunctionTypeEntry = read_pod(input, entry_offset)?;
+        total_function_type_size = total_function_type_size
+            .checked_add(entry.parameter_count as usize)
+            .and_then(|size| size.checked_add(entry.result_count as usize))
+            .ok_or("function type values size overflow")?;
+        function_type_entries.push(entry);
+    }
+
+    let insn_region_offset = align_up(function_types_end, align_of::<CraneliftInsn>())?;
     let insn_region_size = total_insn_count
         .checked_mul(size_of::<CraneliftInsn>())
         .ok_or("instruction region size overflow")?;
     let locals_region_offset = insn_region_offset
         .checked_add(insn_region_size)
         .ok_or("locals region offset overflow")?;
+    let function_type_values_offset = locals_region_offset
+        .checked_add(total_locals_size)
+        .ok_or("function type values offset overflow")?;
     let layout_offset = align_up(
-        locals_region_offset
-            .checked_add(total_locals_size)
+        function_type_values_offset
+            .checked_add(total_function_type_size)
             .ok_or("layout offset overflow")?,
         align_of::<RuntimeLayout>(),
     )?;
@@ -159,8 +213,43 @@ fn parse_input(
             .ok_or("locals region offset overflow")?;
     }
 
+    let mut function_types = Vec::with_capacity(function_type_count);
+    let mut function_type_values_cursor = function_type_values_offset;
+    for entry in function_type_entries {
+        let parameters_offset =
+            usize::try_from(entry.parameters_offset).map_err(|_| "function type parameters offset overflow")?;
+        let results_offset =
+            usize::try_from(entry.results_offset).map_err(|_| "function type results offset overflow")?;
+        if parameters_offset != function_type_values_cursor {
+            return Err("function type values are not canonical");
+        }
+        let parameters_end = parameters_offset
+            .checked_add(entry.parameter_count as usize)
+            .ok_or("function type parameters size overflow")?;
+        if results_offset != parameters_end {
+            return Err("function type values are not canonical");
+        }
+        let results_end = results_offset
+            .checked_add(entry.result_count as usize)
+            .ok_or("function type results size overflow")?;
+        let parameters = input
+            .get(parameters_offset..parameters_end)
+            .ok_or("function type parameters are truncated")?;
+        let results = input
+            .get(results_offset..results_end)
+            .ok_or("function type results are truncated")?;
+        function_types.push(WasmFunctionType { parameters, results });
+        function_type_values_cursor = results_end;
+    }
+    if function_type_values_cursor != layout_offset {
+        let aligned_values_end = align_up(function_type_values_cursor, align_of::<RuntimeLayout>())?;
+        if aligned_values_end != layout_offset {
+            return Err("function type values are not canonical");
+        }
+    }
+
     let layout = read_pod(input, layout_offset)?;
-    Ok((header, entries, layout))
+    Ok((header, entries, layout, function_types))
 }
 
 fn select_compiled_functions(
@@ -215,7 +304,7 @@ fn select_compiled_functions(
 }
 
 pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
-    let (header, entries, layout) = parse_input(input, output.len())?;
+    let (header, entries, layout, function_types) = parse_input(input, output.len())?;
     let func_count = usize::try_from(header.function_count).map_err(|_| "function_count overflow")?;
 
     let thread_count = std::thread::available_parallelism()
@@ -225,6 +314,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
     let chunk_size = func_count.div_ceil(thread_count.max(1));
     let mapped_ref: &[u8] = input;
     let layout_ref = &layout;
+    let function_types_ref = function_types.as_slice();
     let outcome_return = header.outcome_return;
 
     // Compile into temporary per-function allocations first so the serialized
@@ -283,6 +373,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                             max_call_rec_size: entry.max_call_rec_size,
                         },
                         local_types,
+                        function_types_ref,
                     ) {
                         out.push((i, compiled));
                     }
@@ -482,6 +573,8 @@ mod tests {
     fn rejects_function_count_larger_than_the_input() {
         let header = InputHeader {
             function_count: u32::MAX,
+            function_type_count: 0,
+            function_types_offset: 0,
             layout_offset: 0,
             outcome_return: 0,
             output_size: 0,

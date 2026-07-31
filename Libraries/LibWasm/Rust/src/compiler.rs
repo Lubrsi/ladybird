@@ -13,6 +13,7 @@ use crate::CraneliftTrap;
 use crate::FunctionCompilationOptions;
 use crate::HelperId;
 use crate::RuntimeLayout;
+use crate::WasmFunctionType;
 
 use cranelift_codegen::Context;
 use cranelift_codegen::FinalizedRelocTarget;
@@ -683,6 +684,7 @@ impl CraneliftCompiler {
         layout: &RuntimeLayout,
         options: FunctionCompilationOptions,
         local_types: &[u8],
+        function_types: &[WasmFunctionType<'_>],
     ) -> Result<CompiledFunction, &'static str> {
         let FunctionCompilationOptions {
             outcome_return_value,
@@ -692,6 +694,14 @@ impl CraneliftCompiler {
             function_index,
             max_call_rec_size,
         } = options;
+
+        let function_type = function_types
+            .get(function_index as usize)
+            .ok_or("missing function type")?;
+        if function_type.parameters.len() != num_params as usize || function_type.results.len() != result_arity as usize
+        {
+            return Err("function type does not match compilation options");
+        }
 
         for insn in insns {
             if !Self::is_supported(insn) {

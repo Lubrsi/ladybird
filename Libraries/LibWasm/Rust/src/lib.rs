@@ -137,11 +137,18 @@ pub struct FunctionCompilationOptions {
     pub max_call_rec_size: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WasmFunctionType<'a> {
+    pub parameters: &'a [u8],
+    pub results: &'a [u8],
+}
+
 pub fn compile_to_bytes(
     insns: &[CraneliftInsn],
     layout: &RuntimeLayout,
     options: FunctionCompilationOptions,
     local_types: &[u8],
+    function_types: &[WasmFunctionType<'_>],
 ) -> Result<CompiledFunction, &'static str> {
-    CraneliftCompiler::compile_to_bytes(insns, layout, options, local_types)
+    CraneliftCompiler::compile_to_bytes(insns, layout, options, local_types, function_types)
 }
