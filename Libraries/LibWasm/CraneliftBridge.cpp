@@ -140,7 +140,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 19;
+constexpr u32 cache_blob_format_version = 20;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -1622,6 +1622,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
     Vector<CraneliftInsn> flat;
     flat.ensure_capacity(dispatches.size());
     size_t raw_call_index = 0;
+    size_t indirect_call_index = 0;
     for (size_t i = 0; i < dispatches.size(); ++i) {
         flat.append(serialize_insn(dispatches[i], addresses[i]));
 
@@ -1632,6 +1633,14 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
             VERIFY(metadata.instruction_index == i);
             flat.last().imm3 = metadata.parameter_count;
             flat.last().call_result_count = metadata.result_count;
+        }
+
+        if (indirect_call_index < compiled.cranelift_indirect_calls.size()
+            && compiled.cranelift_indirect_calls[indirect_call_index].instruction_index == i) {
+            auto const& metadata = compiled.cranelift_indirect_calls[indirect_call_index++];
+            flat.last().imm3 = metadata.parameter_count;
+            flat.last().call_result_count = metadata.result_count;
+            flat.last().call_type_encoding = metadata.type_encoding;
         }
 
         if (dispatches[i].instruction->opcode().value() == Instructions::synthetic_tier_up.value())
@@ -1657,14 +1666,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
         }
     }
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
-
-    for (auto const& metadata : compiled.cranelift_indirect_calls) {
-        VERIFY(metadata.instruction_index < flat.size());
-        auto& instruction = flat[metadata.instruction_index];
-        instruction.imm3 = metadata.parameter_count;
-        instruction.call_result_count = metadata.result_count;
-        instruction.call_type_encoding = metadata.type_encoding;
-    }
+    VERIFY(indirect_call_index == compiled.cranelift_indirect_calls.size());
 
     cranelift_cache_state().pending_batch.append({ move(flat), result_arity, s_active_function_index, &compiled, compiled.cranelift_local_count, compiled.cranelift_param_count });
     return false; // Not compiled yet, will be compiled in flush.
