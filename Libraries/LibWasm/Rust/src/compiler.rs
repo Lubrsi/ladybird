@@ -535,21 +535,16 @@ impl CraneliftCompiler {
         })
     }
 
-    fn emit_native_call_from_record(
+    fn emit_native_call_from_value_array(
         builder: &mut FunctionBuilder<'_>,
         native_signature: SigRef,
         native_entry: Value,
         operands: IndirectCallOperands,
+        argument_base: Value,
         target_type: WasmFunctionType<'_>,
         context: IndirectCallLoweringContext,
     ) -> Result<Option<Value>, &'static str> {
         let entry_token = builder.ins().iconst(types::I32, 0);
-        let call_record = builder.ins().load(
-            context.ptr_type,
-            MemFlags::trusted(),
-            operands.configuration,
-            context.call_record_base_offset,
-        );
         let uses_register_native_abi = Self::uses_register_native_abi(target_type);
         let mut arguments = Vec::with_capacity(if uses_register_native_abi {
             3 + target_type.parameters.len()
@@ -564,11 +559,11 @@ impl CraneliftCompiler {
                 let argument_type = Self::wasm_abi_type(parameter_kind)?;
                 let argument = builder
                     .ins()
-                    .load(argument_type, MemFlags::trusted(), call_record, offset);
+                    .load(argument_type, MemFlags::trusted(), argument_base, offset);
                 arguments.push(argument);
             }
         } else {
-            arguments.push(call_record);
+            arguments.push(argument_base);
         }
 
         let call = builder.ins().call_indirect(native_signature, native_entry, &arguments);
@@ -670,11 +665,18 @@ impl CraneliftCompiler {
         // https://webassembly.github.io/spec/core/exec/instructions.html#exec-call-indirect
         // (CALL_REF yy)
         let native_entry = builder.block_params(target.native_call)[0];
-        let native_result = Self::emit_native_call_from_record(
+        let call_record = builder.ins().load(
+            context.ptr_type,
+            MemFlags::trusted(),
+            operands.configuration,
+            context.call_record_base_offset,
+        );
+        let native_result = Self::emit_native_call_from_value_array(
             builder,
             native_signature,
             native_entry,
             operands,
+            call_record,
             target_type,
             context,
         )?;
@@ -4023,22 +4025,132 @@ impl CraneliftCompiler {
                     };
                     let type_idx = builder.ins().iconst(types::I32, insn.imm1);
                     let table_idx = builder.ins().iconst(types::I32, insn.imm2);
-                    let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
-                    do_call_and_check!(
-                        builder,
-                        call_indirect_sig,
-                        cfp,
-                        &[iv, cv, table_idx, type_idx, element_index]
-                    );
-                    restore_vstack_after_raw_call!(
-                        builder,
-                        original_top,
-                        stack_base,
-                        insn.call_result_count as usize,
-                        insn.destination
-                    );
+                    let operands = IndirectCallOperands {
+                        interpreter: iv,
+                        configuration: cv,
+                        table_index: table_idx,
+                        type_index: type_idx,
+                        element_index,
+                    };
+                    let call_type = if insn.call_result_count <= 1 {
+                        Self::decode_indirect_call_type(insn)?
+                    } else {
+                        None
+                    };
+
+                    let mut emitted_native_call = false;
+                    if let Some(call_type) = call_type {
+                        let target_type = WasmFunctionType {
+                            parameters: &call_type.parameters,
+                            results: &call_type.results,
+                        };
+                        if target_type.parameters.len() != insn.imm3 as usize
+                            || target_type.results.len() != insn.call_result_count as usize
+                        {
+                            return Err("raw indirect call does not match target type");
+                        }
+
+                        if Self::uses_register_native_abi(target_type) {
+                            let native_signature =
+                                builder.import_signature(Self::native_signature(&*isa, target_type)?);
+                            let continuation = builder.create_block();
+                            if !target_type.results.is_empty() {
+                                builder.append_block_param(continuation, types::I64);
+                            }
+
+                            let target = Self::emit_native_indirect_call_target(
+                                &mut builder,
+                                insn,
+                                operands,
+                                indirect_call_lowering_context,
+                            )?;
+
+                            let native_entry = builder.block_params(target.native_call)[0];
+                            let argument_offset = i64::try_from(stack_base)
+                                .ok()
+                                .and_then(|base| base.checked_mul(i64::from(value_size)))
+                                .ok_or("raw indirect-call argument offset overflow")?;
+                            let argument_base = builder.ins().iadd_imm(original_top, argument_offset);
+                            let native_result = Self::emit_native_call_from_value_array(
+                                &mut builder,
+                                native_signature,
+                                native_entry,
+                                operands,
+                                argument_base,
+                                target_type,
+                                indirect_call_lowering_context,
+                            )?;
+                            if let Some(result) = native_result {
+                                builder.ins().jump(continuation, &[result]);
+                            } else {
+                                builder.ins().jump(continuation, &[]);
+                            }
+
+                            builder.switch_to_block(target.fallback_call);
+                            let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
+                            do_call_and_check!(
+                                builder,
+                                call_indirect_sig,
+                                cfp,
+                                &[iv, cv, table_idx, type_idx, element_index]
+                            );
+                            if target_type.results.is_empty() {
+                                builder.ins().jump(continuation, &[]);
+                            } else {
+                                let helper_top =
+                                    builder
+                                        .ins()
+                                        .load(ptr_type, MemFlags::trusted(), cv, value_stack_top_offset);
+                                let result =
+                                    builder
+                                        .ins()
+                                        .load(types::I64, MemFlags::trusted(), helper_top, -value_size);
+                                builder.ins().jump(continuation, &[result]);
+                            }
+
+                            builder.switch_to_block(continuation);
+                            builder.seal_block(continuation);
+                            sp = stack_base;
+                            builder
+                                .ins()
+                                .store(MemFlags::trusted(), original_top, cv, value_stack_top_offset);
+                            if let Some(&result_kind) = target_type.results.first() {
+                                let payload = builder.block_params(continuation)[0];
+                                match result_kind {
+                                    F32_KIND => {
+                                        let value = Self::payload_to_value(&mut builder, payload, F32_KIND)?;
+                                        write_dst_f32!(builder, insn.destination, value);
+                                    }
+                                    F64_KIND => {
+                                        let value = Self::payload_to_value(&mut builder, payload, F64_KIND)?;
+                                        write_dst_f64!(builder, insn.destination, value);
+                                    }
+                                    I32_KIND | I64_KIND => write_dst!(builder, insn.destination, payload),
+                                    _ => return Err("unsupported native Wasm ABI type"),
+                                }
+                            }
+                            emitted_native_call = true;
+                        }
+                    }
+
+                    if !emitted_native_call {
+                        let cfp = builder.ins().func_addr(ptr_type, h_call_indirect);
+                        do_call_and_check!(
+                            builder,
+                            call_indirect_sig,
+                            cfp,
+                            &[iv, cv, table_idx, type_idx, element_index]
+                        );
+                        restore_vstack_after_raw_call!(
+                            builder,
+                            original_top,
+                            stack_base,
+                            insn.call_result_count as usize,
+                            insn.destination
+                        );
+                    }
                 }
 
                 opc if (op::SYNTHETIC_CALL_00..=op::SYNTHETIC_CALL_31).contains(&opc) => {
