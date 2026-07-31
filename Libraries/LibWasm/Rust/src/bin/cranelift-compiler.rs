@@ -10,6 +10,7 @@ use libwasm_cranelift::CompiledFunction;
 use libwasm_cranelift::CraneliftInsn;
 use libwasm_cranelift::CraneliftRelocation;
 use libwasm_cranelift::CraneliftTrap;
+use libwasm_cranelift::FunctionCompilationOptions;
 use libwasm_cranelift::RuntimeHelpers;
 use libwasm_cranelift::compile_to_bytes;
 use std::env;
@@ -45,6 +46,8 @@ struct InputFunctionEntry {
     num_locals: u32,
     locals_offset: u32,
     num_params: u32,
+    function_index: u32,
+    max_call_rec_size: u32,
 }
 
 #[repr(C)]
@@ -305,10 +308,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(compiled) = compile_to_bytes(
                         insns,
                         helpers_ref,
-                        outcome_return,
-                        entry.result_arity,
-                        entry.num_locals,
-                        entry.num_params,
+                        FunctionCompilationOptions {
+                            outcome_return_value: outcome_return,
+                            result_arity: entry.result_arity,
+                            num_locals: entry.num_locals,
+                            num_params: entry.num_params,
+                            function_index: entry.function_index,
+                            max_call_rec_size: entry.max_call_rec_size,
+                        },
                         local_types,
                     ) {
                         out.push((i, compiled));

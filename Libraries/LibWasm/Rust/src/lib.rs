@@ -57,6 +57,8 @@ pub struct RuntimeHelpers {
     pub primitive_storage_cage_base: usize,
     // i32 fn(interp, config, table_idx, type_idx, element_index); call using call record args
     pub call_indirect_with_record: usize,
+    // void fn(interp); set the standard Wasm stack-exhaustion trap
+    pub stack_exhaustion: usize,
 
     pub regs_offset: u32,
     pub value_size: u32,
@@ -99,9 +101,10 @@ pub enum HelperId {
     memory_fill = 11,
     primitive_storage_cage_base = 12,
     call_indirect_with_record = 13,
+    stack_exhaustion = 14,
 }
 
-pub const HELPER_COUNT: u32 = 14;
+pub const HELPER_COUNT: u32 = 15;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
 /// The numeric values are part of the cache blob format.
@@ -149,22 +152,21 @@ pub struct CompiledFunction {
     pub traps: Vec<CraneliftTrap>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionCompilationOptions {
+    pub outcome_return_value: u64,
+    pub result_arity: u32,
+    pub num_locals: u32,
+    pub num_params: u32,
+    pub function_index: u32,
+    pub max_call_rec_size: u32,
+}
+
 pub fn compile_to_bytes(
     insns: &[CraneliftInsn],
     helpers: &RuntimeHelpers,
-    outcome_return_value: u64,
-    result_arity: u32,
-    num_locals: u32,
-    num_params: u32,
+    options: FunctionCompilationOptions,
     local_types: &[u8],
 ) -> Result<CompiledFunction, &'static str> {
-    CraneliftCompiler::compile_to_bytes(
-        insns,
-        helpers,
-        outcome_return_value,
-        result_arity,
-        num_locals,
-        num_params,
-        local_types,
-    )
+    CraneliftCompiler::compile_to_bytes(insns, helpers, options, local_types)
 }

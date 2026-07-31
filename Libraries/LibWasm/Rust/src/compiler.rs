@@ -10,6 +10,7 @@ use crate::CraneliftRelocation;
 use crate::CraneliftRelocationKind;
 use crate::CraneliftRelocationTargetKind;
 use crate::CraneliftTrap;
+use crate::FunctionCompilationOptions;
 use crate::HelperId;
 use crate::RuntimeHelpers;
 
@@ -41,6 +42,7 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_frontend::Variable;
 use cranelift_native;
+use std::collections::HashMap;
 
 // Opcode constants generated from Opcode.h (see build.rs.)
 #[allow(dead_code)]
@@ -631,12 +633,18 @@ impl CraneliftCompiler {
     pub fn compile_to_bytes(
         insns: &[CraneliftInsn],
         helpers: &RuntimeHelpers,
-        outcome_return_value: u64,
-        result_arity: u32,
-        num_locals: u32,
-        num_params: u32,
+        options: FunctionCompilationOptions,
         local_types: &[u8],
     ) -> Result<CompiledFunction, &'static str> {
+        let FunctionCompilationOptions {
+            outcome_return_value,
+            result_arity,
+            num_locals,
+            num_params,
+            function_index,
+            max_call_rec_size,
+        } = options;
+
         for insn in insns {
             if !Self::is_supported(insn) {
                 return Err("unsupported instruction");
@@ -673,7 +681,8 @@ impl CraneliftCompiler {
         sig.params.push(AbiParam::new(ptr_type)); // addresses_ptr (unused)
         sig.returns.push(AbiParam::new(types::I64)); // Outcome
 
-        let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig);
+        let direct_call_signature = sig.clone();
+        let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), sig);
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
@@ -741,8 +750,8 @@ impl CraneliftCompiler {
             cage_base_sig:     i64 fn();
             mem_size_sig:      i64 fn(ptr, i32);
             mem_grow_sig:      i32 fn(ptr, i32, i32);
-            call_wr_sig:       i32 fn(ptr, ptr, i32);
             set_trap_sig:      void fn(ptr, ptr, i32);
+            stack_exhaustion_sig: void fn(ptr);
         }
 
         // Declare each runtime helper as an imported external function. At every use site
@@ -770,12 +779,33 @@ impl CraneliftCompiler {
         let h_set_trap = decl_helper!(set_trap_sig, HelperId::set_trap);
         let h_mem_size = decl_helper!(mem_size_sig, HelperId::memory_size);
         let h_mem_grow = decl_helper!(mem_grow_sig, HelperId::memory_grow);
-        let h_call_wr = decl_helper!(call_wr_sig, HelperId::call_with_record);
         let h_call_indirect = decl_helper!(call_indirect_sig, HelperId::call_indirect);
         let h_call_indirect_wr = decl_helper!(call_indirect_sig, HelperId::call_indirect_with_record);
         let h_memory_copy = decl_helper!(memory_copy_sig, HelperId::memory_copy);
         let h_memory_fill = decl_helper!(memory_fill_sig, HelperId::memory_fill);
         let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
+        let h_stack_exhaustion = decl_helper!(stack_exhaustion_sig, HelperId::stack_exhaustion);
+        let direct_call_sig = builder.import_signature(direct_call_signature);
+        let mut direct_call_targets = HashMap::new();
+        for insn in insns.iter().filter(|insn| {
+            matches!(
+                insn.opcode,
+                op::SYNTHETIC_CALL_WITH_RECORD_0 | op::SYNTHETIC_CALL_WITH_RECORD_1
+            )
+        }) {
+            let target_index = u32::try_from(insn.imm1).map_err(|_| "invalid direct-call target")?;
+            direct_call_targets.entry(target_index).or_insert_with(|| {
+                let user_ref = builder.func.declare_imported_user_function(UserExternalName {
+                    namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
+                    index: target_index,
+                });
+                builder.func.import_function(ExtFuncData {
+                    name: ExternalName::user(user_ref),
+                    signature: direct_call_sig,
+                    colocated: true,
+                })
+            });
+        }
         let locals_base_offset = helpers.locals_base_offset as i32;
         let memory_instances_offset = helpers.memory_instances_offset as i32;
         let global_instances_offset = helpers.global_instances_offset as i32;
@@ -786,6 +816,12 @@ impl CraneliftCompiler {
         let value_stack_base_offset = helpers.value_stack_base_offset as i32;
         let value_stack_top_offset = helpers.value_stack_top_offset as i32;
         let call_record_base_offset = helpers.call_record_base_offset as i32;
+        let call_record_stack_top_offset = helpers.call_record_stack_top_offset as i32;
+        let depth_offset = helpers.depth_offset as i32;
+        let current_compiled_fn_table_data_offset = helpers.current_compiled_fn_table_data_offset as i32;
+        let current_expression_offset = helpers.current_expression_offset as i32;
+        let compiled_function_entry_size = i64::from(helpers.compiled_function_entry_size);
+        let compiled_function_entry_expression_offset = helpers.compiled_function_entry_expression_offset as i32;
         // Accesses to memory32 are unchecked and may fault; the fault handler turns
         // faults inside a memory's guarded reservation into wasm traps.
         let wasm_memory_flags = MemFlags::new();
@@ -795,6 +831,135 @@ impl CraneliftCompiler {
         let config_var = Variable::from_u32(9);
         builder.declare_var(config_var, ptr_type);
         builder.def_var(config_var, configuration_val);
+
+        let direct_call_mode_var = Variable::from_u32(11);
+        builder.declare_var(direct_call_mode_var, types::I8);
+        let entry_instruction = builder.block_params(entry_block)[2];
+        let direct_call_mode = builder.ins().icmp_imm(IntCC::Equal, entry_instruction, 0);
+        builder.def_var(direct_call_mode_var, direct_call_mode);
+
+        let saved_locals_base_var = Variable::from_u32(12);
+        let saved_call_record_base_var = Variable::from_u32(13);
+        let saved_call_record_top_var = Variable::from_u32(14);
+        let saved_expression_var = Variable::from_u32(15);
+        let saved_depth_var = Variable::from_u32(16);
+        for var in [
+            saved_locals_base_var,
+            saved_call_record_base_var,
+            saved_call_record_top_var,
+            saved_expression_var,
+            saved_depth_var,
+        ] {
+            builder.declare_var(var, ptr_type);
+            let zero = builder.ins().iconst(ptr_type, 0);
+            builder.def_var(var, zero);
+        }
+
+        let direct_setup = builder.create_block();
+        let normal_entry = builder.create_block();
+        let setup_done = builder.create_block();
+        builder
+            .ins()
+            .brif(direct_call_mode, direct_setup, &[], normal_entry, &[]);
+
+        builder.switch_to_block(direct_setup);
+        builder.seal_block(direct_setup);
+        let cfg = builder.use_var(config_var);
+        let saved_locals = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), cfg, locals_base_offset);
+        let saved_call_record = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+        let saved_call_record_top =
+            builder
+                .ins()
+                .load(ptr_type, MemFlags::trusted(), cfg, call_record_stack_top_offset);
+        let saved_expression = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), cfg, current_expression_offset);
+        let saved_depth = builder.ins().load(ptr_type, MemFlags::trusted(), cfg, depth_offset);
+        builder.def_var(saved_locals_base_var, saved_locals);
+        builder.def_var(saved_call_record_base_var, saved_call_record);
+        builder.def_var(saved_call_record_top_var, saved_call_record_top);
+        builder.def_var(saved_expression_var, saved_expression);
+        builder.def_var(saved_depth_var, saved_depth);
+
+        let direct_setup_body = builder.create_block();
+        let direct_stack_exhausted = builder.create_block();
+        let depth_exhausted = builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, saved_depth, 500);
+        builder
+            .ins()
+            .brif(depth_exhausted, direct_stack_exhausted, &[], direct_setup_body, &[]);
+
+        builder.switch_to_block(direct_stack_exhausted);
+        builder.seal_block(direct_stack_exhausted);
+        let stack_exhaustion = builder.ins().func_addr(ptr_type, h_stack_exhaustion);
+        let interpreter = builder.use_var(interp_var);
+        builder
+            .ins()
+            .call_indirect(stack_exhaustion_sig, stack_exhaustion, &[interpreter]);
+        builder.ins().jump(trap_block, &[]);
+
+        builder.switch_to_block(direct_setup_body);
+        builder.seal_block(direct_setup_body);
+        builder
+            .ins()
+            .store(MemFlags::trusted(), saved_call_record, cfg, locals_base_offset);
+        let table_data = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            cfg,
+            current_compiled_fn_table_data_offset,
+        );
+        let entry_function_index = builder.block_params(entry_block)[3];
+        let target_index = if ptr_type == types::I64 {
+            builder.ins().uextend(types::I64, entry_function_index)
+        } else {
+            entry_function_index
+        };
+        let entry_offset = builder.ins().imul_imm(target_index, compiled_function_entry_size);
+        let entry = builder.ins().iadd(table_data, entry_offset);
+        let expression = builder.ins().load(
+            ptr_type,
+            MemFlags::trusted(),
+            entry,
+            compiled_function_entry_expression_offset,
+        );
+        builder
+            .ins()
+            .store(MemFlags::trusted(), expression, cfg, current_expression_offset);
+
+        if max_call_rec_size > 0 {
+            builder
+                .ins()
+                .store(MemFlags::trusted(), saved_call_record_top, cfg, call_record_base_offset);
+            let next_call_record_top = builder.ins().iadd_imm(
+                saved_call_record_top,
+                i64::from(max_call_rec_size) * i64::from(value_size),
+            );
+            builder.ins().store(
+                MemFlags::trusted(),
+                next_call_record_top,
+                cfg,
+                call_record_stack_top_offset,
+            );
+        } else {
+            let null = builder.ins().iconst(ptr_type, 0);
+            builder
+                .ins()
+                .store(MemFlags::trusted(), null, cfg, call_record_base_offset);
+        }
+        let next_depth = builder.ins().iadd_imm(saved_depth, 1);
+        builder.ins().store(MemFlags::trusted(), next_depth, cfg, depth_offset);
+        builder.ins().jump(setup_done, &[]);
+
+        builder.switch_to_block(normal_entry);
+        builder.seal_block(normal_entry);
+        builder.ins().jump(setup_done, &[]);
+
+        builder.switch_to_block(setup_done);
+        builder.seal_block(setup_done);
         let locals_base_var = Variable::from_u32(10);
         builder.declare_var(locals_base_var, ptr_type);
         let initial_locals_base =
@@ -926,7 +1091,7 @@ impl CraneliftCompiler {
         let mut is_unreachable = false;
         let mut dirty_regs = [false; REG_COUNT];
         let mut stack_vars: Vec<Variable> = Vec::with_capacity(max_stack_depth);
-        const VSTACK_VAR_BASE: u32 = 12;
+        const VSTACK_VAR_BASE: u32 = 17;
 
         for i in 0..max_stack_depth {
             let var = Variable::from_u32(VSTACK_VAR_BASE + i as u32);
@@ -1959,7 +2124,10 @@ impl CraneliftCompiler {
             let dispatch = builder.create_block();
             let fresh = builder.create_block();
             let resume = builder.create_block();
-            let is_tier_up = builder.ins().icmp_imm(IntCC::NotEqual, tier_up_target_ip, 0);
+            let has_tier_up_target = builder.ins().icmp_imm(IntCC::NotEqual, tier_up_target_ip, 0);
+            let direct_call_mode = builder.use_var(direct_call_mode_var);
+            let is_normal_entry = builder.ins().icmp_imm(IntCC::Equal, direct_call_mode, 0);
+            let is_tier_up = builder.ins().band(has_tier_up_target, is_normal_entry);
             builder.ins().brif(is_tier_up, resume, &[], fresh, &[]);
 
             builder.switch_to_block(resume);
@@ -3069,18 +3237,26 @@ impl CraneliftCompiler {
 
                 op::SYNTHETIC_CALL_WITH_RECORD_0 | op::SYNTHETIC_CALL_WITH_RECORD_1 => {
                     let func_idx = builder.ins().iconst(types::I32, insn.imm1);
-                    let cwp = builder.ins().func_addr(ptr_type, h_call_wr);
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
-                    do_call_and_check!(builder, call_wr_sig, cwp, &[iv, cv, func_idx]);
+                    let null = builder.ins().iconst(ptr_type, 0);
+                    let result_count = if opc == op::SYNTHETIC_CALL_WITH_RECORD_1 { 1 } else { 0 };
+                    let result_count_arg = builder.ins().iconst(ptr_type, result_count);
+                    let target = direct_call_targets
+                        .get(&(insn.imm1 as u32))
+                        .copied()
+                        .expect("direct-call target must be declared");
+                    let call = builder
+                        .ins()
+                        .call(target, &[iv, cv, null, func_idx, result_count_arg, null]);
+                    let status = builder.inst_results(call)[0];
+                    let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+                    let cont = builder.create_block();
+                    builder.ins().brif(trapped, trap_block, &[], cont, &[]);
+                    builder.switch_to_block(cont);
+                    builder.seal_block(cont);
                     if opc == op::SYNTHETIC_CALL_WITH_RECORD_1 {
-                        let cv2 = builder.use_var(config_var);
-                        let result = builder.ins().load(
-                            types::I64,
-                            MemFlags::trusted(),
-                            cv2,
-                            compiled_call_result_scratch_offset,
-                        );
+                        let result = emit_stack_pop!(builder);
                         write_dst!(builder, insn.destination, result);
                     }
                 }
@@ -3258,11 +3434,61 @@ impl CraneliftCompiler {
             builder.seal_block(body_start);
         }
 
+        macro_rules! restore_direct_call_context {
+            ($builder:expr) => {{
+                let cfg = $builder.use_var(config_var);
+                let saved_locals = $builder.use_var(saved_locals_base_var);
+                let saved_call_record = $builder.use_var(saved_call_record_base_var);
+                let saved_call_record_top = $builder.use_var(saved_call_record_top_var);
+                let saved_expression = $builder.use_var(saved_expression_var);
+                let saved_depth = $builder.use_var(saved_depth_var);
+                $builder
+                    .ins()
+                    .store(MemFlags::trusted(), saved_locals, cfg, locals_base_offset);
+                $builder.ins().store(
+                    MemFlags::trusted(),
+                    saved_call_record,
+                    cfg,
+                    call_record_base_offset,
+                );
+                $builder.ins().store(
+                    MemFlags::trusted(),
+                    saved_call_record_top,
+                    cfg,
+                    call_record_stack_top_offset,
+                );
+                $builder.ins().store(
+                    MemFlags::trusted(),
+                    saved_expression,
+                    cfg,
+                    current_expression_offset,
+                );
+                $builder
+                    .ins()
+                    .store(MemFlags::trusted(), saved_depth, cfg, depth_offset);
+            }};
+        }
+
         builder.switch_to_block(trap_block);
         builder.seal_block(trap_block);
         // The helper already set the trap for us.
-        let trap_ret = builder.ins().iconst(types::I64, outcome_return_value as i64);
-        builder.ins().return_(&[trap_ret]);
+        let direct_trap_return = builder.create_block();
+        let handler_trap_return = builder.create_block();
+        let direct_call_mode = builder.use_var(direct_call_mode_var);
+        builder
+            .ins()
+            .brif(direct_call_mode, direct_trap_return, &[], handler_trap_return, &[]);
+
+        builder.switch_to_block(direct_trap_return);
+        builder.seal_block(direct_trap_return);
+        restore_direct_call_context!(builder);
+        let direct_trap_ret = builder.ins().iconst(types::I64, 1);
+        builder.ins().return_(&[direct_trap_ret]);
+
+        builder.switch_to_block(handler_trap_return);
+        builder.seal_block(handler_trap_return);
+        let handler_trap_ret = builder.ins().iconst(types::I64, outcome_return_value as i64);
+        builder.ins().return_(&[handler_trap_ret]);
 
         builder.switch_to_block(epilogue_block);
         builder.seal_block(epilogue_block);
@@ -3280,8 +3506,23 @@ impl CraneliftCompiler {
             &dirty_regs,
         );
         flush_locals!(builder);
-        let ret_val = builder.ins().iconst(types::I64, outcome_return_value as i64);
-        builder.ins().return_(&[ret_val]);
+        let direct_return = builder.create_block();
+        let handler_return = builder.create_block();
+        let direct_call_mode = builder.use_var(direct_call_mode_var);
+        builder
+            .ins()
+            .brif(direct_call_mode, direct_return, &[], handler_return, &[]);
+
+        builder.switch_to_block(direct_return);
+        builder.seal_block(direct_return);
+        restore_direct_call_context!(builder);
+        let direct_ret = builder.ins().iconst(types::I64, 0);
+        builder.ins().return_(&[direct_ret]);
+
+        builder.switch_to_block(handler_return);
+        builder.seal_block(handler_return);
+        let handler_ret = builder.ins().iconst(types::I64, outcome_return_value as i64);
+        builder.ins().return_(&[handler_ret]);
 
         builder.finalize();
 
