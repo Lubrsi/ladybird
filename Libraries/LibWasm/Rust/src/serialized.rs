@@ -8,6 +8,7 @@ use crate::CompiledFunction;
 use crate::CraneliftInsn;
 use crate::CraneliftRelocation;
 use crate::CraneliftTrap;
+use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
 use crate::compile_to_bytes;
@@ -34,6 +35,8 @@ struct InputFunctionEntry {
     num_locals: u32,
     locals_offset: u32,
     num_params: u32,
+    function_index: u32,
+    max_call_rec_size: u32,
 }
 
 #[repr(C)]
@@ -271,10 +274,14 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                     if let Ok(compiled) = compile_to_bytes(
                         insns,
                         layout_ref,
-                        outcome_return,
-                        entry.result_arity,
-                        entry.num_locals,
-                        entry.num_params,
+                        FunctionCompilationOptions {
+                            outcome_return_value: outcome_return,
+                            result_arity: entry.result_arity,
+                            num_locals: entry.num_locals,
+                            num_params: entry.num_params,
+                            function_index: entry.function_index,
+                            max_call_rec_size: entry.max_call_rec_size,
+                        },
                         local_types,
                     ) {
                         out.push((i, compiled));
