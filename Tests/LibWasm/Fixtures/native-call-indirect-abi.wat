@@ -242,13 +242,15 @@
     call_indirect (type $binary_i32))
 
   (func (export "run_nested_raw_fallback_i32") (result i32)
+    i32.const 7
     i32.const 100
     i32.const 20
     i32.const 3
     i32.const 0
     call_indirect (type $binary_i32)
     i32.const 13
-    call_indirect (type $binary_i32))
+    call_indirect (type $binary_i32)
+    i32.add)
 
   (func (export "run_nested_raw_i64") (result i64)
     i64.const 10000000000
