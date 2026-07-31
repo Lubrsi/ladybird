@@ -148,6 +148,7 @@ pub struct CraneliftTrap {
 /// Output of `compile_to_bytes`: the machine code plus the patch table.
 pub struct CompiledFunction {
     pub code: Vec<u8>,
+    pub native_entry_offset: u32,
     pub relocs: Vec<CraneliftRelocation>,
     pub traps: Vec<CraneliftTrap>,
 }

@@ -60,7 +60,7 @@ struct OutputFunctionEntry {
     reloc_count: u32,
     trap_offset: u64,
     trap_count: u32,
-    _pad: u32,
+    native_entry_offset: u32,
 }
 
 fn as_bytes_slice<T>(value: &[T]) -> &[u8] {
@@ -331,9 +331,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reloc_cursor = 0usize;
     for chunk in compiled_chunks {
         for (i, compiled) in chunk {
-            let code = compiled.code;
-            let relocs = compiled.relocs;
-            let traps = compiled.traps;
+            let CompiledFunction {
+                code,
+                native_entry_offset,
+                relocs,
+                traps,
+            } = compiled;
             let aligned = (code.len() + 15) & !15;
             let reloc_bytes_len = relocs.len() * size_of::<CraneliftRelocation>();
             let trap_bytes_len = traps.len() * size_of::<CraneliftTrap>();
@@ -367,7 +370,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reloc_count: u32::try_from(relocs.len()).map_err(|_| "reloc count overflow")?,
                 trap_offset: u64::try_from(trap_offset).map_err(|_| "trap offset overflow")?,
                 trap_count: u32::try_from(traps.len()).map_err(|_| "trap count overflow")?,
-                _pad: 0,
+                native_entry_offset,
             };
             let entry_dst = out_entries_offset + i * size_of::<OutputFunctionEntry>();
             let entry_bytes = as_bytes_slice(std::slice::from_ref(&entry));

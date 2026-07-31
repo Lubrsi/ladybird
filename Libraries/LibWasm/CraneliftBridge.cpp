@@ -71,7 +71,7 @@ struct OutputFunctionEntry {
     u32 reloc_count;
     u64 trap_offset;
     u32 trap_count;
-    u32 _pad;
+    u32 native_entry_offset;
 };
 
 struct CodeMapping {
@@ -101,6 +101,7 @@ struct PendingCompiledFunction {
     OwnPtr<CodeMapping> mapping;
     Vector<CraneliftRelocation> relocs;
     size_t code_size;
+    size_t native_entry_offset;
     size_t next_veneer_offset;
 };
 
@@ -129,7 +130,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 16;
+constexpr u32 cache_blob_format_version = 17;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -145,13 +146,16 @@ static_assert(sizeof(CacheBlobHeader) == 64);
 struct CacheBlobFunctionEntry {
     u32 function_index;
     u32 code_size;
+    u32 native_entry_offset;
     u32 reloc_count;
     u32 trap_count;
+    u32 _pad;
 };
-static_assert(sizeof(CacheBlobFunctionEntry) == 16);
+static_assert(sizeof(CacheBlobFunctionEntry) == 24);
 
 struct CacheRecord {
     u32 function_index;
+    u32 native_entry_offset;
     ByteBuffer unpatched_code;
     Vector<CraneliftRelocation> relocs;
     Vector<CraneliftTrap> traps;
@@ -417,9 +421,11 @@ static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes, size_
 #endif
 }
 
-static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps)
+static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, size_t native_entry_offset, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps)
 {
     if (target.dispatches.is_empty())
+        return {};
+    if (native_entry_offset >= code_bytes.size())
         return {};
 
     auto mapping = allocate_code_mapping(code_bytes, relocs.size());
@@ -441,6 +447,7 @@ static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_
         .mapping = move(mapping),
         .relocs = move(copied_relocs),
         .code_size = code_bytes.size(),
+        .native_entry_offset = native_entry_offset,
         .next_veneer_offset = align_up(code_bytes.size(), 16),
     };
 }
@@ -488,8 +495,10 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
 static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelpers const& helpers)
 {
     HashMap<u32, FlatPtr> native_targets;
-    for (auto const& pending : pending_functions)
-        native_targets.set(pending.function_index, bit_cast<FlatPtr>(pending.mapping->mapping));
+    for (auto const& pending : pending_functions) {
+        auto* native_entry = static_cast<u8*>(pending.mapping->mapping) + pending.native_entry_offset;
+        native_targets.set(pending.function_index, bit_cast<FlatPtr>(native_entry));
+    }
 
     for (auto& pending : pending_functions) {
         if (!link_compiled_function(pending, helpers, native_targets))
@@ -509,9 +518,9 @@ static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_
 
 // Used by the cache-install path. Freshly compiled functions are prepared as a batch so every
 // native address exists before any relocations are applied.
-static bool install_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
+static bool install_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, size_t native_entry_offset, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelpers const& helpers)
 {
-    auto pending = prepare_compiled_function(function_index, target, code_bytes, relocs, traps);
+    auto pending = prepare_compiled_function(function_index, target, code_bytes, native_entry_offset, relocs, traps);
     if (!pending.has_value())
         return false;
 
@@ -1366,6 +1375,7 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
             if (auto copy = ByteBuffer::copy(code_bytes.data(), code_bytes.size()); !copy.is_error()) {
                 CacheRecord rec;
                 rec.function_index = batch[i].function_index;
+                rec.native_entry_offset = output->native_entry_offset;
                 rec.unpatched_code = copy.release_value();
                 rec.relocs.ensure_capacity(reloc_count);
                 for (size_t j = 0; j < reloc_count; ++j)
@@ -1377,7 +1387,7 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch)
             }
         }
 
-        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, code_bytes, relocs, traps); pending.has_value())
+        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, code_bytes, output->native_entry_offset, relocs, traps); pending.has_value())
             pending_functions.append(pending.release_value());
     }
 
@@ -1415,6 +1425,7 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
                     s_active_function_index,
                     compiled,
                     record->unpatched_code.bytes(),
+                    record->native_entry_offset,
                     record->relocs.span(),
                     record->traps.span(),
                     cache_install_helpers)) {
@@ -1640,6 +1651,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
         auto* entry = reinterpret_cast<CacheBlobFunctionEntry*>(out + offset);
         entry->function_index = r.function_index;
         entry->code_size = static_cast<u32>(r.unpatched_code.size());
+        entry->native_entry_offset = r.native_entry_offset;
         entry->reloc_count = static_cast<u32>(r.relocs.size());
         entry->trap_count = static_cast<u32>(r.traps.size());
         offset += sizeof(CacheBlobFunctionEntry);
@@ -1688,6 +1700,8 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
             return false;
         auto const* entry = reinterpret_cast<CacheBlobFunctionEntry const*>(blob.data() + offset);
         offset += sizeof(CacheBlobFunctionEntry);
+        if (entry->native_entry_offset >= entry->code_size)
+            return false;
 
         auto code_off = offset;
         auto aligned_code_size = align_up(entry->code_size, 16);
@@ -1713,6 +1727,7 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
 
         CacheRecord rec;
         rec.function_index = entry->function_index;
+        rec.native_entry_offset = entry->native_entry_offset;
         rec.unpatched_code = code_copy.release_value();
         rec.relocs.ensure_capacity(entry->reloc_count);
         for (u32 j = 0; j < entry->reloc_count; ++j) {
