@@ -47,6 +47,11 @@
   (func $fallback_i32 (type $unary_i32) (local externref)
     local.get 0)
 
+  (func $fallback_binary_i32 (type $binary_i32) (local externref)
+    local.get 0
+    local.get 1
+    i32.sub)
+
   (func $trap (type $void)
     unreachable)
 
@@ -110,9 +115,9 @@
     local.get 6
     i32.add)
 
-  (table 14 funcref)
+  (table 15 funcref)
   (memory 1)
-  (elem (i32.const 0) $sub_i32 $sub_i64 $sub_f32 $sub_f64 $sum9_i32 $fallback_i32 $trap $nop $mixed_i32_f32 $mixed_i32_i64_i32 $mixed_six $mixed_f32_result $mixed_f64)
+  (elem (i32.const 0) $sub_i32 $sub_i64 $sub_f32 $sub_f64 $sum9_i32 $fallback_i32 $trap $nop $mixed_i32_f32 $mixed_i32_i64_i32 $mixed_six $mixed_f32_result $mixed_f64 $fallback_binary_i32)
   (export "table" (table 0))
   (export "target_add_i32" (func $add_i32))
   (export "target_fallback_i32" (func $fallback_i32))
@@ -225,6 +230,61 @@
     i32.load
     call_indirect (type $binary_i32))
 
+  ;; The inner and outer call lifetimes overlap, so only the inner call can use
+  ;; the shared call record. This leaves the outer call as a raw call_indirect.
+  (func (export "run_nested_raw_i32") (result i32)
+    i32.const 100
+    i32.const 20
+    i32.const 3
+    i32.const 0
+    call_indirect (type $binary_i32)
+    i32.const 0
+    call_indirect (type $binary_i32))
+
+  (func (export "run_nested_raw_fallback_i32") (result i32)
+    i32.const 100
+    i32.const 20
+    i32.const 3
+    i32.const 0
+    call_indirect (type $binary_i32)
+    i32.const 13
+    call_indirect (type $binary_i32))
+
+  (func (export "run_nested_raw_i64") (result i64)
+    i64.const 10000000000
+    i64.const 20
+    i64.const 3
+    i32.const 1
+    call_indirect (type $binary_i64)
+    i32.const 1
+    call_indirect (type $binary_i64))
+
+  (func (export "run_nested_raw_f32") (result f32)
+    f32.const 100
+    f32.const 7.5
+    f32.const 2.25
+    i32.const 2
+    call_indirect (type $binary_f32)
+    i32.const 2
+    call_indirect (type $binary_f32))
+
+  (func (export "run_nested_raw_f64") (result f64)
+    f64.const 100
+    f64.const 9.5
+    f64.const 1.25
+    i32.const 3
+    call_indirect (type $binary_f64)
+    i32.const 3
+    call_indirect (type $binary_f64))
+
+  (func (export "run_nested_raw_void") (result i32)
+    i32.const 20
+    i32.const 3
+    i32.const 7
+    call_indirect (type $void)
+    i32.const 0
+    call_indirect (type $binary_i32))
+
   (func (export "run_trap")
     i32.const 6
     call_indirect (type $void))
@@ -236,9 +296,9 @@
     call_indirect (type $binary_i64))
 
   (func (export "run_null")
-    i32.const 13
+    i32.const 14
     call_indirect (type $void))
 
   (func (export "run_out_of_bounds")
-    i32.const 14
+    i32.const 15
     call_indirect (type $void)))

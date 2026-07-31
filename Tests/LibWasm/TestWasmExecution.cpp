@@ -323,20 +323,34 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     MUST(machine.validate(*module));
 
     auto const& functions = module->code_section().functions();
-    EXPECT_EQ(functions.size(), 31u);
+    EXPECT_EQ(functions.size(), 38u);
     Optional<Wasm::FunctionIndex> fallback_target_index;
+    Vector<Wasm::FunctionIndex> raw_indirect_caller_indices;
     for (auto const& export_ : module->export_section().entries()) {
         if (export_.name() == "target_fallback_i32"sv)
             fallback_target_index = export_.description().get<Wasm::FunctionIndex>();
+        if (export_.name().starts_with("run_nested_raw_"sv))
+            raw_indirect_caller_indices.append(export_.description().get<Wasm::FunctionIndex>());
         if (!export_.name().starts_with("run_"sv))
             continue;
         auto function_index = export_.description().get<Wasm::FunctionIndex>().value();
         auto const& compiled = functions[function_index].func().body().compiled_instructions;
         EXPECT(compiled.cranelift_compiled);
-        EXPECT_EQ(compiled.cranelift_indirect_calls.size(), 1u);
+        auto const expected_indirect_calls = export_.name().starts_with("run_nested_raw_"sv) ? 2u : 1u;
+        EXPECT_EQ(compiled.cranelift_indirect_calls.size(), expected_indirect_calls);
     }
     VERIFY(fallback_target_index.has_value());
     EXPECT(!functions[fallback_target_index->value()].func().body().compiled_instructions.cranelift_compiled);
+    EXPECT_EQ(raw_indirect_caller_indices.size(), 6u);
+    for (auto function_index : raw_indirect_caller_indices) {
+        auto const& raw_indirect_caller = functions[function_index.value()].func().body().compiled_instructions;
+        bool has_raw_call_indirect = false;
+        for (auto const& dispatch : raw_indirect_caller.dispatches) {
+            if (dispatch.instruction->opcode() == Wasm::Instructions::call_indirect)
+                has_raw_call_indirect = true;
+        }
+        EXPECT(has_raw_call_indirect);
+    }
 
     auto instance = MUST(machine.instantiate(*module, {}));
     auto find_export = [&](StringView name) {
@@ -370,6 +384,18 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     EXPECT_EQ(invoke_value("run_mixed_f32_result"sv).to<float>(), 15.75f);
     EXPECT_EQ(invoke_value("run_mixed_f64"sv).to<i32>(), 28);
     EXPECT_EQ(invoke_value("run_br_table_then_indirect"sv).to<i32>(), 17);
+    EXPECT_EQ(invoke_value("run_nested_raw_i32"sv).to<i32>(), 83);
+    EXPECT_EQ(invoke_value("run_nested_raw_fallback_i32"sv).to<i32>(), 83);
+    EXPECT_EQ(invoke_value("run_nested_raw_i64"sv).to<i64>(), 9999999983);
+    EXPECT_EQ(invoke_value("run_nested_raw_f32"sv).to<float>(), 94.75f);
+    EXPECT_EQ(invoke_value("run_nested_raw_f64"sv).to<double>(), 91.75);
+
+    auto raw_void_result = invoke("run_nested_raw_void"sv);
+    EXPECT(!raw_void_result.is_trap());
+    if (!raw_void_result.is_trap()) {
+        EXPECT_EQ(raw_void_result.values().size(), 1u);
+        EXPECT_EQ(raw_void_result.values()[0].to<i32>(), 17);
+    }
 
     Optional<Wasm::TableAddress> table_address;
     Optional<Wasm::FunctionAddress> replacement_address;
