@@ -75,9 +75,10 @@ pub enum HelperId {
     primitive_storage_cage_base = 12,
     call_indirect_with_record = 13,
     stack_exhaustion = 14,
+    raise_trap = 15,
 }
 
-pub const HELPER_COUNT: u32 = 15;
+pub const HELPER_COUNT: u32 = 16;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
@@ -108,6 +109,8 @@ pub struct CraneliftRelocation {
     pub kind: CraneliftRelocationKind,
     pub target_kind: CraneliftRelocationTargetKind,
     pub target_index: u32,
+    pub fallback_offset: u32,
+    pub _padding: u32,
     pub addend: i64,
 }
 
