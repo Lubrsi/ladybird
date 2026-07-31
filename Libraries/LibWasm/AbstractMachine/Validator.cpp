@@ -188,7 +188,7 @@ void compile_module_to_native(Module& module)
 
     ScopeGuard cleanup = [&] {
         auto cranelift_start = MonotonicTime::now();
-        flush_cranelift_batch();
+        flush_cranelift_batch(module);
         auto cranelift_duration = MonotonicTime::now() - cranelift_start;
 
         if (installing)
