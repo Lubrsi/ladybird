@@ -20,6 +20,7 @@ use cranelift_codegen::FinalizedRelocTarget;
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::Block;
+use cranelift_codegen::ir::BlockArg;
 use cranelift_codegen::ir::ExtFuncData;
 use cranelift_codegen::ir::ExternalName;
 use cranelift_codegen::ir::FuncRef;
@@ -48,6 +49,7 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_frontend::Variable;
 use cranelift_native;
 use std::collections::HashMap;
+use std::mem::size_of;
 
 // Opcode constants generated from Opcode.h (see build.rs.)
 #[allow(dead_code)]
@@ -103,8 +105,6 @@ struct IndirectCallLoweringContext {
     check_type_signature: SigRef,
     check_type_helper: FuncRef,
     trap_block: Block,
-    locals_base: Variable,
-    locals_base_offset: i32,
     result_scratch_offset: i32,
     call_record_base_offset: i32,
     value_size: i32,
@@ -521,9 +521,13 @@ impl CraneliftCompiler {
             .ins()
             .atomic_load(ptr_type, MemFlags::trusted(), native_entry_address);
         let has_native_entry = builder.ins().icmp_imm(IntCC::NotEqual, native_entry, 0);
-        builder
-            .ins()
-            .brif(has_native_entry, native_call, &[native_entry], fallback_call, &[]);
+        builder.ins().brif(
+            has_native_entry,
+            native_call,
+            &[BlockArg::Value(native_entry)],
+            fallback_call,
+            &[],
+        );
 
         builder.seal_block(fallback_call);
         builder.switch_to_block(native_call);
@@ -599,14 +603,6 @@ impl CraneliftCompiler {
         builder.switch_to_block(continuation);
         builder.seal_block(continuation);
 
-        let new_locals_base = builder.ins().load(
-            context.ptr_type,
-            MemFlags::trusted(),
-            operands.configuration,
-            context.locals_base_offset,
-        );
-        builder.def_var(context.locals_base, new_locals_base);
-
         has_result.then(|| {
             builder.ins().load(
                 types::I64,
@@ -681,7 +677,7 @@ impl CraneliftCompiler {
             context,
         )?;
         if let Some(result) = native_result {
-            builder.ins().jump(continuation, &[result]);
+            builder.ins().jump(continuation, &[BlockArg::Value(result)]);
         } else {
             builder.ins().jump(continuation, &[]);
         }
@@ -689,7 +685,7 @@ impl CraneliftCompiler {
         builder.switch_to_block(target.fallback_call);
         let fallback_result = Self::emit_indirect_bridge_call(builder, operands, context, has_result);
         if let Some(result) = fallback_result {
-            builder.ins().jump(continuation, &[result]);
+            builder.ins().jump(continuation, &[BlockArg::Value(result)]);
         } else {
             builder.ins().jump(continuation, &[]);
         }
@@ -1393,10 +1389,7 @@ impl CraneliftCompiler {
 
         // Declare variables for virtual registers R0-R7.
         // We store everything as i64 and bitcast for floats.
-        let reg_vars: [Variable; REG_COUNT] = std::array::from_fn(|i| Variable::from_u32(i as u32));
-        for var in &reg_vars {
-            builder.declare_var(*var, types::I64);
-        }
+        let reg_vars: [Variable; REG_COUNT] = std::array::from_fn(|_| builder.declare_var(types::I64));
 
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
@@ -1571,32 +1564,26 @@ impl CraneliftCompiler {
         // Accesses to memory32 are unchecked and may fault; the fault handler turns
         // faults inside a memory's guarded reservation into wasm traps.
         let wasm_memory_flags = MemFlags::new();
-        let interp_var = Variable::from_u32(8);
-        builder.declare_var(interp_var, ptr_type);
+        let interp_var = builder.declare_var(ptr_type);
         builder.def_var(interp_var, interpreter_val);
-        let config_var = Variable::from_u32(9);
-        builder.declare_var(config_var, ptr_type);
+        let config_var = builder.declare_var(ptr_type);
         builder.def_var(config_var, configuration_val);
 
-        let direct_call_mode_var = Variable::from_u32(11);
-        builder.declare_var(direct_call_mode_var, types::I8);
+        let direct_call_mode_var = builder.declare_var(types::I8);
         let entry_token = builder.block_params(entry_block)[2];
         let direct_call_mode = builder.ins().icmp_imm(IntCC::Equal, entry_token, 0);
         builder.def_var(direct_call_mode_var, direct_call_mode);
 
-        let saved_locals_base_var = Variable::from_u32(12);
-        let saved_call_record_base_var = Variable::from_u32(13);
-        let saved_call_record_top_var = Variable::from_u32(14);
-        let saved_expression_var = Variable::from_u32(15);
-        let saved_depth_var = Variable::from_u32(16);
+        let saved_call_record_base_var = builder.declare_var(ptr_type);
+        let saved_call_record_top_var = builder.declare_var(ptr_type);
+        let saved_expression_var = builder.declare_var(ptr_type);
+        let saved_depth_var = builder.declare_var(ptr_type);
         for var in [
-            saved_locals_base_var,
             saved_call_record_base_var,
             saved_call_record_top_var,
             saved_expression_var,
             saved_depth_var,
         ] {
-            builder.declare_var(var, ptr_type);
             let zero = builder.ins().iconst(ptr_type, 0);
             builder.def_var(var, zero);
         }
@@ -1611,9 +1598,6 @@ impl CraneliftCompiler {
         builder.switch_to_block(direct_setup);
         builder.seal_block(direct_setup);
         let cfg = builder.use_var(config_var);
-        let saved_locals = builder
-            .ins()
-            .load(ptr_type, MemFlags::trusted(), cfg, locals_base_offset);
         let saved_call_record = builder
             .ins()
             .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
@@ -1625,7 +1609,6 @@ impl CraneliftCompiler {
             .ins()
             .load(ptr_type, MemFlags::trusted(), cfg, current_expression_offset);
         let saved_depth = builder.ins().load(ptr_type, MemFlags::trusted(), cfg, depth_offset);
-        builder.def_var(saved_locals_base_var, saved_locals);
         builder.def_var(saved_call_record_base_var, saved_call_record);
         builder.def_var(saved_call_record_top_var, saved_call_record_top);
         builder.def_var(saved_expression_var, saved_expression);
@@ -1650,37 +1633,6 @@ impl CraneliftCompiler {
         builder.switch_to_block(direct_setup_body);
         builder.seal_block(direct_setup_body);
         let uses_register_native_abi = Self::uses_register_native_abi(function_type);
-        let direct_locals = if uses_register_native_abi {
-            let direct_locals_size = num_locals
-                .checked_mul(value_size as usize)
-                .and_then(|size| u32::try_from(size.max(1)).ok())
-                .ok_or("native locals size overflow")?;
-            let direct_locals_slot =
-                builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, direct_locals_size, 4));
-            builder.ins().stack_addr(ptr_type, direct_locals_slot, 0)
-        } else {
-            builder.block_params(entry_block)[3]
-        };
-        builder
-            .ins()
-            .store(MemFlags::trusted(), direct_locals, cfg, locals_base_offset);
-        let zero = builder.ins().iconst(types::I64, 0);
-        for (local_index, &promoted) in promoted_locals.iter().enumerate() {
-            let offset = i32::try_from(local_index * value_size as usize).map_err(|_| "local offset overflow")?;
-            let payload = if local_index < num_params {
-                if !uses_register_native_abi || promoted {
-                    continue;
-                }
-                let parameter = builder.block_params(entry_block)[3 + local_index];
-                Self::value_to_payload(&mut builder, parameter, function_type.parameters[local_index])?
-            } else {
-                zero
-            };
-            builder.ins().store(MemFlags::trusted(), payload, direct_locals, offset);
-            builder
-                .ins()
-                .store(MemFlags::trusted(), zero, direct_locals, offset + 8);
-        }
         let table_data = builder.ins().load(
             ptr_type,
             MemFlags::trusted(),
@@ -1735,13 +1687,6 @@ impl CraneliftCompiler {
 
         builder.switch_to_block(setup_done);
         builder.seal_block(setup_done);
-        let locals_base_var = Variable::from_u32(10);
-        builder.declare_var(locals_base_var, ptr_type);
-        let initial_locals_base =
-            builder
-                .ins()
-                .load(ptr_type, MemFlags::trusted(), configuration_val, locals_base_offset);
-        builder.def_var(locals_base_var, initial_locals_base);
         let indirect_call_lowering_context = IndirectCallLoweringContext {
             ptr_type,
             bridge_signature: call_indirect_sig,
@@ -1751,8 +1696,6 @@ impl CraneliftCompiler {
             check_type_signature: check_indirect_type_sig,
             check_type_helper: h_check_indirect_type,
             trap_block,
-            locals_base: locals_base_var,
-            locals_base_offset,
             result_scratch_offset: compiled_call_result_scratch_offset,
             call_record_base_offset,
             value_size,
@@ -1882,11 +1825,8 @@ impl CraneliftCompiler {
         let mut is_unreachable = false;
         let mut dirty_regs = [false; REG_COUNT];
         let mut stack_vars: Vec<Variable> = Vec::with_capacity(max_stack_depth);
-        const VSTACK_VAR_BASE: u32 = 17;
-
-        for i in 0..max_stack_depth {
-            let var = Variable::from_u32(VSTACK_VAR_BASE + i as u32);
-            builder.declare_var(var, types::I64);
+        for _ in 0..max_stack_depth {
+            let var = builder.declare_var(types::I64);
             let zero = builder.ins().iconst(types::I64, 0);
             builder.def_var(var, zero);
             stack_vars.push(var);
@@ -1894,38 +1834,12 @@ impl CraneliftCompiler {
         let mut sp: usize = 0;
 
         // If we allocate something on the stack, make sure to restore the stack at the end.
-        let initial_stack_size_var = Variable::from_u32(VSTACK_VAR_BASE + max_stack_depth as u32);
-        builder.declare_var(initial_stack_size_var, types::I64);
-        let mut next_var_id: u32 = VSTACK_VAR_BASE + max_stack_depth as u32 + 1;
+        let initial_stack_size_var = builder.declare_var(types::I64);
 
-        let reg_vars_f64: [Variable; REG_COUNT] = std::array::from_fn(|_| {
-            let v = Variable::from_u32(next_var_id);
-            next_var_id += 1;
-            builder.declare_var(v, types::F64);
-            v
-        });
-        let stack_vars_f64: Vec<Variable> = (0..max_stack_depth)
-            .map(|_| {
-                let v = Variable::from_u32(next_var_id);
-                next_var_id += 1;
-                builder.declare_var(v, types::F64);
-                v
-            })
-            .collect();
-        let reg_vars_f32: [Variable; REG_COUNT] = std::array::from_fn(|_| {
-            let v = Variable::from_u32(next_var_id);
-            next_var_id += 1;
-            builder.declare_var(v, types::F32);
-            v
-        });
-        let stack_vars_f32: Vec<Variable> = (0..max_stack_depth)
-            .map(|_| {
-                let v = Variable::from_u32(next_var_id);
-                next_var_id += 1;
-                builder.declare_var(v, types::F32);
-                v
-            })
-            .collect();
+        let reg_vars_f64: [Variable; REG_COUNT] = std::array::from_fn(|_| builder.declare_var(types::F64));
+        let stack_vars_f64: Vec<Variable> = (0..max_stack_depth).map(|_| builder.declare_var(types::F64)).collect();
+        let reg_vars_f32: [Variable; REG_COUNT] = std::array::from_fn(|_| builder.declare_var(types::F32));
+        let stack_vars_f32: Vec<Variable> = (0..max_stack_depth).map(|_| builder.declare_var(types::F32)).collect();
         let mut reg_ty = [Bank::Int; REG_COUNT];
         let mut stack_ty = vec![Bank::Int; max_stack_depth];
 
@@ -1952,29 +1866,64 @@ impl CraneliftCompiler {
             .unwrap_or_default();
         let local_vars: Vec<Option<Variable>> = promoted_locals
             .iter()
-            .map(|&promoted| {
+            .enumerate()
+            .map(|(i, &promoted)| {
                 if !promoted {
                     return None;
                 }
-                let v = Variable::from_u32(next_var_id);
-                next_var_id += 1;
-                Some(v)
+                let ty = if local_is_f64[i] {
+                    types::F64
+                } else if local_is_f32[i] {
+                    types::F32
+                } else {
+                    types::I64
+                };
+                Some(builder.declare_var(ty))
             })
             .collect();
-        let mut dirty_locals = vec![false; num_locals];
-        for (i, var) in local_vars.iter().enumerate() {
-            let Some(var) = var else {
-                continue;
-            };
-            let ty = if local_is_f64[i] {
-                types::F64
-            } else if local_is_f32[i] {
-                types::F32
-            } else {
-                types::I64
-            };
-            builder.declare_var(*var, ty);
+        let mut local_is_accessed = vec![false; num_locals];
+        for insn in insns {
+            let accesses = Self::local_accesses(insn);
+            for local_index in accesses.reads.into_iter().flatten() {
+                if let Some(accessed) = local_is_accessed.get_mut(local_index) {
+                    *accessed = true;
+                }
+            }
+            if let Some(local_index) = accesses.write
+                && let Some(accessed) = local_is_accessed.get_mut(local_index)
+            {
+                *accessed = true;
+            }
         }
+        let mut native_local_count = 0usize;
+        let native_local_offsets: Vec<Option<i32>> = local_vars
+            .iter()
+            .zip(&local_is_accessed)
+            .map(|(variable, &accessed)| {
+                if variable.is_some() || !accessed {
+                    return Ok(None);
+                }
+                let offset = native_local_count
+                    .checked_mul(size_of::<u64>())
+                    .and_then(|offset| i32::try_from(offset).ok())
+                    .ok_or("native local offset overflow")?;
+                native_local_count += 1;
+                Ok(Some(offset))
+            })
+            .collect::<Result<_, _>>()?;
+        let native_locals_slot = if native_local_count > 0 {
+            let size = native_local_count
+                .checked_mul(size_of::<u64>())
+                .and_then(|size| u32::try_from(size.max(1)).ok())
+                .filter(|size| *size <= i32::MAX as u32)
+                .ok_or("native locals size overflow")?;
+            Some(builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size, 3)))
+        } else {
+            None
+        };
+        // Keep one address for the dense slot. Lowering stack_load/stack_store at each distinct
+        // offset materializes many separate address values, which the backend may then spill.
+        let native_locals_base = native_locals_slot.map(|slot| builder.ins().stack_addr(ptr_type, slot, 0));
         let edge_cache_vars: Vec<Vec<Option<Variable>>> = edge_cached_locals
             .iter()
             .map(|incoming_locals| {
@@ -1984,10 +1933,7 @@ impl CraneliftCompiler {
                         if !cached {
                             return None;
                         }
-                        let variable = Variable::from_u32(next_var_id);
-                        next_var_id += 1;
-                        builder.declare_var(variable, types::I64);
-                        Some(variable)
+                        Some(builder.declare_var(types::I64))
                     })
                     .collect()
             })
@@ -2504,18 +2450,22 @@ impl CraneliftCompiler {
                     if let Some(value) = local_cache[idx] {
                         value
                     } else {
-                        let lb = $builder.use_var(locals_base_var);
-                        let value = $builder
-                            .ins()
-                            .load(types::I64, MemFlags::trusted(), lb, (idx as i32) * value_size);
+                        let value = $builder.ins().load(
+                            types::I64,
+                            MemFlags::trusted(),
+                            native_locals_base.expect("unpromoted local needs native storage"),
+                            native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                        );
                         local_cache[idx] = Some(value);
                         value
                     }
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    $builder
-                        .ins()
-                        .load(types::I64, MemFlags::trusted(), lb, (idx as i32) * value_size)
+                    $builder.ins().load(
+                        types::I64,
+                        MemFlags::trusted(),
+                        native_locals_base.expect("unpromoted local needs native storage"),
+                        native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                    )
                 }
             }};
         }
@@ -2533,10 +2483,12 @@ impl CraneliftCompiler {
                     let bits = read_local_inline!($builder, $idx_imm);
                     $builder.ins().bitcast(types::F64, MemFlags::new(), bits)
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    $builder
-                        .ins()
-                        .load(types::F64, MemFlags::trusted(), lb, (idx as i32) * value_size)
+                    $builder.ins().load(
+                        types::F64,
+                        MemFlags::trusted(),
+                        native_locals_base.expect("unpromoted local needs native storage"),
+                        native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                    )
                 }
             }};
         }
@@ -2556,10 +2508,14 @@ impl CraneliftCompiler {
                     let bits32 = $builder.ins().ireduce(types::I32, bits);
                     $builder.ins().bitcast(types::F32, MemFlags::new(), bits32)
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    $builder
-                        .ins()
-                        .load(types::F32, MemFlags::trusted(), lb, (idx as i32) * value_size)
+                    let bits = $builder.ins().load(
+                        types::I64,
+                        MemFlags::trusted(),
+                        native_locals_base.expect("unpromoted local needs native storage"),
+                        native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                    );
+                    let bits32 = $builder.ins().ireduce(types::I32, bits);
+                    $builder.ins().bitcast(types::F32, MemFlags::new(), bits32)
                 }
             }};
         }
@@ -2577,16 +2533,16 @@ impl CraneliftCompiler {
                         v
                     };
                     $builder.def_var(var, stored);
-                    dirty_locals[idx] = true;
                 } else if block_cached_locals[idx] {
                     local_cache[idx] = Some(v);
                     local_cache_dirty[idx] = true;
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    let offset = (idx as i32) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), v, lb, offset);
-                    let zero = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                    $builder.ins().store(
+                        MemFlags::trusted(),
+                        v,
+                        native_locals_base.expect("unpromoted local needs native storage"),
+                        native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                    );
                 }
             }};
         }
@@ -2601,17 +2557,17 @@ impl CraneliftCompiler {
                         let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), v);
                         $builder.def_var(var, bits);
                     }
-                    dirty_locals[idx] = true;
                 } else if block_cached_locals[idx] {
                     let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), v);
                     local_cache[idx] = Some(bits);
                     local_cache_dirty[idx] = true;
                 } else {
-                    let lb = $builder.use_var(locals_base_var);
-                    let offset = (idx as i32) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), v, lb, offset);
-                    let zero = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                    $builder.ins().store(
+                        MemFlags::trusted(),
+                        v,
+                        native_locals_base.expect("unpromoted local needs native storage"),
+                        native_local_offsets[idx].expect("accessed unpromoted local needs native storage"),
+                    );
                 }
             }};
         }
@@ -2621,7 +2577,6 @@ impl CraneliftCompiler {
                 let v = $val;
                 if local_vars.get(idx).is_some_and(Option::is_some) && local_is_f32[idx] {
                     $builder.def_var(local_vars[idx].expect("promoted local"), v);
-                    dirty_locals[idx] = true;
                 } else {
                     let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), v);
                     let bits = $builder.ins().sextend(types::I64, bits32);
@@ -2658,28 +2613,6 @@ impl CraneliftCompiler {
                 } else {
                     let val = read_src!($builder, $src);
                     write_local_inline!($builder, $idx_imm, val);
-                }
-            }};
-        }
-        macro_rules! flush_locals {
-            ($builder:expr) => {{
-                let lb = $builder.use_var(locals_base_var);
-                for i in 0..local_vars.len() {
-                    if !dirty_locals[i] {
-                        continue;
-                    }
-                    let var = local_vars[i].expect("dirty local must be promoted");
-                    let v = $builder.use_var(var);
-                    let stored = if local_is_f32[i] {
-                        let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), v);
-                        $builder.ins().sextend(types::I64, bits32)
-                    } else {
-                        v
-                    };
-                    let offset = (i as i32) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), stored, lb, offset);
-                    let zero = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
                 }
             }};
         }
@@ -2746,8 +2679,6 @@ impl CraneliftCompiler {
                     if local_cache_dirty.iter().enumerate().any(|(local_index, &dirty)| {
                         dirty && block.live_out.contains(local_index) && local_needs_store(local_index)
                     }) {
-                        let lb = $builder.use_var(locals_base_var);
-                        let zero = $builder.ins().iconst(types::I64, 0);
                         for local_index in 0..num_locals {
                             if !local_cache_dirty[local_index]
                                 || !block.live_out.contains(local_index)
@@ -2756,9 +2687,13 @@ impl CraneliftCompiler {
                                 continue;
                             }
                             let value = local_cache[local_index].expect("dirty local must be cached");
-                            let offset = (local_index as i32) * value_size;
-                            $builder.ins().store(MemFlags::trusted(), value, lb, offset);
-                            $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                            $builder.ins().store(
+                                MemFlags::trusted(),
+                                value,
+                                native_locals_base.expect("unpromoted local needs native storage"),
+                                native_local_offsets[local_index]
+                                    .expect("accessed unpromoted local needs native storage"),
+                            );
                         }
                     }
 
@@ -2779,12 +2714,6 @@ impl CraneliftCompiler {
                 $builder.ins().brif(is_trap, trap_block, &[], cont, &[]);
                 $builder.switch_to_block(cont);
                 $builder.seal_block(cont);
-                // Reload locals_base; frame_stack may have reallocated.
-                let _cfg_for_lb = $builder.use_var(config_var);
-                let new_lb = $builder
-                    .ins()
-                    .load(ptr_type, MemFlags::trusted(), _cfg_for_lb, locals_base_offset);
-                $builder.def_var(locals_base_var, new_lb);
             }};
         }
         macro_rules! set_trap {
@@ -2837,13 +2766,10 @@ impl CraneliftCompiler {
         // A direct native caller supplies the same values without going through locals memory.
         macro_rules! init_locals_fresh {
             ($builder:expr) => {{
-                let lb = $builder.use_var(locals_base_var);
-                let memory_zero = if local_vars[num_params..].iter().any(Option::is_none) {
-                    Some($builder.ins().iconst(types::I64, 0))
-                } else {
-                    None
-                };
                 for (i, var) in local_vars.iter().enumerate() {
+                    if !local_is_accessed[i] {
+                        continue;
+                    }
                     if let Some(var) = var {
                         if i < num_params {
                             let val = if uses_register_native_abi {
@@ -2854,6 +2780,7 @@ impl CraneliftCompiler {
                                     Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
                                 }
                             } else {
+                                let incoming_locals = $builder.block_params(entry_block)[3];
                                 let ty = if local_is_f64[i] {
                                     types::F64
                                 } else if local_is_f32[i] {
@@ -2862,7 +2789,9 @@ impl CraneliftCompiler {
                                     types::I64
                                 };
                                 let offset = (i as i32) * value_size;
-                                $builder.ins().load(ty, MemFlags::trusted(), lb, offset)
+                                $builder
+                                    .ins()
+                                    .load(ty, MemFlags::trusted(), incoming_locals, offset)
                             };
                             $builder.def_var(*var, val);
                         } else if local_is_f64[i] {
@@ -2875,30 +2804,43 @@ impl CraneliftCompiler {
                             let zero = $builder.ins().iconst(types::I64, 0);
                             $builder.def_var(*var, zero);
                         }
-                    } else if i >= num_params {
-                        let zero = memory_zero.expect("unpromoted non-parameter local needs memory initialization");
-                        let offset = (i as i32) * value_size;
-                        $builder.ins().store(MemFlags::trusted(), zero, lb, offset);
-                        $builder.ins().store(MemFlags::trusted(), zero, lb, offset + 8);
+                    } else {
+                        let payload = if i < num_params {
+                            if uses_register_native_abi {
+                                let parameter = $builder.block_params(entry_block)[3 + i];
+                                Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
+                            } else {
+                                let incoming_locals = $builder.block_params(entry_block)[3];
+                                let offset = (i as i32) * value_size;
+                                $builder
+                                    .ins()
+                                    .load(types::I64, MemFlags::trusted(), incoming_locals, offset)
+                            }
+                        } else {
+                            $builder.ins().iconst(types::I64, 0)
+                        };
+                        $builder.ins().store(
+                            MemFlags::trusted(),
+                            payload,
+                            native_locals_base.expect("unpromoted local needs native storage"),
+                            native_local_offsets[i].expect("accessed unpromoted local needs native storage"),
+                        );
                     }
                 }
             }};
         }
         macro_rules! init_locals_resume {
             ($builder:expr) => {{
-                let lb = $builder.use_var(locals_base_var);
+                let cfg = $builder.use_var(config_var);
+                let canonical_locals = $builder
+                    .ins()
+                    .load(ptr_type, MemFlags::trusted(), cfg, locals_base_offset);
                 for (i, var) in local_vars.iter().enumerate() {
-                    let Some(var) = var else {
+                    if !local_is_accessed[i] {
                         continue;
-                    };
-                    let val = if i < num_params && uses_register_native_abi {
-                        let parameter = $builder.block_params(entry_block)[3 + i];
-                        if local_is_f64[i] || local_is_f32[i] {
-                            parameter
-                        } else {
-                            Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
-                        }
-                    } else {
+                    }
+                    let canonical_offset = (i as i32) * value_size;
+                    if let Some(var) = var {
                         let ty = if local_is_f64[i] {
                             types::F64
                         } else if local_is_f32[i] {
@@ -2906,10 +2848,24 @@ impl CraneliftCompiler {
                         } else {
                             types::I64
                         };
-                        let offset = (i as i32) * value_size;
-                        $builder.ins().load(ty, MemFlags::trusted(), lb, offset)
-                    };
-                    $builder.def_var(*var, val);
+                        let value = $builder
+                            .ins()
+                            .load(ty, MemFlags::trusted(), canonical_locals, canonical_offset);
+                        $builder.def_var(*var, value);
+                    } else {
+                        let payload = $builder.ins().load(
+                            types::I64,
+                            MemFlags::trusted(),
+                            canonical_locals,
+                            canonical_offset,
+                        );
+                        $builder.ins().store(
+                            MemFlags::trusted(),
+                            payload,
+                            native_locals_base.expect("unpromoted local needs native storage"),
+                            native_local_offsets[i].expect("accessed unpromoted local needs native storage"),
+                        );
+                    }
                 }
             }};
         }
@@ -2977,7 +2933,6 @@ impl CraneliftCompiler {
                         value_size,
                         &dirty_regs,
                     );
-                    flush_locals!(builder);
                     set_trap!(builder, "unreachable executed");
                     builder.ins().jump(trap_block, &[]);
                     is_unreachable = true;
@@ -2991,9 +2946,7 @@ impl CraneliftCompiler {
                     let param_count = (insn.imm3 >> 16) as usize;
                     let after = builder.create_block();
                     let entry_real_depth_var = if max_stack_depth == 0 {
-                        let var = Variable::from_u32(next_var_id);
-                        next_var_id += 1;
-                        builder.declare_var(var, types::I64);
+                        let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
                         let entry = builder.ins().iadd_imm(cur, -(param_count as i64));
                         builder.def_var(var, entry);
@@ -3020,9 +2973,7 @@ impl CraneliftCompiler {
                     let header = builder.create_block();
                     let after = builder.create_block();
                     let entry_real_depth_var = if max_stack_depth == 0 {
-                        let var = Variable::from_u32(next_var_id);
-                        next_var_id += 1;
-                        builder.declare_var(var, types::I64);
+                        let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
                         let entry = builder.ins().iadd_imm(cur, -(param_count as i64));
                         builder.def_var(var, entry);
@@ -3058,9 +3009,7 @@ impl CraneliftCompiler {
                     let cond_raw = read_src!(builder, insn.sources[0]);
                     let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond_raw, 0);
                     let entry_real_depth_var = if max_stack_depth == 0 {
-                        let var = Variable::from_u32(next_var_id);
-                        next_var_id += 1;
-                        builder.declare_var(var, types::I64);
+                        let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
                         let entry = builder.ins().iadd_imm(cur, -(_param_count as i64));
                         builder.def_var(var, entry);
@@ -4113,7 +4062,7 @@ impl CraneliftCompiler {
                                 None
                             };
                             if let Some(result) = native_result {
-                                builder.ins().jump(continuation, &[result]);
+                                builder.ins().jump(continuation, &[BlockArg::Value(result)]);
                             } else {
                                 builder.ins().jump(continuation, &[]);
                             }
@@ -4144,7 +4093,7 @@ impl CraneliftCompiler {
                                 .ins()
                                 .store(MemFlags::trusted(), original_top, cv, value_stack_top_offset);
                             if let Some(result) = fallback_result {
-                                builder.ins().jump(continuation, &[result]);
+                                builder.ins().jump(continuation, &[BlockArg::Value(result)]);
                             } else {
                                 builder.ins().jump(continuation, &[]);
                             }
@@ -4485,14 +4434,10 @@ impl CraneliftCompiler {
         macro_rules! restore_direct_call_context {
             ($builder:expr) => {{
                 let cfg = $builder.use_var(config_var);
-                let saved_locals = $builder.use_var(saved_locals_base_var);
                 let saved_call_record = $builder.use_var(saved_call_record_base_var);
                 let saved_call_record_top = $builder.use_var(saved_call_record_top_var);
                 let saved_expression = $builder.use_var(saved_expression_var);
                 let saved_depth = $builder.use_var(saved_depth_var);
-                $builder
-                    .ins()
-                    .store(MemFlags::trusted(), saved_locals, cfg, locals_base_offset);
                 $builder.ins().store(
                     MemFlags::trusted(),
                     saved_call_record,
@@ -4552,7 +4497,6 @@ impl CraneliftCompiler {
             value_size,
             &dirty_regs,
         );
-        flush_locals!(builder);
         let direct_return = builder.create_block();
         let native_return = builder.create_block();
         let direct_call_mode = builder.use_var(direct_call_mode_var);

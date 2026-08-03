@@ -39,19 +39,59 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     VERIFY(compile.has_value());
 
     auto instance = MUST(machine.instantiate(*module, { *compile }));
-    Optional<Wasm::FunctionAddress> run;
-    for (auto const& export_ : instance->exports()) {
-        if (export_.name() == "run"sv)
-            run = export_.value().get<Wasm::FunctionAddress>();
-    }
-    VERIFY(run.has_value());
+    auto find_export = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        return *address;
+    };
+    auto run = find_export("run"sv);
 
-    auto result = machine.invoke(*run, {});
+    auto result = machine.invoke(run, {});
     EXPECT(compiled.cranelift_compiled);
     EXPECT_EQ(compilation_requests, 1u);
     EXPECT(!result.is_trap());
     EXPECT_EQ(result.values().size(), 1u);
     EXPECT_EQ(result.values()[0].to<i32>(), 3);
+
+    auto fresh_native_result = machine.invoke(run, {});
+    EXPECT_EQ(compilation_requests, 2u);
+    EXPECT(!fresh_native_result.is_trap());
+    EXPECT_EQ(fresh_native_result.values().size(), 1u);
+    EXPECT_EQ(fresh_native_result.values()[0].to<i32>(), 6);
+
+    Vector<Wasm::Value> native_arguments;
+    for (i32 argument = 1; argument <= 11; ++argument)
+        native_arguments.append(Wasm::Value(argument));
+    auto native_unpromoted_result = machine.invoke(find_export("native_unpromoted"sv), move(native_arguments));
+    EXPECT(!native_unpromoted_result.is_trap());
+    EXPECT_EQ(native_unpromoted_result.values().size(), 1u);
+    EXPECT_EQ(native_unpromoted_result.values()[0].to<i32>(), 12);
+
+    auto direct_unpromoted_result = machine.invoke(find_export("direct_unpromoted"sv), {});
+    EXPECT(!direct_unpromoted_result.is_trap());
+    EXPECT_EQ(direct_unpromoted_result.values().size(), 1u);
+    EXPECT_EQ(direct_unpromoted_result.values()[0].to<i32>(), 12);
+
+    Vector<Wasm::Value> typed_arguments {
+        Wasm::Value(static_cast<i32>(1)),
+        Wasm::Value(static_cast<i64>(2)),
+        Wasm::Value(3.5f),
+        Wasm::Value(4.25),
+    };
+    auto native_typed_unpromoted_result = machine.invoke(
+        find_export("native_typed_unpromoted"sv), move(typed_arguments));
+    EXPECT(!native_typed_unpromoted_result.is_trap());
+    EXPECT_EQ(native_typed_unpromoted_result.values().size(), 1u);
+    EXPECT_EQ(native_typed_unpromoted_result.values()[0].to<double>(), 20.75);
+
+    auto direct_typed_unpromoted_result = machine.invoke(find_export("direct_typed_unpromoted"sv), {});
+    EXPECT(!direct_typed_unpromoted_result.is_trap());
+    EXPECT_EQ(direct_typed_unpromoted_result.values().size(), 1u);
+    EXPECT_EQ(direct_typed_unpromoted_result.values()[0].to<double>(), 20.75);
 }
 
 TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
