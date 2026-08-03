@@ -459,7 +459,7 @@ void BytecodeInterpreter::interpret(Configuration& configuration)
         }
     }
     if (native_entry != 0) {
-        (void)run_native_entry(configuration);
+        run_native_entry(configuration);
         goto done;
     }
     {
@@ -524,10 +524,10 @@ Outcome BytecodeInterpreter::run_compiled_function_direct(Configuration& configu
     return handler(*this, configuration, instruction, short_ip, cc, addresses_ptr);
 }
 
-// Enter the Cranelift-compiled native code for this function. The native entry conforms to the
-// same handler ABI as the direct-threaded interpreter, but lives in CompiledInstructions::cranelift_entry
-// (dispatches[0].handler_ptr stays the C++ handler). Caller must have confirmed the entry is non-zero.
-Outcome BytecodeInterpreter::run_native_entry(Configuration& configuration)
+// Enter the Cranelift-compiled native code for this function. The native entry uses the
+// direct-threaded interpreter handler parameters, but completing it always completes this frame.
+// It therefore has no Outcome result that could resume interpreter dispatch.
+void BytecodeInterpreter::run_native_entry(Configuration& configuration)
 {
     m_trap = Empty {};
     auto& expression = configuration.frame().expression();
@@ -535,8 +535,8 @@ Outcome BytecodeInterpreter::run_native_entry(Configuration& configuration)
     auto const* addresses_ptr = expression.compiled_instructions.src_dst_mappings.data();
     ShortenedIP short_ip { .current_ip_value = 0 };
     auto const instruction = cc[0].instruction;
-    auto const handler = bit_cast<Outcome (*)(HANDLER_PARAMS(DECOMPOSE_PARAMS_TYPE_ONLY))>(cranelift_entry_acquire(expression.compiled_instructions));
-    return handler(*this, configuration, instruction, short_ip, cc, addresses_ptr);
+    auto const handler = bit_cast<void (*)(HANDLER_PARAMS(DECOMPOSE_PARAMS_TYPE_ONLY))>(cranelift_entry_acquire(expression.compiled_instructions));
+    handler(*this, configuration, instruction, short_ip, cc, addresses_ptr);
 }
 
 #define HANDLE_INSTRUCTION(name, ...)                                                              \
@@ -2026,10 +2026,13 @@ HANDLE_INSTRUCTION(synthetic_tier_up)
     auto& ci = configuration.frame().expression().compiled_instructions;
     auto const native_entry = cranelift_entry_acquire(ci);
     if (native_entry != 0) {
-        // If we have native code for this block, jump into it.
-        // The code is set up such that the target checkpoint is recovered from short_ip and nothing else needs to be passed as the stack is empty and all live state is in the shared locals.
-        auto const handler = bit_cast<Outcome (*)(HANDLER_PARAMS(DECOMPOSE_PARAMS_TYPE_ONLY))>(native_entry);
-        return handler(interpreter, configuration, cc[short_ip.current_ip_value].instruction, short_ip, cc, addresses_ptr);
+        // If we have native code for this block, hand ownership of the current activation to it.
+        // The target checkpoint is recovered from short_ip; the empty operand stack and canonical
+        // locals provide the state needed by the native resume path. Native completion also
+        // completes this frame, so interpreter dispatch must not resume afterwards.
+        auto const handler = bit_cast<void (*)(HANDLER_PARAMS(DECOMPOSE_PARAMS_TYPE_ONLY))>(native_entry);
+        handler(interpreter, configuration, cc[short_ip.current_ip_value].instruction, short_ip, cc, addresses_ptr);
+        return Outcome::Return;
     }
     TAILCALL return continue_(HANDLER_PARAMS(DECOMPOSE_PARAMS_NAME_ONLY));
 }

@@ -12,6 +12,48 @@
 #include <LibWasm/AbstractMachine/Validator.h>
 #include <LibWasm/Constants.h>
 
+TEST_CASE(tier_up_does_not_resume_interpreter_frame)
+{
+    auto file = MUST(Core::File::open("Fixtures/tier-up-one-way.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, {}, Wasm::CompileToNative::No));
+
+    auto& compiled = module->code_section().functions()[0].func().body().compiled_instructions;
+    EXPECT(compiled.has_tier_up_checkpoints);
+    EXPECT(!compiled.cranelift_compiled);
+
+    size_t compilation_requests = 0;
+    Wasm::FunctionType compile_type { {}, {} };
+    auto compile = machine.store().allocate(Wasm::HostFunction {
+        [&](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
+            ++compilation_requests;
+            Wasm::start_cranelift_compilation(*module);
+            return Wasm::Result { Vector<Wasm::Value> {} };
+        },
+        compile_type,
+        "compile" });
+    VERIFY(compile.has_value());
+
+    auto instance = MUST(machine.instantiate(*module, { *compile }));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(compiled.cranelift_compiled);
+    EXPECT_EQ(compilation_requests, 1u);
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 3);
+}
+
 TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
 {
     auto file = MUST(Core::File::open("Fixtures/label-stack-cleanup.wasm"sv, Core::File::OpenMode::Read));
