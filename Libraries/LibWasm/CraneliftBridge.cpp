@@ -47,7 +47,6 @@ struct InputHeader {
     u32 function_type_count;
     u32 function_types_offset;
     u32 helpers_offset;
-    u64 outcome_return;
     u64 code_region_start;
     u64 reloc_region_start;
     u64 total_size;
@@ -140,7 +139,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 23;
+constexpr u32 cache_blob_format_version = 24;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -625,18 +624,14 @@ static ALWAYS_INLINE i32 wasm_cl_run_compiled(BytecodeInterpreter& interpreter, 
     config.ip() = 0;
 
     interpreter.clear_trap();
-    using HandlerFn = Outcome (*)(BytecodeInterpreter&, Configuration&, Instruction const*, u32, Dispatch const*, SourcesAndDestination const*);
+    using HandlerFn = void (*)(BytecodeInterpreter&, Configuration&, Instruction const*, u32, Dispatch const*, SourcesAndDestination const*);
     auto const handler = bit_cast<HandlerFn>(entry.handler_ptr);
-    auto outcome = handler(interpreter, config, entry.first_insn, 0, bit_cast<Dispatch const*>(entry.dispatches_ptr), bit_cast<SourcesAndDestination const*>(entry.src_dst_ptr));
+    handler(interpreter, config, entry.first_insn, 0, bit_cast<Dispatch const*>(entry.dispatches_ptr), bit_cast<SourcesAndDestination const*>(entry.src_dst_ptr));
 
     config.m_call_record_stack.release_to(caller_record_mark);
     config.set_call_record_base(caller_record_base);
     config.depth()--;
 
-    if (outcome != Outcome::Return) {
-        interpreter.set_trap("Compiled function returned unexpectedly"sv);
-        return 1;
-    }
     if (interpreter.did_trap())
         return 1;
     if (entry.arity == 1)
@@ -1252,8 +1247,6 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch, Module const&
         return;
 
     static auto helpers = make_runtime_helpers();
-    u64 outcome_return = to_underlying(Outcome::Return);
-
     size_t function_count = batch.size();
     auto const entries_offset = sizeof(InputHeader);
     auto const entries_size = sizeof(InputFunctionEntry) * function_count;
@@ -1361,7 +1354,6 @@ static void try_cranelift_compile_batch(Vector<BatchInput>& batch, Module const&
         .function_type_count = static_cast<u32>(function_types.size()),
         .function_types_offset = static_cast<u32>(function_types_offset),
         .helpers_offset = static_cast<u32>(helpers_offset),
-        .outcome_return = outcome_return,
         .code_region_start = code_region_start,
         .reloc_region_start = reloc_region_start,
         .total_size = total_size,

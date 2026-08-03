@@ -173,7 +173,6 @@ pub struct CompiledFunction {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FunctionCompilationOptions {
-    pub outcome_return_value: u64,
     pub result_arity: u32,
     pub num_locals: u32,
     pub num_params: u32,

@@ -34,7 +34,6 @@ struct InputHeader {
     function_type_count: u32,
     function_types_offset: u32,
     helpers_offset: u32,
-    outcome_return: u64,
     code_region_start: u64,
     reloc_region_start: u64,
     total_size: u64,
@@ -311,7 +310,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk_size = func_count.div_ceil(thread_count.max(1));
     let mapped_ref: &[u8] = mapped;
     let helpers_ref = &helpers;
-    let outcome_return = header.outcome_return;
     let function_types_ref = &function_types;
 
     let compiled_chunks: Vec<Vec<(usize, CompiledFunction)>> = std::thread::scope(|scope| {
@@ -354,7 +352,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         insns,
                         helpers_ref,
                         FunctionCompilationOptions {
-                            outcome_return_value: outcome_return,
                             result_arity: entry.result_arity,
                             num_locals: entry.num_locals,
                             num_params: entry.num_params,

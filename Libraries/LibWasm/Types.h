@@ -1008,8 +1008,9 @@ struct CompiledInstructions {
     // into one word instead of scattering padding between them.
 
     // Native adapter and body entry points for this function. Both are zero until the background/AOT
-    // compile has fully installed the code. The adapter conforms to the interpreter handler ABI;
-    // compiled callers use the body entry to skip it. Both are published with atomic store-release
+    // compile has fully installed the code. The adapter uses the interpreter handler parameters but
+    // returns void, making entry a one-way handoff of the current activation. Compiled callers use
+    // the body entry to skip it. Both are published with atomic store-release
     // and read with atomic load-acquire, so a function can tier up concurrently with execution without
     // a reader ever observing half-installed code. dispatches[0].handler_ptr always stays the C++
     // interpreter handler, so the interpreter path is valid regardless of compilation state.
