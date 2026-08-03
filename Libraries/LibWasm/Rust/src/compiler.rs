@@ -1335,7 +1335,6 @@ impl CraneliftCompiler {
         function_types: &[WasmFunctionType<'_>],
     ) -> Result<CompiledFunction, &'static str> {
         let FunctionCompilationOptions {
-            outcome_return_value,
             result_arity,
             num_locals,
             num_params,
@@ -1374,8 +1373,9 @@ impl CraneliftCompiler {
             .finish(flags)
             .map_err(|_| "failed to build ISA")?;
 
-        // Function signature matches handler_ptr:
-        //   u64 fn(void* interpreter, void* configuration, void* insn, u32 short_ip, void* cc, void* addrs)
+        // Function signature uses the handler_ptr parameters, but has no return value: entering
+        // through this adapter transfers the current activation to native code until completion.
+        //   void fn(void* interpreter, void* configuration, void* insn, u32 short_ip, void* cc, void* addrs)
         let ptr_type = isa.pointer_type();
         let host_cc = isa.default_call_conv();
         let mut sig = Signature::new(host_cc);
@@ -1385,8 +1385,6 @@ impl CraneliftCompiler {
         sig.params.push(AbiParam::new(types::I32)); // short_ip (unused)
         sig.params.push(AbiParam::new(ptr_type)); // cc (unused)
         sig.params.push(AbiParam::new(ptr_type)); // addresses_ptr (unused)
-        sig.returns.push(AbiParam::new(types::I64)); // Outcome
-
         let handler_signature = sig;
         let native_signature = Self::native_signature(&*isa, function_type)?;
         let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), native_signature.clone());
@@ -4648,8 +4646,7 @@ impl CraneliftCompiler {
                 .ins()
                 .store(MemFlags::trusted(), new_top, adapter_params[1], value_stack_top_offset);
         }
-        let outcome = adapter_builder.ins().iconst(types::I64, outcome_return_value as i64);
-        adapter_builder.ins().return_(&[outcome]);
+        adapter_builder.ins().return_(&[]);
         adapter_builder.finalize();
         let adapter = Self::compile_function(&*isa, adapter)?;
 

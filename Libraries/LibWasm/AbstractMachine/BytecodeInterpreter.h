@@ -105,7 +105,7 @@ struct WASM_API BytecodeInterpreter final : public Interpreter {
     bool store_to_memory(Configuration&, Instruction::MemoryArgument const&, ReadonlyBytes data, Value const& base);
     Outcome call_address(Configuration&, FunctionAddress, SourcesAndDestination const&, CallAddressSource = CallAddressSource::DirectCall, CallType = CallType::UsingStack);
     Outcome run_compiled_function_direct(Configuration&);
-    Outcome run_native_entry(Configuration&);
+    void run_native_entry(Configuration&);
     bool trap_if_insufficient_native_stack_space(size_t minimum_native_stack_space_to_keep_free = 2 * MiB);
 
     template<typename T>

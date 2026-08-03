@@ -24,7 +24,6 @@ struct InputHeader {
     function_type_count: u32,
     function_types_offset: u32,
     layout_offset: u32,
-    outcome_return: u64,
     output_size: u64,
     total_size: u64,
 }
@@ -315,8 +314,6 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
     let mapped_ref: &[u8] = input;
     let layout_ref = &layout;
     let function_types_ref = function_types.as_slice();
-    let outcome_return = header.outcome_return;
-
     // Compile into temporary per-function allocations first so the serialized
     // output contains only bytes that Cranelift actually produced.
     let compiled_chunks = std::thread::scope(|scope| {
@@ -365,7 +362,6 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                         insns,
                         layout_ref,
                         FunctionCompilationOptions {
-                            outcome_return_value: outcome_return,
                             result_arity: entry.result_arity,
                             num_locals: entry.num_locals,
                             num_params: entry.num_params,
@@ -576,7 +572,6 @@ mod tests {
             function_type_count: 0,
             function_types_offset: 0,
             layout_offset: 0,
-            outcome_return: 0,
             output_size: 0,
             total_size: size_of::<InputHeader>() as u64,
         };
