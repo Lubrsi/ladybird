@@ -4,9 +4,8 @@
   (global $iterations (mut i32) (i32.const 0))
 
   (func (export "run") (result i32)
-    ;; Keep ten read-only locals ahead of the loop counter in the bounded promotion order, then
-    ;; make the function large enough to use selective promotion. The loop counter consequently
-    ;; exercises the unpromoted native-local representation on both OSR and fresh native entry.
+    ;; Keep the loop counter after more than 256 declared locals. This covers both OSR and fresh
+    ;; native entry without relying on a small or prefix-shaped local set.
     (local $stable0 i32)
     (local $stable1 i32)
     (local $stable2 i32)
@@ -64,9 +63,9 @@
 
     (global.get $iterations))
 
-  ;; The first ten stable parameters win the bounded promotion order. The final parameter remains
-  ;; in native payload storage, covering both interpreter-adapter and direct native entry.
-  (func $native_unpromoted (export "native_unpromoted")
+  ;; Keep the established large-local fixture shape while covering both interpreter-adapter and
+  ;; direct native entry.
+  (func $native_many_locals (export "native_many_locals")
     (param $stable0 i32)
     (param $stable1 i32)
     (param $stable2 i32)
@@ -118,9 +117,8 @@
     (local.set $value (i32.add (local.get $value) (i32.const 1)))
     (local.get $value))
 
-  ;; Keep all four numeric parameters outside the promotion budget while remaining below the
-  ;; typed native ABI's parameter limit.
-  (func $native_typed_unpromoted (export "native_typed_unpromoted")
+  ;; Cover every numeric local type while remaining below the typed native ABI's parameter limit.
+  (func $native_typed_locals (export "native_typed_locals")
     (param $i i32)
     (param $l i64)
     (param $f f32)
@@ -184,8 +182,8 @@
         (f64.promote_f32 (local.get $f))
         (local.get $d))))
 
-  (func (export "direct_unpromoted") (result i32)
-    (call $native_unpromoted
+  (func (export "direct_many_locals") (result i32)
+    (call $native_many_locals
       (i32.const 1)
       (i32.const 2)
       (i32.const 3)
@@ -198,10 +196,69 @@
       (i32.const 10)
       (i32.const 11)))
 
-  (func (export "direct_typed_unpromoted") (result f64)
-    (call $native_typed_unpromoted
+  (func (export "direct_typed_locals") (result f64)
+    (call $native_typed_locals
       (i32.const 1)
       (i64.const 2)
       (f32.const 3.5)
       (f64.const 4.25)))
+
+  ;; Both predecessors define every local consumed after the merge.
+  (func (export "ssa_typed_merge") (param $condition i32) (result f64)
+    (local $i i32)
+    (local $l i64)
+    (local $f f32)
+    (local $d f64)
+    (if (local.get $condition)
+      (then
+        (local.set $i (i32.const 2))
+        (local.set $l (i64.const 4))
+        (local.set $f (f32.const 6.5))
+        (local.set $d (f64.const 8.25)))
+      (else
+        (local.set $i (i32.const 3))
+        (local.set $l (i64.const 5))
+        (local.set $f (f32.const 7.5))
+        (local.set $d (f64.const 9.25))))
+    (f64.add
+      (f64.add
+        (f64.convert_i32_s (local.get $i))
+        (f64.convert_i64_s (local.get $l)))
+      (f64.add
+        (f64.promote_f32 (local.get $f))
+        (local.get $d))))
+
+  ;; The false predecessor retains the definition that reaches the if.
+  (func (export "ssa_partial_merge") (param $condition i32) (result i32)
+    (local $value i32)
+    (local.set $value (i32.const 10))
+    (if (local.get $condition)
+      (then (local.set $value (i32.const 20))))
+    (local.get $value))
+
+  ;; Both locals are loop-carried and consumed after the backedge closes.
+  (func (export "ssa_loop_backedge") (param $limit i32) (result i64)
+    (local $counter i32)
+    (local $accumulator i64)
+    (loop $loop
+      (local.set $accumulator (i64.add (local.get $accumulator) (i64.const 3)))
+      (local.set $counter (i32.add (local.get $counter) (i32.const 1)))
+      (br_if $loop (i32.lt_u (local.get $counter) (local.get $limit))))
+    (local.get $accumulator))
+
+  ;; Exercise i32 values through virtual registers, select, a control-flow merge, and an i32 local
+  ;; without requiring a canonical i64 payload during native execution.
+  (func (export "i32_bank_edges") (param $value i32) (param $condition i32) (result i32)
+    (local $selected i32)
+    (local.set $selected
+      (select
+        (i32.add (local.get $value) (i32.const 17))
+        (i32.xor (local.get $value) (i32.const -1))
+        (local.get $condition)))
+    (if (local.get $condition)
+      (then
+        (local.set $selected (i32.shr_u (local.get $selected) (i32.const 1))))
+      (else
+        (local.set $selected (i32.extend8_s (local.get $selected)))))
+    (local.get $selected))
 )
