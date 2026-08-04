@@ -139,7 +139,7 @@ struct BatchInput {
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 27;
+constexpr u32 cache_blob_format_version = 28;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -240,13 +240,13 @@ static u64 compute_layout_hash(RuntimeHelpers const& h)
 // `HelperId` values are assigned in lockstep with the field order of `RuntimeHelpers`,
 // so the helper address for id N is simply the N-th `size_t` field of the struct.
 static_assert(offsetof(RuntimeHelpers, call_function) == 0);
-static_assert(offsetof(RuntimeHelpers, memory_fill) == sizeof(size_t) * 11);
-static_assert(offsetof(RuntimeHelpers, primitive_storage_cage_base) == sizeof(size_t) * 12);
-static_assert(offsetof(RuntimeHelpers, call_indirect_with_record) == sizeof(size_t) * 13);
-static_assert(offsetof(RuntimeHelpers, stack_exhaustion) == sizeof(size_t) * 14);
-static_assert(offsetof(RuntimeHelpers, raise_trap) == sizeof(size_t) * 15);
-static_assert(offsetof(RuntimeHelpers, check_indirect_type) == sizeof(size_t) * 16);
-static_assert(HELPER_COUNT == 17);
+static_assert(offsetof(RuntimeHelpers, memory_fill) == sizeof(size_t) * 10);
+static_assert(offsetof(RuntimeHelpers, primitive_storage_cage_base) == sizeof(size_t) * 11);
+static_assert(offsetof(RuntimeHelpers, call_indirect_with_record) == sizeof(size_t) * 12);
+static_assert(offsetof(RuntimeHelpers, stack_exhaustion) == sizeof(size_t) * 13);
+static_assert(offsetof(RuntimeHelpers, raise_trap) == sizeof(size_t) * 14);
+static_assert(offsetof(RuntimeHelpers, check_indirect_type) == sizeof(size_t) * 15);
+static_assert(HELPER_COUNT == 16);
 static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
@@ -766,13 +766,6 @@ i32 wasm_cl_call_function(void* interp_ptr, void* config_ptr, i32 func_index)
     return outcome == Outcome::Return && interpreter.did_trap() ? 1 : 0;
 }
 
-void wasm_cl_set_trap(void* interp_ptr, u8 const* msg, i32 len);
-void wasm_cl_set_trap(void* interp_ptr, u8 const* msg, i32 len)
-{
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    interpreter.set_trap(StringView(reinterpret_cast<char const*>(msg), len));
-}
-
 static inline MemoryInstance* wasm_cl_get_memory(void* config_ptr, u32 mem_idx)
 {
     auto& config = *static_cast<Configuration*>(config_ptr);
@@ -941,16 +934,12 @@ i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 ta
     return wasm_cl_finish_call(interpreter, config, callable->address, config.call_record_base(), callable->parameter_count);
 }
 
-i32 wasm_cl_check_indirect_type(void* interp_ptr, void const* actual_type_ptr, void const* expected_type_ptr);
-i32 wasm_cl_check_indirect_type(void* interp_ptr, void const* actual_type_ptr, void const* expected_type_ptr)
+i32 wasm_cl_check_indirect_type(void const* actual_type_ptr, void const* expected_type_ptr);
+i32 wasm_cl_check_indirect_type(void const* actual_type_ptr, void const* expected_type_ptr)
 {
     auto const& actual_type = *static_cast<DefinedType const*>(actual_type_ptr);
     auto const& expected_type = *static_cast<DefinedType const*>(expected_type_ptr);
-    if (matches_defined_type(actual_type, expected_type))
-        return 0;
-
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
+    return matches_defined_type(actual_type, expected_type) ? 0 : 1;
 }
 
 static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
@@ -1030,7 +1019,6 @@ static RuntimeHelpers make_runtime_helpers()
 {
     return RuntimeHelpers {
         .call_function = bit_cast<uintptr_t>(&wasm_cl_call_function),
-        .set_trap = bit_cast<uintptr_t>(&wasm_cl_set_trap),
         .memory_size = bit_cast<uintptr_t>(&wasm_cl_memory_size),
         .memory_grow = bit_cast<uintptr_t>(&wasm_cl_memory_grow),
         .call_with_record = bit_cast<uintptr_t>(&wasm_cl_call_with_record),

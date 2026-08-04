@@ -10,6 +10,7 @@ use crate::CraneliftRelocation;
 use crate::CraneliftRelocationKind;
 use crate::CraneliftRelocationTargetKind;
 use crate::CraneliftTrap;
+use crate::CraneliftUserTrapCode;
 use crate::FunctionCompilationOptions;
 use crate::HelperId;
 use crate::RuntimeHelpers;
@@ -29,8 +30,7 @@ use cranelift_codegen::ir::InstBuilder;
 use cranelift_codegen::ir::MemFlagsData as MemFlags;
 use cranelift_codegen::ir::SigRef;
 use cranelift_codegen::ir::Signature;
-use cranelift_codegen::ir::StackSlotData;
-use cranelift_codegen::ir::StackSlotKind;
+use cranelift_codegen::ir::TrapCode;
 use cranelift_codegen::ir::Type;
 use cranelift_codegen::ir::UserExternalName;
 use cranelift_codegen::ir::UserFuncName;
@@ -99,8 +99,6 @@ struct IndirectCallLoweringContext {
     ptr_type: Type,
     bridge_signature: SigRef,
     bridge_helper: FuncRef,
-    set_trap_signature: SigRef,
-    set_trap_helper: FuncRef,
     check_type_signature: SigRef,
     check_type_helper: FuncRef,
     trap_block: Block,
@@ -275,29 +273,8 @@ impl CraneliftCompiler {
         }))
     }
 
-    fn emit_trap_message(
-        builder: &mut FunctionBuilder<'_>,
-        ptr_type: Type,
-        interpreter: Value,
-        set_trap: FuncRef,
-        set_trap_signature: SigRef,
-        message: &'static str,
-    ) {
-        let message = message.as_bytes();
-        let slot =
-            builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, message.len() as u32, 0));
-        for (index, &byte) in message.iter().enumerate() {
-            let byte = builder.ins().iconst(types::I8, i64::from(byte));
-            builder.ins().stack_store(ptr_type, byte, slot, index as i32);
-        }
-        let message_pointer = builder.ins().stack_addr(ptr_type, slot, 0);
-        let message_length = builder.ins().iconst(types::I32, message.len() as i64);
-        let set_trap = builder.ins().func_addr(ptr_type, set_trap);
-        builder.ins().call_indirect(
-            set_trap_signature,
-            set_trap,
-            &[interpreter, message_pointer, message_length],
-        );
+    fn user_trap_code(code: CraneliftUserTrapCode) -> TrapCode {
+        TrapCode::unwrap_user(code as u8)
     }
 
     fn emit_native_indirect_call_target(
@@ -308,10 +285,6 @@ impl CraneliftCompiler {
     ) -> Result<NativeIndirectCallTarget, &'static str> {
         let ptr_type = context.ptr_type;
         let layout = context.native_layout;
-        let bounds_ok = builder.create_block();
-        let bounds_trap = builder.create_block();
-        let callable_ok = builder.create_block();
-        let null_trap = builder.create_block();
         let exact_type = builder.create_block();
         let subtype_check = builder.create_block();
         let native_entry_check = builder.create_block();
@@ -343,22 +316,9 @@ impl CraneliftCompiler {
         let in_bounds = builder
             .ins()
             .icmp(IntCC::UnsignedLessThan, operands.element_index, table_size);
-        builder.ins().brif(in_bounds, bounds_ok, &[], bounds_trap, &[]);
-
-        builder.switch_to_block(bounds_trap);
-        builder.seal_block(bounds_trap);
-        Self::emit_trap_message(
-            builder,
-            ptr_type,
-            operands.interpreter,
-            context.set_trap_helper,
-            context.set_trap_signature,
-            "Table index out of bounds",
-        );
-        builder.ins().jump(context.trap_block, &[]);
-
-        builder.switch_to_block(bounds_ok);
-        builder.seal_block(bounds_ok);
+        builder
+            .ins()
+            .trapz(in_bounds, Self::user_trap_code(CraneliftUserTrapCode::TableOutOfBounds));
         let callables = builder
             .ins()
             .load(ptr_type, MemFlags::trusted(), table, layout.table_instance_callables);
@@ -373,22 +333,10 @@ impl CraneliftCompiler {
         let callable_address = builder.ins().iadd(callables, element_offset);
         let callable = builder.ins().load(ptr_type, MemFlags::trusted(), callable_address, 0);
         let is_callable = builder.ins().icmp_imm_s(IntCC::NotEqual, callable, 0);
-        builder.ins().brif(is_callable, callable_ok, &[], null_trap, &[]);
-
-        builder.switch_to_block(null_trap);
-        builder.seal_block(null_trap);
-        Self::emit_trap_message(
-            builder,
-            ptr_type,
-            operands.interpreter,
-            context.set_trap_helper,
-            context.set_trap_signature,
-            "Table element is not a function reference",
+        builder.ins().trapz(
+            is_callable,
+            Self::user_trap_code(CraneliftUserTrapCode::IndirectCallNull),
         );
-        builder.ins().jump(context.trap_block, &[]);
-
-        builder.switch_to_block(callable_ok);
-        builder.seal_block(callable_ok);
         let actual_type = builder
             .ins()
             .load(ptr_type, MemFlags::trusted(), callable, layout.callable_defined_type);
@@ -413,16 +361,16 @@ impl CraneliftCompiler {
         builder.switch_to_block(subtype_check);
         builder.seal_block(subtype_check);
         let type_check = builder.ins().func_addr(ptr_type, context.check_type_helper);
-        let type_check_call = builder.ins().call_indirect(
-            context.check_type_signature,
-            type_check,
-            &[operands.interpreter, actual_type, expected_type],
-        );
+        let type_check_call =
+            builder
+                .ins()
+                .call_indirect(context.check_type_signature, type_check, &[actual_type, expected_type]);
         let type_mismatch = builder.inst_results(type_check_call)[0];
-        let type_matches = builder.ins().icmp_imm_s(IntCC::Equal, type_mismatch, 0);
-        builder
-            .ins()
-            .brif(type_matches, exact_type, &[], context.trap_block, &[]);
+        builder.ins().trapnz(
+            type_mismatch,
+            Self::user_trap_code(CraneliftUserTrapCode::IndirectCallTypeMismatch),
+        );
+        builder.ins().jump(exact_type, &[]);
 
         builder.switch_to_block(exact_type);
         builder.seal_block(exact_type);
@@ -814,7 +762,6 @@ impl CraneliftCompiler {
                 traps,
             )
         };
-
         let mut relocs = Vec::with_capacity(raw_relocations.len());
         let user_names = context.func.params.user_named_funcs();
         for relocation in &raw_relocations {
@@ -1011,9 +958,8 @@ impl CraneliftCompiler {
             cage_base_sig:     i64 fn();
             mem_size_sig:      i64 fn(ptr, i32);
             mem_grow_sig:      i32 fn(ptr, i32, i32);
-            set_trap_sig:      void fn(ptr, ptr, i32);
             stack_exhaustion_sig: void fn(ptr);
-            check_indirect_type_sig: i32 fn(ptr, ptr, ptr);
+            check_indirect_type_sig: i32 fn(ptr, ptr);
         }
         let raise_trap_sig = builder.import_signature(Signature::new(host_cc));
 
@@ -1036,7 +982,6 @@ impl CraneliftCompiler {
             }};
         }
         let h_call_fn = decl_helper!(call_fn_sig, HelperId::call_function);
-        let h_set_trap = decl_helper!(set_trap_sig, HelperId::set_trap);
         let h_mem_size = decl_helper!(mem_size_sig, HelperId::memory_size);
         let h_mem_grow = decl_helper!(mem_grow_sig, HelperId::memory_grow);
         let h_call_indirect = decl_helper!(call_indirect_sig, HelperId::call_indirect);
@@ -1274,8 +1219,6 @@ impl CraneliftCompiler {
             ptr_type,
             bridge_signature: call_indirect_sig,
             bridge_helper: h_call_indirect_wr,
-            set_trap_signature: set_trap_sig,
-            set_trap_helper: h_set_trap,
             check_type_signature: check_indirect_type_sig,
             check_type_helper: h_check_indirect_type,
             trap_block,
@@ -2426,27 +2369,6 @@ impl CraneliftCompiler {
                 $builder.seal_block(cont);
             }};
         }
-        macro_rules! set_trap {
-            ($builder:expr, $msg:expr) => {{
-                let msg = $msg.as_bytes();
-                let ss = $builder.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    msg.len() as u32,
-                    0,
-                ));
-                for (i, &byte) in msg.iter().enumerate() {
-                    let b = $builder.ins().iconst(types::I8, i64::from(byte));
-                    $builder.ins().stack_store(ptr_type, b, ss, i as i32);
-                }
-                let msg_ptr = $builder.ins().stack_addr(ptr_type, ss, 0);
-                let msg_len = $builder.ins().iconst(types::I32, msg.len() as i64);
-                let st_ptr = $builder.ins().func_addr(ptr_type, h_set_trap);
-                let interp = $builder.use_var(interp_var);
-                $builder
-                    .ins()
-                    .call_indirect(set_trap_sig, st_ptr, &[interp, msg_ptr, msg_len]);
-            }};
-        }
         // No bounds checks: the memory reserves the full base (u32) + offset (u32) span, so any
         // out-of-bounds access faults on an uncommitted page and unwinds as a wasm trap.
         macro_rules! inline_memory_address {
@@ -2594,9 +2516,9 @@ impl CraneliftCompiler {
                 op::NOP => {}
 
                 op::UNREACHABLE => {
-                    sync_registers_to_config!(builder);
-                    set_trap!(builder, "unreachable executed");
-                    builder.ins().jump(trap_block, &[]);
+                    builder
+                        .ins()
+                        .trap(Self::user_trap_code(CraneliftUserTrapCode::Unreachable));
                     is_unreachable = true;
                     let dead = builder.create_block();
                     builder.switch_to_block(dead);

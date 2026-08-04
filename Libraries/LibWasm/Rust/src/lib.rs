@@ -35,8 +35,6 @@ pub struct CraneliftInsn {
 pub struct RuntimeHelpers {
     // i32 fn(interp, config, func_index); returns 1 on trap
     pub call_function: usize,
-    // void fn(interp, msg_ptr, msg_len)
-    pub set_trap: usize,
     // i64 fn(config, mem_idx); returns size in pages
     pub memory_size: usize,
     // i32 fn(config, mem_idx, pages); returns old size or -1
@@ -102,25 +100,35 @@ pub struct RuntimeHelpers {
 #[allow(non_camel_case_types)]
 pub enum HelperId {
     call_function = 0,
-    set_trap = 1,
-    memory_size = 2,
-    memory_grow = 3,
-    call_with_record = 4,
-    direct_call_0 = 5,
-    direct_call_1 = 6,
-    direct_call_2 = 7,
-    direct_call_3 = 8,
-    call_indirect = 9,
-    memory_copy = 10,
-    memory_fill = 11,
-    primitive_storage_cage_base = 12,
-    call_indirect_with_record = 13,
-    stack_exhaustion = 14,
-    raise_trap = 15,
-    check_indirect_type = 16,
+    memory_size = 1,
+    memory_grow = 2,
+    call_with_record = 3,
+    direct_call_0 = 4,
+    direct_call_1 = 5,
+    direct_call_2 = 6,
+    direct_call_3 = 7,
+    call_indirect = 8,
+    memory_copy = 9,
+    memory_fill = 10,
+    primitive_storage_cage_base = 11,
+    call_indirect_with_record = 12,
+    stack_exhaustion = 13,
+    raise_trap = 14,
+    check_indirect_type = 15,
 }
 
-pub const HELPER_COUNT: u32 = 17;
+pub const HELPER_COUNT: u32 = 16;
+
+/// Ladybird-specific Cranelift trap codes. The numeric values are embedded in generated code and
+/// cached trap tables, and must remain below Cranelift's reserved range.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraneliftUserTrapCode {
+    Unreachable = 1,
+    TableOutOfBounds = 2,
+    IndirectCallNull = 3,
+    IndirectCallTypeMismatch = 4,
+}
 
 /// Relocation kinds emitted for runtime helpers and direct calls between compiled Wasm functions.
 /// The numeric values are part of the cache blob format.

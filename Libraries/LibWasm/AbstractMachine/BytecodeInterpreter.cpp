@@ -30,6 +30,10 @@
 #include <LibWasm/Types.h>
 #include <setjmp.h>
 
+#ifdef WASM_CRANELIFT
+#    include <CraneliftFFI.h>
+#endif
+
 #if defined(AK_OS_WINDOWS)
 #    include <AK/Windows.h>
 #else
@@ -71,6 +75,19 @@ thread_local CompiledFaultRecoveryContext* s_compiled_fault_recovery = nullptr;
 
 static StringView cranelift_trap_message(u8 trap_code)
 {
+#    ifdef WASM_CRANELIFT
+    switch (trap_code) {
+    case to_underlying(Wasm::Cranelift::CraneliftUserTrapCode::Unreachable):
+        return "unreachable executed"sv;
+    case to_underlying(Wasm::Cranelift::CraneliftUserTrapCode::TableOutOfBounds):
+        return "Table index out of bounds"sv;
+    case to_underlying(Wasm::Cranelift::CraneliftUserTrapCode::IndirectCallNull):
+        return "Table element is not a function reference"sv;
+    case to_underlying(Wasm::Cranelift::CraneliftUserTrapCode::IndirectCallTypeMismatch):
+        return "Indirect call type mismatch"sv;
+    }
+#    endif
+
     // Cranelift reserves trap codes at the high end of u8:
     // stack_overflow=251, int_overflow=252, heap_oob=253, int_divz=254, bad_toint=255.
     switch (trap_code) {
@@ -84,7 +101,7 @@ static StringView cranelift_trap_message(u8 trap_code)
     case 255:
         return "Truncation out of range"sv;
     default:
-        return "unreachable executed"sv;
+        return "Unknown compiled WebAssembly trap"sv;
     }
 }
 
@@ -103,6 +120,33 @@ static bool is_wasm_memory_fault(Wasm::Configuration& configuration, void* addre
     return false;
 }
 
+static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPtr pc)
+{
+    auto const* expression = recovery.configuration->current_expression();
+    if (!expression)
+        return false;
+
+    auto const& compiled = expression->compiled_instructions;
+    auto const code_start = compiled.cranelift_entry;
+    auto const code_size = compiled.cranelift_code_size;
+    if (!compiled.cranelift_compiled || code_start == 0 || pc < code_start || pc >= code_start + code_size)
+        return false;
+
+    auto const offset = static_cast<u32>(pc - code_start);
+    for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
+        auto const& trap = compiled.cranelift_traps[i];
+        if (trap.offset != offset)
+            continue;
+
+        recovery.faulted = true;
+        recovery.fault_kind = CompiledFaultKind::CraneliftTrap;
+        recovery.cranelift_trap_code = trap.code;
+        return true;
+    }
+
+    return false;
+}
+
 extern "C" {
 [[noreturn, gnu::used]] static void wasm_compiled_fault_trampoline()
 {
@@ -116,21 +160,36 @@ extern "C" {
 
 static LONG WINAPI compiled_fault_exception_handler(EXCEPTION_POINTERS* exception_info)
 {
-    if (exception_info->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION
-        && exception_info->ExceptionRecord->ExceptionCode != EXCEPTION_IN_PAGE_ERROR)
-        return EXCEPTION_CONTINUE_SEARCH;
-
-    auto* fault_address = reinterpret_cast<void*>(exception_info->ExceptionRecord->ExceptionInformation[1]);
-    if (auto* recovery = s_compiled_fault_recovery; recovery && is_wasm_memory_fault(*recovery->configuration, fault_address)) {
-        recovery->faulted = true;
-        auto* ctx = exception_info->ContextRecord;
+    auto* recovery = s_compiled_fault_recovery;
+    auto* ctx = exception_info->ContextRecord;
+    auto redirect_to_trampoline = [&] {
 #        if ARCH(AARCH64)
         ctx->Pc = reinterpret_cast<DWORD64>(&wasm_compiled_fault_trampoline);
 #        elif ARCH(X86_64)
         ctx->Rip = reinterpret_cast<DWORD64>(&wasm_compiled_fault_trampoline);
 #        endif
+    };
+
+    auto const exception_code = exception_info->ExceptionRecord->ExceptionCode;
+    if (recovery && (exception_code == EXCEPTION_ACCESS_VIOLATION || exception_code == EXCEPTION_IN_PAGE_ERROR)) {
+        auto* fault_address = reinterpret_cast<void*>(exception_info->ExceptionRecord->ExceptionInformation[1]);
+        if (!is_wasm_memory_fault(*recovery->configuration, fault_address))
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        recovery->faulted = true;
+        recovery->fault_kind = CompiledFaultKind::Memory;
+        redirect_to_trampoline();
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+
+    if (recovery && (exception_code == EXCEPTION_ILLEGAL_INSTRUCTION || exception_code == EXCEPTION_INT_DIVIDE_BY_ZERO || exception_code == EXCEPTION_INT_OVERFLOW)) {
+        auto const pc = reinterpret_cast<FlatPtr>(exception_info->ExceptionRecord->ExceptionAddress);
+        if (record_cranelift_trap(*recovery, pc)) {
+            redirect_to_trampoline();
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -228,24 +287,9 @@ static void compiled_fault_signal_handler(int signal, siginfo_t* info, void* con
 #        endif
 
         // The faulting function may be a frameless compiled callee.
-        if (auto const* expression = recovery->configuration->current_expression()) {
-            auto const& compiled = expression->compiled_instructions;
-            auto const code_start = compiled.cranelift_entry;
-            auto const code_size = compiled.cranelift_code_size;
-            if (compiled.cranelift_compiled && code_start != 0 && pc >= code_start && pc < code_start + code_size) {
-                auto const offset = static_cast<u32>(pc - code_start);
-                for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
-                    auto const& trap = compiled.cranelift_traps[i];
-                    if (trap.offset != offset)
-                        continue;
-
-                    recovery->faulted = true;
-                    recovery->fault_kind = CompiledFaultKind::CraneliftTrap;
-                    recovery->cranelift_trap_code = trap.code;
-                    redirect_to_trampoline();
-                    return;
-                }
-            }
+        if (record_cranelift_trap(*recovery, pc)) {
+            redirect_to_trampoline();
+            return;
         }
     }
 

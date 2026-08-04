@@ -20,6 +20,7 @@ include = [
     "CraneliftRelocation",
     "CraneliftRelocationKind",
     "CraneliftRelocationTargetKind",
+    "CraneliftUserTrapCode",
     "HelperId",
     "HELPER_COUNT",
 ]
