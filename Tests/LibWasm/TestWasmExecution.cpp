@@ -66,15 +66,15 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     Vector<Wasm::Value> native_arguments;
     for (i32 argument = 1; argument <= 11; ++argument)
         native_arguments.append(Wasm::Value(argument));
-    auto native_unpromoted_result = machine.invoke(find_export("native_unpromoted"sv), move(native_arguments));
-    EXPECT(!native_unpromoted_result.is_trap());
-    EXPECT_EQ(native_unpromoted_result.values().size(), 1u);
-    EXPECT_EQ(native_unpromoted_result.values()[0].to<i32>(), 12);
+    auto native_many_locals_result = machine.invoke(find_export("native_many_locals"sv), move(native_arguments));
+    EXPECT(!native_many_locals_result.is_trap());
+    EXPECT_EQ(native_many_locals_result.values().size(), 1u);
+    EXPECT_EQ(native_many_locals_result.values()[0].to<i32>(), 12);
 
-    auto direct_unpromoted_result = machine.invoke(find_export("direct_unpromoted"sv), {});
-    EXPECT(!direct_unpromoted_result.is_trap());
-    EXPECT_EQ(direct_unpromoted_result.values().size(), 1u);
-    EXPECT_EQ(direct_unpromoted_result.values()[0].to<i32>(), 12);
+    auto direct_many_locals_result = machine.invoke(find_export("direct_many_locals"sv), {});
+    EXPECT(!direct_many_locals_result.is_trap());
+    EXPECT_EQ(direct_many_locals_result.values().size(), 1u);
+    EXPECT_EQ(direct_many_locals_result.values()[0].to<i32>(), 12);
 
     Vector<Wasm::Value> typed_arguments {
         Wasm::Value(static_cast<i32>(1)),
@@ -82,16 +82,37 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
         Wasm::Value(3.5f),
         Wasm::Value(4.25),
     };
-    auto native_typed_unpromoted_result = machine.invoke(
-        find_export("native_typed_unpromoted"sv), move(typed_arguments));
-    EXPECT(!native_typed_unpromoted_result.is_trap());
-    EXPECT_EQ(native_typed_unpromoted_result.values().size(), 1u);
-    EXPECT_EQ(native_typed_unpromoted_result.values()[0].to<double>(), 20.75);
+    auto native_typed_locals_result = machine.invoke(
+        find_export("native_typed_locals"sv), move(typed_arguments));
+    EXPECT(!native_typed_locals_result.is_trap());
+    EXPECT_EQ(native_typed_locals_result.values().size(), 1u);
+    EXPECT_EQ(native_typed_locals_result.values()[0].to<double>(), 20.75);
 
-    auto direct_typed_unpromoted_result = machine.invoke(find_export("direct_typed_unpromoted"sv), {});
-    EXPECT(!direct_typed_unpromoted_result.is_trap());
-    EXPECT_EQ(direct_typed_unpromoted_result.values().size(), 1u);
-    EXPECT_EQ(direct_typed_unpromoted_result.values()[0].to<double>(), 20.75);
+    auto direct_typed_locals_result = machine.invoke(find_export("direct_typed_locals"sv), {});
+    EXPECT(!direct_typed_locals_result.is_trap());
+    EXPECT_EQ(direct_typed_locals_result.values().size(), 1u);
+    EXPECT_EQ(direct_typed_locals_result.values()[0].to<double>(), 20.75);
+
+    auto invoke_with_i32 = [&](StringView name, i32 argument) {
+        auto result = machine.invoke(find_export(name), { Wasm::Value(argument) });
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        return result.values()[0];
+    };
+    EXPECT_EQ(invoke_with_i32("ssa_typed_merge"sv, 1).to<double>(), 20.75);
+    EXPECT_EQ(invoke_with_i32("ssa_typed_merge"sv, 0).to<double>(), 24.75);
+    EXPECT_EQ(invoke_with_i32("ssa_partial_merge"sv, 1).to<i32>(), 20);
+    EXPECT_EQ(invoke_with_i32("ssa_partial_merge"sv, 0).to<i32>(), 10);
+    EXPECT_EQ(invoke_with_i32("ssa_loop_backedge"sv, 4).to<i64>(), 12);
+
+    auto invoke_i32_bank_edges = [&](i32 value, i32 condition) {
+        auto result = machine.invoke(find_export("i32_bank_edges"sv), { Wasm::Value(value), Wasm::Value(condition) });
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        return result.values()[0].to<i32>();
+    };
+    EXPECT_EQ(invoke_i32_bank_edges(-2147483647 - 1, 1), 0x40000008);
+    EXPECT_EQ(invoke_i32_bank_edges(0x1234, 0), -53);
 }
 
 TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
