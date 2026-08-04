@@ -26,7 +26,7 @@ use cranelift_codegen::ir::ExternalName;
 use cranelift_codegen::ir::FuncRef;
 use cranelift_codegen::ir::Function;
 use cranelift_codegen::ir::InstBuilder;
-use cranelift_codegen::ir::MemFlags;
+use cranelift_codegen::ir::MemFlagsData as MemFlags;
 use cranelift_codegen::ir::SigRef;
 use cranelift_codegen::ir::Signature;
 use cranelift_codegen::ir::StackSlotData;
@@ -158,6 +158,7 @@ struct ControlFrame {
     /// Only meaningful (and only set) when vstack is disabled (max_stack_depth == 0).
     entry_real_depth_var: Option<Variable>,
     bank_snapshot: Option<([Bank; REG_COUNT], Vec<Bank>)>,
+    branch_target_reg_ty: Option<[Bank; REG_COUNT]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,7 +287,7 @@ impl CraneliftCompiler {
             builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, message.len() as u32, 0));
         for (index, &byte) in message.iter().enumerate() {
             let byte = builder.ins().iconst(types::I8, i64::from(byte));
-            builder.ins().stack_store(byte, slot, index as i32);
+            builder.ins().stack_store(ptr_type, byte, slot, index as i32);
         }
         let message_pointer = builder.ins().stack_addr(ptr_type, slot, 0);
         let message_length = builder.ins().iconst(types::I32, message.len() as i64);
@@ -363,14 +364,14 @@ impl CraneliftCompiler {
         let element_offset = if ptr_type == types::I64 {
             builder
                 .ins()
-                .imul_imm(operands.element_index, i64::from(ptr_type.bytes()))
+                .imul_imm_s(operands.element_index, i64::from(ptr_type.bytes()))
         } else {
             let element_index = builder.ins().ireduce(types::I32, operands.element_index);
-            builder.ins().imul_imm(element_index, i64::from(ptr_type.bytes()))
+            builder.ins().imul_imm_s(element_index, i64::from(ptr_type.bytes()))
         };
         let callable_address = builder.ins().iadd(callables, element_offset);
         let callable = builder.ins().load(ptr_type, MemFlags::trusted(), callable_address, 0);
-        let is_callable = builder.ins().icmp_imm(IntCC::NotEqual, callable, 0);
+        let is_callable = builder.ins().icmp_imm_s(IntCC::NotEqual, callable, 0);
         builder.ins().brif(is_callable, callable_ok, &[], null_trap, &[]);
 
         builder.switch_to_block(null_trap);
@@ -417,7 +418,7 @@ impl CraneliftCompiler {
             &[operands.interpreter, actual_type, expected_type],
         );
         let type_mismatch = builder.inst_results(type_check_call)[0];
-        let type_matches = builder.ins().icmp_imm(IntCC::Equal, type_mismatch, 0);
+        let type_matches = builder.ins().icmp_imm_s(IntCC::Equal, type_mismatch, 0);
         builder
             .ins()
             .brif(type_matches, exact_type, &[], context.trap_block, &[]);
@@ -446,14 +447,14 @@ impl CraneliftCompiler {
             callable,
             layout.callable_compiled_instructions,
         );
-        let native_entry_address = builder.ins().iadd_imm(
+        let native_entry_address = builder.ins().iadd_imm_s(
             compiled_instructions,
             i64::from(layout.compiled_instructions_native_entry),
         );
         let native_entry = builder
             .ins()
             .atomic_load(ptr_type, MemFlags::trusted(), native_entry_address);
-        let has_native_entry = builder.ins().icmp_imm(IntCC::NotEqual, native_entry, 0);
+        let has_native_entry = builder.ins().icmp_imm_s(IntCC::NotEqual, native_entry, 0);
         builder.ins().brif(
             has_native_entry,
             native_call,
@@ -530,7 +531,7 @@ impl CraneliftCompiler {
             ],
         );
         let status = builder.inst_results(call)[0];
-        let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        let trapped = builder.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         let continuation = builder.create_block();
         builder.ins().brif(trapped, context.trap_block, &[], continuation, &[]);
         builder.switch_to_block(continuation);
@@ -674,7 +675,7 @@ impl CraneliftCompiler {
         }
         let arguments_size = i64::try_from(function_type.parameters.len() * helpers.value_size as usize)
             .map_err(|_| "argument size overflow")?;
-        let arguments_top = builder.ins().iadd_imm(original_top, arguments_size);
+        let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
         builder.ins().store(
             MemFlags::trusted(),
             arguments_top,
@@ -696,6 +697,7 @@ impl CraneliftCompiler {
             name: ExternalName::user(call_name),
             signature: call_signature,
             colocated: false,
+            patchable: false,
         });
         let call_address = builder.ins().func_addr(ptr_type, call_function);
         let target_index = builder.ins().iconst(types::I32, i64::from(function_index));
@@ -705,7 +707,7 @@ impl CraneliftCompiler {
             &[interpreter, configuration, target_index],
         );
         let status = builder.inst_results(call)[0];
-        let trapped = builder.ins().icmp_imm(IntCC::NotEqual, status, 0);
+        let trapped = builder.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         let trap_block = builder.create_block();
         let return_block = builder.create_block();
         builder.ins().brif(trapped, trap_block, &[], return_block, &[]);
@@ -721,6 +723,7 @@ impl CraneliftCompiler {
             name: ExternalName::user(raise_name),
             signature: raise_signature,
             colocated: false,
+            patchable: false,
         });
         let raise_address = builder.ins().func_addr(ptr_type, raise_function);
         builder.ins().call_indirect(raise_signature, raise_address, &[]);
@@ -748,7 +751,7 @@ impl CraneliftCompiler {
             builder.ins().return_(&[]);
         }
 
-        builder.finalize();
+        builder.finalize(isa.frontend_config());
         Self::compile_function(isa, function)
     }
 
@@ -946,9 +949,8 @@ impl CraneliftCompiler {
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
-        // Declare variables for virtual registers R0-R7. The i64 bank retains the canonical
-        // payload required at interpreter/helper boundaries; typed banks avoid converting values
-        // during native execution.
+        // Declare variables for virtual registers R0-R7. Each register has one selected bank at
+        // a time; canonical i64 payloads are reconstructed only when a consumer requires one.
         let reg_vars: [Variable; REG_COUNT] = std::array::from_fn(|_| builder.declare_var(types::I64));
         let reg_vars_i32: [Variable; REG_COUNT] = std::array::from_fn(|_| builder.declare_var(types::I32));
 
@@ -1028,6 +1030,7 @@ impl CraneliftCompiler {
                     name: ExternalName::user(user_ref),
                     signature: $sig,
                     colocated: false,
+                    patchable: false,
                 })
             }};
         }
@@ -1074,6 +1077,7 @@ impl CraneliftCompiler {
                     name: ExternalName::user(user_ref),
                     signature: target_signature,
                     colocated: true,
+                    patchable: false,
                 });
                 entry.insert(target);
             }
@@ -1149,7 +1153,7 @@ impl CraneliftCompiler {
 
         let direct_call_mode_var = builder.declare_var(types::I8);
         let entry_token = builder.block_params(entry_block)[2];
-        let direct_call_mode = builder.ins().icmp_imm(IntCC::Equal, entry_token, 0);
+        let direct_call_mode = builder.ins().icmp_imm_s(IntCC::Equal, entry_token, 0);
         builder.def_var(direct_call_mode_var, direct_call_mode);
 
         let saved_call_record_base_var = builder.declare_var(ptr_type);
@@ -1194,7 +1198,7 @@ impl CraneliftCompiler {
 
         let direct_setup_body = builder.create_block();
         let direct_stack_exhausted = builder.create_block();
-        let depth_exhausted = builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, saved_depth, 500);
+        let depth_exhausted = builder.ins().icmp_imm_s(IntCC::UnsignedGreaterThan, saved_depth, 500);
         builder
             .ins()
             .brif(depth_exhausted, direct_stack_exhausted, &[], direct_setup_body, &[]);
@@ -1223,7 +1227,7 @@ impl CraneliftCompiler {
         } else {
             entry_function_index
         };
-        let entry_offset = builder.ins().imul_imm(target_index, compiled_function_entry_size);
+        let entry_offset = builder.ins().imul_imm_s(target_index, compiled_function_entry_size);
         let entry = builder.ins().iadd(table_data, entry_offset);
         let expression = builder.ins().load(
             ptr_type,
@@ -1239,7 +1243,7 @@ impl CraneliftCompiler {
             builder
                 .ins()
                 .store(MemFlags::trusted(), saved_call_record_top, cfg, call_record_base_offset);
-            let next_call_record_top = builder.ins().iadd_imm(
+            let next_call_record_top = builder.ins().iadd_imm_s(
                 saved_call_record_top,
                 i64::from(max_call_rec_size) * i64::from(value_size),
             );
@@ -1255,7 +1259,7 @@ impl CraneliftCompiler {
                 .ins()
                 .store(MemFlags::trusted(), null, cfg, call_record_base_offset);
         }
-        let next_depth = builder.ins().iadd_imm(saved_depth, 1);
+        let next_depth = builder.ins().iadd_imm_s(saved_depth, 1);
         builder.ins().store(MemFlags::trusted(), next_depth, cfg, depth_offset);
         builder.ins().jump(setup_done, &[]);
 
@@ -1382,6 +1386,7 @@ impl CraneliftCompiler {
         }
 
         let mut control_stack: Vec<ControlFrame> = Vec::new();
+        let mut epilogue_reg_ty: Option<[Bank; REG_COUNT]> = None;
 
         // Virtual stack, to avoid touching the interpreter-side stack as much as possible.
         let has_raw_call = insns
@@ -1461,7 +1466,7 @@ impl CraneliftCompiler {
                 $builder.ins().store(MemFlags::trusted(), v, top, 0);
                 let zero_tag = $builder.ins().iconst(types::I64, 0);
                 $builder.ins().store(MemFlags::trusted(), zero_tag, top, 8);
-                let new_top = $builder.ins().iadd_imm(top, i64::from(value_size));
+                let new_top = $builder.ins().iadd_imm_s(top, i64::from(value_size));
                 $builder
                     .ins()
                     .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
@@ -1473,7 +1478,7 @@ impl CraneliftCompiler {
                 let top = $builder
                     .ins()
                     .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
-                let new_top = $builder.ins().iadd_imm(top, -i64::from(value_size));
+                let new_top = $builder.ins().iadd_imm_s(top, -i64::from(value_size));
                 $builder
                     .ins()
                     .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
@@ -1490,7 +1495,7 @@ impl CraneliftCompiler {
                     .ins()
                     .load(ptr_type, MemFlags::trusted(), cfg, value_stack_base_offset);
                 let bytes = $builder.ins().isub(top, base);
-                $builder.ins().ushr_imm(bytes, 4)
+                $builder.ins().ushr_imm_u(bytes, 4)
             }};
         }
         // Trim the real stack to `target_size + arity` values, keeping the top `arity` values
@@ -1503,7 +1508,7 @@ impl CraneliftCompiler {
                 let base = $builder
                     .ins()
                     .load(ptr_type, MemFlags::trusted(), cfg, value_stack_base_offset);
-                let target_bytes = $builder.ins().ishl_imm($target_size, 4);
+                let target_bytes = $builder.ins().ishl_imm_u($target_size, 4);
                 let trimmed_top = $builder.ins().iadd(base, target_bytes);
                 let new_top = if $arity as usize > 0 {
                     let top = $builder
@@ -1517,7 +1522,7 @@ impl CraneliftCompiler {
                         .load(types::I64, MemFlags::trusted(), top, -value_size + 8);
                     $builder.ins().store(MemFlags::trusted(), bits, trimmed_top, 0);
                     $builder.ins().store(MemFlags::trusted(), tag, trimmed_top, 8);
-                    $builder.ins().iadd_imm(trimmed_top, i64::from(value_size))
+                    $builder.ins().iadd_imm_s(trimmed_top, i64::from(value_size))
                 } else {
                     trimmed_top
                 };
@@ -1535,12 +1540,40 @@ impl CraneliftCompiler {
             builder.def_var(initial_stack_size_var, zero);
         }
 
+        macro_rules! register_payload {
+            ($builder:expr, $index:expr, $bank:expr) => {{
+                let index = $index;
+                match $bank {
+                    Bank::I32 => {
+                        let value = $builder.use_var(reg_vars_i32[index]);
+                        $builder.ins().uextend(types::I64, value)
+                    }
+                    Bank::I64 => $builder.use_var(reg_vars[index]),
+                    Bank::F32 => {
+                        let value = $builder.use_var(reg_vars_f32[index]);
+                        let bits = $builder.ins().bitcast(types::I32, MemFlags::new(), value);
+                        $builder.ins().sextend(types::I64, bits)
+                    }
+                    Bank::F64 => {
+                        let value = $builder.use_var(reg_vars_f64[index]);
+                        $builder.ins().bitcast(types::I64, MemFlags::new(), value)
+                    }
+                }
+            }};
+        }
+
         // Read a value from a source location (register, virtual stack, or call record)
         macro_rules! read_src {
             ($builder:expr, $src:expr) => {{
                 let src = $src;
                 if src < STACK_MARKER {
-                    $builder.use_var(reg_vars[src as usize])
+                    let index = src as usize;
+                    let payload = register_payload!($builder, index, reg_ty[index]);
+                    if reg_ty[index] != Bank::I64 {
+                        $builder.def_var(reg_vars[index], payload);
+                        reg_ty[index] = Bank::I64;
+                    }
+                    payload
                 } else if src == STACK_MARKER {
                     if max_stack_depth > 0 && sp > 0 {
                         // we have vstack, so just allocate on the native stack.
@@ -1565,11 +1598,15 @@ impl CraneliftCompiler {
             ($builder:expr, $src:expr) => {{
                 let src = $src;
                 if src < STACK_MARKER {
-                    if reg_ty[src as usize] == Bank::I32 {
-                        $builder.use_var(reg_vars_i32[src as usize])
+                    let index = src as usize;
+                    if reg_ty[index] == Bank::I32 {
+                        $builder.use_var(reg_vars_i32[index])
                     } else {
-                        let payload = $builder.use_var(reg_vars[src as usize]);
-                        $builder.ins().ireduce(types::I32, payload)
+                        let payload = register_payload!($builder, index, reg_ty[index]);
+                        let value = $builder.ins().ireduce(types::I32, payload);
+                        $builder.def_var(reg_vars_i32[index], value);
+                        reg_ty[index] = Bank::I32;
+                        value
                     }
                 } else if src == STACK_MARKER {
                     if max_stack_depth > 0 && sp > 0 {
@@ -1629,7 +1666,9 @@ impl CraneliftCompiler {
                             .ins()
                             .store(MemFlags::trusted(), zero_tag, top, offset + 8);
                     }
-                    let new_top = $builder.ins().iadd_imm(top, i64::from(count as i32 * value_size));
+                    let new_top = $builder
+                        .ins()
+                        .iadd_imm_s(top, i64::from(count as i32 * value_size));
                     $builder
                         .ins()
                         .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
@@ -1651,7 +1690,7 @@ impl CraneliftCompiler {
                     .ins()
                     .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
                 let result_bytes = (result_count as i64) * i64::from(value_size);
-                let mut result_address = $builder.ins().iadd_imm(helper_top, -result_bytes);
+                let mut result_address = $builder.ins().iadd_imm_s(helper_top, -result_bytes);
 
                 sp = stack_base;
                 if destination == STACK_MARKER {
@@ -1661,7 +1700,7 @@ impl CraneliftCompiler {
                             .load(types::I64, MemFlags::trusted(), result_address, 0);
                         $builder.def_var(stack_vars[stack_base + i], result);
                         stack_ty[stack_base + i] = Bank::I64;
-                        result_address = $builder.ins().iadd_imm(result_address, i64::from(value_size));
+                        result_address = $builder.ins().iadd_imm_s(result_address, i64::from(value_size));
                     }
                     sp += result_count;
                 } else {
@@ -1697,7 +1736,7 @@ impl CraneliftCompiler {
                             .ins()
                             .store(MemFlags::trusted(), zero_tag, top, offset + 8);
                     }
-                    let new_top = $builder.ins().iadd_imm(top, i64::from(n as i32 * value_size));
+                    let new_top = $builder.ins().iadd_imm_s(top, i64::from(n as i32 * value_size));
                     $builder
                         .ins()
                         .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
@@ -1739,13 +1778,12 @@ impl CraneliftCompiler {
             ($builder:expr, $dst:expr, $val:expr) => {{
                 let dst = $dst;
                 let val = $val;
-                let payload = $builder.ins().uextend(types::I64, val);
                 if dst < STACK_MARKER {
                     $builder.def_var(reg_vars_i32[dst as usize], val);
-                    $builder.def_var(reg_vars[dst as usize], payload);
                     reg_ty[dst as usize] = Bank::I32;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
+                    let payload = $builder.ins().uextend(types::I64, val);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_i32[sp], val);
                         $builder.def_var(stack_vars[sp], payload);
@@ -1755,6 +1793,7 @@ impl CraneliftCompiler {
                         emit_stack_push!($builder, payload);
                     }
                 } else {
+                    let payload = $builder.ins().uextend(types::I64, val);
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
@@ -1771,11 +1810,15 @@ impl CraneliftCompiler {
             ($builder:expr, $src:expr) => {{
                 let src = $src;
                 if src < STACK_MARKER {
-                    if reg_ty[src as usize] == Bank::F64 {
-                        $builder.use_var(reg_vars_f64[src as usize])
+                    let index = src as usize;
+                    if reg_ty[index] == Bank::F64 {
+                        $builder.use_var(reg_vars_f64[index])
                     } else {
-                        let raw = $builder.use_var(reg_vars[src as usize]);
-                        $builder.ins().bitcast(types::F64, MemFlags::new(), raw)
+                        let payload = register_payload!($builder, index, reg_ty[index]);
+                        let value = $builder.ins().bitcast(types::F64, MemFlags::new(), payload);
+                        $builder.def_var(reg_vars_f64[index], value);
+                        reg_ty[index] = Bank::F64;
+                        value
                     }
                 } else if src == STACK_MARKER {
                     if max_stack_depth > 0 && sp > 0 {
@@ -1805,13 +1848,12 @@ impl CraneliftCompiler {
             ($builder:expr, $dst:expr, $val:expr) => {{
                 let dst = $dst;
                 let val = $val;
-                let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), val);
                 if dst < STACK_MARKER {
                     $builder.def_var(reg_vars_f64[dst as usize], val);
-                    $builder.def_var(reg_vars[dst as usize], bits);
                     reg_ty[dst as usize] = Bank::F64;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
+                    let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), val);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_f64[sp], val);
                         $builder.def_var(stack_vars[sp], bits);
@@ -1821,6 +1863,7 @@ impl CraneliftCompiler {
                         emit_stack_push!($builder, bits);
                     }
                 } else {
+                    let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), val);
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
@@ -1837,12 +1880,16 @@ impl CraneliftCompiler {
             ($builder:expr, $src:expr) => {{
                 let src = $src;
                 if src < STACK_MARKER {
-                    if reg_ty[src as usize] == Bank::F32 {
-                        $builder.use_var(reg_vars_f32[src as usize])
+                    let index = src as usize;
+                    if reg_ty[index] == Bank::F32 {
+                        $builder.use_var(reg_vars_f32[index])
                     } else {
-                        let raw = $builder.use_var(reg_vars[src as usize]);
-                        let raw32 = $builder.ins().ireduce(types::I32, raw);
-                        $builder.ins().bitcast(types::F32, MemFlags::new(), raw32)
+                        let payload = register_payload!($builder, index, reg_ty[index]);
+                        let bits = $builder.ins().ireduce(types::I32, payload);
+                        let value = $builder.ins().bitcast(types::F32, MemFlags::new(), bits);
+                        $builder.def_var(reg_vars_f32[index], value);
+                        reg_ty[index] = Bank::F32;
+                        value
                     }
                 } else if src == STACK_MARKER {
                     if max_stack_depth > 0 && sp > 0 {
@@ -1874,16 +1921,13 @@ impl CraneliftCompiler {
             ($builder:expr, $dst:expr, $val:expr) => {{
                 let dst = $dst;
                 let val = $val;
-                // Keep the always-valid i64 copy in sync for bank-agnostic consumers: an f32 is 4
-                // bytes, so bitcast to i32 and sign-extend into the boxed slot.
-                let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), val);
-                let bits = $builder.ins().sextend(types::I64, bits32);
                 if dst < STACK_MARKER {
                     $builder.def_var(reg_vars_f32[dst as usize], val);
-                    $builder.def_var(reg_vars[dst as usize], bits);
                     reg_ty[dst as usize] = Bank::F32;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
+                    let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), val);
+                    let bits = $builder.ins().sextend(types::I64, bits32);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_f32[sp], val);
                         $builder.def_var(stack_vars[sp], bits);
@@ -1893,6 +1937,8 @@ impl CraneliftCompiler {
                         emit_stack_push!($builder, bits);
                     }
                 } else {
+                    let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), val);
+                    let bits = $builder.ins().sextend(types::I64, bits32);
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
@@ -1905,11 +1951,92 @@ impl CraneliftCompiler {
             }};
         }
 
-        macro_rules! reset_banks {
-            () => {{
-                for t in reg_ty.iter_mut() {
-                    *t = Bank::I64;
+        macro_rules! sync_registers_to_config {
+            ($builder:expr) => {{
+                let config = $builder.use_var(config_var);
+                for index in 0..REG_COUNT {
+                    if !dirty_regs[index] {
+                        continue;
+                    }
+                    let payload = register_payload!($builder, index, reg_ty[index]);
+                    let offset = regs_offset + (index as i32) * value_size;
+                    $builder.ins().store(MemFlags::trusted(), payload, config, offset);
+                    let zero = $builder.ins().iconst(types::I64, 0);
+                    $builder
+                        .ins()
+                        .store(MemFlags::trusted(), zero, config, offset + 8);
                 }
+            }};
+        }
+
+        macro_rules! materialize_register_bank {
+            ($builder:expr, $index:expr, $source_bank:expr, $target_bank:expr) => {{
+                let index = $index;
+                let payload = register_payload!($builder, index, $source_bank);
+                match $target_bank {
+                    Bank::I32 => {
+                        let value = $builder.ins().ireduce(types::I32, payload);
+                        $builder.def_var(reg_vars_i32[index], value);
+                    }
+                    Bank::I64 => {
+                        $builder.def_var(reg_vars[index], payload);
+                    }
+                    Bank::F32 => {
+                        let bits = $builder.ins().ireduce(types::I32, payload);
+                        let value = $builder.ins().bitcast(types::F32, MemFlags::new(), bits);
+                        $builder.def_var(reg_vars_f32[index], value);
+                    }
+                    Bank::F64 => {
+                        let value = $builder.ins().bitcast(types::F64, MemFlags::new(), payload);
+                        $builder.def_var(reg_vars_f64[index], value);
+                    }
+                }
+            }};
+        }
+
+        macro_rules! normalize_register_banks_for_edge {
+            ($builder:expr, $target_reg_ty:expr) => {{
+                let target_reg_ty = $target_reg_ty;
+                for index in 0..REG_COUNT {
+                    if reg_ty[index] != target_reg_ty[index] {
+                        materialize_register_bank!($builder, index, reg_ty[index], target_reg_ty[index]);
+                    }
+                }
+            }};
+        }
+
+        macro_rules! prepare_register_banks_for_branch {
+            ($builder:expr, $target_index:expr) => {{
+                let target_index = $target_index;
+                let target_reg_ty = match control_stack[target_index].branch_target_reg_ty {
+                    Some(target_reg_ty) => target_reg_ty,
+                    None => {
+                        let target_reg_ty = reg_ty;
+                        control_stack[target_index].branch_target_reg_ty = Some(target_reg_ty);
+                        target_reg_ty
+                    }
+                };
+                normalize_register_banks_for_edge!($builder, target_reg_ty);
+                target_reg_ty
+            }};
+        }
+
+        macro_rules! prepare_register_banks_for_epilogue {
+            ($builder:expr) => {{
+                let target_reg_ty = match epilogue_reg_ty {
+                    Some(target_reg_ty) => target_reg_ty,
+                    None => {
+                        let target_reg_ty = reg_ty;
+                        epilogue_reg_ty = Some(target_reg_ty);
+                        target_reg_ty
+                    }
+                };
+                normalize_register_banks_for_edge!($builder, target_reg_ty);
+            }};
+        }
+
+        macro_rules! reset_stack_banks {
+            () => {{
                 for t in stack_ty.iter_mut() {
                     *t = Bank::I64;
                 }
@@ -2170,7 +2297,7 @@ impl CraneliftCompiler {
             ($builder:expr, $sig:expr, $ptr:expr, $args:expr) => {{
                 let call = $builder.ins().call_indirect($sig, $ptr, $args);
                 let trapped = $builder.inst_results(call)[0];
-                let is_trap = $builder.ins().icmp_imm(IntCC::NotEqual, trapped, 0);
+                let is_trap = $builder.ins().icmp_imm_s(IntCC::NotEqual, trapped, 0);
                 let cont = $builder.create_block();
                 $builder.ins().brif(is_trap, trap_block, &[], cont, &[]);
                 $builder.switch_to_block(cont);
@@ -2187,7 +2314,7 @@ impl CraneliftCompiler {
                 ));
                 for (i, &byte) in msg.iter().enumerate() {
                     let b = $builder.ins().iconst(types::I8, i64::from(byte));
-                    $builder.ins().stack_store(b, ss, i as i32);
+                    $builder.ins().stack_store(ptr_type, b, ss, i as i32);
                 }
                 let msg_ptr = $builder.ins().stack_addr(ptr_type, ss, 0);
                 let msg_len = $builder.ins().iconst(types::I32, msg.len() as i64);
@@ -2305,16 +2432,16 @@ impl CraneliftCompiler {
         // If we have any tier-up checkpoints, the interpreter will eventually need to jump to some point in the function other than the entry block, so prepare dispatch blocks for that.
         // Note that the initial block will already have the correct register state loaded, so we don't need to sync registers for the tier-up dispatch targets.
         let has_tier_up = insns.iter().any(|i| i.opcode == op::SYNTHETIC_TIER_UP);
-        let tier_up_target_ip = builder.ins().iadd_imm(entry_token, -1);
+        let tier_up_target_ip = builder.ins().iadd_imm_s(entry_token, -1);
         let mut tier_up_dispatch_tail: Option<Block> = None;
         let tier_up_body_start: Option<Block> = if has_tier_up {
             let body_start = builder.create_block();
             let dispatch = builder.create_block();
             let fresh = builder.create_block();
             let resume = builder.create_block();
-            let has_tier_up_target = builder.ins().icmp_imm(IntCC::NotEqual, tier_up_target_ip, 0);
+            let has_tier_up_target = builder.ins().icmp_imm_s(IntCC::NotEqual, tier_up_target_ip, 0);
             let direct_call_mode = builder.use_var(direct_call_mode_var);
-            let is_normal_entry = builder.ins().icmp_imm(IntCC::Equal, direct_call_mode, 0);
+            let is_normal_entry = builder.ins().icmp_imm_s(IntCC::Equal, direct_call_mode, 0);
             let is_tier_up = builder.ins().band(has_tier_up_target, is_normal_entry);
             builder.ins().brif(is_tier_up, resume, &[], fresh, &[]);
 
@@ -2345,14 +2472,7 @@ impl CraneliftCompiler {
                 op::NOP => {}
 
                 op::UNREACHABLE => {
-                    Self::sync_regs_to_config(
-                        &mut builder,
-                        &reg_vars,
-                        config_var,
-                        regs_offset,
-                        value_size,
-                        &dirty_regs,
-                    );
+                    sync_registers_to_config!(builder);
                     set_trap!(builder, "unreachable executed");
                     builder.ins().jump(trap_block, &[]);
                     is_unreachable = true;
@@ -2368,7 +2488,7 @@ impl CraneliftCompiler {
                     let entry_real_depth_var = if max_stack_depth == 0 {
                         let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
-                        let entry = builder.ins().iadd_imm(cur, -(param_count as i64));
+                        let entry = builder.ins().iadd_imm_s(cur, -(param_count as i64));
                         builder.def_var(var, entry);
                         Some(var)
                     } else {
@@ -2383,6 +2503,7 @@ impl CraneliftCompiler {
                         stack_depth_at_entry: (sp - param_count) as i32,
                         entry_real_depth_var,
                         bank_snapshot: None,
+                        branch_target_reg_ty: None,
                     });
                 }
 
@@ -2394,7 +2515,7 @@ impl CraneliftCompiler {
                     let entry_real_depth_var = if max_stack_depth == 0 {
                         let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
-                        let entry = builder.ins().iadd_imm(cur, -(param_count as i64));
+                        let entry = builder.ins().iadd_imm_s(cur, -(param_count as i64));
                         builder.def_var(var, entry);
                         Some(var)
                     } else {
@@ -2402,6 +2523,7 @@ impl CraneliftCompiler {
                     };
                     builder.ins().jump(header, &[]);
                     builder.switch_to_block(header);
+                    let header_reg_ty = reg_ty;
                     control_stack.push(ControlFrame {
                         kind: ControlKind::Loop,
                         branch_target: header,
@@ -2411,9 +2533,11 @@ impl CraneliftCompiler {
                         stack_depth_at_entry: (sp - param_count) as i32,
                         entry_real_depth_var,
                         bank_snapshot: None,
+                        branch_target_reg_ty: Some(header_reg_ty),
                     });
-                    // Loop header is a merge point (entry edge + back-edges + any tier-up dispatch).
-                    reset_banks!();
+                    // Stack-bank types are not tracked per edge yet. Register backedges are
+                    // normalized to the types established by the loop's initial edge.
+                    reset_stack_banks!();
                 }
 
                 op::IF => {
@@ -2425,11 +2549,11 @@ impl CraneliftCompiler {
                     let after = builder.create_block();
 
                     let cond = read_src_i32!(builder, insn.sources[0]);
-                    let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond, 0);
+                    let cond = builder.ins().icmp_imm_s(IntCC::NotEqual, cond, 0);
                     let entry_real_depth_var = if max_stack_depth == 0 {
                         let var = builder.declare_var(types::I64);
                         let cur = emit_stack_size!(builder);
-                        let entry = builder.ins().iadd_imm(cur, -(_param_count as i64));
+                        let entry = builder.ins().iadd_imm_s(cur, -(_param_count as i64));
                         builder.def_var(var, entry);
                         Some(var)
                     } else {
@@ -2453,16 +2577,24 @@ impl CraneliftCompiler {
                         stack_depth_at_entry: (sp - _param_count) as i32,
                         entry_real_depth_var,
                         bank_snapshot: Some((reg_ty, stack_ty.clone())),
+                        branch_target_reg_ty: if has_else { None } else { Some(reg_ty) },
                     });
                 }
 
                 op::ELSE => {
-                    if let Some(frame) = control_stack.last() {
-                        let else_block = frame.after_block;
-                        let after = frame.branch_target;
-                        let entry_depth = frame.stack_depth_at_entry;
-                        let pc = frame.param_count;
-                        let snapshot = frame.bank_snapshot.clone();
+                    if !control_stack.is_empty() {
+                        let frame_index = control_stack.len() - 1;
+                        let (else_block, after, entry_depth, pc, snapshot) = {
+                            let frame = &control_stack[frame_index];
+                            (
+                                frame.after_block,
+                                frame.branch_target,
+                                frame.stack_depth_at_entry,
+                                frame.param_count,
+                                frame.bank_snapshot.clone(),
+                            )
+                        };
+                        prepare_register_banks_for_branch!(builder, frame_index);
                         builder.ins().jump(after, &[]);
                         builder.switch_to_block(else_block);
                         builder.seal_block(else_block);
@@ -2472,9 +2604,7 @@ impl CraneliftCompiler {
                             reg_ty = saved_reg_ty;
                             stack_ty = saved_stack_ty;
                         }
-                        if let Some(frame) = control_stack.last_mut() {
-                            frame.after_block = after;
-                        }
+                        control_stack[frame_index].after_block = after;
                     }
                 }
 
@@ -2487,11 +2617,17 @@ impl CraneliftCompiler {
                             frame.after_block
                         };
 
+                        let after_reg_ty = if frame.kind == ControlKind::Loop {
+                            reg_ty
+                        } else {
+                            frame.branch_target_reg_ty.unwrap_or(reg_ty)
+                        };
+                        normalize_register_banks_for_edge!(builder, after_reg_ty);
                         builder.ins().jump(after, &[]);
                         builder.switch_to_block(after);
                         is_unreachable = false;
-                        // `after` merges the block body with any branches to it.
-                        reset_banks!();
+                        reg_ty = after_reg_ty;
+                        reset_stack_banks!();
 
                         // After end of block, sp = entry depth + arity.
                         sp = (frame.stack_depth_at_entry + frame.arity as i32) as usize;
@@ -2502,6 +2638,7 @@ impl CraneliftCompiler {
                         builder.seal_block(after);
                     } else if !is_unreachable {
                         push_top_n_to_real!(builder, result_arity);
+                        prepare_register_banks_for_epilogue!(builder);
                         builder.ins().jump(epilogue_block, &[]);
                         let dead = builder.create_block();
                         builder.switch_to_block(dead);
@@ -2513,14 +2650,19 @@ impl CraneliftCompiler {
                     let label_idx = insn.imm1 as usize;
                     if label_idx < control_stack.len() {
                         let target_idx = control_stack.len() - 1 - label_idx;
-                        let frame = &control_stack[target_idx];
-                        let target = frame.branch_target;
-                        let arity = if frame.kind == ControlKind::Loop {
-                            0
-                        } else {
-                            frame.arity
+                        let (target, arity, entry, entry_real_depth_var) = {
+                            let frame = &control_stack[target_idx];
+                            (
+                                frame.branch_target,
+                                if frame.kind == ControlKind::Loop {
+                                    0
+                                } else {
+                                    frame.arity
+                                },
+                                frame.stack_depth_at_entry as usize,
+                                frame.entry_real_depth_var,
+                            )
                         };
-                        let entry = frame.stack_depth_at_entry as usize;
                         if max_stack_depth > 0 {
                             // vstack enabled: move top arity values to entry position.
                             if arity > 0 {
@@ -2533,16 +2675,17 @@ impl CraneliftCompiler {
                             }
                         } else {
                             // vstack disabled: trim the real value stack down to the target label's entry depth + arity, preserving the top arity values.
-                            let entry_depth_var = frame
-                                .entry_real_depth_var
-                                .expect("entry_real_depth_var must be set when vstack is disabled");
+                            let entry_depth_var =
+                                entry_real_depth_var.expect("entry_real_depth_var must be set when vstack is disabled");
                             let target_size = builder.use_var(entry_depth_var);
                             emit_stack_cleanup!(builder, target_size, arity);
                         }
+                        prepare_register_banks_for_branch!(builder, target_idx);
                         builder.ins().jump(target, &[]);
                     } else {
                         // br to function label = return.
                         push_top_n_to_real!(builder, result_arity);
+                        prepare_register_banks_for_epilogue!(builder);
                         builder.ins().jump(epilogue_block, &[]);
                     }
                     sp = 0;
@@ -2555,25 +2698,29 @@ impl CraneliftCompiler {
                 op::BR_IF | op::SYNTHETIC_BR_IF_NOSTACK => {
                     let label_idx = insn.imm1 as usize;
                     let cond = read_src_i32!(builder, insn.sources[0]);
-                    let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond, 0);
+                    let cond = builder.ins().icmp_imm_s(IntCC::NotEqual, cond, 0);
 
                     if label_idx < control_stack.len() {
                         let target_idx = control_stack.len() - 1 - label_idx;
-                        let frame = &control_stack[target_idx];
-                        let target = frame.branch_target;
-                        let arity = if frame.kind == ControlKind::Loop {
-                            0
-                        } else {
-                            frame.arity
+                        let (target, arity, entry, entry_real_depth_var) = {
+                            let frame = &control_stack[target_idx];
+                            (
+                                frame.branch_target,
+                                if frame.kind == ControlKind::Loop {
+                                    0
+                                } else {
+                                    frame.arity
+                                },
+                                frame.stack_depth_at_entry as usize,
+                                frame.entry_real_depth_var,
+                            )
                         };
-                        let entry = frame.stack_depth_at_entry as usize;
                         let extras = (sp as i32 - entry as i32 - arity as i32).max(0);
                         if max_stack_depth == 0 {
                             // not vstack: real value stack may have extras between the target label's entry depth and the result on top.
                             // On the taken path, trim using the saved entry-depth variable.
-                            let entry_depth_var = frame
-                                .entry_real_depth_var
-                                .expect("entry_real_depth_var must be set when vstack is disabled");
+                            let entry_depth_var =
+                                entry_real_depth_var.expect("entry_real_depth_var must be set when vstack is disabled");
                             let taken_block = builder.create_block();
                             let fallthrough = builder.create_block();
                             builder.ins().brif(cond, taken_block, &[], fallthrough, &[]);
@@ -2581,6 +2728,7 @@ impl CraneliftCompiler {
                             builder.seal_block(taken_block);
                             let target_size = builder.use_var(entry_depth_var);
                             emit_stack_cleanup!(builder, target_size, arity);
+                            prepare_register_banks_for_branch!(builder, target_idx);
                             builder.ins().jump(target, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
@@ -2595,11 +2743,13 @@ impl CraneliftCompiler {
                                 builder.def_var(stack_vars[entry], result);
                             }
                             // Note: we don't change sp here since fallthrough needs the original sp.
+                            prepare_register_banks_for_branch!(builder, target_idx);
                             builder.ins().jump(target, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
                         } else {
                             let fallthrough = builder.create_block();
+                            prepare_register_banks_for_branch!(builder, target_idx);
                             builder.ins().brif(cond, target, &[], fallthrough, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
@@ -2612,11 +2762,13 @@ impl CraneliftCompiler {
                             builder.switch_to_block(taken_block);
                             builder.seal_block(taken_block);
                             push_top_n_to_real!(builder, result_arity);
+                            prepare_register_banks_for_epilogue!(builder);
                             builder.ins().jump(epilogue_block, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
                         } else {
                             let fallthrough = builder.create_block();
+                            prepare_register_banks_for_epilogue!(builder);
                             builder.ins().brif(cond, epilogue_block, &[], fallthrough, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
@@ -2626,6 +2778,7 @@ impl CraneliftCompiler {
 
                 op::RETURN => {
                     push_top_n_to_real!(builder, result_arity);
+                    prepare_register_banks_for_epilogue!(builder);
                     builder.ins().jump(epilogue_block, &[]);
                     sp = 0;
                     is_unreachable = true;
@@ -2732,7 +2885,7 @@ impl CraneliftCompiler {
 
                 op::SELECT | op::SELECT_TYPED => {
                     let cond_raw = read_src_i32!(builder, insn.sources[0]);
-                    let cond = builder.ins().icmp_imm(IntCC::NotEqual, cond_raw, 0);
+                    let cond = builder.ins().icmp_imm_s(IntCC::NotEqual, cond_raw, 0);
                     let rhs_is_i32 = src_is_i32!(insn.sources[1]);
                     let rhs = if rhs_is_i32 {
                         read_src_i32!(builder, insn.sources[1])
@@ -2790,17 +2943,22 @@ impl CraneliftCompiler {
 
                     let cond = read_src_i32!(builder, insn.sources[0]);
 
-                    let branch_to_label = |builder: &mut FunctionBuilder, label_idx: usize| {
+                    let mut branch_to_label = |builder: &mut FunctionBuilder, label_idx: usize| {
                         if label_idx < control_stack.len() {
                             let target_idx = control_stack.len() - 1 - label_idx;
-                            let frame = &control_stack[target_idx];
-                            let target = frame.branch_target;
-                            let arity = if frame.kind == ControlKind::Loop {
-                                0
-                            } else {
-                                frame.arity
+                            let (target, arity, entry, entry_real_depth_var) = {
+                                let frame = &control_stack[target_idx];
+                                (
+                                    frame.branch_target,
+                                    if frame.kind == ControlKind::Loop {
+                                        0
+                                    } else {
+                                        frame.arity
+                                    },
+                                    frame.stack_depth_at_entry as usize,
+                                    frame.entry_real_depth_var,
+                                )
                             };
-                            let entry = frame.stack_depth_at_entry as usize;
                             if max_stack_depth > 0 && arity > 0 {
                                 let result = if sp > 0 {
                                     builder.use_var(stack_vars[sp - 1])
@@ -2809,15 +2967,16 @@ impl CraneliftCompiler {
                                 };
                                 builder.def_var(stack_vars[entry], result);
                             } else if max_stack_depth == 0 {
-                                let entry_depth_var = frame
-                                    .entry_real_depth_var
+                                let entry_depth_var = entry_real_depth_var
                                     .expect("entry_real_depth_var must be set when vstack is disabled");
                                 let target_size = builder.use_var(entry_depth_var);
                                 emit_stack_cleanup!(builder, target_size, arity);
                             }
+                            prepare_register_banks_for_branch!(builder, target_idx);
                             builder.ins().jump(target, &[]);
                         } else {
                             push_top_n_to_real!(builder, result_arity);
+                            prepare_register_banks_for_epilogue!(builder);
                             builder.ins().jump(epilogue_block, &[]);
                         }
                     };
@@ -2825,7 +2984,7 @@ impl CraneliftCompiler {
                     for (i, &label) in all_labels.iter().enumerate() {
                         let case_block = builder.create_block();
                         let next_fallthrough = builder.create_block();
-                        let compare = builder.ins().icmp_imm(IntCC::Equal, cond, i as i64);
+                        let compare = builder.ins().icmp_imm_s(IntCC::Equal, cond, i as i64);
                         builder.ins().brif(compare, case_block, &[], next_fallthrough, &[]);
 
                         builder.switch_to_block(case_block);
@@ -2884,7 +3043,7 @@ impl CraneliftCompiler {
 
                 op::I32_EQZ => {
                     let src = read_src_i32!(builder, insn.sources[0]);
-                    let r = builder.ins().icmp_imm(IntCC::Equal, src, 0);
+                    let r = builder.ins().icmp_imm_s(IntCC::Equal, src, 0);
                     let result = builder.ins().uextend(types::I32, r);
                     write_dst_i32!(builder, insn.destination, result);
                 }
@@ -2901,7 +3060,7 @@ impl CraneliftCompiler {
 
                 op::I64_EQZ => {
                     let src = read_src!(builder, insn.sources[0]);
-                    let r = builder.ins().icmp_imm(IntCC::Equal, src, 0);
+                    let r = builder.ins().icmp_imm_s(IntCC::Equal, src, 0);
                     let result = builder.ins().uextend(types::I32, r);
                     write_dst_i32!(builder, insn.destination, result);
                 }
@@ -3843,20 +4002,32 @@ impl CraneliftCompiler {
 
                 op::SYNTHETIC_TIER_UP => {
                     if let Some(tail) = tier_up_dispatch_tail {
-                        let header = control_stack
-                            .last()
-                            .expect("tier-up checkpoint must be inside a loop")
-                            .branch_target;
+                        let (header, header_reg_ty) = {
+                            let frame = control_stack.last().expect("tier-up checkpoint must be inside a loop");
+                            (
+                                frame.branch_target,
+                                frame
+                                    .branch_target_reg_ty
+                                    .expect("loop header register banks must be initialized"),
+                            )
+                        };
                         let next_tail = builder.create_block();
                         builder.switch_to_block(tail);
-                        let matches = builder.ins().icmp_imm(IntCC::Equal, tier_up_target_ip, insn.imm1);
+                        // Tier-up dispatch starts with canonical payloads loaded from the
+                        // interpreter configuration. Recreate the typed banks required by this
+                        // particular loop header before taking its resume edge.
+                        for (index, &bank) in header_reg_ty.iter().enumerate() {
+                            if bank != Bank::I64 {
+                                materialize_register_bank!(builder, index, Bank::I64, bank);
+                            }
+                        }
+                        let matches = builder.ins().icmp_imm_s(IntCC::Equal, tier_up_target_ip, insn.imm1);
                         builder.ins().brif(matches, header, &[], next_tail, &[]);
                         builder.seal_block(tail);
                         tier_up_dispatch_tail = Some(next_tail);
                         builder.switch_to_block(header);
-                        // The tier-up dispatch jumps straight into this header with regs loaded from config (i64 bank),
-                        // so we can't trust any F32/F64 vars to survive across this jump.
-                        reset_banks!();
+                        reg_ty = header_reg_ty;
+                        reset_stack_banks!();
                     }
                 }
 
@@ -3871,6 +4042,7 @@ impl CraneliftCompiler {
         // If we fell through without hitting end, sync all results and head to the epilogue.
         if !is_unreachable {
             push_top_n_to_real!(builder, result_arity);
+            prepare_register_banks_for_epilogue!(builder);
             builder.ins().jump(epilogue_block, &[]);
         }
 
@@ -3929,6 +4101,7 @@ impl CraneliftCompiler {
 
         builder.switch_to_block(epilogue_block);
         builder.seal_block(epilogue_block);
+        reg_ty = epilogue_reg_ty.unwrap_or([Bank::I64; REG_COUNT]);
         // Clean up excess values on the real stack (e.g. from BR out of nested blocks); nothing to touch if we have vstack info.
         if has_raw_call {
             let init_size = builder.use_var(initial_stack_size_var);
@@ -3940,14 +4113,7 @@ impl CraneliftCompiler {
         } else {
             None
         };
-        Self::sync_regs_to_config(
-            &mut builder,
-            &reg_vars,
-            config_var,
-            regs_offset,
-            value_size,
-            &dirty_regs,
-        );
+        sync_registers_to_config!(builder);
         let direct_return = builder.create_block();
         let native_return = builder.create_block();
         let direct_call_mode = builder.use_var(direct_call_mode_var);
@@ -3968,7 +4134,7 @@ impl CraneliftCompiler {
             builder.ins().return_(&[]);
         }
 
-        builder.finalize();
+        builder.finalize(isa.frontend_config());
 
         let body = Self::compile_function(&*isa, func)?;
         let mut fallback_target_indices: Vec<u32> = direct_call_targets.keys().copied().collect();
@@ -3994,7 +4160,7 @@ impl CraneliftCompiler {
             adapter_builder
                 .ins()
                 .load(ptr_type, MemFlags::trusted(), adapter_params[1], locals_base_offset);
-        let entry_token = adapter_builder.ins().iadd_imm(adapter_params[3], 1);
+        let entry_token = adapter_builder.ins().iadd_imm_s(adapter_params[3], 1);
         let uses_register_native_abi = Self::uses_register_native_abi(function_type);
         let mut body_arguments = Vec::with_capacity(if uses_register_native_abi {
             3 + function_type.parameters.len()
@@ -4024,6 +4190,7 @@ impl CraneliftCompiler {
             name: ExternalName::user(body_name),
             signature: body_signature,
             colocated: true,
+            patchable: false,
         });
         let call = adapter_builder.ins().call(body_function, &body_arguments);
         if let Some(&result_kind) = function_type.results.first() {
@@ -4036,13 +4203,13 @@ impl CraneliftCompiler {
             adapter_builder.ins().store(MemFlags::trusted(), payload, top, 0);
             let zero_tag = adapter_builder.ins().iconst(types::I64, 0);
             adapter_builder.ins().store(MemFlags::trusted(), zero_tag, top, 8);
-            let new_top = adapter_builder.ins().iadd_imm(top, i64::from(value_size));
+            let new_top = adapter_builder.ins().iadd_imm_s(top, i64::from(value_size));
             adapter_builder
                 .ins()
                 .store(MemFlags::trusted(), new_top, adapter_params[1], value_stack_top_offset);
         }
         adapter_builder.ins().return_(&[]);
-        adapter_builder.finalize();
+        adapter_builder.finalize(isa.frontend_config());
         let adapter = Self::compile_function(&*isa, adapter)?;
 
         let native_entry_offset = adapter.code.len().div_ceil(16) * 16;
@@ -4187,27 +4354,6 @@ impl CraneliftCompiler {
                 | op::SYNTHETIC_BR_TABLE_CONT
                 | op::SYNTHETIC_TIER_UP
         )
-    }
-
-    fn sync_regs_to_config(
-        builder: &mut FunctionBuilder,
-        reg_vars: &[Variable; REG_COUNT],
-        config_var: Variable,
-        regs_offset: i32,
-        value_size: i32,
-        dirty: &[bool; REG_COUNT],
-    ) {
-        let config = builder.use_var(config_var);
-        for i in 0..REG_COUNT {
-            if !dirty[i] {
-                continue;
-            }
-            let val = builder.use_var(reg_vars[i]);
-            let offset = regs_offset + (i as i32) * value_size;
-            builder.ins().store(MemFlags::trusted(), val, config, offset);
-            let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().store(MemFlags::trusted(), zero, config, offset + 8);
-        }
     }
 }
 
