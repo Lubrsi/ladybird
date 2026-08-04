@@ -261,4 +261,50 @@
       (else
         (local.set $selected (i32.extend8_s (local.get $selected)))))
     (local.get $selected))
+
+  ;; Keep every scalar type on the virtual operand stack across ordinary native control-flow
+  ;; edges. The temporary values exercise branch cleanup without changing the four preserved
+  ;; values.
+  (func (export "vstack_control_edges") (param $condition i32) (result f64)
+    (local $counter i32)
+    (local $i i32)
+    (local $l i64)
+    (local $f f32)
+    (local $d f64)
+
+    (i32.const 11)
+    (i64.const 22)
+    (f32.const 3.5)
+    (f64.const 4.25)
+
+    (if (local.get $condition)
+      (then)
+      (else))
+
+    (loop $loop
+      (local.set $counter (i32.add (local.get $counter) (i32.const 1)))
+      (br_if $loop (i32.lt_u (local.get $counter) (i32.const 2))))
+
+    (block $conditional_exit
+      (f64.const 99)
+      (br_if $conditional_exit (local.get $condition))
+      (drop))
+
+    (block $table_exit
+      (block $table_inner
+        (i64.const 101)
+        (br_table $table_inner $table_exit (local.get $condition)))
+      (br $table_exit))
+
+    (local.set $d)
+    (local.set $f)
+    (local.set $l)
+    (local.set $i)
+    (f64.add
+      (f64.add
+        (f64.convert_i32_s (local.get $i))
+        (f64.convert_i64_s (local.get $l)))
+      (f64.add
+        (f64.promote_f32 (local.get $f))
+        (local.get $d))))
 )
