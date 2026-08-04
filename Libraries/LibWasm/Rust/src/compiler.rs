@@ -159,6 +159,7 @@ struct ControlFrame {
     entry_real_depth_var: Option<Variable>,
     bank_snapshot: Option<([Bank; REG_COUNT], Vec<Bank>)>,
     branch_target_reg_ty: Option<[Bank; REG_COUNT]>,
+    branch_target_stack_ty: Option<Vec<Bank>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1562,6 +1563,54 @@ impl CraneliftCompiler {
             }};
         }
 
+        macro_rules! stack_payload {
+            ($builder:expr, $index:expr, $bank:expr) => {{
+                let index = $index;
+                match $bank {
+                    Bank::I32 => {
+                        let value = $builder.use_var(stack_vars_i32[index]);
+                        $builder.ins().uextend(types::I64, value)
+                    }
+                    Bank::I64 => $builder.use_var(stack_vars[index]),
+                    Bank::F32 => {
+                        let value = $builder.use_var(stack_vars_f32[index]);
+                        let bits = $builder.ins().bitcast(types::I32, MemFlags::new(), value);
+                        $builder.ins().sextend(types::I64, bits)
+                    }
+                    Bank::F64 => {
+                        let value = $builder.use_var(stack_vars_f64[index]);
+                        $builder.ins().bitcast(types::I64, MemFlags::new(), value)
+                    }
+                }
+            }};
+        }
+
+        macro_rules! stack_value_as_bank {
+            ($builder:expr, $index:expr, $target_bank:expr) => {{
+                let index = $index;
+                let target_bank = $target_bank;
+                if stack_ty[index] == target_bank {
+                    match target_bank {
+                        Bank::I32 => $builder.use_var(stack_vars_i32[index]),
+                        Bank::I64 => $builder.use_var(stack_vars[index]),
+                        Bank::F32 => $builder.use_var(stack_vars_f32[index]),
+                        Bank::F64 => $builder.use_var(stack_vars_f64[index]),
+                    }
+                } else {
+                    let payload = stack_payload!($builder, index, stack_ty[index]);
+                    match target_bank {
+                        Bank::I32 => $builder.ins().ireduce(types::I32, payload),
+                        Bank::I64 => payload,
+                        Bank::F32 => {
+                            let bits = $builder.ins().ireduce(types::I32, payload);
+                            $builder.ins().bitcast(types::F32, MemFlags::new(), bits)
+                        }
+                        Bank::F64 => $builder.ins().bitcast(types::F64, MemFlags::new(), payload),
+                    }
+                }
+            }};
+        }
+
         // Read a value from a source location (register, virtual stack, or call record)
         macro_rules! read_src {
             ($builder:expr, $src:expr) => {{
@@ -1578,7 +1627,7 @@ impl CraneliftCompiler {
                     if max_stack_depth > 0 && sp > 0 {
                         // we have vstack, so just allocate on the native stack.
                         sp -= 1;
-                        $builder.use_var(stack_vars[sp])
+                        stack_payload!($builder, sp, stack_ty[sp])
                     } else {
                         emit_stack_pop!($builder)
                     }
@@ -1614,7 +1663,7 @@ impl CraneliftCompiler {
                         if stack_ty[sp] == Bank::I32 {
                             $builder.use_var(stack_vars_i32[sp])
                         } else {
-                            let payload = $builder.use_var(stack_vars[sp]);
+                            let payload = stack_payload!($builder, sp, stack_ty[sp]);
                             $builder.ins().ireduce(types::I32, payload)
                         }
                     } else {
@@ -1659,7 +1708,8 @@ impl CraneliftCompiler {
                 if count > 0 {
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
                     for i in 0..count {
-                        let val = $builder.use_var(stack_vars[sp - count + i]);
+                        let index = sp - count + i;
+                        let val = stack_payload!($builder, index, stack_ty[index]);
                         let offset = (i as i32) * value_size;
                         $builder.ins().store(MemFlags::trusted(), val, top, offset);
                         $builder
@@ -1729,7 +1779,8 @@ impl CraneliftCompiler {
                         .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
                     for i in 0..n {
-                        let val = $builder.use_var(stack_vars[sp - n + i]);
+                        let index = sp - n + i;
+                        let val = stack_payload!($builder, index, stack_ty[index]);
                         let offset = (i as i32) * value_size;
                         $builder.ins().store(MemFlags::trusted(), val, top, offset);
                         $builder
@@ -1783,13 +1834,12 @@ impl CraneliftCompiler {
                     reg_ty[dst as usize] = Bank::I32;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
-                    let payload = $builder.ins().uextend(types::I64, val);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_i32[sp], val);
-                        $builder.def_var(stack_vars[sp], payload);
                         stack_ty[sp] = Bank::I32;
                         sp += 1;
                     } else {
+                        let payload = $builder.ins().uextend(types::I64, val);
                         emit_stack_push!($builder, payload);
                     }
                 } else {
@@ -1826,7 +1876,7 @@ impl CraneliftCompiler {
                         if stack_ty[sp] == Bank::F64 {
                             $builder.use_var(stack_vars_f64[sp])
                         } else {
-                            let raw = $builder.use_var(stack_vars[sp]);
+                            let raw = stack_payload!($builder, sp, stack_ty[sp]);
                             $builder.ins().bitcast(types::F64, MemFlags::new(), raw)
                         }
                     } else {
@@ -1853,13 +1903,12 @@ impl CraneliftCompiler {
                     reg_ty[dst as usize] = Bank::F64;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
-                    let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), val);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_f64[sp], val);
-                        $builder.def_var(stack_vars[sp], bits);
                         stack_ty[sp] = Bank::F64;
                         sp += 1;
                     } else {
+                        let bits = $builder.ins().bitcast(types::I64, MemFlags::new(), val);
                         emit_stack_push!($builder, bits);
                     }
                 } else {
@@ -1897,7 +1946,7 @@ impl CraneliftCompiler {
                         if stack_ty[sp] == Bank::F32 {
                             $builder.use_var(stack_vars_f32[sp])
                         } else {
-                            let raw = $builder.use_var(stack_vars[sp]);
+                            let raw = stack_payload!($builder, sp, stack_ty[sp]);
                             let raw32 = $builder.ins().ireduce(types::I32, raw);
                             $builder.ins().bitcast(types::F32, MemFlags::new(), raw32)
                         }
@@ -1926,14 +1975,13 @@ impl CraneliftCompiler {
                     reg_ty[dst as usize] = Bank::F32;
                     dirty_regs[dst as usize] = true;
                 } else if dst == STACK_MARKER {
-                    let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), val);
-                    let bits = $builder.ins().sextend(types::I64, bits32);
                     if max_stack_depth > 0 {
                         $builder.def_var(stack_vars_f32[sp], val);
-                        $builder.def_var(stack_vars[sp], bits);
                         stack_ty[sp] = Bank::F32;
                         sp += 1;
                     } else {
+                        let bits32 = $builder.ins().bitcast(types::I32, MemFlags::new(), val);
+                        let bits = $builder.ins().sextend(types::I64, bits32);
                         emit_stack_push!($builder, bits);
                     }
                 } else {
@@ -1994,6 +2042,71 @@ impl CraneliftCompiler {
             }};
         }
 
+        macro_rules! materialize_stack_bank {
+            ($builder:expr, $index:expr, $source_bank:expr, $target_bank:expr) => {{
+                let index = $index;
+                let payload = stack_payload!($builder, index, $source_bank);
+                match $target_bank {
+                    Bank::I32 => {
+                        let value = $builder.ins().ireduce(types::I32, payload);
+                        $builder.def_var(stack_vars_i32[index], value);
+                    }
+                    Bank::I64 => {
+                        $builder.def_var(stack_vars[index], payload);
+                    }
+                    Bank::F32 => {
+                        let bits = $builder.ins().ireduce(types::I32, payload);
+                        let value = $builder.ins().bitcast(types::F32, MemFlags::new(), bits);
+                        $builder.def_var(stack_vars_f32[index], value);
+                    }
+                    Bank::F64 => {
+                        let value = $builder.ins().bitcast(types::F64, MemFlags::new(), payload);
+                        $builder.def_var(stack_vars_f64[index], value);
+                    }
+                }
+            }};
+        }
+
+        macro_rules! normalize_stack_banks_for_edge {
+            ($builder:expr, $source_stack_ty:expr, $target_stack_ty:expr) => {{
+                let source_stack_ty = $source_stack_ty;
+                let target_stack_ty = $target_stack_ty;
+                debug_assert_eq!(source_stack_ty.len(), target_stack_ty.len());
+                for index in 0..source_stack_ty.len() {
+                    if source_stack_ty[index] != target_stack_ty[index] {
+                        materialize_stack_bank!($builder, index, source_stack_ty[index], target_stack_ty[index]);
+                    }
+                }
+            }};
+        }
+
+        macro_rules! copy_stack_value {
+            ($builder:expr, $source:expr, $destination:expr) => {{
+                let source = $source;
+                let destination = $destination;
+                let bank = stack_ty[source];
+                match bank {
+                    Bank::I32 => {
+                        let value = $builder.use_var(stack_vars_i32[source]);
+                        $builder.def_var(stack_vars_i32[destination], value);
+                    }
+                    Bank::I64 => {
+                        let value = $builder.use_var(stack_vars[source]);
+                        $builder.def_var(stack_vars[destination], value);
+                    }
+                    Bank::F32 => {
+                        let value = $builder.use_var(stack_vars_f32[source]);
+                        $builder.def_var(stack_vars_f32[destination], value);
+                    }
+                    Bank::F64 => {
+                        let value = $builder.use_var(stack_vars_f64[source]);
+                        $builder.def_var(stack_vars_f64[destination], value);
+                    }
+                }
+                stack_ty[destination] = bank;
+            }};
+        }
+
         macro_rules! normalize_register_banks_for_edge {
             ($builder:expr, $target_reg_ty:expr) => {{
                 let target_reg_ty = $target_reg_ty;
@@ -2021,6 +2134,23 @@ impl CraneliftCompiler {
             }};
         }
 
+        macro_rules! prepare_stack_banks_for_branch {
+            ($builder:expr, $target_index:expr, $depth:expr) => {{
+                let target_index = $target_index;
+                let depth = $depth;
+                let source_stack_ty = stack_ty[..depth].to_vec();
+                let target_stack_ty = match control_stack[target_index].branch_target_stack_ty.clone() {
+                    Some(target_stack_ty) => target_stack_ty,
+                    None => {
+                        control_stack[target_index].branch_target_stack_ty = Some(source_stack_ty.clone());
+                        source_stack_ty.clone()
+                    }
+                };
+                normalize_stack_banks_for_edge!($builder, &source_stack_ty, &target_stack_ty);
+                target_stack_ty
+            }};
+        }
+
         macro_rules! prepare_register_banks_for_epilogue {
             ($builder:expr) => {{
                 let target_reg_ty = match epilogue_reg_ty {
@@ -2032,14 +2162,6 @@ impl CraneliftCompiler {
                     }
                 };
                 normalize_register_banks_for_edge!($builder, target_reg_ty);
-            }};
-        }
-
-        macro_rules! reset_stack_banks {
-            () => {{
-                for t in stack_ty.iter_mut() {
-                    *t = Bank::I64;
-                }
             }};
         }
 
@@ -2504,6 +2626,7 @@ impl CraneliftCompiler {
                         entry_real_depth_var,
                         bank_snapshot: None,
                         branch_target_reg_ty: None,
+                        branch_target_stack_ty: None,
                     });
                 }
 
@@ -2534,10 +2657,8 @@ impl CraneliftCompiler {
                         entry_real_depth_var,
                         bank_snapshot: None,
                         branch_target_reg_ty: Some(header_reg_ty),
+                        branch_target_stack_ty: Some(stack_ty[..sp].to_vec()),
                     });
-                    // Stack-bank types are not tracked per edge yet. Register backedges are
-                    // normalized to the types established by the loop's initial edge.
-                    reset_stack_banks!();
                 }
 
                 op::IF => {
@@ -2578,6 +2699,7 @@ impl CraneliftCompiler {
                         entry_real_depth_var,
                         bank_snapshot: Some((reg_ty, stack_ty.clone())),
                         branch_target_reg_ty: if has_else { None } else { Some(reg_ty) },
+                        branch_target_stack_ty: if has_else { None } else { Some(stack_ty[..sp].to_vec()) },
                     });
                 }
 
@@ -2595,6 +2717,7 @@ impl CraneliftCompiler {
                             )
                         };
                         prepare_register_banks_for_branch!(builder, frame_index);
+                        prepare_stack_banks_for_branch!(builder, frame_index, sp);
                         builder.ins().jump(after, &[]);
                         builder.switch_to_block(else_block);
                         builder.seal_block(else_block);
@@ -2622,15 +2745,23 @@ impl CraneliftCompiler {
                         } else {
                             frame.branch_target_reg_ty.unwrap_or(reg_ty)
                         };
+                        let target_depth = (frame.stack_depth_at_entry + frame.arity as i32) as usize;
+                        let source_stack_ty = stack_ty[..target_depth].to_vec();
+                        let after_stack_ty = if frame.kind == ControlKind::Loop {
+                            source_stack_ty.clone()
+                        } else {
+                            frame.branch_target_stack_ty.unwrap_or_else(|| source_stack_ty.clone())
+                        };
                         normalize_register_banks_for_edge!(builder, after_reg_ty);
+                        normalize_stack_banks_for_edge!(builder, &source_stack_ty, &after_stack_ty);
                         builder.ins().jump(after, &[]);
                         builder.switch_to_block(after);
                         is_unreachable = false;
                         reg_ty = after_reg_ty;
-                        reset_stack_banks!();
 
                         // After end of block, sp = entry depth + arity.
-                        sp = (frame.stack_depth_at_entry + frame.arity as i32) as usize;
+                        sp = target_depth;
+                        stack_ty[..sp].copy_from_slice(&after_stack_ty);
 
                         if frame.kind == ControlKind::Loop {
                             builder.seal_block(frame.branch_target); // loop header
@@ -2666,12 +2797,13 @@ impl CraneliftCompiler {
                         if max_stack_depth > 0 {
                             // vstack enabled: move top arity values to entry position.
                             if arity > 0 {
-                                let result = if sp > 0 {
-                                    builder.use_var(stack_vars[sp - 1])
+                                if sp > 0 {
+                                    copy_stack_value!(builder, sp - 1, entry);
                                 } else {
-                                    emit_stack_pop!(builder)
-                                };
-                                builder.def_var(stack_vars[entry], result);
+                                    let result = emit_stack_pop!(builder);
+                                    builder.def_var(stack_vars[entry], result);
+                                    stack_ty[entry] = Bank::I64;
+                                }
                             }
                         } else {
                             // vstack disabled: trim the real value stack down to the target label's entry depth + arity, preserving the top arity values.
@@ -2681,6 +2813,7 @@ impl CraneliftCompiler {
                             emit_stack_cleanup!(builder, target_size, arity);
                         }
                         prepare_register_banks_for_branch!(builder, target_idx);
+                        prepare_stack_banks_for_branch!(builder, target_idx, entry + arity as usize);
                         builder.ins().jump(target, &[]);
                     } else {
                         // br to function label = return.
@@ -2733,23 +2866,26 @@ impl CraneliftCompiler {
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
                         } else if extras > 0 {
+                            let fallthrough_stack_ty = stack_ty.clone();
                             let taken_block = builder.create_block();
                             let fallthrough = builder.create_block();
                             builder.ins().brif(cond, taken_block, &[], fallthrough, &[]);
                             builder.switch_to_block(taken_block);
                             builder.seal_block(taken_block);
                             if arity > 0 {
-                                let result = builder.use_var(stack_vars[sp - 1]);
-                                builder.def_var(stack_vars[entry], result);
+                                copy_stack_value!(builder, sp - 1, entry);
                             }
                             // Note: we don't change sp here since fallthrough needs the original sp.
                             prepare_register_banks_for_branch!(builder, target_idx);
+                            prepare_stack_banks_for_branch!(builder, target_idx, entry + arity as usize);
                             builder.ins().jump(target, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
+                            stack_ty = fallthrough_stack_ty;
                         } else {
                             let fallthrough = builder.create_block();
                             prepare_register_banks_for_branch!(builder, target_idx);
+                            prepare_stack_banks_for_branch!(builder, target_idx, entry + arity as usize);
                             builder.ins().brif(cond, target, &[], fallthrough, &[]);
                             builder.switch_to_block(fallthrough);
                             builder.seal_block(fallthrough);
@@ -2944,6 +3080,7 @@ impl CraneliftCompiler {
                     let cond = read_src_i32!(builder, insn.sources[0]);
 
                     let mut branch_to_label = |builder: &mut FunctionBuilder, label_idx: usize| {
+                        let fallthrough_stack_ty = stack_ty.clone();
                         if label_idx < control_stack.len() {
                             let target_idx = control_stack.len() - 1 - label_idx;
                             let (target, arity, entry, entry_real_depth_var) = {
@@ -2960,12 +3097,13 @@ impl CraneliftCompiler {
                                 )
                             };
                             if max_stack_depth > 0 && arity > 0 {
-                                let result = if sp > 0 {
-                                    builder.use_var(stack_vars[sp - 1])
+                                if sp > 0 {
+                                    copy_stack_value!(builder, sp - 1, entry);
                                 } else {
-                                    emit_stack_pop!(builder)
-                                };
-                                builder.def_var(stack_vars[entry], result);
+                                    let result = emit_stack_pop!(builder);
+                                    builder.def_var(stack_vars[entry], result);
+                                    stack_ty[entry] = Bank::I64;
+                                }
                             } else if max_stack_depth == 0 {
                                 let entry_depth_var = entry_real_depth_var
                                     .expect("entry_real_depth_var must be set when vstack is disabled");
@@ -2973,12 +3111,14 @@ impl CraneliftCompiler {
                                 emit_stack_cleanup!(builder, target_size, arity);
                             }
                             prepare_register_banks_for_branch!(builder, target_idx);
+                            prepare_stack_banks_for_branch!(builder, target_idx, entry + arity as usize);
                             builder.ins().jump(target, &[]);
                         } else {
                             push_top_n_to_real!(builder, result_arity);
                             prepare_register_banks_for_epilogue!(builder);
                             builder.ins().jump(epilogue_block, &[]);
                         }
+                        stack_ty = fallthrough_stack_ty;
                     };
 
                     for (i, &label) in all_labels.iter().enumerate() {
@@ -3622,32 +3762,10 @@ impl CraneliftCompiler {
                             for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
                                 let stack_index = stack_base + parameter_index;
                                 let argument = match parameter_kind {
-                                    I32_KIND => {
-                                        if stack_ty[stack_index] == Bank::I32 {
-                                            builder.use_var(stack_vars_i32[stack_index])
-                                        } else {
-                                            let payload = builder.use_var(stack_vars[stack_index]);
-                                            builder.ins().ireduce(types::I32, payload)
-                                        }
-                                    }
-                                    I64_KIND => builder.use_var(stack_vars[stack_index]),
-                                    F32_KIND => {
-                                        if stack_ty[stack_index] == Bank::F32 {
-                                            builder.use_var(stack_vars_f32[stack_index])
-                                        } else {
-                                            let payload = builder.use_var(stack_vars[stack_index]);
-                                            let bits = builder.ins().ireduce(types::I32, payload);
-                                            builder.ins().bitcast(types::F32, MemFlags::new(), bits)
-                                        }
-                                    }
-                                    F64_KIND => {
-                                        if stack_ty[stack_index] == Bank::F64 {
-                                            builder.use_var(stack_vars_f64[stack_index])
-                                        } else {
-                                            let payload = builder.use_var(stack_vars[stack_index]);
-                                            builder.ins().bitcast(types::F64, MemFlags::new(), payload)
-                                        }
-                                    }
+                                    I32_KIND => stack_value_as_bank!(builder, stack_index, Bank::I32),
+                                    I64_KIND => stack_value_as_bank!(builder, stack_index, Bank::I64),
+                                    F32_KIND => stack_value_as_bank!(builder, stack_index, Bank::F32),
+                                    F64_KIND => stack_value_as_bank!(builder, stack_index, Bank::F64),
                                     _ => return Err("unsupported native Wasm ABI type"),
                                 };
                                 wasm_arguments.push(argument);
@@ -4004,6 +4122,12 @@ impl CraneliftCompiler {
                     if let Some(tail) = tier_up_dispatch_tail {
                         let (header, header_reg_ty) = {
                             let frame = control_stack.last().expect("tier-up checkpoint must be inside a loop");
+                            debug_assert!(
+                                frame
+                                    .branch_target_stack_ty
+                                    .as_ref()
+                                    .is_some_and(|stack_ty| stack_ty.is_empty())
+                            );
                             (
                                 frame.branch_target,
                                 frame
@@ -4027,7 +4151,6 @@ impl CraneliftCompiler {
                         tier_up_dispatch_tail = Some(next_tail);
                         builder.switch_to_block(header);
                         reg_ty = header_reg_ty;
-                        reset_stack_banks!();
                     }
                 }
 

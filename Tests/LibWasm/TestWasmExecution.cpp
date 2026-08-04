@@ -114,6 +114,9 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     };
     EXPECT_EQ(invoke_i32_bank_edges(-2147483647 - 1, 1), 0x40000008);
     EXPECT_EQ(invoke_i32_bank_edges(0x1234, 0), -53);
+
+    EXPECT_EQ(invoke_with_i32("vstack_control_edges"sv, 0).to<double>(), 40.75);
+    EXPECT_EQ(invoke_with_i32("vstack_control_edges"sv, 1).to<double>(), 40.75);
 }
 
 TEST_CASE(function_import_requires_function_type)
