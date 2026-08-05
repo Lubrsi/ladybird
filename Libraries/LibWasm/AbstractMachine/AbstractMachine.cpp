@@ -90,6 +90,7 @@ void dump_module_stats()
             total_tier_up_functions,
             total_tier_up_checkpoints,
             total_hits);
+        warnln("wasm-stats: tier-up transfers: {}", tier_up_taken_count());
     });
 }
 

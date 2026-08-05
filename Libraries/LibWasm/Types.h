@@ -1027,6 +1027,7 @@ struct CompiledInstructions {
     u32 cranelift_local_count = 0;    // total locals (params + declared + inlined); lets Cranelift promote locals to SSA instead of memory. Only meaningful when cranelift_eligible.
     u32 cranelift_param_count = 0;    // leading locals that are parameters; the compiled entry block zero-initializes everything past them. Only meaningful when cranelift_eligible.
     u32 cranelift_inlined_locals = 0; // extra locals appended for inlined callee bodies (see try_compile_instructions); the frame is grown by this much in both interpreter and JIT paths.
+    u32 cranelift_function_index = NumericLimits<u32>::max();
 
     bool direct = false;                  // true if all dispatches contain handler_ptr, otherwise false and all contain instruction_opcode.
     bool cranelift_eligible = false;      // true if this expression cleared the Cranelift type/shape checks during validation.
@@ -1830,6 +1831,7 @@ void compile_module_to_native(Module&);
 
 WASM_API void record_module_stats(ModuleStats);
 WASM_API void dump_module_stats();
+WASM_API size_t tier_up_taken_count();
 
 // Cranelift disk-cache plumbing. Validator drives these around CodeSection validation:
 //   1. set_cranelift_active_function_index() before each function so cache-hit installs
