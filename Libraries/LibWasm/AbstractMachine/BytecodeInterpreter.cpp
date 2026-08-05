@@ -7037,7 +7037,7 @@ Instruction& InstructionStorage::append(Instruction instruction)
     return slot.value();
 }
 
-CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<TableType const> tables, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count)
+CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<TableType const> tables, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count, bool cranelift_candidate)
 {
     CompiledInstructions result;
 
@@ -7705,7 +7705,7 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
     // Every time we have a large-enough function, drop a synthetic_tier_up checkpoint right after each loop header that's eligible for tier-up (empty stack at the header, so the back-edge hits it every iteration).
     // This allows us to start running code immediately in the interpreter, and switch to native code on paths that matter (or eventually) once compiled code is ready and the tier-up check hits.
     constexpr size_t tier_up_instruction_threshold = 32;
-    if (result.dispatches.size() >= tier_up_instruction_threshold) {
+    if (cranelift_candidate && should_try_to_use_direct_threading && result.dispatches.size() >= tier_up_instruction_threshold) {
         Vector<size_t> loop_positions;
         for (size_t i = 0; i < result.dispatches.size(); ++i) {
             if (result.dispatches[i].instruction->opcode() != Instructions::loop)

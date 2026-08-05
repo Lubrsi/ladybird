@@ -5126,56 +5126,59 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
 
     VERIFY(m_frames.is_empty());
 
-    // Now that we're in happy land, try to compile the expression down to a list of labels to help dispatch.
-    expression.compiled_instructions = try_compile_instructions(expression, m_context.functions.span(), m_context.types.span(), m_context.tables.span(), callee_bodies, current_function_index, m_context.locals.size(), m_context.imported_function_count);
-
-    if (expression.compiled_instructions.direct && !is_constant_expression) {
-        bool has_unsupported_types = false;
+    bool cranelift_candidate = !is_constant_expression;
+    if (cranelift_candidate) {
         for (auto& type : m_context.locals) {
             if (type.is_reference() || type.kind() == ValueType::V128) {
-                has_unsupported_types = true;
+                cranelift_candidate = false;
                 break;
             }
         }
-        if (!has_unsupported_types) {
+        if (cranelift_candidate) {
             for (auto& type : result_types) {
                 if (type.is_reference() || type.kind() == ValueType::V128) {
-                    has_unsupported_types = true;
+                    cranelift_candidate = false;
                     break;
                 }
             }
         }
         // Also skip 64-bit addressing (cranelift truncates base to u32).
-        if (!has_unsupported_types) {
+        if (cranelift_candidate) {
             for (auto& mem : m_context.memories) {
                 if (mem.limits().address_type() == AddressType::I64) {
-                    has_unsupported_types = true;
+                    cranelift_candidate = false;
                     break;
                 }
             }
         }
         // Also skip if any call targets a function with multi-value returns.
-        if (!has_unsupported_types) {
+        if (cranelift_candidate) {
             for (auto& insn : expression.instructions()) {
                 if (insn.opcode() == Instructions::call) {
                     auto func_idx = insn.arguments().get<FunctionIndex>().value();
                     if (func_idx < m_context.functions.size() && m_context.functions[func_idx].results().size() > 1) {
-                        has_unsupported_types = true;
+                        cranelift_candidate = false;
                         break;
                     }
                 }
             }
         }
         // Also skip multi-value return functions.
-        if (!has_unsupported_types && result_types.size() <= 1) {
-            expression.compiled_instructions.cranelift_eligible = true;
-            expression.compiled_instructions.cranelift_result_arity = static_cast<u32>(result_types.size());
-            expression.compiled_instructions.cranelift_local_count = static_cast<u32>(m_context.locals.size()) + expression.compiled_instructions.cranelift_inlined_locals;
-            expression.compiled_instructions.cranelift_param_count = static_cast<u32>(m_context.current_function_parameter_count);
-            expression.compiled_instructions.cranelift_local_types.ensure_capacity(m_context.locals.size());
-            for (auto& type : m_context.locals)
-                expression.compiled_instructions.cranelift_local_types.unchecked_append(to_underlying(type.kind()));
-        }
+        if (result_types.size() > 1)
+            cranelift_candidate = false;
+    }
+
+    // Now that we're in happy land, try to compile the expression down to a list of labels to help dispatch.
+    expression.compiled_instructions = try_compile_instructions(expression, m_context.functions.span(), m_context.types.span(), m_context.tables.span(), callee_bodies, current_function_index, m_context.locals.size(), m_context.imported_function_count, cranelift_candidate);
+
+    if (expression.compiled_instructions.direct && cranelift_candidate) {
+        expression.compiled_instructions.cranelift_eligible = true;
+        expression.compiled_instructions.cranelift_result_arity = static_cast<u32>(result_types.size());
+        expression.compiled_instructions.cranelift_local_count = static_cast<u32>(m_context.locals.size()) + expression.compiled_instructions.cranelift_inlined_locals;
+        expression.compiled_instructions.cranelift_param_count = static_cast<u32>(m_context.current_function_parameter_count);
+        expression.compiled_instructions.cranelift_local_types.ensure_capacity(m_context.locals.size());
+        for (auto& type : m_context.locals)
+            expression.compiled_instructions.cranelift_local_types.unchecked_append(to_underlying(type.kind()));
     }
 
     return ExpressionTypeResult { stack.release_vector(), is_constant_expression };

@@ -118,6 +118,23 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     EXPECT_EQ(invoke_with_i32("vstack_control_edges"sv, 1).to<double>(), 40.75);
 }
 
+TEST_CASE(ineligible_function_has_no_tier_up_checkpoints)
+{
+    auto file = MUST(Core::File::open("Fixtures/tier-up-one-way.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, {}, Wasm::CompileToNative::No));
+
+    auto const& ineligible = module->code_section().functions().last().func().body().compiled_instructions;
+    EXPECT(!ineligible.cranelift_eligible);
+    EXPECT(!ineligible.has_tier_up_checkpoints);
+    for (auto const& dispatch : ineligible.dispatches)
+        EXPECT(dispatch.instruction->opcode() != Wasm::Instructions::synthetic_tier_up);
+}
+
 TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
 {
     auto file = MUST(Core::File::open("Fixtures/label-stack-cleanup.wasm"sv, Core::File::OpenMode::Read));

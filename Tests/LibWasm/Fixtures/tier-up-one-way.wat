@@ -307,4 +307,32 @@
       (f64.add
         (f64.promote_f32 (local.get $f))
         (local.get $d))))
+
+  ;; A function that is large enough for checkpoint insertion and has an eligible loop, but cannot
+  ;; be compiled by Cranelift because it has a v128 local.
+  (func (export "ineligible_tier_up") (result i32)
+    (local v128)
+    (loop $loop
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (br_if $loop (i32.const 0)))
+    (i32.const 0))
 )
