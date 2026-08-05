@@ -1702,6 +1702,11 @@ struct CompileCacheConfig {
 class WASM_API Module : public AtomicRefCounted<Module>
     , public Weakable<Module> {
 public:
+    struct CraneliftPublications {
+        size_t total_count { 0 };
+        Vector<FunctionIndex> function_indices;
+    };
+
     enum class ValidationStatus {
         Unchecked,
         Invalid,
@@ -1769,6 +1774,39 @@ public:
         });
     }
 
+    void record_cranelift_publications(ReadonlySpan<FunctionIndex> function_indices) const
+    {
+        if (function_indices.is_empty())
+            return;
+
+        Sync::MutexLocker locker(m_cranelift_publications_mutex);
+        m_cranelift_publications.ensure_capacity(m_cranelift_publications.size() + function_indices.size());
+        for (auto function_index : function_indices)
+            m_cranelift_publications.unchecked_append(function_index);
+
+        // Publish the append-only log length after its new entries are visible. Instances compare
+        // this count on every table request and only take the mutex when it changes.
+        m_cranelift_publication_count.store(m_cranelift_publications.size(), AK::MemoryOrder::memory_order_release);
+    }
+
+    size_t cranelift_publication_count() const
+    {
+        return m_cranelift_publication_count.load(AK::MemoryOrder::memory_order_acquire);
+    }
+
+    CraneliftPublications cranelift_publications_since(size_t publication_count) const
+    {
+        Sync::MutexLocker locker(m_cranelift_publications_mutex);
+        VERIFY(publication_count <= m_cranelift_publications.size());
+
+        CraneliftPublications publications;
+        publications.total_count = m_cranelift_publications.size();
+        publications.function_indices.ensure_capacity(publications.total_count - publication_count);
+        for (auto function_index : m_cranelift_publications.span().slice(publication_count))
+            publications.function_indices.unchecked_append(function_index);
+        return publications;
+    }
+
     // Disk-cache config for native compilation. Parked here by the embedder before compilation is kicked off, and consumed by whichever path ends up driving compile_module_to_native() first.
     void set_cranelift_cache_config(CompileCacheConfig config) { m_cranelift_cache_config = move(config); }
     Optional<CompileCacheConfig> take_cranelift_cache_config() { return move(m_cranelift_cache_config); }
@@ -1811,6 +1849,9 @@ private:
     mutable Atomic<u8> m_cranelift_compilation_state { 0 };
     mutable Sync::Mutex m_cranelift_compilation_mutex;
     mutable Sync::ConditionVariable m_cranelift_compilation_state_changed { m_cranelift_compilation_mutex };
+    mutable Atomic<size_t> m_cranelift_publication_count { 0 };
+    mutable Sync::Mutex m_cranelift_publications_mutex;
+    mutable Vector<FunctionIndex> m_cranelift_publications;
     Optional<CompileCacheConfig> m_cranelift_cache_config;
     Optional<ModuleStats> m_compile_stats;
 
@@ -1839,13 +1880,15 @@ WASM_API void dump_module_stats();
 WASM_API size_t tier_up_taken_count();
 
 // Cranelift disk-cache plumbing. Validator drives these around CodeSection validation:
-//   1. set_cranelift_active_function_index() before each function so cache-hit installs
+//   1. set_cranelift_active_function_index() before each function so queued cache-hit records
 //      and post-compile capture know which function they're talking about.
 //   2. begin_cranelift_cache_capture() to start collecting compiled bytes + relocs.
 //   3. try_install_cranelift_cache_blob() with the wasm-bytes hash + stored blob; if
 //      it returns true, individual try_cranelift_compile calls will short-circuit by
-//      installing from the stashed records instead of queueing fresh compiles.
-//   4. After flush, serialize_cranelift_cache_blob() returns a blob to hand to the
+//      queueing the stashed records for installation instead of queueing fresh compiles.
+//   4. flush_cranelift_batch() installs queued cache-hit records together so direct-call
+//      relocations can resolve to other records in the same blob.
+//   5. After flush, serialize_cranelift_cache_blob() returns a blob to hand to the
 //      cache store (or {} if nothing was captured); abort_cranelift_cache_capture()
 //      throws the capture away.
 void set_cranelift_active_function_index(u32 function_index);

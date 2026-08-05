@@ -526,45 +526,97 @@ GlobalInstanceTable ModuleInstance::resolved_globals(Store& store) const
     return m_resolved_globals.data();
 }
 
-Vector<CompiledFunctionEntry> const& ModuleInstance::compiled_fn_table(Store& store) const
+void ModuleInstance::initialize_compiled_fn_table(Store& store) const
 {
-    if (m_compiled_fn_table_built)
-        return m_compiled_fn_table;
-
     auto count = m_functions.size();
-    if (count == 0) {
-        m_compiled_fn_table_built = true;
-        return m_compiled_fn_table;
-    }
-
     m_compiled_fn_table.resize_with_default_value_and_keep_capacity(count, {});
-    auto* entries = m_compiled_fn_table.data();
 
-    // Since we asynchronously compile the code to native, we'll need to rebuild this table incrementally until all functions have been compiled.
-    bool all_ready = true;
     for (size_t i = 0; i < count; i++) {
         auto* instance = store.unsafe_get(m_functions[i]);
         auto* wasm_fn = instance->get_pointer<WasmFunction>();
         if (!wasm_fn)
             continue;
-        if (auto src = wasm_fn->module_ref(); src && !src->has_attempted_cranelift_compilation())
-            all_ready = false;
-        auto& ci = wasm_fn->code().func().body().compiled_instructions;
-        auto native = cranelift_entry_acquire(ci);
-        if (native == 0)
+
+        auto module = wasm_fn->module_ref();
+        if (!module)
             continue;
 
-        auto& entry = entries[i];
-        entry.handler_ptr = native;
-        entry.dispatches_ptr = bit_cast<FlatPtr>(ci.dispatches.data());
-        entry.src_dst_ptr = bit_cast<FlatPtr>(ci.src_dst_mappings.data());
-        entry.first_insn = ci.dispatches[0].instruction;
-        entry.expression = &wasm_fn->code().func().body();
-        entry.module = &wasm_fn->module();
-        entry.total_local_count = static_cast<u32>(wasm_fn->code().func().total_local_count()) + ci.cranelift_inlined_locals;
-        entry.arity = static_cast<u32>(wasm_fn->type().results().size());
-        entry.max_call_rec_size = static_cast<u32>(ci.max_call_rec_size);
+        size_t source_index = 0;
+        while (source_index < m_compiled_fn_table_sources.size() && m_compiled_fn_table_sources[source_index].module != module)
+            ++source_index;
+
+        if (source_index == m_compiled_fn_table_sources.size()) {
+            m_compiled_fn_table_sources.append({
+                .module = module.release_nonnull(),
+                .table_indices_by_function = {},
+                .publication_count = 0,
+            });
+        }
+
+        auto function_index = FunctionIndex { wasm_fn->code().func().body().compiled_instructions.cranelift_function_index };
+        m_compiled_fn_table_sources[source_index].table_indices_by_function.ensure(function_index).append(i);
     }
+
+    m_compiled_fn_table_initialized = true;
+}
+
+void ModuleInstance::update_compiled_fn_table_entry(Store& store, size_t table_index) const
+{
+    auto* instance = store.unsafe_get(m_functions[table_index]);
+    auto* wasm_fn = instance->get_pointer<WasmFunction>();
+    if (!wasm_fn)
+        return;
+
+    auto& function = wasm_fn->code().func();
+    auto& compiled = function.body().compiled_instructions;
+    auto native_entry = cranelift_entry_acquire(compiled);
+    if (native_entry == 0)
+        return;
+
+    auto& entry = m_compiled_fn_table[table_index];
+    entry.handler_ptr = native_entry;
+    entry.dispatches_ptr = bit_cast<FlatPtr>(compiled.dispatches.data());
+    entry.src_dst_ptr = bit_cast<FlatPtr>(compiled.src_dst_mappings.data());
+    entry.first_insn = compiled.dispatches[0].instruction;
+    entry.expression = &function.body();
+    entry.module = &wasm_fn->module();
+    entry.total_local_count = static_cast<u32>(function.total_local_count()) + compiled.cranelift_inlined_locals;
+    entry.arity = static_cast<u32>(wasm_fn->type().results().size());
+    entry.max_call_rec_size = static_cast<u32>(compiled.max_call_rec_size);
+}
+
+Vector<CompiledFunctionEntry> const& ModuleInstance::compiled_fn_table(Store& store) const
+{
+    if (m_compiled_fn_table_built)
+        return m_compiled_fn_table;
+
+    if (!m_compiled_fn_table_initialized)
+        initialize_compiled_fn_table(store);
+
+    bool all_ready = true;
+    for (auto& source : m_compiled_fn_table_sources) {
+        // Read completion before the publication count. Observing completion guarantees that all
+        // publications happened-before the count read, so the table cannot become permanently
+        // built without applying the final batch.
+        bool compilation_finished = source.module->has_attempted_cranelift_compilation();
+        auto publication_count = source.module->cranelift_publication_count();
+        if (publication_count != source.publication_count) {
+            auto publications = source.module->cranelift_publications_since(source.publication_count);
+            source.publication_count = publications.total_count;
+
+            for (auto function_index : publications.function_indices) {
+                auto table_indices = source.table_indices_by_function.get(function_index);
+                if (!table_indices.has_value())
+                    continue;
+                for (auto table_index : table_indices.value())
+                    update_compiled_fn_table_entry(store, table_index);
+            }
+        }
+
+        if (!compilation_finished)
+            all_ready = false;
+    }
+
     m_compiled_fn_table_built = all_ready;
     return m_compiled_fn_table;
 }

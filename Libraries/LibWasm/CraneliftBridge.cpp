@@ -7,9 +7,13 @@
 #include <AK/Array.h>
 #include <AK/ByteString.h>
 #include <AK/Checked.h>
+#include <AK/DistinctNumeric.h>
+#include <AK/HashMap.h>
+#include <AK/HashTable.h>
 #include <AK/LexicalPath.h>
 #include <AK/NeverDestroyed.h>
 #include <AK/Platform.h>
+#include <AK/Queue.h>
 #include <AK/ScopeGuard.h>
 #include <CraneliftFFI.h>
 #include <LibCore/AnonymousBuffer.h>
@@ -240,11 +244,17 @@ struct CacheRecord {
     Vector<CraneliftTrap> traps;
 };
 
+struct PendingCachedFunction {
+    u32 function_index;
+    CompiledInstructions* target;
+    CacheRecord record;
+};
+
 // On a cache miss we capture every successful compile so we can hand the blob to a
 // store callback after validation finishes. On a cache hit we populate the install
-// map up front; the per-function lookup happens inside try_cranelift_compile when
-// the dispatch table for that function has just been built and is ready to receive
-// a handler_ptr.
+// map up front; try_cranelift_compile associates each record with its completed
+// dispatch table, and flush_cranelift_batch installs the records together so their
+// cross-function relocations can resolve directly.
 struct CacheCaptureState {
     bool capturing { false };
     Vector<CacheRecord> records;
@@ -252,6 +262,7 @@ struct CacheCaptureState {
 struct PendingInstallState {
     bool active { false };
     HashMap<u32, CacheRecord> records;
+    Vector<PendingCachedFunction> functions;
 };
 struct CacheState {
     CacheCaptureState cache_capture;
@@ -591,9 +602,32 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
     publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
 }
 
-static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelperAddresses const& helper_addresses)
+static size_t imported_function_count(Module const& module)
+{
+    size_t count = 0;
+    for (auto const& import : module.import_section().imports()) {
+        import.description().visit(
+            [&](TypeIndex const& type_index) {
+                auto const& types = module.type_section().types();
+                if (type_index.value() < types.size() && types[type_index.value()].is_function())
+                    ++count;
+            },
+            [&](FunctionType const&) { ++count; },
+            [&](auto const&) {});
+    }
+    return count;
+}
+
+static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelperAddresses const& helper_addresses, Module const& module)
 {
     HashMap<u32, FlatPtr> native_targets;
+    auto function_index = imported_function_count(module);
+    for (auto const& function : module.code_section().functions()) {
+        auto const& compiled = function.func().body().compiled_instructions;
+        if (auto native_entry = cranelift_native_entry_acquire(compiled); native_entry != 0)
+            native_targets.set(static_cast<u32>(function_index), native_entry);
+        ++function_index;
+    }
     for (auto const& pending : pending_functions) {
         auto* native_entry = static_cast<u8*>(pending.mapping->mapping) + pending.native_entry_offset;
         native_targets.set(pending.function_index, bit_cast<FlatPtr>(native_entry));
@@ -609,24 +643,15 @@ static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_
             return;
     }
 
+    Vector<FunctionIndex> published_functions;
+    published_functions.ensure_capacity(pending_functions.size());
     for (auto& pending : pending_functions) {
-        if (pending.mapping)
+        if (pending.mapping) {
+            published_functions.unchecked_append(FunctionIndex { pending.function_index });
             publish_compiled_function(move(pending));
+        }
     }
-}
-
-// Used by the cache-install path. Freshly compiled functions are prepared as a batch so every
-// native address exists before any relocations are applied.
-static bool install_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, size_t native_entry_offset, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps, RuntimeHelperAddresses const& helper_addresses)
-{
-    auto pending = prepare_compiled_function(function_index, target, code_bytes, native_entry_offset, relocs, traps);
-    if (!pending.has_value())
-        return false;
-
-    Vector<PendingCompiledFunction> pending_functions;
-    pending_functions.append(pending.release_value());
-    install_compiled_functions(pending_functions, helper_addresses);
-    return target.cranelift_compiled;
+    module.record_cranelift_publications(published_functions);
 }
 
 }
@@ -884,16 +909,15 @@ i32 wasm_cl_call_indirect(void* interp_ptr, void* config_ptr, i32 table_idx, i32
     if (!callable->defined_type || !matches_defined_type(*callable->defined_type, *type_expected))
         return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 
-    auto const& function_type = function->visit([](auto const& value) -> FunctionType const& { return value.type(); });
-    if (function_type.results().size() <= 1) {
-        auto parameter_count = function_type.parameters().size();
+    if (callable->result_count <= 1) {
+        auto parameter_count = callable->parameter_count;
         if (parameter_count > config.value_stack().size())
             return interpreter.set_trap(Trap::from_string("Insufficient arguments for indirect call"));
 
         auto arguments = config.value_stack().span().slice_from_end(parameter_count);
         config.value_stack().shrink(config.value_stack().size() - parameter_count);
         auto did_trap = wasm_cl_finish_call(interpreter, config, address, arguments.data(), arguments.size());
-        if (!did_trap && !function_type.results().is_empty())
+        if (!did_trap && callable->result_count != 0)
             config.value_stack().unchecked_append(config.compiled_call_result_scratch());
         return did_trap;
     }
@@ -1740,7 +1764,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             pending_functions.append(pending.release_value());
     }
 
-    install_compiled_functions(pending_functions, helper_addresses);
+    install_compiled_functions(pending_functions, helper_addresses, module);
     return {};
 }
 
@@ -1765,24 +1789,14 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
     if (s_active_function_index == NumericLimits<u32>::max())
         return false;
 
-    // Cache hit: install from the parsed blob instead of going through cranelift.
-    //            dispatches[] has just been populated by try_compile_instructions, so handler_ptr is ready to be set.
+    // Cache hit: associate the parsed record with the dispatch table that was just populated by
+    // try_compile_instructions. The records are installed together by flush_cranelift_batch so
+    // cross-function relocations resolve directly.
     if (cranelift_cache_state().pending_install.active && s_active_function_index != NumericLimits<u32>::max()) {
         auto record = cranelift_cache_state().pending_install.records.take(s_active_function_index);
         if (record.has_value()) {
-            static auto cache_install_helper_addresses = make_runtime_helper_addresses();
-            if (install_compiled_function(
-                    s_active_function_index,
-                    compiled,
-                    record->unpatched_code.bytes(),
-                    record->native_entry_offset,
-                    record->relocs.span(),
-                    record->traps.span(),
-                    cache_install_helper_addresses)) {
-                return true;
-            }
-            // Put it back so we can try later.
-            cranelift_cache_state().pending_install.records.set(s_active_function_index, record.release_value());
+            cranelift_cache_state().pending_install.functions.append({ s_active_function_index, &compiled, record.release_value() });
+            return false;
         }
     }
 
@@ -1927,14 +1941,372 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
 #endif
 }
 
+static bool is_native_direct_call_opcode(u32 opcode)
+{
+    return opcode == Instructions::call.value()
+        || (opcode >= Instructions::synthetic_call_00.value() && opcode <= Instructions::synthetic_call_31.value())
+        || opcode == Instructions::synthetic_call_with_record_0.value()
+        || opcode == Instructions::synthetic_call_with_record_1.value();
+}
+
+static Optional<FunctionIndex> native_direct_call_target(CraneliftInsn const& instruction)
+{
+    if (!is_native_direct_call_opcode(instruction.opcode))
+        return {};
+    if (instruction.imm1 < 0 || !AK::is_within_range<u32>(instruction.imm1))
+        return {};
+    return FunctionIndex { static_cast<u32>(instruction.imm1) };
+}
+
+// A component is keyed by the function index of the node it was discovered from.
+AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, ComponentKey);
+
+struct CompilationComponent {
+    Vector<BatchInput> inputs;
+    OrderedHashTable<ComponentKey> dependencies;
+    OrderedHashTable<ComponentKey> dependents;
+    size_t instruction_count { 0 };
+};
+
+class CompilationCallGraph {
+public:
+    explicit CompilationCallGraph(Vector<BatchInput>& inputs)
+    {
+        m_nodes.ensure_capacity(inputs.size());
+
+        // The graph takes ownership of the inputs; they are handed back grouped into components.
+        for (auto& input : inputs) {
+            FunctionIndex function_index { input.function_index };
+            auto& new_node = m_nodes.ensure(function_index);
+            new_node.input = move(input);
+        }
+
+        // Record callee edges for direct calls within the batch; calls that leave it don't constrain ordering.
+        for (auto& entry : m_nodes) {
+            auto& current_node = entry.value;
+            for (auto const& instruction : current_node.input.insns) {
+                auto target = native_direct_call_target(instruction);
+                if (!target.has_value())
+                    continue;
+
+                auto callee = target.value();
+                if (m_nodes.contains(callee))
+                    current_node.callees.set(callee);
+            }
+        }
+
+        // Mirror callee edges into caller edges: component discovery walks the transposed graph.
+        for (auto& entry : m_nodes) {
+            auto function_index = entry.key;
+            for (auto callee : entry.value.callees) {
+                auto& callee_node = node(callee);
+                callee_node.callers.set(function_index);
+            }
+        }
+    }
+
+    // Kosaraju's algorithm: peel components off in reverse finishing order by walking the transposed (caller-edge) graph.
+    OrderedHashMap<ComponentKey, CompilationComponent> strongly_connected_components()
+    {
+        auto finishing_order = depth_first_finishing_order();
+
+        OrderedHashMap<ComponentKey, CompilationComponent> components;
+        components.ensure_capacity(m_nodes.size());
+
+        for (auto root : finishing_order.in_reverse()) {
+            auto const& root_node = node(root);
+            if (root_node.component.has_value())
+                continue;
+
+            ComponentKey const component_key { root.value() };
+            auto& component = components.ensure(component_key);
+            append_component(root, component_key, component);
+        }
+
+        connect_components(components);
+        return components;
+    }
+
+private:
+    struct Node {
+        BatchInput input;
+        OrderedHashTable<FunctionIndex> callees;
+        OrderedHashTable<FunctionIndex> callers;
+        Optional<ComponentKey> component;
+    };
+
+    enum class TraversalPhase : u8 {
+        Enter,
+        Leave,
+    };
+
+    struct TraversalStep {
+        FunctionIndex function_index;
+        TraversalPhase phase;
+    };
+
+    Node& node(FunctionIndex function_index)
+    {
+        return m_nodes.get(function_index).value();
+    }
+
+    Node const& node(FunctionIndex function_index) const
+    {
+        return m_nodes.get(function_index).value();
+    }
+
+    Vector<FunctionIndex> depth_first_finishing_order() const
+    {
+        HashTable<FunctionIndex> visited;
+        visited.ensure_capacity(m_nodes.size());
+
+        Vector<FunctionIndex> finishing_order;
+        finishing_order.ensure_capacity(m_nodes.size());
+
+        for (auto const& entry : m_nodes) {
+            if (visited.contains(entry.key))
+                continue;
+            append_depth_first_order(entry.key, visited, finishing_order);
+        }
+        return finishing_order;
+    }
+
+    void append_depth_first_order(FunctionIndex root, HashTable<FunctionIndex>& visited, Vector<FunctionIndex>& finishing_order) const
+    {
+        Vector<TraversalStep> work_list;
+        work_list.append({ root, TraversalPhase::Enter });
+
+        while (!work_list.is_empty()) {
+            auto step = work_list.take_last();
+            if (step.phase == TraversalPhase::Leave) {
+                finishing_order.append(step.function_index);
+                continue;
+            }
+
+            if (visited.contains(step.function_index))
+                continue;
+
+            visited.set(step.function_index);
+            work_list.append({ step.function_index, TraversalPhase::Leave });
+
+            auto const& current_node = node(step.function_index);
+
+            // Reversed so callees are visited in their original order despite the LIFO work list.
+            for (auto callee : current_node.callees.in_reverse()) {
+                if (!visited.contains(callee))
+                    work_list.append({ callee, TraversalPhase::Enter });
+            }
+        }
+    }
+
+    void append_component(FunctionIndex root, ComponentKey component_key, CompilationComponent& component)
+    {
+        Vector<FunctionIndex> work_list;
+        auto& root_node = node(root);
+        root_node.component = component_key;
+        work_list.append(root);
+
+        while (!work_list.is_empty()) {
+            auto function_index = work_list.take_last();
+            auto& current_node = node(function_index);
+
+            component.instruction_count += current_node.input.insns.size();
+            component.inputs.append(move(current_node.input));
+
+            for (auto caller : current_node.callers) {
+                auto& caller_node = node(caller);
+                if (caller_node.component.has_value())
+                    continue;
+
+                caller_node.component = component_key;
+                work_list.append(caller);
+            }
+        }
+    }
+
+    void connect_components(OrderedHashMap<ComponentKey, CompilationComponent>& components) const
+    {
+        // A call into another component makes that component a compilation dependency.
+        for (auto const& entry : m_nodes) {
+            auto const& current_node = entry.value;
+            auto component_key = current_node.component.value();
+            auto& component = components.get(component_key).value();
+
+            for (auto callee : current_node.callees) {
+                auto const& callee_node = node(callee);
+                auto callee_component = callee_node.component.value();
+                if (callee_component != component_key)
+                    component.dependencies.set(callee_component);
+            }
+        }
+
+        // Mirror dependency edges into dependent edges.
+        for (auto& entry : components) {
+            auto& component = entry.value;
+            for (auto dependency : component.dependencies) {
+                auto& dependency_component = components.get(dependency).value();
+                dependency_component.dependents.set(entry.key);
+            }
+        }
+    }
+
+    OrderedHashMap<FunctionIndex, Node> m_nodes;
+};
+
+// Plans batches so that every function is compiled after the functions it calls. Mutual recursion permits
+// no such order, so the planning unit is a whole strongly connected component of the call graph.
+// Batches are drawn in dependency order using Kahn's algorithm, consuming edges as components are scheduled.
+class IncrementalCompilationPlan {
+public:
+    explicit IncrementalCompilationPlan(Vector<BatchInput>& inputs)
+    {
+        CompilationCallGraph call_graph { inputs };
+        m_components = call_graph.strongly_connected_components();
+        initialize_ready_components();
+    }
+
+    // The component graph is acyclic, so the ready queue only runs dry once every component has been scheduled.
+    bool is_complete() const { return m_ready_components.is_empty(); }
+
+    Vector<BatchInput> take_batch()
+    {
+        auto selection = select_components();
+
+        Vector<BatchInput> batch;
+        batch.ensure_capacity(selection.function_count);
+
+        for (auto component_key : selection.components) {
+            auto& component = m_components.get(component_key).value();
+            for (auto& input : component.inputs)
+                batch.unchecked_append(move(input));
+        }
+
+        return batch;
+    }
+
+private:
+    static constexpr size_t MAXIMUM_BATCH_FUNCTION_COUNT = 512;
+    static constexpr size_t MAXIMUM_BATCH_INSTRUCTION_COUNT = 100'000;
+
+    struct BatchSelection {
+        Vector<ComponentKey> components;
+        size_t function_count { 0 };
+        size_t instruction_count { 0 };
+    };
+
+    void initialize_ready_components()
+    {
+        for (auto const& entry : m_components) {
+            if (entry.value.dependencies.is_empty())
+                m_ready_components.enqueue(entry.key);
+        }
+    }
+
+    static bool exceeds_limit(size_t current, size_t addition, size_t maximum)
+    {
+        Checked<size_t> total = current;
+        total += addition;
+        return total.has_overflow() || total.value() > maximum;
+    }
+
+    bool fits_in_batch(CompilationComponent const& component, BatchSelection const& selection) const
+    {
+        // An oversized component still has to compile, so it gets a batch of its own.
+        if (selection.components.is_empty())
+            return true;
+
+        if (exceeds_limit(selection.function_count, component.inputs.size(), MAXIMUM_BATCH_FUNCTION_COUNT))
+            return false;
+        return !exceeds_limit(selection.instruction_count, component.instruction_count, MAXIMUM_BATCH_INSTRUCTION_COUNT);
+    }
+
+    BatchSelection select_components()
+    {
+        VERIFY(!m_ready_components.is_empty());
+
+        BatchSelection selection;
+        while (!m_ready_components.is_empty()) {
+            auto component_key = m_ready_components.head();
+            auto const& component = m_components.get(component_key).value();
+            if (!fits_in_batch(component, selection))
+                break;
+
+            m_ready_components.dequeue();
+            selection.components.append(component_key);
+            selection.function_count += component.inputs.size();
+            selection.instruction_count += component.instruction_count;
+
+            schedule(component_key);
+        }
+
+        return selection;
+    }
+
+    void schedule(ComponentKey component_key)
+    {
+        auto const& component = m_components.get(component_key).value();
+        for (auto dependent : component.dependents) {
+            auto& dependent_component = m_components.get(dependent).value();
+            bool removed = dependent_component.dependencies.remove(component_key);
+            VERIFY(removed);
+
+            if (dependent_component.dependencies.is_empty())
+                m_ready_components.enqueue(dependent);
+        }
+    }
+
+    OrderedHashMap<ComponentKey, CompilationComponent> m_components;
+    Queue<ComponentKey> m_ready_components;
+};
+
+static ErrorOr<void> compile_incremental_batches(Vector<BatchInput>& inputs, Module const& module)
+{
+    IncrementalCompilationPlan plan { inputs };
+    while (!plan.is_complete()) {
+        auto batch = plan.take_batch();
+        TRY(try_cranelift_compile_batch(batch, module));
+    }
+    return {};
+}
+
+static void install_cached_functions(Vector<PendingCachedFunction>& functions, Module const& module)
+{
+    static auto helper_addresses = make_runtime_helper_addresses();
+    Vector<PendingCompiledFunction> pending_functions;
+    pending_functions.ensure_capacity(functions.size());
+
+    for (auto& function : functions) {
+        auto& record = function.record;
+        auto pending = prepare_compiled_function(
+            function.function_index,
+            *function.target,
+            record.unpatched_code.bytes(),
+            record.native_entry_offset,
+            record.relocs.span(),
+            record.traps.span());
+        if (pending.has_value())
+            pending_functions.unchecked_append(pending.release_value());
+    }
+
+    install_compiled_functions(pending_functions, helper_addresses, module);
+}
+
 void flush_cranelift_batch(Module const& module)
 {
-    if (cranelift_cache_state().pending_batch.is_empty())
+    auto& state = cranelift_cache_state();
+    if (state.pending_batch.is_empty() && state.pending_install.functions.is_empty())
         return;
-    auto result = try_cranelift_compile_batch(cranelift_cache_state().pending_batch, module);
-    if (result.is_error())
-        warnln("Cranelift compilation failed: {}", result.error());
-    cranelift_cache_state().pending_batch.clear();
+
+    if (!state.pending_batch.is_empty()) {
+        auto result = compile_incremental_batches(state.pending_batch, module);
+        if (result.is_error())
+            warnln("Cranelift compilation failed: {}", result.error());
+    }
+    if (!state.pending_install.functions.is_empty())
+        install_cached_functions(state.pending_install.functions, module);
+
+    state.pending_batch.clear();
+    state.pending_install.functions.clear();
 }
 
 void discard_cranelift_batch()
@@ -1968,6 +2340,7 @@ void abort_cranelift_cache_install()
 {
     cranelift_cache_state().pending_install.active = false;
     cranelift_cache_state().pending_install.records.clear();
+    cranelift_cache_state().pending_install.functions.clear();
 }
 
 Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
