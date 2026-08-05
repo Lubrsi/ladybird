@@ -20,6 +20,7 @@ use cranelift_codegen::Context;
 use cranelift_codegen::FinalizedRelocTarget;
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::AbiParam;
+use cranelift_codegen::ir::AliasRegionData;
 use cranelift_codegen::ir::Block;
 use cranelift_codegen::ir::BlockArg;
 use cranelift_codegen::ir::ExtFuncData;
@@ -77,6 +78,44 @@ struct CompiledCodeParts {
 }
 
 #[derive(Clone, Copy)]
+struct WasmMemoryFlags {
+    activation: MemFlags,
+    configuration: MemFlags,
+    globals: MemFlags,
+    linear_memory: MemFlags,
+    runtime_metadata: MemFlags,
+    tables: MemFlags,
+}
+
+impl WasmMemoryFlags {
+    fn new(function: &mut Function) -> Self {
+        // Regions describe disjoint runtime storage, not module indices. Keep all memories,
+        // tables, and globals in broad regions because imported instances may be aliased.
+        let mut insert_region = |user_id, description: &'static str| {
+            function.dfg.alias_regions.insert(AliasRegionData {
+                user_id,
+                description: description.into(),
+            })
+        };
+        let activation = insert_region(0, "Wasm activation values");
+        let configuration = insert_region(1, "Wasm Configuration fields");
+        let globals = insert_region(2, "Wasm global state");
+        let linear_memory = insert_region(3, "Wasm linear memory");
+        let runtime_metadata = insert_region(4, "Wasm runtime metadata");
+        let tables = insert_region(5, "Wasm table state");
+
+        Self {
+            activation: MemFlags::trusted().with_alias_region(Some(activation)),
+            configuration: MemFlags::trusted().with_alias_region(Some(configuration)),
+            globals: MemFlags::trusted().with_alias_region(Some(globals)),
+            linear_memory: MemFlags::new().with_alias_region(Some(linear_memory)),
+            runtime_metadata: MemFlags::trusted().with_alias_region(Some(runtime_metadata)),
+            tables: MemFlags::trusted().with_alias_region(Some(tables)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct NativeIndirectCallLayout {
     table_instances: i32,
     current_module: i32,
@@ -106,6 +145,7 @@ struct IndirectCallLoweringContext {
     call_record_base_offset: i32,
     value_size: i32,
     native_layout: NativeIndirectCallLayout,
+    memory_flags: WasmMemoryFlags,
 }
 
 struct IndirectCallResult {
@@ -285,6 +325,7 @@ impl CraneliftCompiler {
     ) -> Result<NativeIndirectCallTarget, &'static str> {
         let ptr_type = context.ptr_type;
         let layout = context.native_layout;
+        let memory_flags = context.memory_flags;
         let exact_type = builder.create_block();
         let subtype_check = builder.create_block();
         let native_entry_check = builder.create_block();
@@ -294,7 +335,7 @@ impl CraneliftCompiler {
 
         let table_instances = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.configuration,
             operands.configuration,
             layout.table_instances,
         );
@@ -304,10 +345,10 @@ impl CraneliftCompiler {
             .ok_or("table index offset overflow")?;
         let table_offset = builder.ins().iconst(ptr_type, table_offset);
         let table_address = builder.ins().iadd(table_instances, table_offset);
-        let table = builder.ins().load(ptr_type, MemFlags::trusted(), table_address, 0);
+        let table = builder.ins().load(ptr_type, memory_flags.tables, table_address, 0);
         let table_size = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), table, layout.table_instance_size);
+            .load(ptr_type, memory_flags.tables, table, layout.table_instance_size);
         let table_size = if ptr_type == types::I64 {
             table_size
         } else {
@@ -321,7 +362,7 @@ impl CraneliftCompiler {
             .trapz(in_bounds, Self::user_trap_code(CraneliftUserTrapCode::TableOutOfBounds));
         let callables = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), table, layout.table_instance_callables);
+            .load(ptr_type, memory_flags.tables, table, layout.table_instance_callables);
         let element_offset = if ptr_type == types::I64 {
             builder
                 .ins()
@@ -331,18 +372,21 @@ impl CraneliftCompiler {
             builder.ins().imul_imm_s(element_index, i64::from(ptr_type.bytes()))
         };
         let callable_address = builder.ins().iadd(callables, element_offset);
-        let callable = builder.ins().load(ptr_type, MemFlags::trusted(), callable_address, 0);
+        let callable = builder.ins().load(ptr_type, memory_flags.tables, callable_address, 0);
         let is_callable = builder.ins().icmp_imm_s(IntCC::NotEqual, callable, 0);
         builder.ins().trapz(
             is_callable,
             Self::user_trap_code(CraneliftUserTrapCode::IndirectCallNull),
         );
-        let actual_type = builder
-            .ins()
-            .load(ptr_type, MemFlags::trusted(), callable, layout.callable_defined_type);
+        let actual_type = builder.ins().load(
+            ptr_type,
+            memory_flags.runtime_metadata,
+            callable,
+            layout.callable_defined_type,
+        );
         let canonical_types = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.configuration,
             operands.configuration,
             layout.current_canonical_types,
         );
@@ -354,7 +398,7 @@ impl CraneliftCompiler {
         let expected_type_address = builder.ins().iadd(canonical_types, type_offset);
         let expected_type = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), expected_type_address, 0);
+            .load(ptr_type, memory_flags.runtime_metadata, expected_type_address, 0);
         let is_exact_type = builder.ins().icmp(IntCC::Equal, actual_type, expected_type);
         builder.ins().brif(is_exact_type, exact_type, &[], subtype_check, &[]);
 
@@ -374,12 +418,15 @@ impl CraneliftCompiler {
 
         builder.switch_to_block(exact_type);
         builder.seal_block(exact_type);
-        let callable_module = builder
-            .ins()
-            .load(ptr_type, MemFlags::trusted(), callable, layout.callable_module);
+        let callable_module = builder.ins().load(
+            ptr_type,
+            memory_flags.runtime_metadata,
+            callable,
+            layout.callable_module,
+        );
         let current_module = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.configuration,
             operands.configuration,
             layout.current_module,
         );
@@ -392,7 +439,7 @@ impl CraneliftCompiler {
         builder.seal_block(native_entry_check);
         let compiled_instructions = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.runtime_metadata,
             callable,
             layout.callable_compiled_instructions,
         );
@@ -402,7 +449,7 @@ impl CraneliftCompiler {
         );
         let native_entry = builder
             .ins()
-            .atomic_load(ptr_type, MemFlags::trusted(), native_entry_address);
+            .atomic_load(ptr_type, memory_flags.runtime_metadata, native_entry_address);
         let has_native_entry = builder.ins().icmp_imm_s(IntCC::NotEqual, native_entry, 0);
         builder.ins().brif(
             has_native_entry,
@@ -444,9 +491,10 @@ impl CraneliftCompiler {
                 let offset = i32::try_from(parameter_index * context.value_size as usize)
                     .map_err(|_| "call-record argument offset overflow")?;
                 let argument_type = Self::wasm_abi_type(parameter_kind)?;
-                let argument = builder
-                    .ins()
-                    .load(argument_type, MemFlags::trusted(), argument_base, offset);
+                let argument =
+                    builder
+                        .ins()
+                        .load(argument_type, context.memory_flags.activation, argument_base, offset);
                 arguments.push(argument);
             }
         } else {
@@ -489,7 +537,7 @@ impl CraneliftCompiler {
         has_result.then(|| {
             builder.ins().load(
                 types::I64,
-                MemFlags::trusted(),
+                context.memory_flags.configuration,
                 operands.configuration,
                 context.result_scratch_offset,
             )
@@ -546,7 +594,7 @@ impl CraneliftCompiler {
         let native_entry = builder.block_params(target.native_call)[0];
         let call_record = builder.ins().load(
             context.ptr_type,
-            MemFlags::trusted(),
+            context.memory_flags.configuration,
             operands.configuration,
             context.call_record_base_offset,
         );
@@ -591,6 +639,7 @@ impl CraneliftCompiler {
         let host_cc = isa.default_call_conv();
         let signature = Self::native_signature(isa, function_type)?;
         let mut function = Function::with_name_signature(UserFuncName::user(2, function_index), signature);
+        let memory_flags = WasmMemoryFlags::new(&mut function);
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut function, &mut builder_context);
         let entry = builder.create_block();
@@ -602,7 +651,7 @@ impl CraneliftCompiler {
         let configuration = builder.block_params(entry)[1];
         let original_top = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.configuration,
             configuration,
             helpers.value_stack_top_offset as i32,
         );
@@ -615,18 +664,20 @@ impl CraneliftCompiler {
                 Self::value_to_payload(&mut builder, value, kind)?
             } else {
                 let locals = builder.block_params(entry)[3];
-                builder.ins().load(types::I64, MemFlags::trusted(), locals, offset)
+                builder.ins().load(types::I64, memory_flags.activation, locals, offset)
             };
-            builder.ins().store(MemFlags::trusted(), payload, original_top, offset);
             builder
                 .ins()
-                .store(MemFlags::trusted(), zero_tag, original_top, offset + 8);
+                .store(memory_flags.activation, payload, original_top, offset);
+            builder
+                .ins()
+                .store(memory_flags.activation, zero_tag, original_top, offset + 8);
         }
         let arguments_size = i64::try_from(function_type.parameters.len() * helpers.value_size as usize)
             .map_err(|_| "argument size overflow")?;
         let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
         builder.ins().store(
-            MemFlags::trusted(),
+            memory_flags.configuration,
             arguments_top,
             configuration,
             helpers.value_stack_top_offset as i32,
@@ -687,13 +738,13 @@ impl CraneliftCompiler {
         builder.switch_to_block(return_block);
         builder.seal_block(return_block);
         builder.ins().store(
-            MemFlags::trusted(),
+            memory_flags.configuration,
             original_top,
             configuration,
             helpers.value_stack_top_offset as i32,
         );
         if let Some(&result_kind) = function_type.results.first() {
-            let result = builder.ins().load(types::I64, MemFlags::trusted(), original_top, 0);
+            let result = builder.ins().load(types::I64, memory_flags.activation, original_top, 0);
             let result = Self::payload_to_value(&mut builder, result, result_kind)?;
             builder.ins().return_(&[result]);
         } else {
@@ -894,6 +945,7 @@ impl CraneliftCompiler {
         let handler_signature = sig;
         let native_signature = Self::native_signature(&*isa, function_type)?;
         let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), native_signature.clone());
+        let memory_flags = WasmMemoryFlags::new(&mut func);
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
@@ -918,7 +970,7 @@ impl CraneliftCompiler {
             let offset = regs_offset + (i as i32) * value_size;
             let val = builder
                 .ins()
-                .load(types::I64, MemFlags::trusted(), configuration_val, offset);
+                .load(types::I64, memory_flags.configuration, configuration_val, offset);
             builder.def_var(*var, val);
             let val_i32 = builder.ins().ireduce(types::I32, val);
             builder.def_var(reg_vars_i32[i], val_i32);
@@ -1091,7 +1143,7 @@ impl CraneliftCompiler {
         }
         // Accesses to memory32 are unchecked and may fault; the fault handler turns
         // faults inside a memory's guarded reservation into wasm traps.
-        let wasm_memory_flags = MemFlags::new();
+        let wasm_memory_flags = memory_flags.linear_memory;
         let interp_var = builder.declare_var(ptr_type);
         builder.def_var(interp_var, interpreter_val);
         let config_var = builder.declare_var(ptr_type);
@@ -1128,15 +1180,17 @@ impl CraneliftCompiler {
         let cfg = builder.use_var(config_var);
         let saved_call_record = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+            .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
         let saved_call_record_top =
             builder
                 .ins()
-                .load(ptr_type, MemFlags::trusted(), cfg, call_record_stack_top_offset);
+                .load(ptr_type, memory_flags.configuration, cfg, call_record_stack_top_offset);
         let saved_expression = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), cfg, current_expression_offset);
-        let saved_depth = builder.ins().load(ptr_type, MemFlags::trusted(), cfg, depth_offset);
+            .load(ptr_type, memory_flags.configuration, cfg, current_expression_offset);
+        let saved_depth = builder
+            .ins()
+            .load(ptr_type, memory_flags.configuration, cfg, depth_offset);
         builder.def_var(saved_call_record_base_var, saved_call_record);
         builder.def_var(saved_call_record_top_var, saved_call_record_top);
         builder.def_var(saved_expression_var, saved_expression);
@@ -1163,7 +1217,7 @@ impl CraneliftCompiler {
         let uses_register_native_abi = Self::uses_register_native_abi(function_type);
         let table_data = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.configuration,
             cfg,
             current_compiled_fn_table_data_offset,
         );
@@ -1177,24 +1231,27 @@ impl CraneliftCompiler {
         let entry = builder.ins().iadd(table_data, entry_offset);
         let expression = builder.ins().load(
             ptr_type,
-            MemFlags::trusted(),
+            memory_flags.runtime_metadata,
             entry,
             compiled_function_entry_expression_offset,
         );
         builder
             .ins()
-            .store(MemFlags::trusted(), expression, cfg, current_expression_offset);
+            .store(memory_flags.configuration, expression, cfg, current_expression_offset);
 
         if max_call_rec_size > 0 {
-            builder
-                .ins()
-                .store(MemFlags::trusted(), saved_call_record_top, cfg, call_record_base_offset);
+            builder.ins().store(
+                memory_flags.configuration,
+                saved_call_record_top,
+                cfg,
+                call_record_base_offset,
+            );
             let next_call_record_top = builder.ins().iadd_imm_s(
                 saved_call_record_top,
                 i64::from(max_call_rec_size) * i64::from(value_size),
             );
             builder.ins().store(
-                MemFlags::trusted(),
+                memory_flags.configuration,
                 next_call_record_top,
                 cfg,
                 call_record_stack_top_offset,
@@ -1203,10 +1260,12 @@ impl CraneliftCompiler {
             let null = builder.ins().iconst(ptr_type, 0);
             builder
                 .ins()
-                .store(MemFlags::trusted(), null, cfg, call_record_base_offset);
+                .store(memory_flags.configuration, null, cfg, call_record_base_offset);
         }
         let next_depth = builder.ins().iadd_imm_s(saved_depth, 1);
-        builder.ins().store(MemFlags::trusted(), next_depth, cfg, depth_offset);
+        builder
+            .ins()
+            .store(memory_flags.configuration, next_depth, cfg, depth_offset);
         builder.ins().jump(setup_done, &[]);
 
         builder.switch_to_block(normal_entry);
@@ -1226,6 +1285,7 @@ impl CraneliftCompiler {
             call_record_base_offset,
             value_size,
             native_layout: native_indirect_call_layout,
+            memory_flags,
         };
         let is_scalar_memory_access = |opcode: u64| {
             matches!(
@@ -1270,10 +1330,12 @@ impl CraneliftCompiler {
             // Each base address is stable for the whole call: memory32 storage reserves its
             // maximum (plus guard) up front, so growing commits in place and never moves it.
             let cage_base_storage = builder.ins().func_addr(ptr_type, h_primitive_storage_cage_base);
-            let cage_base = builder.ins().load(ptr_type, MemFlags::trusted(), cage_base_storage, 0);
+            let cage_base = builder
+                .ins()
+                .load(ptr_type, memory_flags.runtime_metadata, cage_base_storage, 0);
             let memory_instances = builder.ins().load(
                 ptr_type,
-                MemFlags::trusted(),
+                memory_flags.configuration,
                 configuration_val,
                 memory_instances_offset,
             );
@@ -1284,10 +1346,10 @@ impl CraneliftCompiler {
                 let memory_pointer_address = builder.ins().iadd(memory_instances, memory_pointer_offset);
                 let memory = builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), memory_pointer_address, 0);
+                    .load(ptr_type, memory_flags.runtime_metadata, memory_pointer_address, 0);
                 let storage_offset = builder.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    memory_flags.runtime_metadata,
                     memory,
                     memory_instance_data_offset + memory_buffer_storage_offset_offset,
                 );
@@ -1313,7 +1375,7 @@ impl CraneliftCompiler {
         if !used_global_indices.is_empty() {
             let globals = builder.ins().load(
                 ptr_type,
-                MemFlags::trusted(),
+                memory_flags.configuration,
                 configuration_val,
                 global_instances_offset,
             );
@@ -1324,7 +1386,7 @@ impl CraneliftCompiler {
                 let global_pointer_address = builder.ins().iadd(globals, global_pointer_offset);
                 let global = builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), global_pointer_address, 0);
+                    .load(ptr_type, memory_flags.globals, global_pointer_address, 0);
                 global_instances.push((global_index, global));
             }
         }
@@ -1406,14 +1468,14 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let top = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
-                $builder.ins().store(MemFlags::trusted(), v, top, 0);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
+                $builder.ins().store(memory_flags.activation, v, top, 0);
                 let zero_tag = $builder.ins().iconst(types::I64, 0);
-                $builder.ins().store(MemFlags::trusted(), zero_tag, top, 8);
+                $builder.ins().store(memory_flags.activation, zero_tag, top, 8);
                 let new_top = $builder.ins().iadd_imm_s(top, i64::from(value_size));
                 $builder
                     .ins()
-                    .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
+                    .store(memory_flags.configuration, new_top, cfg, value_stack_top_offset);
             }};
         }
         macro_rules! emit_stack_pop {
@@ -1421,12 +1483,14 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let top = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                 let new_top = $builder.ins().iadd_imm_s(top, -i64::from(value_size));
                 $builder
                     .ins()
-                    .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
-                $builder.ins().load(types::I64, MemFlags::trusted(), new_top, 0)
+                    .store(memory_flags.configuration, new_top, cfg, value_stack_top_offset);
+                $builder
+                    .ins()
+                    .load(types::I64, memory_flags.activation, new_top, 0)
             }};
         }
         macro_rules! emit_stack_size {
@@ -1434,10 +1498,10 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let top = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                 let base = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_base_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_base_offset);
                 let bytes = $builder.ins().isub(top, base);
                 $builder.ins().ushr_imm_u(bytes, 4)
             }};
@@ -1451,28 +1515,30 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let base = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_base_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_base_offset);
                 let target_bytes = $builder.ins().ishl_imm_u($target_size, 4);
                 let trimmed_top = $builder.ins().iadd(base, target_bytes);
                 let new_top = if $arity as usize > 0 {
                     let top = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                     let bits = $builder
                         .ins()
-                        .load(types::I64, MemFlags::trusted(), top, -value_size);
+                        .load(types::I64, memory_flags.activation, top, -value_size);
                     let tag = $builder
                         .ins()
-                        .load(types::I64, MemFlags::trusted(), top, -value_size + 8);
-                    $builder.ins().store(MemFlags::trusted(), bits, trimmed_top, 0);
-                    $builder.ins().store(MemFlags::trusted(), tag, trimmed_top, 8);
+                        .load(types::I64, memory_flags.activation, top, -value_size + 8);
+                    $builder
+                        .ins()
+                        .store(memory_flags.activation, bits, trimmed_top, 0);
+                    $builder.ins().store(memory_flags.activation, tag, trimmed_top, 8);
                     $builder.ins().iadd_imm_s(trimmed_top, i64::from(value_size))
                 } else {
                     trimmed_top
                 };
                 $builder
                     .ins()
-                    .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
+                    .store(memory_flags.configuration, new_top, cfg, value_stack_top_offset);
             }};
         }
 
@@ -1579,9 +1645,11 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(src - CALLREC_BASE) * value_size;
-                    $builder.ins().load(types::I64, MemFlags::trusted(), base, off)
+                    $builder
+                        .ins()
+                        .load(types::I64, memory_flags.activation, base, off)
                 }
             }};
         }
@@ -1617,9 +1685,11 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(src - CALLREC_BASE) * value_size;
-                    $builder.ins().load(types::I32, MemFlags::trusted(), base, off)
+                    $builder
+                        .ins()
+                        .load(types::I32, memory_flags.activation, base, off)
                 }
             }};
         }
@@ -1647,24 +1717,24 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let top = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                 if count > 0 {
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
                     for i in 0..count {
                         let index = sp - count + i;
                         let val = stack_payload!($builder, index, stack_ty[index]);
                         let offset = (i as i32) * value_size;
-                        $builder.ins().store(MemFlags::trusted(), val, top, offset);
+                        $builder.ins().store(memory_flags.activation, val, top, offset);
                         $builder
                             .ins()
-                            .store(MemFlags::trusted(), zero_tag, top, offset + 8);
+                            .store(memory_flags.activation, zero_tag, top, offset + 8);
                     }
                     let new_top = $builder
                         .ins()
                         .iadd_imm_s(top, i64::from(count as i32 * value_size));
                     $builder
                         .ins()
-                        .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
+                        .store(memory_flags.configuration, new_top, cfg, value_stack_top_offset);
                 }
                 top
             }};
@@ -1681,7 +1751,7 @@ impl CraneliftCompiler {
                 let cfg = $builder.use_var(config_var);
                 let helper_top = $builder
                     .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                    .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                 let result_bytes = (result_count as i64) * i64::from(value_size);
                 let mut result_address = $builder.ins().iadd_imm_s(helper_top, -result_bytes);
 
@@ -1690,7 +1760,7 @@ impl CraneliftCompiler {
                     for i in 0..result_count {
                         let result = $builder
                             .ins()
-                            .load(types::I64, MemFlags::trusted(), result_address, 0);
+                            .load(types::I64, memory_flags.activation, result_address, 0);
                         $builder.def_var(stack_vars[stack_base + i], result);
                         stack_ty[stack_base + i] = Bank::I64;
                         result_address = $builder.ins().iadd_imm_s(result_address, i64::from(value_size));
@@ -1701,14 +1771,17 @@ impl CraneliftCompiler {
                     if result_count == 1 {
                         let result = $builder
                             .ins()
-                            .load(types::I64, MemFlags::trusted(), result_address, 0);
+                            .load(types::I64, memory_flags.activation, result_address, 0);
                         write_dst!($builder, destination, result);
                     }
                 }
 
-                $builder
-                    .ins()
-                    .store(MemFlags::trusted(), $original_top, cfg, value_stack_top_offset);
+                $builder.ins().store(
+                    memory_flags.configuration,
+                    $original_top,
+                    cfg,
+                    value_stack_top_offset,
+                );
             }};
         }
         // push only the top n values from vstack to real stack
@@ -1719,21 +1792,21 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let top = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, value_stack_top_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, value_stack_top_offset);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
                     for i in 0..n {
                         let index = sp - n + i;
                         let val = stack_payload!($builder, index, stack_ty[index]);
                         let offset = (i as i32) * value_size;
-                        $builder.ins().store(MemFlags::trusted(), val, top, offset);
+                        $builder.ins().store(memory_flags.activation, val, top, offset);
                         $builder
                             .ins()
-                            .store(MemFlags::trusted(), zero_tag, top, offset + 8);
+                            .store(memory_flags.activation, zero_tag, top, offset + 8);
                     }
                     let new_top = $builder.ins().iadd_imm_s(top, i64::from(n as i32 * value_size));
                     $builder
                         .ins()
-                        .store(MemFlags::trusted(), new_top, cfg, value_stack_top_offset);
+                        .store(memory_flags.configuration, new_top, cfg, value_stack_top_offset);
                 }
             }};
         }
@@ -1759,11 +1832,13 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(dst - CALLREC_BASE) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), val, base, off);
+                    $builder.ins().store(memory_flags.activation, val, base, off);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero_tag, base, off + 8);
+                    $builder
+                        .ins()
+                        .store(memory_flags.activation, zero_tag, base, off + 8);
                 }
             }};
         }
@@ -1790,11 +1865,13 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(dst - CALLREC_BASE) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), payload, base, off);
+                    $builder.ins().store(memory_flags.activation, payload, base, off);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero_tag, base, off + 8);
+                    $builder
+                        .ins()
+                        .store(memory_flags.activation, zero_tag, base, off + 8);
                 }
             }};
         }
@@ -1830,9 +1907,11 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(src - CALLREC_BASE) * value_size;
-                    $builder.ins().load(types::F64, MemFlags::trusted(), base, off)
+                    $builder
+                        .ins()
+                        .load(types::F64, memory_flags.activation, base, off)
                 }
             }};
         }
@@ -1859,11 +1938,13 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(dst - CALLREC_BASE) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), bits, base, off);
+                    $builder.ins().store(memory_flags.activation, bits, base, off);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero_tag, base, off + 8);
+                    $builder
+                        .ins()
+                        .store(memory_flags.activation, zero_tag, base, off + 8);
                 }
             }};
         }
@@ -1902,9 +1983,11 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(src - CALLREC_BASE) * value_size;
-                    $builder.ins().load(types::F32, MemFlags::trusted(), base, off)
+                    $builder
+                        .ins()
+                        .load(types::F32, memory_flags.activation, base, off)
                 }
             }};
         }
@@ -1933,11 +2016,13 @@ impl CraneliftCompiler {
                     let cfg = $builder.use_var(config_var);
                     let base = $builder
                         .ins()
-                        .load(ptr_type, MemFlags::trusted(), cfg, call_record_base_offset);
+                        .load(ptr_type, memory_flags.configuration, cfg, call_record_base_offset);
                     let off = i32::from(dst - CALLREC_BASE) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), bits, base, off);
+                    $builder.ins().store(memory_flags.activation, bits, base, off);
                     let zero_tag = $builder.ins().iconst(types::I64, 0);
-                    $builder.ins().store(MemFlags::trusted(), zero_tag, base, off + 8);
+                    $builder
+                        .ins()
+                        .store(memory_flags.activation, zero_tag, base, off + 8);
                 }
             }};
         }
@@ -1951,11 +2036,13 @@ impl CraneliftCompiler {
                     }
                     let payload = register_payload!($builder, index, reg_ty[index]);
                     let offset = regs_offset + (index as i32) * value_size;
-                    $builder.ins().store(MemFlags::trusted(), payload, config, offset);
+                    $builder
+                        .ins()
+                        .store(memory_flags.configuration, payload, config, offset);
                     let zero = $builder.ins().iconst(types::I64, 0);
                     $builder
                         .ins()
-                        .store(MemFlags::trusted(), zero, config, offset + 8);
+                        .store(memory_flags.configuration, zero, config, offset + 8);
                 }
             }};
         }
@@ -2425,7 +2512,7 @@ impl CraneliftCompiler {
                             let offset = (i as i32) * value_size;
                             $builder
                                 .ins()
-                                .load(ty, MemFlags::trusted(), incoming_locals, offset)
+                                .load(ty, memory_flags.activation, incoming_locals, offset)
                         };
                         $builder.def_var(var, val);
                     } else if local_is_f64[i] {
@@ -2447,9 +2534,10 @@ impl CraneliftCompiler {
         macro_rules! init_locals_resume {
             ($builder:expr) => {{
                 let cfg = $builder.use_var(config_var);
-                let canonical_locals = $builder
-                    .ins()
-                    .load(ptr_type, MemFlags::trusted(), cfg, locals_base_offset);
+                let canonical_locals =
+                    $builder
+                        .ins()
+                        .load(ptr_type, memory_flags.configuration, cfg, locals_base_offset);
                 for (i, var) in local_vars.iter().enumerate() {
                     if !local_is_accessed[i] {
                         continue;
@@ -2467,7 +2555,7 @@ impl CraneliftCompiler {
                     };
                     let value = $builder
                         .ins()
-                        .load(ty, MemFlags::trusted(), canonical_locals, canonical_offset);
+                        .load(ty, memory_flags.activation, canonical_locals, canonical_offset);
                     $builder.def_var(var, value);
                 }
             }};
@@ -2919,7 +3007,7 @@ impl CraneliftCompiler {
                     let result =
                         builder
                             .ins()
-                            .load(types::I64, MemFlags::trusted(), global, global_instance_value_offset);
+                            .load(types::I64, memory_flags.globals, global, global_instance_value_offset);
                     write_dst!(builder, insn.destination, result);
                 }
                 op::GLOBAL_SET => {
@@ -2927,11 +3015,11 @@ impl CraneliftCompiler {
                     let global = inline_global_instance!(insn.imm1 as u32);
                     builder
                         .ins()
-                        .store(MemFlags::trusted(), val, global, global_instance_value_offset);
+                        .store(memory_flags.globals, val, global, global_instance_value_offset);
                     let zero = builder.ins().iconst(types::I64, 0);
                     builder
                         .ins()
-                        .store(MemFlags::trusted(), zero, global, global_instance_value_offset + 8);
+                        .store(memory_flags.globals, zero, global, global_instance_value_offset + 8);
                 }
 
                 op::DROP => {
@@ -3739,19 +3827,21 @@ impl CraneliftCompiler {
                             let fallback_result = if target_type.results.is_empty() {
                                 None
                             } else {
-                                let helper_top =
-                                    builder
-                                        .ins()
-                                        .load(ptr_type, MemFlags::trusted(), cv, value_stack_top_offset);
+                                let helper_top = builder.ins().load(
+                                    ptr_type,
+                                    memory_flags.configuration,
+                                    cv,
+                                    value_stack_top_offset,
+                                );
                                 let result =
                                     builder
                                         .ins()
-                                        .load(types::I64, MemFlags::trusted(), helper_top, -value_size);
+                                        .load(types::I64, memory_flags.activation, helper_top, -value_size);
                                 Some(result)
                             };
                             builder
                                 .ins()
-                                .store(MemFlags::trusted(), original_top, cv, value_stack_top_offset);
+                                .store(memory_flags.configuration, original_top, cv, value_stack_top_offset);
                             if let Some(result) = fallback_result {
                                 builder.ins().jump(continuation, &[BlockArg::Value(result)]);
                             } else {
@@ -3863,9 +3953,10 @@ impl CraneliftCompiler {
                     let iv = builder.use_var(interp_var);
                     let cv = builder.use_var(config_var);
                     let entry_token = builder.ins().iconst(types::I32, 0);
-                    let call_record = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::trusted(), cv, call_record_base_offset);
+                    let call_record =
+                        builder
+                            .ins()
+                            .load(ptr_type, memory_flags.configuration, cv, call_record_base_offset);
                     let uses_register_native_abi = Self::uses_register_native_abi(target_type);
                     let mut arguments = Vec::with_capacity(if uses_register_native_abi {
                         3 + target_type.parameters.len()
@@ -3878,9 +3969,10 @@ impl CraneliftCompiler {
                             let offset = i32::try_from(parameter_index * value_size as usize)
                                 .map_err(|_| "call-record argument offset overflow")?;
                             let argument_type = Self::wasm_abi_type(parameter_kind)?;
-                            let argument = builder
-                                .ins()
-                                .load(argument_type, MemFlags::trusted(), call_record, offset);
+                            let argument =
+                                builder
+                                    .ins()
+                                    .load(argument_type, memory_flags.activation, call_record, offset);
                             arguments.push(argument);
                         }
                     } else {
@@ -4107,26 +4199,26 @@ impl CraneliftCompiler {
                 let saved_expression = $builder.use_var(saved_expression_var);
                 let saved_depth = $builder.use_var(saved_depth_var);
                 $builder.ins().store(
-                    MemFlags::trusted(),
+                    memory_flags.configuration,
                     saved_call_record,
                     cfg,
                     call_record_base_offset,
                 );
                 $builder.ins().store(
-                    MemFlags::trusted(),
+                    memory_flags.configuration,
                     saved_call_record_top,
                     cfg,
                     call_record_stack_top_offset,
                 );
                 $builder.ins().store(
-                    MemFlags::trusted(),
+                    memory_flags.configuration,
                     saved_expression,
                     cfg,
                     current_expression_offset,
                 );
                 $builder
                     .ins()
-                    .store(MemFlags::trusted(), saved_depth, cfg, depth_offset);
+                    .store(memory_flags.configuration, saved_depth, cfg, depth_offset);
             }};
         }
 
@@ -4194,6 +4286,7 @@ impl CraneliftCompiler {
         }
 
         let mut adapter = Function::with_name_signature(UserFuncName::user(1, function_index), handler_signature);
+        let adapter_memory_flags = WasmMemoryFlags::new(&mut adapter);
         let mut adapter_builder_context = FunctionBuilderContext::new();
         let mut adapter_builder = FunctionBuilder::new(&mut adapter, &mut adapter_builder_context);
         let adapter_entry = adapter_builder.create_block();
@@ -4201,10 +4294,12 @@ impl CraneliftCompiler {
         adapter_builder.switch_to_block(adapter_entry);
         adapter_builder.seal_block(adapter_entry);
         let adapter_params = adapter_builder.block_params(adapter_entry).to_vec();
-        let locals_base =
-            adapter_builder
-                .ins()
-                .load(ptr_type, MemFlags::trusted(), adapter_params[1], locals_base_offset);
+        let locals_base = adapter_builder.ins().load(
+            ptr_type,
+            adapter_memory_flags.configuration,
+            adapter_params[1],
+            locals_base_offset,
+        );
         let entry_token = adapter_builder.ins().iadd_imm_s(adapter_params[3], 1);
         let uses_register_native_abi = Self::uses_register_native_abi(function_type);
         let mut body_arguments = Vec::with_capacity(if uses_register_native_abi {
@@ -4218,9 +4313,10 @@ impl CraneliftCompiler {
                 let offset = i32::try_from(parameter_index * value_size as usize)
                     .map_err(|_| "adapter parameter offset overflow")?;
                 let parameter_type = Self::wasm_abi_type(parameter_kind)?;
-                let parameter = adapter_builder
-                    .ins()
-                    .load(parameter_type, MemFlags::trusted(), locals_base, offset);
+                let parameter =
+                    adapter_builder
+                        .ins()
+                        .load(parameter_type, adapter_memory_flags.activation, locals_base, offset);
                 body_arguments.push(parameter);
             }
         } else {
@@ -4241,17 +4337,26 @@ impl CraneliftCompiler {
         if let Some(&result_kind) = function_type.results.first() {
             let result = adapter_builder.inst_results(call)[0];
             let payload = Self::value_to_payload(&mut adapter_builder, result, result_kind)?;
-            let top =
-                adapter_builder
-                    .ins()
-                    .load(ptr_type, MemFlags::trusted(), adapter_params[1], value_stack_top_offset);
-            adapter_builder.ins().store(MemFlags::trusted(), payload, top, 0);
-            let zero_tag = adapter_builder.ins().iconst(types::I64, 0);
-            adapter_builder.ins().store(MemFlags::trusted(), zero_tag, top, 8);
-            let new_top = adapter_builder.ins().iadd_imm_s(top, i64::from(value_size));
+            let top = adapter_builder.ins().load(
+                ptr_type,
+                adapter_memory_flags.configuration,
+                adapter_params[1],
+                value_stack_top_offset,
+            );
             adapter_builder
                 .ins()
-                .store(MemFlags::trusted(), new_top, adapter_params[1], value_stack_top_offset);
+                .store(adapter_memory_flags.activation, payload, top, 0);
+            let zero_tag = adapter_builder.ins().iconst(types::I64, 0);
+            adapter_builder
+                .ins()
+                .store(adapter_memory_flags.activation, zero_tag, top, 8);
+            let new_top = adapter_builder.ins().iadd_imm_s(top, i64::from(value_size));
+            adapter_builder.ins().store(
+                adapter_memory_flags.configuration,
+                new_top,
+                adapter_params[1],
+                value_stack_top_offset,
+            );
         }
         adapter_builder.ins().return_(&[]);
         adapter_builder.finalize(isa.frontend_config());
