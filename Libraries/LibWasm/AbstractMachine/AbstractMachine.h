@@ -475,6 +475,15 @@ public:
     Vector<CompiledFunctionEntry> const& compiled_fn_table(Store&) const;
 
 private:
+    struct CompiledFunctionTableSource {
+        NonnullRefPtr<Module const> module;
+        HashMap<FunctionIndex, Vector<size_t>> table_indices_by_function;
+        size_t publication_count { 0 };
+    };
+
+    void initialize_compiled_fn_table(Store&) const;
+    void update_compiled_fn_table_entry(Store&, size_t table_index) const;
+
     Vector<TypeSection::Type> m_types;
     Vector<DefinedType const*> m_canonical_types;
     Vector<TagType> m_tag_types;
@@ -494,6 +503,8 @@ private:
     mutable Vector<GlobalInstance*> m_resolved_globals;
     mutable bool m_resolved_globals_built { false };
     mutable Vector<CompiledFunctionEntry> m_compiled_fn_table;
+    mutable Vector<CompiledFunctionTableSource> m_compiled_fn_table_sources;
+    mutable bool m_compiled_fn_table_initialized { false };
     mutable bool m_compiled_fn_table_built { false };
 };
 
