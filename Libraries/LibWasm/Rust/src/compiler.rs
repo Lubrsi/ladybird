@@ -83,6 +83,7 @@ struct WasmMemoryFlags {
     configuration: MemFlags,
     globals: MemFlags,
     linear_memory: MemFlags,
+    readonly_runtime_metadata: MemFlags,
     runtime_metadata: MemFlags,
     tables: MemFlags,
 }
@@ -109,6 +110,12 @@ impl WasmMemoryFlags {
             configuration: MemFlags::trusted().with_alias_region(Some(configuration)),
             globals: MemFlags::trusted().with_alias_region(Some(globals)),
             linear_memory: MemFlags::new().with_alias_region(Some(linear_memory)),
+            // CallableMetadata and canonical type-table entries are initialized before execution
+            // and remain immutable. Other runtime metadata includes fields published while code
+            // is running and must not use these flags.
+            readonly_runtime_metadata: MemFlags::trusted()
+                .with_alias_region(Some(runtime_metadata))
+                .with_readonly(),
             runtime_metadata: MemFlags::trusted().with_alias_region(Some(runtime_metadata)),
             tables: MemFlags::trusted().with_alias_region(Some(tables)),
         }
@@ -380,7 +387,7 @@ impl CraneliftCompiler {
         );
         let actual_type = builder.ins().load(
             ptr_type,
-            memory_flags.runtime_metadata,
+            memory_flags.readonly_runtime_metadata,
             callable,
             layout.callable_defined_type,
         );
@@ -396,9 +403,12 @@ impl CraneliftCompiler {
             .ok_or("type index offset overflow")?;
         let type_offset = builder.ins().iconst(ptr_type, type_offset);
         let expected_type_address = builder.ins().iadd(canonical_types, type_offset);
-        let expected_type = builder
-            .ins()
-            .load(ptr_type, memory_flags.runtime_metadata, expected_type_address, 0);
+        let expected_type = builder.ins().load(
+            ptr_type,
+            memory_flags.readonly_runtime_metadata,
+            expected_type_address,
+            0,
+        );
         let is_exact_type = builder.ins().icmp(IntCC::Equal, actual_type, expected_type);
         builder.ins().brif(is_exact_type, exact_type, &[], subtype_check, &[]);
 
@@ -420,7 +430,7 @@ impl CraneliftCompiler {
         builder.seal_block(exact_type);
         let callable_module = builder.ins().load(
             ptr_type,
-            memory_flags.runtime_metadata,
+            memory_flags.readonly_runtime_metadata,
             callable,
             layout.callable_module,
         );
@@ -439,7 +449,7 @@ impl CraneliftCompiler {
         builder.seal_block(native_entry_check);
         let compiled_instructions = builder.ins().load(
             ptr_type,
-            memory_flags.runtime_metadata,
+            memory_flags.readonly_runtime_metadata,
             callable,
             layout.callable_compiled_instructions,
         );
