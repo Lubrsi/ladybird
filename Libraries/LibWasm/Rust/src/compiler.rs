@@ -199,6 +199,8 @@ struct ControlFrame {
     param_count: usize,
     /// Stack depth at block entry, tracked for br*.
     stack_depth_at_entry: i32,
+    /// Whether this construct was entered from unreachable code.
+    is_unreachable_at_entry: bool,
     /// Real value-stack size at block entry, minus this block's param count.
     /// Only meaningful (and only set) when vstack is disabled (max_stack_depth == 0).
     entry_real_depth_var: Option<Variable>,
@@ -2160,34 +2162,36 @@ impl CraneliftCompiler {
 
         macro_rules! prepare_register_banks_for_branch {
             ($builder:expr, $target_index:expr) => {{
-                let target_index = $target_index;
-                let target_reg_ty = match control_stack[target_index].branch_target_reg_ty {
-                    Some(target_reg_ty) => target_reg_ty,
-                    None => {
-                        let target_reg_ty = reg_ty;
-                        control_stack[target_index].branch_target_reg_ty = Some(target_reg_ty);
-                        target_reg_ty
-                    }
-                };
-                normalize_register_banks_for_edge!($builder, target_reg_ty);
-                target_reg_ty
+                if !is_unreachable {
+                    let target_index = $target_index;
+                    let target_reg_ty = match control_stack[target_index].branch_target_reg_ty {
+                        Some(target_reg_ty) => target_reg_ty,
+                        None => {
+                            let target_reg_ty = reg_ty;
+                            control_stack[target_index].branch_target_reg_ty = Some(target_reg_ty);
+                            target_reg_ty
+                        }
+                    };
+                    normalize_register_banks_for_edge!($builder, target_reg_ty);
+                }
             }};
         }
 
         macro_rules! prepare_stack_banks_for_branch {
             ($builder:expr, $target_index:expr, $depth:expr) => {{
-                let target_index = $target_index;
-                let depth = $depth;
-                let source_stack_ty = stack_ty[..depth].to_vec();
-                let target_stack_ty = match control_stack[target_index].branch_target_stack_ty.clone() {
-                    Some(target_stack_ty) => target_stack_ty,
-                    None => {
-                        control_stack[target_index].branch_target_stack_ty = Some(source_stack_ty.clone());
-                        source_stack_ty.clone()
-                    }
-                };
-                normalize_stack_banks_for_edge!($builder, &source_stack_ty, &target_stack_ty);
-                target_stack_ty
+                if !is_unreachable {
+                    let target_index = $target_index;
+                    let depth = $depth;
+                    let source_stack_ty = stack_ty[..depth].to_vec();
+                    let target_stack_ty = match control_stack[target_index].branch_target_stack_ty.clone() {
+                        Some(target_stack_ty) => target_stack_ty,
+                        None => {
+                            control_stack[target_index].branch_target_stack_ty = Some(source_stack_ty.clone());
+                            source_stack_ty.clone()
+                        }
+                    };
+                    normalize_stack_banks_for_edge!($builder, &source_stack_ty, &target_stack_ty);
+                }
             }};
         }
 
@@ -2643,6 +2647,7 @@ impl CraneliftCompiler {
                         arity,
                         param_count,
                         stack_depth_at_entry: (sp - param_count) as i32,
+                        is_unreachable_at_entry: is_unreachable,
                         entry_real_depth_var,
                         bank_snapshot: None,
                         branch_target_reg_ty: None,
@@ -2674,6 +2679,7 @@ impl CraneliftCompiler {
                         arity,
                         param_count,
                         stack_depth_at_entry: (sp - param_count) as i32,
+                        is_unreachable_at_entry: is_unreachable,
                         entry_real_depth_var,
                         bank_snapshot: None,
                         branch_target_reg_ty: Some(header_reg_ty),
@@ -2716,17 +2722,22 @@ impl CraneliftCompiler {
                         arity,
                         param_count: _param_count,
                         stack_depth_at_entry: (sp - _param_count) as i32,
+                        is_unreachable_at_entry: is_unreachable,
                         entry_real_depth_var,
                         bank_snapshot: Some((reg_ty, stack_ty.clone())),
-                        branch_target_reg_ty: if has_else { None } else { Some(reg_ty) },
-                        branch_target_stack_ty: if has_else { None } else { Some(stack_ty[..sp].to_vec()) },
+                        branch_target_reg_ty: if has_else || is_unreachable { None } else { Some(reg_ty) },
+                        branch_target_stack_ty: if has_else || is_unreachable {
+                            None
+                        } else {
+                            Some(stack_ty[..sp].to_vec())
+                        },
                     });
                 }
 
                 op::ELSE => {
                     if !control_stack.is_empty() {
                         let frame_index = control_stack.len() - 1;
-                        let (else_block, after, entry_depth, pc, snapshot) = {
+                        let (else_block, after, entry_depth, pc, snapshot, is_unreachable_at_entry) = {
                             let frame = &control_stack[frame_index];
                             (
                                 frame.after_block,
@@ -2734,11 +2745,14 @@ impl CraneliftCompiler {
                                 frame.stack_depth_at_entry,
                                 frame.param_count,
                                 frame.bank_snapshot.clone(),
+                                frame.is_unreachable_at_entry,
                             )
                         };
-                        prepare_register_banks_for_branch!(builder, frame_index);
-                        prepare_stack_banks_for_branch!(builder, frame_index, sp);
-                        builder.ins().jump(after, &[]);
+                        if !is_unreachable {
+                            prepare_register_banks_for_branch!(builder, frame_index);
+                            prepare_stack_banks_for_branch!(builder, frame_index, sp);
+                            builder.ins().jump(after, &[]);
+                        }
                         builder.switch_to_block(else_block);
                         builder.seal_block(else_block);
                         // Reset sp to entry depth + param_count (else branch inherits params).
@@ -2747,6 +2761,7 @@ impl CraneliftCompiler {
                             reg_ty = saved_reg_ty;
                             stack_ty = saved_stack_ty;
                         }
+                        is_unreachable = is_unreachable_at_entry;
                         control_stack[frame_index].after_block = after;
                     }
                 }
@@ -2760,23 +2775,29 @@ impl CraneliftCompiler {
                             frame.after_block
                         };
 
-                        let after_reg_ty = if frame.kind == ControlKind::Loop {
-                            reg_ty
-                        } else {
-                            frame.branch_target_reg_ty.unwrap_or(reg_ty)
-                        };
+                        let fallthrough_is_reachable = !is_unreachable;
+                        let branch_target_is_reachable =
+                            frame.kind != ControlKind::Loop && frame.branch_target_reg_ty.is_some();
+                        let after_is_reachable = fallthrough_is_reachable || branch_target_is_reachable;
                         let target_depth = (frame.stack_depth_at_entry + frame.arity as i32) as usize;
                         let source_stack_ty = stack_ty[..target_depth].to_vec();
-                        let after_stack_ty = if frame.kind == ControlKind::Loop {
-                            source_stack_ty.clone()
+                        let after_reg_ty = if branch_target_is_reachable {
+                            frame.branch_target_reg_ty.unwrap()
                         } else {
-                            frame.branch_target_stack_ty.unwrap_or_else(|| source_stack_ty.clone())
+                            reg_ty
                         };
-                        normalize_register_banks_for_edge!(builder, after_reg_ty);
-                        normalize_stack_banks_for_edge!(builder, &source_stack_ty, &after_stack_ty);
-                        builder.ins().jump(after, &[]);
+                        let after_stack_ty = if branch_target_is_reachable {
+                            frame.branch_target_stack_ty.unwrap()
+                        } else {
+                            source_stack_ty.clone()
+                        };
+                        if fallthrough_is_reachable {
+                            normalize_register_banks_for_edge!(builder, after_reg_ty);
+                            normalize_stack_banks_for_edge!(builder, &source_stack_ty, &after_stack_ty);
+                            builder.ins().jump(after, &[]);
+                        }
                         builder.switch_to_block(after);
-                        is_unreachable = false;
+                        is_unreachable = !after_is_reachable;
                         reg_ty = after_reg_ty;
 
                         // After end of block, sp = entry depth + arity.
