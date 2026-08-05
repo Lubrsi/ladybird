@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Atomic.h>
 #include <AK/Bitmap.h>
 #include <AK/ByteReader.h>
 #include <AK/Debug.h>
@@ -360,6 +361,13 @@ constexpr static auto should_try_to_use_direct_threading = true;
 #endif
 
 namespace Wasm {
+
+static Atomic<size_t> s_tier_up_taken_count;
+
+size_t tier_up_taken_count()
+{
+    return s_tier_up_taken_count.load(AK::MemoryOrder::memory_order_relaxed);
+}
 
 struct InstructionOperandCounts {
     ssize_t inputs;
@@ -2070,6 +2078,10 @@ HANDLE_INSTRUCTION(synthetic_tier_up)
     auto& ci = configuration.frame().expression().compiled_instructions;
     auto const native_entry = cranelift_entry_acquire(ci);
     if (native_entry != 0) {
+        s_tier_up_taken_count.fetch_add(1, AK::MemoryOrder::memory_order_relaxed);
+        if (getenv("LADYBIRD_WASM_TIER_UP_TRACE"))
+            warnln("wasm-tier-up: function={} checkpoint={}", ci.cranelift_function_index, short_ip.current_ip_value);
+
         // If we have native code for this block, hand ownership of the current activation to it.
         // The target checkpoint is recovered from short_ip; the empty operand stack and canonical
         // locals provide the state needed by the native resume path. Native completion also
@@ -7040,6 +7052,7 @@ Instruction& InstructionStorage::append(Instruction instruction)
 CompiledInstructions try_compile_instructions(Expression const& expression, Span<FunctionType const> functions, Span<TypeSection::Type const> types, Span<TableType const> tables, Span<CodeSection::Func const* const> callee_bodies, size_t current_function_index, size_t caller_local_count, size_t imported_function_count, bool cranelift_candidate)
 {
     CompiledInstructions result;
+    result.cranelift_function_index = static_cast<u32>(current_function_index);
 
     auto instruction_count = expression.instructions().size();
     result.dispatches.ensure_capacity(instruction_count);
