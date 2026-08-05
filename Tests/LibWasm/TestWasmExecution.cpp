@@ -138,6 +138,42 @@ TEST_CASE(ineligible_function_has_no_tier_up_checkpoints)
         EXPECT(dispatch.instruction->opcode() != Wasm::Instructions::synthetic_tier_up);
 }
 
+TEST_CASE(native_control_flow_ignores_unreachable_merge_predecessors)
+{
+    auto file = MUST(Core::File::open("Fixtures/cranelift-unreachable-merge.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    for (auto const& function : module->code_section().functions())
+        EXPECT(function.func().body().compiled_instructions.cranelift_compiled);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto invoke = [&](StringView name, Vector<Wasm::Value> arguments = {}) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        return machine.invoke(*address, move(arguments));
+    };
+
+    auto unreachable_then = invoke("unreachable_then"sv, { Wasm::Value(static_cast<i32>(0)) });
+    EXPECT(!unreachable_then.is_trap());
+    EXPECT_EQ(unreachable_then.values()[0].to<i32>(), 42);
+
+    auto unreachable_else = invoke("unreachable_else"sv, { Wasm::Value(static_cast<i32>(1)) });
+    EXPECT(!unreachable_else.is_trap());
+    EXPECT_EQ(unreachable_else.values()[0].to<double>(), 13.5);
+
+    auto branched_result = invoke("branched_result"sv);
+    EXPECT(!branched_result.is_trap());
+    EXPECT_EQ(branched_result.values()[0].to<float>(), 7.25f);
+}
+
 TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
 {
     auto file = MUST(Core::File::open("Fixtures/label-stack-cleanup.wasm"sv, Core::File::OpenMode::Read));
