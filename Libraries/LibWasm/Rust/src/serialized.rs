@@ -4,10 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+use crate::CRANELIFT_COMPILER_INPUT_FORMAT_VERSION;
 use crate::CompiledFunction;
+use crate::CraneliftFrontend;
 use crate::CraneliftInsn;
 use crate::CraneliftRelocation;
 use crate::CraneliftTrap;
+use crate::DirectInstruction;
+use crate::DirectValueType;
 use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
@@ -20,6 +24,7 @@ use std::mem::size_of_val;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InputHeader {
+    format_version: u32,
     function_count: u32,
     function_type_count: u32,
     function_types_offset: u32,
@@ -31,8 +36,15 @@ struct InputHeader {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InputFunctionEntry {
+    frontend: u32,
     insn_offset: u32,
     insn_count: u32,
+    direct_insn_offset: u32,
+    direct_insn_count: u32,
+    direct_branch_targets_offset: u32,
+    direct_branch_target_count: u32,
+    direct_locals_offset: u32,
+    direct_local_count: u32,
     result_arity: u32,
     num_locals: u32,
     locals_offset: u32,
@@ -101,6 +113,9 @@ fn parse_input<'a>(
     &'static str,
 > {
     let header: InputHeader = read_pod(input, 0)?;
+    if header.format_version != CRANELIFT_COMPILER_INPUT_FORMAT_VERSION {
+        return Err("unsupported compiler input format version");
+    }
     if usize::try_from(header.total_size).map_err(|_| "total_size overflow")? != input.len() {
         return Err("input buffer size mismatch");
     }
@@ -138,6 +153,9 @@ fn parse_input<'a>(
 
     let mut entries = Vec::with_capacity(func_count);
     let mut total_insn_count = 0usize;
+    let mut total_direct_insn_count = 0usize;
+    let mut total_direct_branch_target_count = 0usize;
+    let mut total_direct_local_count = 0usize;
     let mut total_locals_size = 0usize;
     for i in 0..func_count {
         let entry_offset = i
@@ -148,6 +166,15 @@ fn parse_input<'a>(
         total_insn_count = total_insn_count
             .checked_add(entry.insn_count as usize)
             .ok_or("instruction count overflow")?;
+        total_direct_insn_count = total_direct_insn_count
+            .checked_add(entry.direct_insn_count as usize)
+            .ok_or("direct instruction count overflow")?;
+        total_direct_branch_target_count = total_direct_branch_target_count
+            .checked_add(entry.direct_branch_target_count as usize)
+            .ok_or("direct branch target count overflow")?;
+        total_direct_local_count = total_direct_local_count
+            .checked_add(entry.direct_local_count as usize)
+            .ok_or("direct local count overflow")?;
         total_locals_size = total_locals_size
             .checked_add(entry.num_locals as usize)
             .ok_or("locals size overflow")?;
@@ -173,8 +200,35 @@ fn parse_input<'a>(
     let insn_region_size = total_insn_count
         .checked_mul(size_of::<CraneliftInsn>())
         .ok_or("instruction region size overflow")?;
-    let locals_region_offset = insn_region_offset
-        .checked_add(insn_region_size)
+    let direct_insn_region_offset = align_up(
+        insn_region_offset
+            .checked_add(insn_region_size)
+            .ok_or("direct instruction region offset overflow")?,
+        align_of::<DirectInstruction>(),
+    )?;
+    let direct_insn_region_size = total_direct_insn_count
+        .checked_mul(size_of::<DirectInstruction>())
+        .ok_or("direct instruction region size overflow")?;
+    let direct_branch_targets_offset = align_up(
+        direct_insn_region_offset
+            .checked_add(direct_insn_region_size)
+            .ok_or("direct branch target region offset overflow")?,
+        align_of::<u32>(),
+    )?;
+    let direct_branch_targets_size = total_direct_branch_target_count
+        .checked_mul(size_of::<u32>())
+        .ok_or("direct branch target region size overflow")?;
+    let direct_locals_offset = align_up(
+        direct_branch_targets_offset
+            .checked_add(direct_branch_targets_size)
+            .ok_or("direct locals region offset overflow")?,
+        align_of::<DirectValueType>(),
+    )?;
+    let direct_locals_size = total_direct_local_count
+        .checked_mul(size_of::<DirectValueType>())
+        .ok_or("direct locals region size overflow")?;
+    let locals_region_offset = direct_locals_offset
+        .checked_add(direct_locals_size)
         .ok_or("locals region offset overflow")?;
     let function_type_values_offset = locals_region_offset
         .checked_add(total_locals_size)
@@ -195,10 +249,23 @@ fn parse_input<'a>(
     }
 
     let mut insn_cursor = insn_region_offset;
+    let mut direct_insn_cursor = direct_insn_region_offset;
+    let mut direct_branch_targets_cursor = direct_branch_targets_offset;
+    let mut direct_locals_cursor = direct_locals_offset;
     let mut locals_cursor = locals_region_offset;
     for entry in &entries {
         if entry.insn_offset as usize != insn_cursor || entry.locals_offset as usize != locals_cursor {
             return Err("input regions are not canonical");
+        }
+        if (entry.direct_insn_count == 0 && entry.direct_insn_offset != 0)
+            || (entry.direct_insn_count != 0 && entry.direct_insn_offset as usize != direct_insn_cursor)
+            || (entry.direct_branch_target_count == 0 && entry.direct_branch_targets_offset != 0)
+            || (entry.direct_branch_target_count != 0
+                && entry.direct_branch_targets_offset as usize != direct_branch_targets_cursor)
+            || (entry.direct_local_count == 0 && entry.direct_locals_offset != 0)
+            || (entry.direct_local_count != 0 && entry.direct_locals_offset as usize != direct_locals_cursor)
+        {
+            return Err("direct input regions are not canonical");
         }
         insn_cursor = insn_cursor
             .checked_add(
@@ -207,6 +274,27 @@ fn parse_input<'a>(
                     .ok_or("instruction region size overflow")?,
             )
             .ok_or("instruction region offset overflow")?;
+        direct_insn_cursor = direct_insn_cursor
+            .checked_add(
+                (entry.direct_insn_count as usize)
+                    .checked_mul(size_of::<DirectInstruction>())
+                    .ok_or("direct instruction region size overflow")?,
+            )
+            .ok_or("direct instruction region offset overflow")?;
+        direct_branch_targets_cursor = direct_branch_targets_cursor
+            .checked_add(
+                (entry.direct_branch_target_count as usize)
+                    .checked_mul(size_of::<u32>())
+                    .ok_or("direct branch target region size overflow")?,
+            )
+            .ok_or("direct branch target region offset overflow")?;
+        direct_locals_cursor = direct_locals_cursor
+            .checked_add(
+                (entry.direct_local_count as usize)
+                    .checked_mul(size_of::<DirectValueType>())
+                    .ok_or("direct locals region size overflow")?,
+            )
+            .ok_or("direct locals region offset overflow")?;
         locals_cursor = locals_cursor
             .checked_add(entry.num_locals as usize)
             .ok_or("locals region offset overflow")?;
@@ -329,6 +417,9 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                 let mut out: Vec<(usize, CompiledFunction)> = Vec::with_capacity(end - start);
                 for (offset_in_chunk, entry) in chunk_entries.iter().enumerate() {
                     let i = start + offset_in_chunk;
+                    if entry.frontend != CraneliftFrontend::AllocatedBytecode as u32 {
+                        continue;
+                    }
                     if entry.insn_count == 0 {
                         continue;
                     }
@@ -558,9 +649,18 @@ mod tests {
 
     #[test]
     fn rejects_buffer_size_mismatch() {
-        let input = vec![0; size_of::<InputHeader>()];
+        let header = InputHeader {
+            format_version: CRANELIFT_COMPILER_INPUT_FORMAT_VERSION,
+            function_count: 0,
+            function_type_count: 0,
+            function_types_offset: 0,
+            layout_offset: 0,
+            output_size: 0,
+            total_size: 0,
+        };
+        let input = as_bytes_slice(std::slice::from_ref(&header));
         assert_eq!(
-            compile_serialized_buffer(&input, &mut []).unwrap_err(),
+            compile_serialized_buffer(input, &mut []).unwrap_err(),
             "input buffer size mismatch"
         );
     }
@@ -568,6 +668,7 @@ mod tests {
     #[test]
     fn rejects_function_count_larger_than_the_input() {
         let header = InputHeader {
+            format_version: CRANELIFT_COMPILER_INPUT_FORMAT_VERSION,
             function_count: u32::MAX,
             function_type_count: 0,
             function_types_offset: 0,
