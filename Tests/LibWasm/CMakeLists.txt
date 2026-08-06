@@ -1,6 +1,8 @@
 ladybird_test(TestWasmMemory.cpp LibWasm LIBS LibGC LibWasm)
 ladybird_test(TestWasmTable.cpp LibWasm LIBS LibGC LibWasm)
 ladybird_test(TestWasmExecution.cpp LibWasm LIBS LibGC LibWasm)
+ladybird_test(TestWasmDifferential.cpp LibWasm LIBS LibGC LibWasm)
+target_sources(TestWasmDifferential PRIVATE WasmDifferentialTest.cpp)
 
 add_executable(test-wasm test-wasm.cpp)
 target_link_libraries(test-wasm AK LibCore LibFileSystem JavaScriptTestRunnerMain LibTest LibWasm LibJS LibCrypto LibGC)
