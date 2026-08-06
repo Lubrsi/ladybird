@@ -51,6 +51,10 @@ use cranelift_frontend::Variable;
 use cranelift_native;
 use std::collections::HashMap;
 
+mod register_liveness;
+use register_liveness::RegisterLiveness;
+use register_liveness::RegisterSet;
+
 // Opcode constants generated from Opcode.h (see build.rs.)
 #[allow(dead_code)]
 mod op {
@@ -207,6 +211,7 @@ struct ControlFrame {
     bank_snapshot: Option<([Bank; REG_COUNT], Vec<Bank>)>,
     branch_target_reg_ty: Option<[Bank; REG_COUNT]>,
     branch_target_stack_ty: Option<Vec<Bank>>,
+    branch_target_live_registers: RegisterSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -932,6 +937,7 @@ impl CraneliftCompiler {
             // Note: op::CALL is used for multi-value returns but also for some
             // single-return calls. We handle it via flush_vstack_to_real before the call.
         }
+        let register_liveness = RegisterLiveness::analyze(insns)?;
 
         let mut flag_builder = settings::builder();
         flag_builder.set("opt_level", "speed").unwrap();
@@ -2150,9 +2156,13 @@ impl CraneliftCompiler {
         }
 
         macro_rules! normalize_register_banks_for_edge {
-            ($builder:expr, $target_reg_ty:expr) => {{
+            ($builder:expr, $target_reg_ty:expr, $live_registers:expr) => {{
                 let target_reg_ty = $target_reg_ty;
+                let live_registers = $live_registers;
                 for index in 0..REG_COUNT {
+                    if live_registers & (1 << index) == 0 {
+                        continue;
+                    }
                     if reg_ty[index] != target_reg_ty[index] {
                         materialize_register_bank!($builder, index, reg_ty[index], target_reg_ty[index]);
                     }
@@ -2164,6 +2174,7 @@ impl CraneliftCompiler {
             ($builder:expr, $target_index:expr) => {{
                 if !is_unreachable {
                     let target_index = $target_index;
+                    let live_registers = control_stack[target_index].branch_target_live_registers;
                     let target_reg_ty = match control_stack[target_index].branch_target_reg_ty {
                         Some(target_reg_ty) => target_reg_ty,
                         None => {
@@ -2172,7 +2183,7 @@ impl CraneliftCompiler {
                             target_reg_ty
                         }
                     };
-                    normalize_register_banks_for_edge!($builder, target_reg_ty);
+                    normalize_register_banks_for_edge!($builder, target_reg_ty, live_registers);
                 }
             }};
         }
@@ -2205,7 +2216,7 @@ impl CraneliftCompiler {
                         target_reg_ty
                     }
                 };
-                normalize_register_banks_for_edge!($builder, target_reg_ty);
+                normalize_register_banks_for_edge!($builder, target_reg_ty, RegisterSet::MAX);
             }};
         }
 
@@ -2654,6 +2665,7 @@ impl CraneliftCompiler {
                         bank_snapshot: None,
                         branch_target_reg_ty: None,
                         branch_target_stack_ty: None,
+                        branch_target_live_registers: register_liveness.branch_target_live(ip),
                     });
                 }
 
@@ -2686,6 +2698,7 @@ impl CraneliftCompiler {
                         bank_snapshot: None,
                         branch_target_reg_ty: Some(header_reg_ty),
                         branch_target_stack_ty: Some(stack_ty[..sp].to_vec()),
+                        branch_target_live_registers: register_liveness.branch_target_live(ip),
                     });
                 }
 
@@ -2733,6 +2746,7 @@ impl CraneliftCompiler {
                         } else {
                             Some(stack_ty[..sp].to_vec())
                         },
+                        branch_target_live_registers: register_liveness.branch_target_live(ip),
                     });
                 }
 
@@ -2794,7 +2808,11 @@ impl CraneliftCompiler {
                             source_stack_ty.clone()
                         };
                         if fallthrough_is_reachable {
-                            normalize_register_banks_for_edge!(builder, after_reg_ty);
+                            normalize_register_banks_for_edge!(
+                                builder,
+                                after_reg_ty,
+                                frame.branch_target_live_registers
+                            );
                             normalize_stack_banks_for_edge!(builder, &source_stack_ty, &after_stack_ty);
                             builder.ins().jump(after, &[]);
                         }
@@ -4167,7 +4185,7 @@ impl CraneliftCompiler {
 
                 op::SYNTHETIC_TIER_UP => {
                     if let Some(tail) = tier_up_dispatch_tail {
-                        let (header, header_reg_ty) = {
+                        let (header, header_reg_ty, header_live_registers) = {
                             let frame = control_stack.last().expect("tier-up checkpoint must be inside a loop");
                             debug_assert!(
                                 frame
@@ -4180,6 +4198,7 @@ impl CraneliftCompiler {
                                 frame
                                     .branch_target_reg_ty
                                     .expect("loop header register banks must be initialized"),
+                                frame.branch_target_live_registers,
                             )
                         };
                         let next_tail = builder.create_block();
@@ -4189,6 +4208,9 @@ impl CraneliftCompiler {
                         // interpreter configuration. Recreate the typed banks required by this
                         // particular loop header before taking its resume edge.
                         for (index, &bank) in header_reg_ty.iter().enumerate() {
+                            if header_live_registers & (1 << index) == 0 {
+                                continue;
+                            }
                             if bank != Bank::I64 {
                                 materialize_register_bank!(builder, index, Bank::I64, bank);
                             }
