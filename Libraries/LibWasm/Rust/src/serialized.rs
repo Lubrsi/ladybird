@@ -10,6 +10,8 @@ use crate::CraneliftFrontend;
 use crate::CraneliftInsn;
 use crate::CraneliftRelocation;
 use crate::CraneliftTrap;
+use crate::DirectCompilerInput;
+use crate::DirectFunctionType;
 use crate::DirectInstruction;
 use crate::DirectValueType;
 use crate::FunctionCompilationOptions;
@@ -29,6 +31,10 @@ struct InputHeader {
     function_count: u32,
     function_type_count: u32,
     function_types_offset: u32,
+    module_type_count: u32,
+    module_types_offset: u32,
+    global_type_count: u32,
+    global_types_offset: u32,
     layout_offset: u32,
     output_size: u64,
     total_size: u64,
@@ -57,6 +63,16 @@ struct InputFunctionEntry {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InputFunctionTypeEntry {
+    parameters_offset: u32,
+    parameter_count: u32,
+    results_offset: u32,
+    result_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InputModuleTypeEntry {
+    is_function: u32,
     parameters_offset: u32,
     parameter_count: u32,
     results_offset: u32,
@@ -126,6 +142,8 @@ fn parse_input<'a>(
         Vec<InputFunctionEntry>,
         RuntimeLayout,
         Vec<WasmFunctionType<'a>>,
+        Vec<Option<DirectFunctionType<'a>>>,
+        &'a [DirectValueType],
     ),
     &'static str,
 > {
@@ -166,6 +184,20 @@ fn parse_input<'a>(
         || function_types_end > input.len()
     {
         return Err("function type entries are not canonical");
+    }
+
+    let module_type_count = usize::try_from(header.module_type_count).map_err(|_| "module_type_count overflow")?;
+    let module_types_offset = align_up(function_types_end, align_of::<InputModuleTypeEntry>())?;
+    let module_types_size = module_type_count
+        .checked_mul(size_of::<InputModuleTypeEntry>())
+        .ok_or("module type entries size overflow")?;
+    let module_types_end = module_types_offset
+        .checked_add(module_types_size)
+        .ok_or("module type entries size overflow")?;
+    if usize::try_from(header.module_types_offset).map_err(|_| "module_types_offset overflow")? != module_types_offset
+        || module_types_end > input.len()
+    {
+        return Err("module type entries are not canonical");
     }
 
     let mut entries = Vec::with_capacity(func_count);
@@ -213,7 +245,36 @@ fn parse_input<'a>(
         function_type_entries.push(entry);
     }
 
-    let insn_region_offset = align_up(function_types_end, align_of::<CraneliftInsn>())?;
+    let mut module_type_entries = Vec::with_capacity(module_type_count);
+    let mut total_module_type_value_count = 0usize;
+    for i in 0..module_type_count {
+        let entry_offset = i
+            .checked_mul(size_of::<InputModuleTypeEntry>())
+            .and_then(|offset| module_types_offset.checked_add(offset))
+            .ok_or("module type entry offset overflow")?;
+        let entry: InputModuleTypeEntry = read_pod(input, entry_offset)?;
+        match entry.is_function {
+            0 => {
+                if entry.parameters_offset != 0
+                    || entry.parameter_count != 0
+                    || entry.results_offset != 0
+                    || entry.result_count != 0
+                {
+                    return Err("invalid non-function module type");
+                }
+            }
+            1 => {
+                total_module_type_value_count = total_module_type_value_count
+                    .checked_add(entry.parameter_count as usize)
+                    .and_then(|count| count.checked_add(entry.result_count as usize))
+                    .ok_or("module type values size overflow")?;
+            }
+            _ => return Err("invalid module type kind"),
+        }
+        module_type_entries.push(entry);
+    }
+
+    let insn_region_offset = align_up(module_types_end, align_of::<CraneliftInsn>())?;
     let insn_region_size = total_insn_count
         .checked_mul(size_of::<CraneliftInsn>())
         .ok_or("instruction region size overflow")?;
@@ -250,9 +311,31 @@ fn parse_input<'a>(
     let function_type_values_offset = locals_region_offset
         .checked_add(total_locals_size)
         .ok_or("function type values offset overflow")?;
-    let layout_offset = align_up(
+    let module_type_values_offset = align_up(
         function_type_values_offset
             .checked_add(total_function_type_size)
+            .ok_or("module type values offset overflow")?,
+        align_of::<DirectValueType>(),
+    )?;
+    let module_type_values_size = total_module_type_value_count
+        .checked_mul(size_of::<DirectValueType>())
+        .ok_or("module type values size overflow")?;
+    let global_types_offset = align_up(
+        module_type_values_offset
+            .checked_add(module_type_values_size)
+            .ok_or("global types offset overflow")?,
+        align_of::<DirectValueType>(),
+    )?;
+    let global_type_count = usize::try_from(header.global_type_count).map_err(|_| "global_type_count overflow")?;
+    let global_types_size = global_type_count
+        .checked_mul(size_of::<DirectValueType>())
+        .ok_or("global types size overflow")?;
+    if usize::try_from(header.global_types_offset).map_err(|_| "global_types_offset overflow")? != global_types_offset {
+        return Err("global types are not canonical");
+    }
+    let layout_offset = align_up(
+        global_types_offset
+            .checked_add(global_types_size)
             .ok_or("layout offset overflow")?,
         align_of::<RuntimeLayout>(),
     )?;
@@ -345,15 +428,50 @@ fn parse_input<'a>(
         function_types.push(WasmFunctionType { parameters, results });
         function_type_values_cursor = results_end;
     }
-    if function_type_values_cursor != layout_offset {
-        let aligned_values_end = align_up(function_type_values_cursor, align_of::<RuntimeLayout>())?;
-        if aligned_values_end != layout_offset {
-            return Err("function type values are not canonical");
-        }
+    if align_up(function_type_values_cursor, align_of::<DirectValueType>())? != module_type_values_offset {
+        return Err("function type values are not canonical");
     }
 
+    let mut module_types = Vec::with_capacity(module_type_count);
+    let mut module_type_values_cursor = module_type_values_offset;
+    for entry in module_type_entries {
+        if entry.is_function == 0 {
+            module_types.push(None);
+            continue;
+        }
+        if entry.parameters_offset as usize != module_type_values_cursor {
+            return Err("module type values are not canonical");
+        }
+        let parameters = read_pod_slice::<DirectValueType>(input, entry.parameters_offset, entry.parameter_count)?;
+        module_type_values_cursor = module_type_values_cursor
+            .checked_add(
+                parameters
+                    .len()
+                    .checked_mul(size_of::<DirectValueType>())
+                    .ok_or("module type size overflow")?,
+            )
+            .ok_or("module type size overflow")?;
+        if entry.results_offset as usize != module_type_values_cursor {
+            return Err("module type values are not canonical");
+        }
+        let results = read_pod_slice::<DirectValueType>(input, entry.results_offset, entry.result_count)?;
+        module_type_values_cursor = module_type_values_cursor
+            .checked_add(
+                results
+                    .len()
+                    .checked_mul(size_of::<DirectValueType>())
+                    .ok_or("module type size overflow")?,
+            )
+            .ok_or("module type size overflow")?;
+        module_types.push(Some(DirectFunctionType { parameters, results }));
+    }
+    if align_up(module_type_values_cursor, align_of::<DirectValueType>())? != global_types_offset {
+        return Err("module type values are not canonical");
+    }
+
+    let global_types = read_pod_slice::<DirectValueType>(input, header.global_types_offset, header.global_type_count)?;
     let layout = read_pod(input, layout_offset)?;
-    Ok((header, entries, layout, function_types))
+    Ok((header, entries, layout, function_types, module_types, global_types))
 }
 
 fn select_compiled_functions(
@@ -408,7 +526,7 @@ fn select_compiled_functions(
 }
 
 pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
-    let (header, entries, layout, function_types) = parse_input(input, output.len())?;
+    let (header, entries, layout, function_types, module_types, global_types) = parse_input(input, output.len())?;
     let func_count = usize::try_from(header.function_count).map_err(|_| "function_count overflow")?;
 
     let thread_count = std::thread::available_parallelism()
@@ -419,6 +537,8 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
     let mapped_ref: &[u8] = input;
     let layout_ref = &layout;
     let function_types_ref = function_types.as_slice();
+    let module_types_ref = module_types.as_slice();
+    let global_types_ref = global_types;
     // Compile into temporary per-function allocations first so the serialized
     // output contains only bytes that Cranelift actually produced.
     let compiled_chunks = std::thread::scope(|scope| {
@@ -464,12 +584,16 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                             continue;
                         };
                         if let Ok(compiled) = compile_direct_to_bytes(
-                            direct_insns,
-                            direct_branch_targets,
+                            DirectCompilerInput {
+                                instructions: direct_insns,
+                                branch_targets: direct_branch_targets,
+                                local_types: direct_local_types,
+                                function_types: function_types_ref,
+                                module_types: module_types_ref,
+                                global_types: global_types_ref,
+                            },
                             layout_ref,
                             options,
-                            direct_local_types,
-                            function_types_ref,
                         ) {
                             out.push((i, compiled));
                         }
@@ -701,6 +825,10 @@ mod tests {
             function_count: 0,
             function_type_count: 0,
             function_types_offset: 0,
+            module_type_count: 0,
+            module_types_offset: 0,
+            global_type_count: 0,
+            global_types_offset: 0,
             layout_offset: 0,
             output_size: 0,
             total_size: 0,
@@ -719,6 +847,10 @@ mod tests {
             function_count: u32::MAX,
             function_type_count: 0,
             function_types_offset: 0,
+            module_type_count: 0,
+            module_types_offset: 0,
+            global_type_count: 0,
+            global_types_offset: 0,
             layout_offset: 0,
             output_size: 0,
             total_size: size_of::<InputHeader>() as u64,

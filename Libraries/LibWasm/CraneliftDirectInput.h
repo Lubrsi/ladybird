@@ -19,6 +19,7 @@ struct DirectCompilerInput {
     Vector<Cranelift::DirectValueType> local_types;
 };
 
+Cranelift::DirectValueType serialize_direct_value_type(ValueType const&);
 Optional<DirectCompilerInput> serialize_direct_compiler_input(CodeSection::Func const&);
 
 }

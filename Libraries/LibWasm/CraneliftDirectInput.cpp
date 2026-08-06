@@ -9,7 +9,7 @@
 
 namespace Wasm {
 
-static Cranelift::DirectValueType serialize_value_type(ValueType const& type)
+Cranelift::DirectValueType serialize_direct_value_type(ValueType const& type)
 {
     auto kind = [&] {
         switch (type.kind()) {
@@ -70,19 +70,19 @@ static Cranelift::DirectBlockType serialize_block_type(BlockType const& block_ty
     case BlockType::Empty:
         return {
             .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::Empty),
-            .value_type = serialize_value_type(ValueType { ValueType::I32 }),
+            .value_type = serialize_direct_value_type(ValueType { ValueType::I32 }),
             .type_index = 0,
         };
     case BlockType::Type:
         return {
             .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::ValueType),
-            .value_type = serialize_value_type(block_type.value_type()),
+            .value_type = serialize_direct_value_type(block_type.value_type()),
             .type_index = 0,
         };
     case BlockType::Index:
         return {
             .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::TypeIndex),
-            .value_type = serialize_value_type(ValueType { ValueType::I32 }),
+            .value_type = serialize_direct_value_type(ValueType { ValueType::I32 }),
             .type_index = block_type.type_index().value(),
         };
     }
@@ -165,6 +165,17 @@ static Optional<Cranelift::DirectInstruction> serialize_instruction(Instruction 
             };
             return true;
         },
+        [&](Instruction::MemoryCopyArgs const& arguments) {
+            output.arguments.memory_copy = {
+                .source_memory_index = arguments.src_index.value(),
+                .destination_memory_index = arguments.dst_index.value(),
+            };
+            return true;
+        },
+        [&](Instruction::MemoryIndexArgument const& argument) {
+            output.arguments.memory_index = argument.memory_index.value();
+            return true;
+        },
         [&](FunctionIndex const& index) {
             output.arguments.function_index = index.value();
             return true;
@@ -226,7 +237,7 @@ Optional<DirectCompilerInput> serialize_direct_compiler_input(CodeSection::Func 
 
     output.local_types.ensure_capacity(function.total_local_count());
     for (auto const& local_group : function.locals()) {
-        auto type = serialize_value_type(local_group.type());
+        auto type = serialize_direct_value_type(local_group.type());
         for (u32 i = 0; i < local_group.n(); ++i)
             output.local_types.unchecked_append(type);
     }
