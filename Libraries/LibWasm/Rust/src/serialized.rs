@@ -16,6 +16,7 @@ use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
 use crate::WasmFunctionType;
+use crate::compile_direct_to_bytes;
 use crate::compile_to_bytes;
 use std::mem::align_of;
 use std::mem::size_of;
@@ -98,6 +99,22 @@ fn read_pod<T: Copy>(base: &[u8], offset: usize) -> Result<T, &'static str> {
     let end = offset.checked_add(size_of::<T>()).ok_or("overflow")?;
     let bytes = base.get(offset..end).ok_or("out of bounds read")?;
     Ok(unsafe { (bytes.as_ptr().cast::<T>()).read_unaligned() })
+}
+
+fn read_pod_slice<T>(base: &[u8], offset: u32, count: u32) -> Result<&[T], &'static str> {
+    let offset = usize::try_from(offset).map_err(|_| "slice offset overflow")?;
+    let count = usize::try_from(count).map_err(|_| "slice count overflow")?;
+    let byte_count = count.checked_mul(size_of::<T>()).ok_or("slice size overflow")?;
+    let end = offset.checked_add(byte_count).ok_or("slice end overflow")?;
+    let bytes = base.get(offset..end).ok_or("slice out of bounds")?;
+    if offset % align_of::<T>() != 0 {
+        return Err("misaligned slice");
+    }
+    let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+    if !prefix.is_empty() || !suffix.is_empty() || values.len() != count {
+        return Err("invalid slice representation");
+    }
+    Ok(values)
 }
 
 fn parse_input<'a>(
@@ -417,6 +434,47 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                 let mut out: Vec<(usize, CompiledFunction)> = Vec::with_capacity(end - start);
                 for (offset_in_chunk, entry) in chunk_entries.iter().enumerate() {
                     let i = start + offset_in_chunk;
+                    let options = FunctionCompilationOptions {
+                        result_arity: entry.result_arity,
+                        num_locals: entry.num_locals,
+                        num_params: entry.num_params,
+                        function_index: entry.function_index,
+                        max_call_rec_size: entry.max_call_rec_size,
+                    };
+                    if entry.frontend == CraneliftFrontend::Direct as u32 {
+                        let Ok(direct_insns) = read_pod_slice::<DirectInstruction>(
+                            mapped_ref,
+                            entry.direct_insn_offset,
+                            entry.direct_insn_count,
+                        ) else {
+                            continue;
+                        };
+                        let Ok(direct_branch_targets) = read_pod_slice::<u32>(
+                            mapped_ref,
+                            entry.direct_branch_targets_offset,
+                            entry.direct_branch_target_count,
+                        ) else {
+                            continue;
+                        };
+                        let Ok(direct_local_types) = read_pod_slice::<DirectValueType>(
+                            mapped_ref,
+                            entry.direct_locals_offset,
+                            entry.direct_local_count,
+                        ) else {
+                            continue;
+                        };
+                        if let Ok(compiled) = compile_direct_to_bytes(
+                            direct_insns,
+                            direct_branch_targets,
+                            layout_ref,
+                            options,
+                            direct_local_types,
+                            function_types_ref,
+                        ) {
+                            out.push((i, compiled));
+                        }
+                        continue;
+                    }
                     if entry.frontend != CraneliftFrontend::AllocatedBytecode as u32 {
                         continue;
                     }
@@ -449,19 +507,8 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                         .and_then(|offset| offset.checked_add(num_locals).map(|end| (offset, end)))
                         .and_then(|(offset, end)| mapped_ref.get(offset..end))
                         .unwrap_or(&[]);
-                    if let Ok(compiled) = compile_to_bytes(
-                        insns,
-                        layout_ref,
-                        FunctionCompilationOptions {
-                            result_arity: entry.result_arity,
-                            num_locals: entry.num_locals,
-                            num_params: entry.num_params,
-                            function_index: entry.function_index,
-                            max_call_rec_size: entry.max_call_rec_size,
-                        },
-                        local_types,
-                        function_types_ref,
-                    ) {
+                    if let Ok(compiled) = compile_to_bytes(insns, layout_ref, options, local_types, function_types_ref)
+                    {
                         out.push((i, compiled));
                     }
                 }

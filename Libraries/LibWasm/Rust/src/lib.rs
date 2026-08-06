@@ -54,21 +54,21 @@ pub enum DirectValueTypeKind {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct DirectValueType {
-    pub kind: DirectValueTypeKind,
+    pub kind: u32,
     pub type_index: u32,
     pub nullable: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct DirectBlockType {
-    pub kind: DirectBlockTypeKind,
+    pub kind: u32,
     pub value_type: DirectValueType,
     pub type_index: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct DirectStructuredInstructionArguments {
     pub block_type: DirectBlockType,
     pub end_ip: u32,
@@ -76,7 +76,7 @@ pub struct DirectStructuredInstructionArguments {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct DirectTableBranchInstructionArguments {
     pub targets_offset: u32,
     pub target_count: u32,
@@ -84,14 +84,14 @@ pub struct DirectTableBranchInstructionArguments {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct DirectIndirectCallInstructionArguments {
     pub type_index: u32,
     pub table_index: u32,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct DirectMemoryInstructionArguments {
     pub align: u32,
     pub memory_index: u32,
@@ -151,7 +151,7 @@ pub struct CraneliftInsn {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RuntimeLayout {
     pub regs_offset: u32,
     pub value_size: u32,
@@ -293,4 +293,22 @@ pub fn compile_to_bytes(
     function_types: &[WasmFunctionType<'_>],
 ) -> Result<CompiledFunction, &'static str> {
     CraneliftCompiler::compile_to_bytes(insns, layout, options, local_types, function_types)
+}
+
+pub fn compile_direct_to_bytes(
+    insns: &[DirectInstruction],
+    branch_targets: &[u32],
+    layout: &RuntimeLayout,
+    options: FunctionCompilationOptions,
+    local_types: &[DirectValueType],
+    function_types: &[WasmFunctionType<'_>],
+) -> Result<CompiledFunction, &'static str> {
+    compiler::direct::DirectCompiler::compile_to_bytes(
+        insns,
+        branch_targets,
+        layout,
+        options,
+        local_types,
+        function_types,
+    )
 }

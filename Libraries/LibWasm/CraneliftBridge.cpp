@@ -212,6 +212,7 @@ static ErrorOr<size_t> compute_output_buffer_size(size_t function_count, size_t 
 struct BatchInput {
     Vector<CraneliftInsn> insns;
     Optional<DirectCompilerInput> direct_input;
+    CraneliftFrontend frontend;
     u32 result_arity;
     u32 function_index;
     CompiledInstructions* target;
@@ -1757,7 +1758,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
         auto* entry = reinterpret_cast<InputFunctionEntry*>(base + entries_offset + i * sizeof(InputFunctionEntry));
         *entry = InputFunctionEntry {
-            .frontend = static_cast<u32>(CraneliftFrontend::AllocatedBytecode),
+            .frontend = static_cast<u32>(input.frontend),
             .insn_offset = static_cast<u32>(insn_cursor),
             .insn_count = static_cast<u32>(input.insns.size()),
             .direct_insn_offset = function_direct_insn_offset,
@@ -1881,6 +1882,11 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         auto traps = trap_count == 0
             ? ReadonlySpan<CraneliftTrap> {}
             : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(output_base + reloc_region_start + trap_offset), trap_count };
+
+        // Direct bodies use the clean native ABI and are not interpreter-facing entries. They are
+        // compiled offline until the clean-entry adapter is available.
+        if (batch[i].frontend == CraneliftFrontend::Direct)
+            continue;
 
         auto& capture = cranelift_cache_state().cache_capture;
         if (capture.capturing && batch[i].function_index != NumericLimits<u32>::max()) {
@@ -2076,10 +2082,10 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
     VERIFY(indirect_call_index == compiled.cranelift_indirect_calls.size());
 
-    auto direct_input = serialize_direct_compiler_input(function);
     cranelift_cache_state().pending_batch.append({
         move(flat),
-        move(direct_input),
+        {},
+        CraneliftFrontend::AllocatedBytecode,
         result_arity,
         s_active_function_index,
         &compiled,

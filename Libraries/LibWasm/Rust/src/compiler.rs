@@ -44,6 +44,8 @@ use cranelift_native;
 use std::collections::HashMap;
 
 mod common;
+pub(crate) mod direct;
+mod direct_input;
 mod register_liveness;
 use common::CompiledCodeParts;
 use common::F32_KIND;
