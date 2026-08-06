@@ -43,6 +43,7 @@
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
 
+    (local.set $stable0 (i32.const 40))
     (call $compile)
 
     (drop (local.get $stable0))
@@ -61,7 +62,9 @@
       (local.set $iteration (i32.add (local.get $iteration) (i32.const 1)))
       (br_if $loop (i32.lt_u (local.get $iteration) (i32.const 3))))
 
-    (global.get $iterations))
+    (i32.add
+      (global.get $iterations)
+      (local.get $stable0)))
 
   ;; Keep the established large-local fixture shape while covering both interpreter-adapter and
   ;; direct native entry.
