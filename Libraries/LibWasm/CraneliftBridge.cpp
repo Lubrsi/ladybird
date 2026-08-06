@@ -1667,6 +1667,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     __builtin_memcpy(base + layout_offset, &layout, sizeof(layout));
 
+    dbgln("Cranelift: submitting batch of {} functions ({} instructions)", function_count, total_insn_count);
     auto output_buffer = TRY([&]() -> ErrorOr<Core::AnonymousBuffer> {
         if (auto& callback = cranelift_compile_callback()) {
             auto output = callback(buffer);
@@ -1674,8 +1675,13 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         }
         return compile_cranelift_buffer(buffer);
     }());
+    if (getenv("LADYBIRD_CRANELIFT_SIMULATE_SLOW_COMPILATION")) {
+        dbgln("Cranelift: simulating 3 seconds of compilation latency");
+        (void)Core::System::sleep_ms(3'000);
+    }
     if (!output_buffer.is_valid() || output_buffer.size() < sizeof(OutputHeader))
         return Error::from_string_literal("Failed to compile a WebAssembly module");
+    dbgln("Cranelift: received batch of {} functions ({} instructions)", function_count, total_insn_count);
 
     // Extract results for each function.
     auto const* output_base = output_buffer.data<u8>();

@@ -20,6 +20,7 @@
 #include <LibCore/MappedFile.h>
 #include <LibCrypto/BigInt/SignedBigInteger.h>
 #include <LibFileSystem/FileSystem.h>
+#include <LibGC/Root.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/BigInt.h>
 #include <LibJS/Runtime/NativeFunction.h>
@@ -352,10 +353,10 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Vector<StringView> wasi_preopened_mappings;
     HashMap<Wasm::Linker::Name, Wasm::ExternValue> js_exports;
 
-    IGNORE_USE_IN_ESCAPING_LAMBDA Wasm::AbstractMachine machine;
     auto vm = JS::VM::create();
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
+    IGNORE_USE_IN_ESCAPING_LAMBDA Wasm::AbstractMachine machine;
     IGNORE_USE_IN_ESCAPING_LAMBDA Wasm::ModuleInstance* reentry_instance = nullptr;
 
     Core::ArgsParser parser;
@@ -486,9 +487,72 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             for (auto& arg : formal_params)
                 params.append(Wasm::ValueType(arg.type));
 
+            auto reentry_this = GC::make_root(JS::Object::create(realm, realm.intrinsics().object_prototype()));
+            auto invoke = JS::NativeFunction::create(
+                realm, [&machine, &reentry_instance](JS::VM& vm) -> JS::ThrowCompletionOr<JS::Value> {
+                    if (!reentry_instance)
+                        return vm.throw_completion<JS::TypeError>("wasm reentry: instance not ready yet"_utf16);
+                    auto export_name = TRY(vm.argument(0).to_utf16_string(vm)).to_byte_string();
+                    Optional<Wasm::FunctionAddress> address;
+                    for (auto& entry : reentry_instance->exports()) {
+                        if (entry.name() == export_name) {
+                            if (auto* addr = entry.value().get_pointer<Wasm::FunctionAddress>())
+                                address = *addr;
+                        }
+                    }
+                    if (!address.has_value())
+                        return vm.throw_completion<JS::TypeError>(Utf16String::formatted("wasm reentry: no exported function '{}'"sv, export_name));
+                    auto* callee = machine.store().get(*address);
+                    if (!callee || !callee->has<Wasm::WasmFunction>())
+                        return vm.throw_completion<JS::TypeError>("wasm reentry: target is not a wasm function"_utf16);
+                    auto const& type = callee->get<Wasm::WasmFunction>().type();
+                    Vector<Wasm::Value> wasm_args;
+                    for (size_t i = 0; i < type.parameters().size(); ++i) {
+                        auto value = vm.argument(i + 1);
+                        switch (type.parameters()[i].kind()) {
+                        case Wasm::ValueType::I32:
+                            wasm_args.append(Wasm::Value(TRY(value.to_u32(vm))));
+                            break;
+                        case Wasm::ValueType::I64:
+                            wasm_args.append(Wasm::Value(TRY(value.to_bigint_uint64(vm))));
+                            break;
+                        case Wasm::ValueType::F32:
+                            wasm_args.append(Wasm::Value(static_cast<f32>(TRY(value.to_double(vm)))));
+                            break;
+                        case Wasm::ValueType::F64:
+                            wasm_args.append(Wasm::Value(TRY(value.to_double(vm))));
+                            break;
+                        default:
+                            return vm.throw_completion<JS::TypeError>("wasm reentry: unsupported parameter type"_utf16);
+                        }
+                    }
+                    auto result = machine.invoke(g_interpreter, *address, move(wasm_args));
+                    if (result.is_trap())
+                        return vm.throw_completion<JS::TypeError>(Utf16String::formatted("wasm reentry trapped: {}"sv, result.trap().format()));
+                    if (result.values().is_empty() || type.results().is_empty())
+                        return JS::js_undefined();
+                    if (type.results().size() > 1)
+                        return vm.throw_completion<JS::TypeError>("wasm reentry: multi-value results are not yet supported"_utf16);
+                    auto const& returned = result.values().first();
+                    switch (type.results()[0].kind()) {
+                    case Wasm::ValueType::I32:
+                        return JS::Value(returned.to<i32>());
+                    case Wasm::ValueType::I64:
+                        return JS::Value(static_cast<double>(returned.to<i64>()));
+                    case Wasm::ValueType::F32:
+                        return JS::Value(static_cast<double>(returned.to<f32>()));
+                    case Wasm::ValueType::F64:
+                        return JS::Value(returned.to<f64>());
+                    default:
+                        return JS::js_undefined();
+                    }
+                },
+                1, "invoke"_utf16);
+            reentry_this->define_direct_property("invoke"_utf16, invoke, JS::default_attributes);
+
             Wasm::FunctionType function_type = { move(params), move(results) };
             auto host_function = Wasm::HostFunction {
-                [&vm, &function, &machine, &realm, &reentry_instance, formal_params, returns, name](Wasm::Configuration&, Span<Wasm::Value> args) mutable -> Wasm::Result {
+                [&vm, &function, reentry_this, formal_params, returns, name](Wasm::Configuration&, Span<Wasm::Value> args) mutable -> Wasm::Result {
                     Vector<JS::Value> js_args;
                     js_args.ensure_capacity(args.size());
                     for (size_t i = 0; i < formal_params.size(); ++i) {
@@ -522,69 +586,6 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                             return Wasm::Trap { ByteString("Unsupported argument type") };
                         }
                     }
-                    auto reentry_this = JS::Object::create(realm, realm.intrinsics().object_prototype());
-                    auto invoke = JS::NativeFunction::create(
-                        realm, [&machine, &reentry_instance](JS::VM& vm) -> JS::ThrowCompletionOr<JS::Value> {
-                            if (!reentry_instance)
-                                return vm.throw_completion<JS::TypeError>("wasm reentry: instance not ready yet"_utf16);
-                            auto export_name = TRY(vm.argument(0).to_utf16_string(vm)).to_byte_string();
-                            Optional<Wasm::FunctionAddress> address;
-                            for (auto& entry : reentry_instance->exports()) {
-                                if (entry.name() == export_name) {
-                                    if (auto* addr = entry.value().get_pointer<Wasm::FunctionAddress>())
-                                        address = *addr;
-                                }
-                            }
-                            if (!address.has_value())
-                                return vm.throw_completion<JS::TypeError>(Utf16String::formatted("wasm reentry: no exported function '{}'"sv, export_name));
-                            auto* callee = machine.store().get(*address);
-                            if (!callee || !callee->has<Wasm::WasmFunction>())
-                                return vm.throw_completion<JS::TypeError>("wasm reentry: target is not a wasm function"_utf16);
-                            auto const& type = callee->get<Wasm::WasmFunction>().type();
-                            Vector<Wasm::Value> wasm_args;
-                            for (size_t i = 0; i < type.parameters().size(); ++i) {
-                                auto value = vm.argument(i + 1);
-                                switch (type.parameters()[i].kind()) {
-                                case Wasm::ValueType::I32:
-                                    wasm_args.append(Wasm::Value(TRY(value.to_u32(vm))));
-                                    break;
-                                case Wasm::ValueType::I64:
-                                    wasm_args.append(Wasm::Value(TRY(value.to_bigint_uint64(vm))));
-                                    break;
-                                case Wasm::ValueType::F32:
-                                    wasm_args.append(Wasm::Value(static_cast<f32>(TRY(value.to_double(vm)))));
-                                    break;
-                                case Wasm::ValueType::F64:
-                                    wasm_args.append(Wasm::Value(TRY(value.to_double(vm))));
-                                    break;
-                                default:
-                                    return vm.throw_completion<JS::TypeError>("wasm reentry: unsupported parameter type"_utf16);
-                                }
-                            }
-                            auto result = machine.invoke(g_interpreter, *address, move(wasm_args));
-                            if (result.is_trap())
-                                return vm.throw_completion<JS::TypeError>(Utf16String::formatted("wasm reentry trapped: {}"sv, result.trap().format()));
-                            if (result.values().is_empty() || type.results().is_empty())
-                                return JS::js_undefined();
-                            if (type.results().size() > 1)
-                                return vm.throw_completion<JS::TypeError>("wasm reentry: multi-value results are not yet supported"_utf16);
-                            auto const& returned = result.values().first();
-                            switch (type.results()[0].kind()) {
-                            case Wasm::ValueType::I32:
-                                return JS::Value(returned.to<i32>());
-                            case Wasm::ValueType::I64:
-                                return JS::Value(static_cast<double>(returned.to<i64>()));
-                            case Wasm::ValueType::F32:
-                                return JS::Value(static_cast<double>(returned.to<f32>()));
-                            case Wasm::ValueType::F64:
-                                return JS::Value(returned.to<f64>());
-                            default:
-                                return JS::js_undefined();
-                            }
-                        },
-                        1, "invoke"_utf16);
-                    reentry_this->define_direct_property("invoke"_utf16, invoke, JS::default_attributes);
-
                     auto result = TRY(trap_for_js_exception(vm, JS::call(vm, function, reentry_this, js_args.span())));
                     if (returns.is_empty())
                         return Wasm::Result { Vector<Wasm::Value> {} };

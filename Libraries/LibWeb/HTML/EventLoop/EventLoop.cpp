@@ -34,9 +34,21 @@
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/Timer.h>
 
+#if defined(AK_OS_MACOS)
+#    include <os/signpost.h>
+#endif
+
 namespace Web::HTML {
 
 GC_DEFINE_ALLOCATOR(EventLoop);
+
+#if defined(AK_OS_MACOS)
+static os_log_t visual_frame_signpost_log()
+{
+    static auto log = os_log_create("org.ladybird.WebContent", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
+    return log;
+}
+#endif
 
 EventLoop::EventLoop(Type type)
     : m_type(type)
@@ -321,6 +333,14 @@ void EventLoop::update_the_rendering()
     ScopeGuard const guard = [this] {
         m_running_rendering_task = false;
     };
+
+#if defined(AK_OS_MACOS)
+    auto signpost_log = visual_frame_signpost_log();
+    os_signpost_animation_interval_begin(signpost_log, OS_SIGNPOST_ID_EXCLUSIVE, "WebContent Visual Frame");
+    ScopeGuard const signpost_guard = [signpost_log] {
+        os_signpost_interval_end(signpost_log, OS_SIGNPOST_ID_EXCLUSIVE, "WebContent Visual Frame");
+    };
+#endif
 
     process_input_events();
 
