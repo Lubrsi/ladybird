@@ -25,7 +25,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (CMAKE_SYSTEM_PROCESSOR MATCHES "^
 endif()
 
 if (ENABLE_CRANELIFT_JIT)
-    list(APPEND SOURCES CraneliftBridge.cpp)
+    list(APPEND SOURCES CraneliftBridge.cpp CraneliftDirectInput.cpp)
     build_rust_binary(
         MANIFEST_PATH Rust/Cargo.toml
         CRATE_NAME libwasm_cranelift

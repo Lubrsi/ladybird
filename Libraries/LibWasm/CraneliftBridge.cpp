@@ -22,6 +22,7 @@
 #include <LibFileSystem/FileSystem.h>
 #include <LibWasm/AbstractMachine/BytecodeInterpreter.h>
 #include <LibWasm/AbstractMachine/Configuration.h>
+#include <LibWasm/CraneliftDirectInput.h>
 #include <LibWasm/Printer/Printer.h>
 #include <LibWasm/Types.h>
 #include <errno.h>
@@ -50,6 +51,7 @@ extern "C" [[noreturn]] void wasm_cl_raise_trap();
 namespace {
 
 struct InputHeader {
+    u32 format_version;
     u32 function_count;
     u32 function_type_count;
     u32 function_types_offset;
@@ -59,8 +61,15 @@ struct InputHeader {
 };
 
 struct InputFunctionEntry {
+    u32 frontend;
     u32 insn_offset;
     u32 insn_count;
+    u32 direct_insn_offset;
+    u32 direct_insn_count;
+    u32 direct_branch_targets_offset;
+    u32 direct_branch_target_count;
+    u32 direct_locals_offset;
+    u32 direct_local_count;
     u32 result_arity;
     u32 num_locals;
     u32 locals_offset;
@@ -76,8 +85,8 @@ struct InputFunctionTypeEntry {
     u32 result_count;
 };
 
-static_assert(sizeof(InputHeader) == 32);
-static_assert(sizeof(InputFunctionEntry) == 32);
+static_assert(sizeof(InputHeader) == 40);
+static_assert(sizeof(InputFunctionEntry) == 60);
 static_assert(sizeof(InputFunctionTypeEntry) == 16);
 
 struct OutputHeader {
@@ -202,6 +211,7 @@ static ErrorOr<size_t> compute_output_buffer_size(size_t function_count, size_t 
 
 struct BatchInput {
     Vector<CraneliftInsn> insns;
+    Optional<DirectCompilerInput> direct_input;
     u32 result_arity;
     u32 function_index;
     CompiledInstructions* target;
@@ -1372,6 +1382,8 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         return Error::from_string_literal("Cranelift input header is truncated");
 
     auto header = TRY(read_cranelift_input<InputHeader>(input, 0));
+    if (header.format_version != CRANELIFT_COMPILER_INPUT_FORMAT_VERSION)
+        return Error::from_string_literal("Unsupported Cranelift compiler input format");
     if (header.total_size != input.size())
         return Error::from_string_literal("Cranelift input size does not match its header");
 
@@ -1397,6 +1409,9 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         return Error::from_string_literal("Cranelift function type entries are not canonical");
 
     size_t instruction_count = 0;
+    size_t direct_instruction_count = 0;
+    size_t direct_branch_target_count = 0;
+    size_t direct_local_count = 0;
     size_t locals_size = 0;
     size_t function_type_values_size = 0;
     for (size_t i = 0; i < header.function_count; ++i) {
@@ -1406,6 +1421,24 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         if (new_instruction_count.has_overflow())
             return Error::from_string_literal("Cranelift instruction count overflow");
         instruction_count = new_instruction_count.value();
+
+        Checked<size_t> new_direct_instruction_count = direct_instruction_count;
+        new_direct_instruction_count += entry.direct_insn_count;
+        if (new_direct_instruction_count.has_overflow())
+            return Error::from_string_literal("Cranelift direct instruction count overflow");
+        direct_instruction_count = new_direct_instruction_count.value();
+
+        Checked<size_t> new_direct_branch_target_count = direct_branch_target_count;
+        new_direct_branch_target_count += entry.direct_branch_target_count;
+        if (new_direct_branch_target_count.has_overflow())
+            return Error::from_string_literal("Cranelift direct branch target count overflow");
+        direct_branch_target_count = new_direct_branch_target_count.value();
+
+        Checked<size_t> new_direct_local_count = direct_local_count;
+        new_direct_local_count += entry.direct_local_count;
+        if (new_direct_local_count.has_overflow())
+            return Error::from_string_literal("Cranelift direct local count overflow");
+        direct_local_count = new_direct_local_count.value();
 
         Checked<size_t> new_locals_size = locals_size;
         new_locals_size += entry.num_locals;
@@ -1430,8 +1463,41 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     if (insn_region_size.has_overflow())
         return Error::from_string_literal("Cranelift instruction region is too large");
 
-    Checked<size_t> locals_region_offset = insn_region_offset;
-    locals_region_offset += insn_region_size.value();
+    Checked<size_t> direct_insn_region_offset = insn_region_offset;
+    direct_insn_region_offset += insn_region_size.value();
+    if (direct_insn_region_offset.has_overflow())
+        return Error::from_string_literal("Cranelift direct instruction region offset overflow");
+    auto aligned_direct_insn_region_offset = align_up(direct_insn_region_offset.value(), alignof(DirectInstruction));
+
+    Checked<size_t> direct_insn_region_size = direct_instruction_count;
+    direct_insn_region_size *= sizeof(DirectInstruction);
+    if (direct_insn_region_size.has_overflow())
+        return Error::from_string_literal("Cranelift direct instruction region is too large");
+
+    Checked<size_t> direct_branch_targets_offset = aligned_direct_insn_region_offset;
+    direct_branch_targets_offset += direct_insn_region_size.value();
+    if (direct_branch_targets_offset.has_overflow())
+        return Error::from_string_literal("Cranelift direct branch target region offset overflow");
+    auto aligned_direct_branch_targets_offset = align_up(direct_branch_targets_offset.value(), alignof(u32));
+
+    Checked<size_t> direct_branch_targets_size = direct_branch_target_count;
+    direct_branch_targets_size *= sizeof(u32);
+    if (direct_branch_targets_size.has_overflow())
+        return Error::from_string_literal("Cranelift direct branch target region is too large");
+
+    Checked<size_t> direct_locals_offset = aligned_direct_branch_targets_offset;
+    direct_locals_offset += direct_branch_targets_size.value();
+    if (direct_locals_offset.has_overflow())
+        return Error::from_string_literal("Cranelift direct locals region offset overflow");
+    auto aligned_direct_locals_offset = align_up(direct_locals_offset.value(), alignof(DirectValueType));
+
+    Checked<size_t> direct_locals_size = direct_local_count;
+    direct_locals_size *= sizeof(DirectValueType);
+    if (direct_locals_size.has_overflow())
+        return Error::from_string_literal("Cranelift direct locals region is too large");
+
+    Checked<size_t> locals_region_offset = aligned_direct_locals_offset;
+    locals_region_offset += direct_locals_size.value();
     if (locals_region_offset.has_overflow())
         return Error::from_string_literal("Cranelift locals region offset overflow");
 
@@ -1452,13 +1518,27 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         return Error::from_string_literal("Cranelift input regions are not canonical");
 
     size_t insn_cursor = insn_region_offset;
+    size_t direct_insn_cursor = aligned_direct_insn_region_offset;
+    size_t direct_branch_targets_cursor = aligned_direct_branch_targets_offset;
+    size_t direct_locals_cursor = aligned_direct_locals_offset;
     size_t locals_cursor = locals_region_offset.value();
     for (size_t i = 0; i < header.function_count; ++i) {
         auto entry = TRY(read_cranelift_input<InputFunctionEntry>(input, sizeof(InputHeader) + i * sizeof(InputFunctionEntry)));
         if (entry.insn_offset != insn_cursor || entry.locals_offset != locals_cursor)
             return Error::from_string_literal("Cranelift input regions are not canonical");
 
+        if ((entry.direct_insn_count == 0 && entry.direct_insn_offset != 0)
+            || (entry.direct_insn_count != 0 && entry.direct_insn_offset != direct_insn_cursor)
+            || (entry.direct_branch_target_count == 0 && entry.direct_branch_targets_offset != 0)
+            || (entry.direct_branch_target_count != 0 && entry.direct_branch_targets_offset != direct_branch_targets_cursor)
+            || (entry.direct_local_count == 0 && entry.direct_locals_offset != 0)
+            || (entry.direct_local_count != 0 && entry.direct_locals_offset != direct_locals_cursor))
+            return Error::from_string_literal("Cranelift direct input regions are not canonical");
+
         insn_cursor += static_cast<size_t>(entry.insn_count) * sizeof(CraneliftInsn);
+        direct_insn_cursor += static_cast<size_t>(entry.direct_insn_count) * sizeof(DirectInstruction);
+        direct_branch_targets_cursor += static_cast<size_t>(entry.direct_branch_target_count) * sizeof(u32);
+        direct_locals_cursor += static_cast<size_t>(entry.direct_local_count) * sizeof(DirectValueType);
         locals_cursor += entry.num_locals;
     }
 
@@ -1594,10 +1674,18 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     auto const function_types_size = sizeof(InputFunctionTypeEntry) * function_types.size();
 
     size_t total_insn_count = 0;
+    size_t total_direct_insn_count = 0;
+    size_t total_direct_branch_target_count = 0;
+    size_t total_direct_local_count = 0;
     size_t total_locals_bytes = 0;
     size_t total_function_type_bytes = 0;
     for (auto const& entry : batch) {
         total_insn_count += entry.insns.size();
+        if (entry.direct_input.has_value()) {
+            total_direct_insn_count += entry.direct_input->instructions.size();
+            total_direct_branch_target_count += entry.direct_input->branch_targets.size();
+            total_direct_local_count += entry.direct_input->local_types.size();
+        }
         total_locals_bytes += entry.num_locals;
     }
     for (auto const* function_type : function_types)
@@ -1605,7 +1693,13 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     auto const insn_region_offset = align_up(function_types_offset + function_types_size, alignof(CraneliftInsn));
     auto const insn_bytes = total_insn_count * sizeof(CraneliftInsn);
-    auto const locals_region_offset = insn_region_offset + insn_bytes;                  // u8, no alignment needed
+    auto const direct_insn_region_offset = align_up(insn_region_offset + insn_bytes, alignof(DirectInstruction));
+    auto const direct_insn_bytes = total_direct_insn_count * sizeof(DirectInstruction);
+    auto const direct_branch_targets_offset = align_up(direct_insn_region_offset + direct_insn_bytes, alignof(u32));
+    auto const direct_branch_targets_bytes = total_direct_branch_target_count * sizeof(u32);
+    auto const direct_locals_offset = align_up(direct_branch_targets_offset + direct_branch_targets_bytes, alignof(DirectValueType));
+    auto const direct_locals_bytes = total_direct_local_count * sizeof(DirectValueType);
+    auto const locals_region_offset = direct_locals_offset + direct_locals_bytes;       // u8, no alignment needed
     auto const function_type_values_offset = locals_region_offset + total_locals_bytes; // u8, no alignment needed
     auto const layout_offset = align_up(function_type_values_offset + total_function_type_bytes, alignof(RuntimeLayout));
     auto const total_size = layout_offset + sizeof(RuntimeLayout);
@@ -1617,6 +1711,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     auto* header = reinterpret_cast<InputHeader*>(base);
     *header = InputHeader {
+        .format_version = CRANELIFT_COMPILER_INPUT_FORMAT_VERSION,
         .function_count = static_cast<u32>(function_count),
         .function_type_count = static_cast<u32>(function_types.size()),
         .function_types_offset = static_cast<u32>(function_types_offset),
@@ -1626,13 +1721,49 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     };
 
     size_t insn_cursor = insn_region_offset;
+    size_t direct_insn_cursor = direct_insn_region_offset;
+    size_t direct_branch_targets_cursor = direct_branch_targets_offset;
+    size_t direct_locals_cursor = direct_locals_offset;
     size_t locals_cursor = locals_region_offset;
     for (size_t i = 0; i < function_count; ++i) {
         auto const& input = batch[i];
+        u32 function_direct_insn_offset = 0;
+        u32 function_direct_insn_count = 0;
+        u32 function_direct_branch_targets_offset = 0;
+        u32 function_direct_branch_target_count = 0;
+        u32 function_direct_locals_offset = 0;
+        u32 function_direct_local_count = 0;
+        if (input.direct_input.has_value()) {
+            auto const& direct_input = input.direct_input.value();
+            function_direct_insn_offset = static_cast<u32>(direct_insn_cursor);
+            function_direct_insn_count = static_cast<u32>(direct_input.instructions.size());
+            function_direct_branch_targets_offset = static_cast<u32>(direct_branch_targets_cursor);
+            function_direct_branch_target_count = static_cast<u32>(direct_input.branch_targets.size());
+            function_direct_locals_offset = static_cast<u32>(direct_locals_cursor);
+            function_direct_local_count = static_cast<u32>(direct_input.local_types.size());
+
+            if (!direct_input.instructions.is_empty())
+                __builtin_memcpy(base + direct_insn_cursor, direct_input.instructions.data(), direct_input.instructions.size() * sizeof(DirectInstruction));
+            direct_insn_cursor += direct_input.instructions.size() * sizeof(DirectInstruction);
+            if (!direct_input.branch_targets.is_empty())
+                __builtin_memcpy(base + direct_branch_targets_cursor, direct_input.branch_targets.data(), direct_input.branch_targets.size() * sizeof(u32));
+            direct_branch_targets_cursor += direct_input.branch_targets.size() * sizeof(u32);
+            if (!direct_input.local_types.is_empty())
+                __builtin_memcpy(base + direct_locals_cursor, direct_input.local_types.data(), direct_input.local_types.size() * sizeof(DirectValueType));
+            direct_locals_cursor += direct_input.local_types.size() * sizeof(DirectValueType);
+        }
+
         auto* entry = reinterpret_cast<InputFunctionEntry*>(base + entries_offset + i * sizeof(InputFunctionEntry));
         *entry = InputFunctionEntry {
+            .frontend = static_cast<u32>(CraneliftFrontend::AllocatedBytecode),
             .insn_offset = static_cast<u32>(insn_cursor),
             .insn_count = static_cast<u32>(input.insns.size()),
+            .direct_insn_offset = function_direct_insn_offset,
+            .direct_insn_count = function_direct_insn_count,
+            .direct_branch_targets_offset = function_direct_branch_targets_offset,
+            .direct_branch_target_count = function_direct_branch_target_count,
+            .direct_locals_offset = function_direct_locals_offset,
+            .direct_local_count = function_direct_local_count,
             .result_arity = input.result_arity,
             .num_locals = input.num_locals,
             .locals_offset = static_cast<u32>(locals_cursor),
@@ -1774,13 +1905,14 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     return {};
 }
 
-bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
+bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
 {
 #if !WASM_COMPILED_FAULT_RECOVERY_SUPPORTED
-    (void)compiled;
+    (void)function;
     (void)result_arity;
     return false;
 #else
+    auto& compiled = function.body().compiled_instructions;
     auto const& dispatches = compiled.dispatches;
     auto const& addresses = compiled.src_dst_mappings;
 
@@ -1942,7 +2074,16 @@ bool try_cranelift_compile(CompiledInstructions& compiled, u32 result_arity)
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
     VERIFY(indirect_call_index == compiled.cranelift_indirect_calls.size());
 
-    cranelift_cache_state().pending_batch.append({ move(flat), result_arity, s_active_function_index, &compiled, compiled.cranelift_local_count, compiled.cranelift_param_count });
+    auto direct_input = serialize_direct_compiler_input(function);
+    cranelift_cache_state().pending_batch.append({
+        move(flat),
+        move(direct_input),
+        result_arity,
+        s_active_function_index,
+        &compiled,
+        compiled.cranelift_local_count,
+        compiled.cranelift_param_count,
+    });
     return false; // Not compiled yet, will be compiled in flush.
 #endif
 }

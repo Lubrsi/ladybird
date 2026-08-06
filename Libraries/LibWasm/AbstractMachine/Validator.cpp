@@ -247,10 +247,11 @@ void compile_module_to_native(Module& module)
 
     size_t function_index = imported_function_count;
     for (auto& entry : module.code_section().functions()) {
-        auto& compiled = entry.func().body().compiled_instructions;
+        auto& function = entry.func();
+        auto& compiled = function.body().compiled_instructions;
         set_cranelift_active_function_index(static_cast<u32>(function_index++));
         if (compiled.cranelift_eligible)
-            try_cranelift_compile(compiled, compiled.cranelift_result_arity);
+            try_cranelift_compile(function, compiled.cranelift_result_arity);
     }
 }
 
