@@ -15,6 +15,18 @@ usize_is_size_t = true
 
 [export]
 include = [
+    "CRANELIFT_COMPILER_INPUT_FORMAT_VERSION",
+    "CraneliftFrontend",
+    "DirectBlockTypeKind",
+    "DirectValueTypeKind",
+    "DirectValueType",
+    "DirectBlockType",
+    "DirectStructuredInstructionArguments",
+    "DirectTableBranchInstructionArguments",
+    "DirectIndirectCallInstructionArguments",
+    "DirectMemoryInstructionArguments",
+    "DirectInstructionArguments",
+    "DirectInstruction",
     "CraneliftInsn",
     "RuntimeLayout",
     "CraneliftRelocation",

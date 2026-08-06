@@ -9,7 +9,7 @@
 
 namespace Wasm {
 
-bool try_cranelift_compile(CompiledInstructions&, u32) { return false; }
+bool try_cranelift_compile(CodeSection::Func const&, u32) { return false; }
 void flush_cranelift_batch(Module const&) { }
 void discard_cranelift_batch() { }
 void free_cranelift_code(void*) { }

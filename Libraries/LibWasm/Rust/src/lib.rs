@@ -9,6 +9,125 @@ pub mod serialized;
 
 use compiler::CraneliftCompiler;
 
+pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 1;
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraneliftFrontend {
+    AllocatedBytecode = 0,
+    Direct = 1,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectBlockTypeKind {
+    Empty = 0,
+    ValueType = 1,
+    TypeIndex = 2,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectValueTypeKind {
+    I32 = 0,
+    I64 = 1,
+    F32 = 2,
+    F64 = 3,
+    V128 = 4,
+    I8 = 5,
+    I16 = 6,
+    FunctionReference = 7,
+    NoFunctionReference = 8,
+    ExternReference = 9,
+    NoExternReference = 10,
+    AnyReference = 11,
+    EqReference = 12,
+    I31Reference = 13,
+    StructReference = 14,
+    ArrayReference = 15,
+    NoneReference = 16,
+    ExceptionReference = 17,
+    NoExceptionReference = 18,
+    TypeUseReference = 19,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectValueType {
+    pub kind: DirectValueTypeKind,
+    pub type_index: u32,
+    pub nullable: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectBlockType {
+    pub kind: DirectBlockTypeKind,
+    pub value_type: DirectValueType,
+    pub type_index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectStructuredInstructionArguments {
+    pub block_type: DirectBlockType,
+    pub end_ip: u32,
+    pub else_ip: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectTableBranchInstructionArguments {
+    pub targets_offset: u32,
+    pub target_count: u32,
+    pub default_target: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectIndirectCallInstructionArguments {
+    pub type_index: u32,
+    pub table_index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectMemoryInstructionArguments {
+    pub align: u32,
+    pub memory_index: u32,
+    pub offset: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union DirectInstructionArguments {
+    pub i32_constant: i32,
+    pub i64_constant: i64,
+    pub f32_constant: f32,
+    pub f64_constant: f64,
+    pub local_index: u32,
+    pub global_index: u32,
+    pub function_index: u32,
+    pub type_index: u32,
+    pub table_index: u32,
+    pub tag_index: u32,
+    pub data_index: u32,
+    pub element_index: u32,
+    pub label_index: u32,
+    pub structured: DirectStructuredInstructionArguments,
+    pub table_branch: DirectTableBranchInstructionArguments,
+    pub indirect_call: DirectIndirectCallInstructionArguments,
+    pub memory: DirectMemoryInstructionArguments,
+    pub vector_constant: [u64; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DirectInstruction {
+    pub opcode: u64,
+    pub arguments: DirectInstructionArguments,
+}
+
 /// Immediates:
 ///   constants:    imm1 = value (i32 sign-extended, i64, or f32/f64 bits)
 ///   local ops:    imm1 = local index
