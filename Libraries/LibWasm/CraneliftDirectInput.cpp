@@ -58,7 +58,7 @@ static Cranelift::DirectValueType serialize_value_type(ValueType const& type)
     }();
 
     return {
-        .kind = kind,
+        .kind = static_cast<u32>(kind),
         .type_index = type.is_typeuse() ? type.unsafe_typeindex().value() : 0,
         .nullable = type.is_nullable() ? 1u : 0u,
     };
@@ -69,19 +69,19 @@ static Cranelift::DirectBlockType serialize_block_type(BlockType const& block_ty
     switch (block_type.kind()) {
     case BlockType::Empty:
         return {
-            .kind = Cranelift::DirectBlockTypeKind::Empty,
+            .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::Empty),
             .value_type = serialize_value_type(ValueType { ValueType::I32 }),
             .type_index = 0,
         };
     case BlockType::Type:
         return {
-            .kind = Cranelift::DirectBlockTypeKind::ValueType,
+            .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::ValueType),
             .value_type = serialize_value_type(block_type.value_type()),
             .type_index = 0,
         };
     case BlockType::Index:
         return {
-            .kind = Cranelift::DirectBlockTypeKind::TypeIndex,
+            .kind = static_cast<u32>(Cranelift::DirectBlockTypeKind::TypeIndex),
             .value_type = serialize_value_type(ValueType { ValueType::I32 }),
             .type_index = block_type.type_index().value(),
         };
