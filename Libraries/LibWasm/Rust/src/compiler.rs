@@ -6,21 +6,14 @@
 
 use crate::CompiledFunction;
 use crate::CraneliftInsn;
-use crate::CraneliftRelocation;
-use crate::CraneliftRelocationKind;
 use crate::CraneliftRelocationTargetKind;
-use crate::CraneliftTrap;
 use crate::CraneliftUserTrapCode;
 use crate::FunctionCompilationOptions;
 use crate::HelperId;
-use crate::RuntimeLayout;
+use crate::RuntimeLayout as SerializedRuntimeLayout;
 use crate::WasmFunctionType;
 
-use cranelift_codegen::Context;
-use cranelift_codegen::FinalizedRelocTarget;
-use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::AbiParam;
-use cranelift_codegen::ir::AliasRegionData;
 use cranelift_codegen::ir::Block;
 use cranelift_codegen::ir::BlockArg;
 use cranelift_codegen::ir::ExtFuncData;
@@ -31,7 +24,6 @@ use cranelift_codegen::ir::InstBuilder;
 use cranelift_codegen::ir::MemFlagsData as MemFlags;
 use cranelift_codegen::ir::SigRef;
 use cranelift_codegen::ir::Signature;
-use cranelift_codegen::ir::TrapCode;
 use cranelift_codegen::ir::Type;
 use cranelift_codegen::ir::UserExternalName;
 use cranelift_codegen::ir::UserFuncName;
@@ -51,7 +43,23 @@ use cranelift_frontend::Variable;
 use cranelift_native;
 use std::collections::HashMap;
 
+mod common;
 mod register_liveness;
+use common::CompiledCodeParts;
+use common::F32_KIND;
+use common::F64_KIND;
+use common::HELPER_EXTERNAL_NAMESPACE;
+use common::I32_KIND;
+use common::I64_KIND;
+use common::LegacyImportedHelpers;
+use common::RuntimeLayout;
+use common::WASM_FUNCTION_EXTERNAL_NAMESPACE;
+use common::WasmMemoryFlags;
+use common::compile_function;
+use common::payload_to_value;
+use common::user_trap_code;
+use common::value_to_payload;
+use common::wasm_abi_type;
 use register_liveness::RegisterLiveness;
 use register_liveness::RegisterSet;
 
@@ -64,67 +72,9 @@ mod op {
 const REG_COUNT: usize = 8;
 const STACK_MARKER: u8 = 8;
 const CALLREC_BASE: u8 = 9;
-const HELPER_EXTERNAL_NAMESPACE: u32 = 0;
-const WASM_FUNCTION_EXTERNAL_NAMESPACE: u32 = 1;
-const I32_KIND: u8 = 0;
-const I64_KIND: u8 = 1;
-const F32_KIND: u8 = 2;
-const F64_KIND: u8 = 3;
-const NO_FALLBACK_OFFSET: u32 = u32::MAX;
 const INDIRECT_CALL_RESULT_TYPE_SHIFT: u32 = 16;
 const INDIRECT_CALL_TABLE64: u32 = 1 << 18;
 const INDIRECT_CALL_TYPE_VALID: u32 = 1 << 19;
-
-struct CompiledCodeParts {
-    code: Vec<u8>,
-    relocs: Vec<CraneliftRelocation>,
-    traps: Vec<CraneliftTrap>,
-}
-
-#[derive(Clone, Copy)]
-struct WasmMemoryFlags {
-    activation: MemFlags,
-    configuration: MemFlags,
-    globals: MemFlags,
-    linear_memory: MemFlags,
-    readonly_runtime_metadata: MemFlags,
-    runtime_metadata: MemFlags,
-    tables: MemFlags,
-}
-
-impl WasmMemoryFlags {
-    fn new(function: &mut Function) -> Self {
-        // Regions describe disjoint runtime storage, not module indices. Keep all memories,
-        // tables, and globals in broad regions because imported instances may be aliased.
-        let mut insert_region = |user_id, description: &'static str| {
-            function.dfg.alias_regions.insert(AliasRegionData {
-                user_id,
-                description: description.into(),
-            })
-        };
-        let activation = insert_region(0, "Wasm activation values");
-        let configuration = insert_region(1, "Wasm Configuration fields");
-        let globals = insert_region(2, "Wasm global state");
-        let linear_memory = insert_region(3, "Wasm linear memory");
-        let runtime_metadata = insert_region(4, "Wasm runtime metadata");
-        let tables = insert_region(5, "Wasm table state");
-
-        Self {
-            activation: MemFlags::trusted().with_alias_region(Some(activation)),
-            configuration: MemFlags::trusted().with_alias_region(Some(configuration)),
-            globals: MemFlags::trusted().with_alias_region(Some(globals)),
-            linear_memory: MemFlags::new().with_alias_region(Some(linear_memory)),
-            // CallableMetadata and canonical type-table entries are initialized before execution
-            // and remain immutable. Other runtime metadata includes fields published while code
-            // is running and must not use these flags.
-            readonly_runtime_metadata: MemFlags::trusted()
-                .with_alias_region(Some(runtime_metadata))
-                .with_readonly(),
-            runtime_metadata: MemFlags::trusted().with_alias_region(Some(runtime_metadata)),
-            tables: MemFlags::trusted().with_alias_region(Some(tables)),
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 struct NativeIndirectCallLayout {
@@ -238,16 +188,6 @@ impl CraneliftCompiler {
         function_type.parameters.len() <= Self::NATIVE_REGISTER_ABI_PARAMETER_LIMIT
     }
 
-    fn wasm_abi_type(kind: u8) -> Result<Type, &'static str> {
-        match kind {
-            I32_KIND => Ok(types::I32),
-            I64_KIND => Ok(types::I64),
-            F32_KIND => Ok(types::F32),
-            F64_KIND => Ok(types::F64),
-            _ => Err("unsupported native Wasm ABI type"),
-        }
-    }
-
     fn native_signature(isa: &dyn TargetIsa, function_type: WasmFunctionType<'_>) -> Result<Signature, &'static str> {
         if function_type.results.len() > 1 {
             return Err("multi-value native Wasm ABI is not supported");
@@ -259,41 +199,15 @@ impl CraneliftCompiler {
         signature.params.push(AbiParam::new(types::I32)); // interpreter resume IP plus one, or zero for native calls
         if Self::uses_register_native_abi(function_type) {
             for &parameter in function_type.parameters {
-                signature.params.push(AbiParam::new(Self::wasm_abi_type(parameter)?));
+                signature.params.push(AbiParam::new(wasm_abi_type(parameter)?));
             }
         } else {
             signature.params.push(AbiParam::new(isa.pointer_type())); // call-record locals
         }
         for &result in function_type.results {
-            signature.returns.push(AbiParam::new(Self::wasm_abi_type(result)?));
+            signature.returns.push(AbiParam::new(wasm_abi_type(result)?));
         }
         Ok(signature)
-    }
-
-    fn value_to_payload(builder: &mut FunctionBuilder<'_>, value: Value, kind: u8) -> Result<Value, &'static str> {
-        match kind {
-            I32_KIND => Ok(builder.ins().uextend(types::I64, value)),
-            I64_KIND => Ok(value),
-            F32_KIND => {
-                let bits = builder.ins().bitcast(types::I32, MemFlags::new(), value);
-                Ok(builder.ins().uextend(types::I64, bits))
-            }
-            F64_KIND => Ok(builder.ins().bitcast(types::I64, MemFlags::new(), value)),
-            _ => Err("unsupported native Wasm ABI type"),
-        }
-    }
-
-    fn payload_to_value(builder: &mut FunctionBuilder<'_>, payload: Value, kind: u8) -> Result<Value, &'static str> {
-        match kind {
-            I32_KIND => Ok(builder.ins().ireduce(types::I32, payload)),
-            I64_KIND => Ok(payload),
-            F32_KIND => {
-                let bits = builder.ins().ireduce(types::I32, payload);
-                Ok(builder.ins().bitcast(types::F32, MemFlags::new(), bits))
-            }
-            F64_KIND => Ok(builder.ins().bitcast(types::F64, MemFlags::new(), payload)),
-            _ => Err("unsupported native Wasm ABI type"),
-        }
     }
 
     fn decode_indirect_call_type(insn: &CraneliftInsn) -> Result<Option<IndirectCallType>, &'static str> {
@@ -325,10 +239,6 @@ impl CraneliftCompiler {
             parameters: parameter_types,
             results: result_types,
         }))
-    }
-
-    fn user_trap_code(code: CraneliftUserTrapCode) -> TrapCode {
-        TrapCode::unwrap_user(code as u8)
     }
 
     fn emit_native_indirect_call_target(
@@ -373,7 +283,7 @@ impl CraneliftCompiler {
             .icmp(IntCC::UnsignedLessThan, operands.element_index, table_size);
         builder
             .ins()
-            .trapz(in_bounds, Self::user_trap_code(CraneliftUserTrapCode::TableOutOfBounds));
+            .trapz(in_bounds, user_trap_code(CraneliftUserTrapCode::TableOutOfBounds));
         let callables = builder
             .ins()
             .load(ptr_type, memory_flags.tables, table, layout.table_instance_callables);
@@ -388,10 +298,9 @@ impl CraneliftCompiler {
         let callable_address = builder.ins().iadd(callables, element_offset);
         let callable = builder.ins().load(ptr_type, memory_flags.tables, callable_address, 0);
         let is_callable = builder.ins().icmp_imm_s(IntCC::NotEqual, callable, 0);
-        builder.ins().trapz(
-            is_callable,
-            Self::user_trap_code(CraneliftUserTrapCode::IndirectCallNull),
-        );
+        builder
+            .ins()
+            .trapz(is_callable, user_trap_code(CraneliftUserTrapCode::IndirectCallNull));
         let actual_type = builder.ins().load(
             ptr_type,
             memory_flags.readonly_runtime_metadata,
@@ -429,7 +338,7 @@ impl CraneliftCompiler {
         let type_mismatch = builder.inst_results(type_check_call)[0];
         builder.ins().trapnz(
             type_mismatch,
-            Self::user_trap_code(CraneliftUserTrapCode::IndirectCallTypeMismatch),
+            user_trap_code(CraneliftUserTrapCode::IndirectCallTypeMismatch),
         );
         builder.ins().jump(exact_type, &[]);
 
@@ -507,7 +416,7 @@ impl CraneliftCompiler {
             for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
                 let offset = i32::try_from(parameter_index * context.value_size as usize)
                     .map_err(|_| "call-record argument offset overflow")?;
-                let argument_type = Self::wasm_abi_type(parameter_kind)?;
+                let argument_type = wasm_abi_type(parameter_kind)?;
                 let argument =
                     builder
                         .ins()
@@ -523,7 +432,7 @@ impl CraneliftCompiler {
             return Ok(None);
         };
         let result = builder.inst_results(call)[0];
-        Ok(Some(Self::value_to_payload(builder, result, result_kind)?))
+        Ok(Some(value_to_payload(builder, result, result_kind)?))
     }
 
     fn emit_indirect_bridge_call(
@@ -650,13 +559,14 @@ impl CraneliftCompiler {
         isa: &dyn TargetIsa,
         function_index: u32,
         function_type: WasmFunctionType<'_>,
-        layout: &RuntimeLayout,
+        layout: &SerializedRuntimeLayout,
     ) -> Result<CompiledCodeParts, &'static str> {
         let ptr_type = isa.pointer_type();
         let host_cc = isa.default_call_conv();
         let signature = Self::native_signature(isa, function_type)?;
         let mut function = Function::with_name_signature(UserFuncName::user(2, function_index), signature);
         let memory_flags = WasmMemoryFlags::new(&mut function);
+        let runtime_layout = RuntimeLayout::new(layout);
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut function, &mut builder_context);
         let entry = builder.create_block();
@@ -670,15 +580,16 @@ impl CraneliftCompiler {
             ptr_type,
             memory_flags.configuration,
             configuration,
-            layout.value_stack_top_offset as i32,
+            runtime_layout.value_stack_top_offset,
         );
         let zero_tag = builder.ins().iconst(types::I64, 0);
         let uses_register_native_abi = Self::uses_register_native_abi(function_type);
         for (index, &kind) in function_type.parameters.iter().enumerate() {
-            let offset = i32::try_from(index * layout.value_size as usize).map_err(|_| "argument offset overflow")?;
+            let offset =
+                i32::try_from(index * runtime_layout.value_size as usize).map_err(|_| "argument offset overflow")?;
             let payload = if uses_register_native_abi {
                 let value = builder.block_params(entry)[3 + index];
-                Self::value_to_payload(&mut builder, value, kind)?
+                value_to_payload(&mut builder, value, kind)?
             } else {
                 let locals = builder.block_params(entry)[3];
                 builder.ins().load(types::I64, memory_flags.activation, locals, offset)
@@ -690,14 +601,14 @@ impl CraneliftCompiler {
                 .ins()
                 .store(memory_flags.activation, zero_tag, original_top, offset + 8);
         }
-        let arguments_size = i64::try_from(function_type.parameters.len() * layout.value_size as usize)
+        let arguments_size = i64::try_from(function_type.parameters.len() * runtime_layout.value_size as usize)
             .map_err(|_| "argument size overflow")?;
         let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
         builder.ins().store(
             memory_flags.configuration,
             arguments_top,
             configuration,
-            layout.value_stack_top_offset as i32,
+            runtime_layout.value_stack_top_offset,
         );
 
         let mut call_signature = Signature::new(host_cc);
@@ -746,7 +657,7 @@ impl CraneliftCompiler {
         builder.ins().call_indirect(raise_signature, raise_address, &[]);
         if let Some(&result_kind) = function_type.results.first() {
             let zero = builder.ins().iconst(types::I64, 0);
-            let zero = Self::payload_to_value(&mut builder, zero, result_kind)?;
+            let zero = payload_to_value(&mut builder, zero, result_kind)?;
             builder.ins().return_(&[zero]);
         } else {
             builder.ins().return_(&[]);
@@ -758,94 +669,18 @@ impl CraneliftCompiler {
             memory_flags.configuration,
             original_top,
             configuration,
-            layout.value_stack_top_offset as i32,
+            runtime_layout.value_stack_top_offset,
         );
         if let Some(&result_kind) = function_type.results.first() {
             let result = builder.ins().load(types::I64, memory_flags.activation, original_top, 0);
-            let result = Self::payload_to_value(&mut builder, result, result_kind)?;
+            let result = payload_to_value(&mut builder, result, result_kind)?;
             builder.ins().return_(&[result]);
         } else {
             builder.ins().return_(&[]);
         }
 
         builder.finalize(isa.frontend_config());
-        Self::compile_function(isa, function)
-    }
-
-    fn serialize_relocation(
-        kind: Reloc,
-        code_offset: u32,
-        addend: i64,
-        target: &UserExternalName,
-    ) -> Result<CraneliftRelocation, &'static str> {
-        let kind = match kind {
-            Reloc::Abs8 => CraneliftRelocationKind::Abs8,
-            Reloc::Arm64Call => CraneliftRelocationKind::Arm64Call,
-            Reloc::X86CallPCRel4 => CraneliftRelocationKind::X86CallPCRel4,
-            _ => return Err("unsupported relocation kind"),
-        };
-        let target_kind = match target.namespace {
-            HELPER_EXTERNAL_NAMESPACE => {
-                if target.index >= crate::HELPER_COUNT {
-                    return Err("relocation refers to an unknown helper id");
-                }
-                if kind != CraneliftRelocationKind::Abs8 {
-                    return Err("helper relocation is not Abs8");
-                }
-                CraneliftRelocationTargetKind::Helper
-            }
-            WASM_FUNCTION_EXTERNAL_NAMESPACE => CraneliftRelocationTargetKind::WasmFunction,
-            _ => return Err("relocation refers to an unknown target namespace"),
-        };
-        Ok(CraneliftRelocation {
-            code_offset,
-            kind,
-            target_kind,
-            target_index: target.index,
-            fallback_offset: NO_FALLBACK_OFFSET,
-            _padding: 0,
-            addend,
-        })
-    }
-
-    fn compile_function(isa: &dyn TargetIsa, function: Function) -> Result<CompiledCodeParts, &'static str> {
-        let mut context = Context::for_function(function);
-        let (code, raw_relocations, traps) = {
-            let compiled_code = context
-                .compile(isa, &mut Default::default())
-                .map_err(|_| "cranelift compilation failed")?;
-            let traps = compiled_code
-                .buffer
-                .traps()
-                .iter()
-                .map(|trap| CraneliftTrap {
-                    offset: trap.offset,
-                    code: trap.code.as_raw().get(),
-                    _padding: [0; 3],
-                })
-                .collect();
-            (
-                compiled_code.code_buffer().to_vec(),
-                compiled_code.buffer.relocs().to_vec(),
-                traps,
-            )
-        };
-        let mut relocs = Vec::with_capacity(raw_relocations.len());
-        let user_names = context.func.params.user_named_funcs();
-        for relocation in &raw_relocations {
-            let name = match &relocation.target {
-                FinalizedRelocTarget::ExternalName(ExternalName::User(user_ref)) => &user_names[*user_ref],
-                _ => return Err("unexpected relocation target"),
-            };
-            relocs.push(Self::serialize_relocation(
-                relocation.kind,
-                relocation.offset,
-                relocation.addend,
-                name,
-            )?);
-        }
-
-        Ok(CompiledCodeParts { code, relocs, traps })
+        compile_function(isa, function)
     }
 
     fn local_accesses(insn: &CraneliftInsn) -> LocalAccesses {
@@ -903,7 +738,7 @@ impl CraneliftCompiler {
 
     pub fn compile_to_bytes(
         insns: &[CraneliftInsn],
-        layout: &RuntimeLayout,
+        layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
         local_types: &[u8],
         function_types: &[WasmFunctionType<'_>],
@@ -982,8 +817,9 @@ impl CraneliftCompiler {
 
         // Load regs[0..7] from configuration. regs is at offset `regs_offset` from Configuration*.
         // Each Value is `value_size` bytes; the low 8 bytes are the i64 payload.
-        let regs_offset = layout.regs_offset as i32;
-        let value_size = layout.value_size as i32;
+        let runtime_layout = RuntimeLayout::new(layout);
+        let regs_offset = runtime_layout.regs_offset;
+        let value_size = runtime_layout.value_size;
         for (i, var) in reg_vars.iter().enumerate() {
             let offset = regs_offset + (i as i32) * value_size;
             let val = builder
@@ -997,71 +833,28 @@ impl CraneliftCompiler {
         let epilogue_block = builder.create_block();
         let trap_block = builder.create_block();
 
-        // Build helper call signatures. We import them as indirect calls via function pointers.
-        macro_rules! sig {
-            (@ty ptr) => { ptr_type };
-            (@ty i32) => { types::I32 };
-            (@ty i64) => { types::I64 };
-            (@def $name:ident : void fn($($param:ident),*)) => {
-                let $name = {
-                    let mut s = Signature::new(host_cc);
-                    $(s.params.push(AbiParam::new(sig!(@ty $param)));)*
-                    builder.import_signature(s)
-                };
-            };
-            (@def $name:ident : $ret:ident fn($($param:ident),*)) => {
-                let $name = {
-                    let mut s = Signature::new(host_cc);
-                    $(s.params.push(AbiParam::new(sig!(@ty $param)));)*
-                    s.returns.push(AbiParam::new(sig!(@ty $ret)));
-                    builder.import_signature(s)
-                };
-            };
-            ($($name:ident : $ret:ident fn($($param:ident),*);)*) => { $(sig!(@def $name : $ret fn($($param),*));)* }
-        }
-
-        sig! {
-            call_fn_sig:       i32 fn(ptr, ptr, i32);
-            call_indirect_sig: i32 fn(ptr, ptr, i32, i32, i64);
-            memory_copy_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32, i32);
-            memory_fill_sig:   i32 fn(ptr, ptr, i32, i32, i32, i32);
-            cage_base_sig:     i64 fn();
-            mem_size_sig:      i64 fn(ptr, i32);
-            mem_grow_sig:      i32 fn(ptr, i32, i32);
-            stack_exhaustion_sig: void fn(ptr);
-            check_indirect_type_sig: i32 fn(ptr, ptr);
-        }
-        let raise_trap_sig = builder.import_signature(Signature::new(host_cc));
-
-        // Declare each runtime helper as an imported external function. At every use site
-        // we emit `func_addr` which lowers (with is_pic=false) to a load from an inline
-        // 8-byte literal marked with a `Reloc::Abs8` relocation -- the cache install path
-        // walks these and rewrites the 8 bytes with the current process's helper address.
-        macro_rules! decl_helper {
-            ($sig:expr, $id:expr) => {{
-                let user_ref = builder.func.declare_imported_user_function(UserExternalName {
-                    namespace: HELPER_EXTERNAL_NAMESPACE,
-                    index: $id as u32,
-                });
-                builder.func.import_function(ExtFuncData {
-                    name: ExternalName::user(user_ref),
-                    signature: $sig,
-                    colocated: false,
-                    patchable: false,
-                })
-            }};
-        }
-        let h_call_fn = decl_helper!(call_fn_sig, HelperId::call_function);
-        let h_mem_size = decl_helper!(mem_size_sig, HelperId::memory_size);
-        let h_mem_grow = decl_helper!(mem_grow_sig, HelperId::memory_grow);
-        let h_call_indirect = decl_helper!(call_indirect_sig, HelperId::call_indirect);
-        let h_call_indirect_wr = decl_helper!(call_indirect_sig, HelperId::call_indirect_with_record);
-        let h_memory_copy = decl_helper!(memory_copy_sig, HelperId::memory_copy);
-        let h_memory_fill = decl_helper!(memory_fill_sig, HelperId::memory_fill);
-        let h_primitive_storage_cage_base = decl_helper!(cage_base_sig, HelperId::primitive_storage_cage_base);
-        let h_stack_exhaustion = decl_helper!(stack_exhaustion_sig, HelperId::stack_exhaustion);
-        let h_raise_trap = decl_helper!(raise_trap_sig, HelperId::raise_trap);
-        let h_check_indirect_type = decl_helper!(check_indirect_type_sig, HelperId::check_indirect_type);
+        let LegacyImportedHelpers {
+            call_function_signature: call_fn_sig,
+            call_indirect_signature: call_indirect_sig,
+            memory_copy_signature: memory_copy_sig,
+            memory_fill_signature: memory_fill_sig,
+            memory_size_signature: mem_size_sig,
+            memory_grow_signature: mem_grow_sig,
+            stack_exhaustion_signature: stack_exhaustion_sig,
+            check_indirect_type_signature: check_indirect_type_sig,
+            raise_trap_signature: raise_trap_sig,
+            call_function: h_call_fn,
+            memory_size: h_mem_size,
+            memory_grow: h_mem_grow,
+            call_indirect: h_call_indirect,
+            call_indirect_with_record: h_call_indirect_wr,
+            memory_copy: h_memory_copy,
+            memory_fill: h_memory_fill,
+            primitive_storage_cage_base: h_primitive_storage_cage_base,
+            stack_exhaustion: h_stack_exhaustion,
+            raise_trap: h_raise_trap,
+            check_indirect_type: h_check_indirect_type,
+        } = LegacyImportedHelpers::new(&mut builder, ptr_type, host_cc);
         let mut direct_call_targets = HashMap::new();
         for insn in insns.iter().filter(|insn| {
             insn.opcode == op::CALL
@@ -1098,31 +891,34 @@ impl CraneliftCompiler {
                 entry.insert(target);
             }
         }
-        let locals_base_offset = layout.locals_base_offset as i32;
-        let table_instances_offset = layout.table_instances_offset as i32;
-        let memory_instances_offset = layout.memory_instances_offset as i32;
-        let global_instances_offset = layout.global_instances_offset as i32;
-        let global_instance_value_offset = layout.global_instance_value_offset as i32;
-        let memory_instance_data_offset = layout.memory_instance_data_offset as i32;
-        let memory_buffer_storage_offset_offset = layout.memory_buffer_storage_offset_offset as i32;
-        let compiled_call_result_scratch_offset = layout.compiled_call_result_scratch_offset as i32;
-        let value_stack_base_offset = layout.value_stack_base_offset as i32;
-        let value_stack_top_offset = layout.value_stack_top_offset as i32;
-        let call_record_base_offset = layout.call_record_base_offset as i32;
-        let call_record_stack_top_offset = layout.call_record_stack_top_offset as i32;
-        let depth_offset = layout.depth_offset as i32;
-        let current_compiled_fn_table_data_offset = layout.current_compiled_fn_table_data_offset as i32;
-        let current_module_offset = layout.current_module_offset as i32;
-        let current_canonical_types_offset = layout.current_canonical_types_offset as i32;
-        let current_expression_offset = layout.current_expression_offset as i32;
-        let compiled_function_entry_size = i64::from(layout.compiled_function_entry_size);
-        let compiled_function_entry_expression_offset = layout.compiled_function_entry_expression_offset as i32;
-        let table_instance_size_offset = layout.table_instance_size_offset as i32;
-        let table_instance_callables_offset = layout.table_instance_callables_offset as i32;
-        let callable_defined_type_offset = layout.callable_defined_type_offset as i32;
-        let callable_module_offset = layout.callable_module_offset as i32;
-        let callable_compiled_instructions_offset = layout.callable_compiled_instructions_offset as i32;
-        let compiled_instructions_native_entry_offset = layout.compiled_instructions_native_entry_offset as i32;
+        let RuntimeLayout {
+            locals_base_offset,
+            table_instances_offset,
+            memory_instances_offset,
+            global_instances_offset,
+            global_instance_value_offset,
+            memory_instance_data_offset,
+            memory_buffer_storage_offset_offset,
+            compiled_call_result_scratch_offset,
+            value_stack_base_offset,
+            value_stack_top_offset,
+            call_record_base_offset,
+            call_record_stack_top_offset,
+            depth_offset,
+            current_compiled_fn_table_data_offset,
+            current_module_offset,
+            current_canonical_types_offset,
+            current_expression_offset,
+            compiled_function_entry_size,
+            compiled_function_entry_expression_offset,
+            table_instance_size_offset,
+            table_instance_callables_offset,
+            callable_defined_type_offset,
+            callable_module_offset,
+            callable_compiled_instructions_offset,
+            compiled_instructions_native_entry_offset,
+            ..
+        } = runtime_layout;
         let native_indirect_call_layout = NativeIndirectCallLayout {
             table_instances: table_instances_offset,
             current_module: current_module_offset,
@@ -2521,7 +2317,7 @@ impl CraneliftCompiler {
                             if local_is_f64[i] || local_is_f32[i] || local_is_i32[i] {
                                 parameter
                             } else {
-                                Self::value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
+                                value_to_payload(&mut $builder, parameter, function_type.parameters[i])?
                             }
                         } else {
                             let incoming_locals = $builder.block_params(entry_block)[3];
@@ -2631,9 +2427,7 @@ impl CraneliftCompiler {
                 op::NOP => {}
 
                 op::UNREACHABLE => {
-                    builder
-                        .ins()
-                        .trap(Self::user_trap_code(CraneliftUserTrapCode::Unreachable));
+                    builder.ins().trap(user_trap_code(CraneliftUserTrapCode::Unreachable));
                     is_unreachable = true;
                     let dead = builder.create_block();
                     builder.switch_to_block(dead);
@@ -3856,7 +3650,7 @@ impl CraneliftCompiler {
                                     .call_indirect(native_signature, native_entry, &native_arguments);
                             let native_result = if let Some(&result_kind) = target_type.results.first() {
                                 let result = builder.inst_results(native_call)[0];
-                                Some(Self::value_to_payload(&mut builder, result, result_kind)?)
+                                Some(value_to_payload(&mut builder, result, result_kind)?)
                             } else {
                                 None
                             };
@@ -3906,16 +3700,16 @@ impl CraneliftCompiler {
                                 let payload = builder.block_params(continuation)[0];
                                 match result_kind {
                                     I32_KIND => {
-                                        let value = Self::payload_to_value(&mut builder, payload, I32_KIND)?;
+                                        let value = payload_to_value(&mut builder, payload, I32_KIND)?;
                                         write_dst_i32!(builder, insn.destination, value);
                                     }
                                     I64_KIND => write_dst!(builder, insn.destination, payload),
                                     F32_KIND => {
-                                        let value = Self::payload_to_value(&mut builder, payload, F32_KIND)?;
+                                        let value = payload_to_value(&mut builder, payload, F32_KIND)?;
                                         write_dst_f32!(builder, insn.destination, value);
                                     }
                                     F64_KIND => {
-                                        let value = Self::payload_to_value(&mut builder, payload, F64_KIND)?;
+                                        let value = payload_to_value(&mut builder, payload, F64_KIND)?;
                                         write_dst_f64!(builder, insn.destination, value);
                                     }
                                     _ => return Err("unsupported native Wasm ABI type"),
@@ -4019,7 +3813,7 @@ impl CraneliftCompiler {
                         for (parameter_index, &parameter_kind) in target_type.parameters.iter().enumerate() {
                             let offset = i32::try_from(parameter_index * value_size as usize)
                                 .map_err(|_| "call-record argument offset overflow")?;
-                            let argument_type = Self::wasm_abi_type(parameter_kind)?;
+                            let argument_type = wasm_abi_type(parameter_kind)?;
                             let argument =
                                 builder
                                     .ins()
@@ -4068,16 +3862,16 @@ impl CraneliftCompiler {
                     if let Some(result) = result {
                         match result.kind {
                             Some(I32_KIND) => {
-                                let value = Self::payload_to_value(&mut builder, result.payload, I32_KIND)?;
+                                let value = payload_to_value(&mut builder, result.payload, I32_KIND)?;
                                 write_dst_i32!(builder, insn.destination, value);
                             }
                             Some(I64_KIND) | None => write_dst!(builder, insn.destination, result.payload),
                             Some(F32_KIND) => {
-                                let value = Self::payload_to_value(&mut builder, result.payload, F32_KIND)?;
+                                let value = payload_to_value(&mut builder, result.payload, F32_KIND)?;
                                 write_dst_f32!(builder, insn.destination, value);
                             }
                             Some(F64_KIND) => {
-                                let value = Self::payload_to_value(&mut builder, result.payload, F64_KIND)?;
+                                let value = payload_to_value(&mut builder, result.payload, F64_KIND)?;
                                 write_dst_f64!(builder, insn.destination, value);
                             }
                             _ => return Err("unsupported native Wasm ABI type"),
@@ -4286,7 +4080,7 @@ impl CraneliftCompiler {
         builder.ins().call_indirect(raise_trap_sig, raise_trap, &[]);
         if let Some(&result_kind) = function_type.results.first() {
             let zero = builder.ins().iconst(types::I64, 0);
-            let zero = Self::payload_to_value(&mut builder, zero, result_kind)?;
+            let zero = payload_to_value(&mut builder, zero, result_kind)?;
             builder.ins().return_(&[zero]);
         } else {
             builder.ins().return_(&[]);
@@ -4302,7 +4096,7 @@ impl CraneliftCompiler {
         }
         let native_result = if let Some(&result_kind) = function_type.results.first() {
             let payload = emit_stack_pop!(builder);
-            Some(Self::payload_to_value(&mut builder, payload, result_kind)?)
+            Some(payload_to_value(&mut builder, payload, result_kind)?)
         } else {
             None
         };
@@ -4329,7 +4123,7 @@ impl CraneliftCompiler {
 
         builder.finalize(isa.frontend_config());
 
-        let body = Self::compile_function(&*isa, func)?;
+        let body = compile_function(&*isa, func)?;
         let mut fallback_target_indices: Vec<u32> = direct_call_targets.keys().copied().collect();
         fallback_target_indices.sort_unstable();
         let mut fallback_functions = Vec::with_capacity(fallback_target_indices.len());
@@ -4368,7 +4162,7 @@ impl CraneliftCompiler {
             for (parameter_index, &parameter_kind) in function_type.parameters.iter().enumerate() {
                 let offset = i32::try_from(parameter_index * value_size as usize)
                     .map_err(|_| "adapter parameter offset overflow")?;
-                let parameter_type = Self::wasm_abi_type(parameter_kind)?;
+                let parameter_type = wasm_abi_type(parameter_kind)?;
                 let parameter =
                     adapter_builder
                         .ins()
@@ -4392,7 +4186,7 @@ impl CraneliftCompiler {
         let call = adapter_builder.ins().call(body_function, &body_arguments);
         if let Some(&result_kind) = function_type.results.first() {
             let result = adapter_builder.inst_results(call)[0];
-            let payload = Self::value_to_payload(&mut adapter_builder, result, result_kind)?;
+            let payload = value_to_payload(&mut adapter_builder, result, result_kind)?;
             let top = adapter_builder.ins().load(
                 ptr_type,
                 adapter_memory_flags.configuration,
@@ -4416,7 +4210,7 @@ impl CraneliftCompiler {
         }
         adapter_builder.ins().return_(&[]);
         adapter_builder.finalize(isa.frontend_config());
-        let adapter = Self::compile_function(&*isa, adapter)?;
+        let adapter = compile_function(&*isa, adapter)?;
 
         let native_entry_offset = adapter.code.len().div_ceil(16) * 16;
         let native_entry_offset = u32::try_from(native_entry_offset).map_err(|_| "native entry offset overflow")?;
@@ -4560,56 +4354,5 @@ impl CraneliftCompiler {
                 | op::SYNTHETIC_BR_TABLE_CONT
                 | op::SYNTHETIC_TIER_UP
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn serializes_helper_and_wasm_function_relocations() {
-        let helper = UserExternalName {
-            namespace: HELPER_EXTERNAL_NAMESPACE,
-            index: HelperId::memory_size as u32,
-        };
-        let helper_relocation = CraneliftCompiler::serialize_relocation(Reloc::Abs8, 12, -4, &helper).unwrap();
-        assert_eq!(helper_relocation.code_offset, 12);
-        assert_eq!(helper_relocation.kind, CraneliftRelocationKind::Abs8);
-        assert_eq!(helper_relocation.target_kind, CraneliftRelocationTargetKind::Helper);
-        assert_eq!(helper_relocation.target_index, HelperId::memory_size as u32);
-        assert_eq!(helper_relocation.addend, -4);
-
-        let wasm_function = UserExternalName {
-            namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
-            index: 42,
-        };
-        let direct_call = CraneliftCompiler::serialize_relocation(Reloc::Arm64Call, 24, 0, &wasm_function).unwrap();
-        assert_eq!(direct_call.kind, CraneliftRelocationKind::Arm64Call);
-        assert_eq!(direct_call.target_kind, CraneliftRelocationTargetKind::WasmFunction);
-        assert_eq!(direct_call.target_index, 42);
-
-        let x86_direct_call =
-            CraneliftCompiler::serialize_relocation(Reloc::X86CallPCRel4, 32, -4, &wasm_function).unwrap();
-        assert_eq!(x86_direct_call.kind, CraneliftRelocationKind::X86CallPCRel4);
-        assert_eq!(x86_direct_call.addend, -4);
-
-        assert!(CraneliftCompiler::serialize_relocation(Reloc::Arm64Call, 0, 0, &helper).is_err());
-        assert!(
-            CraneliftCompiler::serialize_relocation(
-                Reloc::Abs8,
-                0,
-                0,
-                &UserExternalName {
-                    namespace: HELPER_EXTERNAL_NAMESPACE,
-                    index: crate::HELPER_COUNT,
-                },
-            )
-            .is_err()
-        );
-        assert!(
-            CraneliftCompiler::serialize_relocation(Reloc::Abs8, 0, 0, &UserExternalName { namespace: 2, index: 0 },)
-                .is_err()
-        );
     }
 }
