@@ -25,6 +25,7 @@ include = [
     "DirectTableBranchInstructionArguments",
     "DirectIndirectCallInstructionArguments",
     "DirectMemoryInstructionArguments",
+    "DirectMemoryCopyInstructionArguments",
     "DirectInstructionArguments",
     "DirectInstruction",
     "CraneliftInsn",

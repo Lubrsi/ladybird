@@ -54,6 +54,8 @@ use common::HELPER_EXTERNAL_NAMESPACE;
 use common::I32_KIND;
 use common::I64_KIND;
 use common::LegacyImportedHelpers;
+use common::NativeIndirectCallLayout;
+use common::NativeIndirectCallTarget;
 use common::RuntimeLayout;
 use common::WASM_FUNCTION_EXTERNAL_NAMESPACE;
 use common::WasmMemoryFlags;
@@ -77,24 +79,6 @@ const CALLREC_BASE: u8 = 9;
 const INDIRECT_CALL_RESULT_TYPE_SHIFT: u32 = 16;
 const INDIRECT_CALL_TABLE64: u32 = 1 << 18;
 const INDIRECT_CALL_TYPE_VALID: u32 = 1 << 19;
-
-#[derive(Clone, Copy)]
-struct NativeIndirectCallLayout {
-    table_instances: i32,
-    current_module: i32,
-    current_canonical_types: i32,
-    table_instance_size: i32,
-    table_instance_callables: i32,
-    callable_defined_type: i32,
-    callable_module: i32,
-    callable_compiled_instructions: i32,
-    compiled_instructions_native_entry: i32,
-}
-
-struct NativeIndirectCallTarget {
-    native_call: Block,
-    fallback_call: Block,
-}
 
 #[derive(Clone, Copy)]
 struct IndirectCallLoweringContext {
