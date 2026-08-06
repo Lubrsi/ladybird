@@ -128,7 +128,7 @@ static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPt
         return false;
 
     auto const& compiled = expression->compiled_instructions;
-    auto const code_start = compiled.cranelift_entry;
+    auto const code_start = compiled.cranelift_code_start;
     auto const code_size = compiled.cranelift_code_size;
     if (!compiled.cranelift_compiled || code_start == 0 || pc < code_start || pc >= code_start + code_size)
         return false;
@@ -2076,11 +2076,11 @@ HANDLE_INSTRUCTION(synthetic_tier_up)
 {
     LOG_INSN;
     auto& ci = configuration.frame().expression().compiled_instructions;
-    auto const native_entry = cranelift_entry_acquire(ci);
+    auto const native_entry = cranelift_osr_entry_acquire(ci);
     if (native_entry != 0) {
         s_tier_up_taken_count.fetch_add(1, AK::MemoryOrder::memory_order_relaxed);
         if (getenv("LADYBIRD_WASM_TIER_UP_TRACE"))
-            warnln("wasm-tier-up: function={} checkpoint={}", ci.cranelift_function_index, short_ip.current_ip_value);
+            warnln("wasm-tier-up: flavor=osr function={} checkpoint={}", ci.cranelift_function_index, short_ip.current_ip_value);
 
         // If we have native code for this block, hand ownership of the current activation to it.
         // The target checkpoint is recovered from short_ip; the empty operand stack and canonical

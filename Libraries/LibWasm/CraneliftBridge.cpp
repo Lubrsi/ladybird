@@ -604,12 +604,14 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
     auto* native_func_ptr = func_ptr + pending.native_entry_offset;
 
     pending.target->cranelift_code_handle = handle;
+    pending.target->cranelift_code_start = bit_cast<FlatPtr>(func_ptr);
     pending.target->cranelift_code_size = pending.code_size;
     pending.target->cranelift_traps = handle->traps.data();
     pending.target->cranelift_trap_count = handle->traps.size();
     pending.target->cranelift_compiled = true;
     publish_cranelift_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
     publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+    publish_cranelift_osr_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
 }
 
 static size_t imported_function_count(Module const& module)

@@ -88,11 +88,20 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     EXPECT(!compiled.cranelift_compiled);
 
     size_t compilation_requests = 0;
+    FlatPtr osr_entry = 0;
+    bool publish_osr_during_call = false;
     Wasm::FunctionType compile_type { {}, {} };
     auto compile = machine.store().allocate(Wasm::HostFunction {
         [&](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
             ++compilation_requests;
-            Wasm::start_cranelift_compilation(*module);
+            if (!compiled.cranelift_compiled) {
+                Wasm::start_cranelift_compilation(*module);
+                osr_entry = Wasm::cranelift_osr_entry_acquire(compiled);
+                EXPECT_NE(osr_entry, 0u);
+                Wasm::publish_cranelift_osr_entry(compiled, 0);
+            } else if (publish_osr_during_call) {
+                Wasm::publish_cranelift_osr_entry(compiled, osr_entry);
+            }
             return Wasm::Result { Vector<Wasm::Value> {} };
         },
         compile_type,
@@ -115,17 +124,29 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     auto result = machine.invoke(run, {});
     EXPECT(compiled.cranelift_compiled);
     EXPECT_EQ(compilation_requests, 1u);
-    EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
+    EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count);
     EXPECT(!result.is_trap());
     EXPECT_EQ(result.values().size(), 1u);
     EXPECT_EQ(result.values()[0].to<i32>(), 43);
 
-    auto fresh_native_result = machine.invoke(run, {});
+    auto const fresh_entry = Wasm::cranelift_entry_acquire(compiled);
+    EXPECT_NE(fresh_entry, 0u);
+    Wasm::publish_cranelift_entry(compiled, 0);
+    publish_osr_during_call = true;
+    auto osr_result = machine.invoke(run, {});
     EXPECT_EQ(compilation_requests, 2u);
+    EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
+    EXPECT(!osr_result.is_trap());
+    EXPECT_EQ(osr_result.values().size(), 1u);
+    EXPECT_EQ(osr_result.values()[0].to<i32>(), 46);
+
+    Wasm::publish_cranelift_entry(compiled, fresh_entry);
+    auto fresh_native_result = machine.invoke(run, {});
+    EXPECT_EQ(compilation_requests, 3u);
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
     EXPECT(!fresh_native_result.is_trap());
     EXPECT_EQ(fresh_native_result.values().size(), 1u);
-    EXPECT_EQ(fresh_native_result.values()[0].to<i32>(), 46);
+    EXPECT_EQ(fresh_native_result.values()[0].to<i32>(), 49);
 
     Vector<Wasm::Value> native_arguments;
     for (i32 argument = 1; argument <= 11; ++argument)
@@ -581,6 +602,7 @@ TEST_CASE(native_direct_calls_cross_incremental_compilation_batches)
 
     auto& first_batch_callee = functions[1].func().body().compiled_instructions;
     Wasm::publish_cranelift_entry(first_batch_callee, 0);
+    Wasm::publish_cranelift_osr_entry(first_batch_callee, 0);
     Wasm::publish_cranelift_native_entry(first_batch_callee, 0);
     for (auto& dispatch : first_batch_callee.dispatches)
         dispatch.instruction_opcode = dispatch.instruction->opcode();

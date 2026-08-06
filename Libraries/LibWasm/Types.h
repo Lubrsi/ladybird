@@ -1008,15 +1008,19 @@ struct CompiledInstructions {
     // Pointer/size_t-sized members first, then the u32, then the bools, so the trailing scalars pack
     // into one word instead of scattering padding between them.
 
-    // Native adapter and body entry points for this function. Both are zero until the background/AOT
-    // compile has fully installed the code. The adapter uses the interpreter handler parameters but
-    // returns void, making entry a one-way handoff of the current activation. Compiled callers use
-    // the body entry to skip it. Both are published with atomic store-release
-    // and read with atomic load-acquire, so a function can tier up concurrently with execution without
-    // a reader ever observing half-installed code. dispatches[0].handler_ptr always stays the C++
+    // Native adapter and body entry points for this function. They are zero until the background/AOT
+    // compile has fully installed the code. Fresh interpreter calls use cranelift_entry, while a
+    // synthetic tier-up checkpoint may only use cranelift_osr_entry. The current allocated-bytecode
+    // adapter supports both capabilities, but keeping their publication separate prevents a future
+    // clean entry-only adapter from being entered with an OSR checkpoint token. Compiled callers use
+    // the body entry to skip the adapter. Entries are published with atomic store-release and read
+    // with atomic load-acquire, so a function can tier up concurrently with execution without a
+    // reader ever observing half-installed code. dispatches[0].handler_ptr always stays the C++
     // interpreter handler, so the interpreter path is valid regardless of compilation state.
     FlatPtr cranelift_entry = 0;
+    FlatPtr cranelift_osr_entry = 0;
     FlatPtr cranelift_native_entry = 0;
+    FlatPtr cranelift_code_start = 0;
     void* cranelift_code_handle = nullptr; // Owned; freed when the owning Module is destroyed.
     size_t cranelift_code_size = 0;
     CraneliftTrap const* cranelift_traps = nullptr; // Owned by cranelift_code_handle.
@@ -1049,6 +1053,11 @@ inline FlatPtr cranelift_native_entry_acquire(CompiledInstructions const& ci)
     return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_native_entry), AK::MemoryOrder::memory_order_acquire);
 }
 
+inline FlatPtr cranelift_osr_entry_acquire(CompiledInstructions const& ci)
+{
+    return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_osr_entry), AK::MemoryOrder::memory_order_acquire);
+}
+
 // Publish the native entry with release ordering. Must be the LAST write of install.
 inline void publish_cranelift_entry(CompiledInstructions& ci, FlatPtr entry)
 {
@@ -1058,6 +1067,11 @@ inline void publish_cranelift_entry(CompiledInstructions& ci, FlatPtr entry)
 inline void publish_cranelift_native_entry(CompiledInstructions& ci, FlatPtr entry)
 {
     AK::atomic_store(&ci.cranelift_native_entry, entry, AK::MemoryOrder::memory_order_release);
+}
+
+inline void publish_cranelift_osr_entry(CompiledInstructions& ci, FlatPtr entry)
+{
+    AK::atomic_store(&ci.cranelift_osr_entry, entry, AK::MemoryOrder::memory_order_release);
 }
 
 template<Enum auto... Vs>
