@@ -9,7 +9,7 @@ pub mod serialized;
 
 use compiler::CraneliftCompiler;
 
-pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 1;
+pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 3;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +100,13 @@ pub struct DirectMemoryInstructionArguments {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct DirectMemoryCopyInstructionArguments {
+    pub source_memory_index: u32,
+    pub destination_memory_index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub union DirectInstructionArguments {
     pub i32_constant: i32,
     pub i64_constant: i64,
@@ -118,6 +125,8 @@ pub union DirectInstructionArguments {
     pub table_branch: DirectTableBranchInstructionArguments,
     pub indirect_call: DirectIndirectCallInstructionArguments,
     pub memory: DirectMemoryInstructionArguments,
+    pub memory_copy: DirectMemoryCopyInstructionArguments,
+    pub memory_index: u32,
     pub vector_constant: [u64; 2],
 }
 
@@ -180,6 +189,7 @@ pub struct RuntimeLayout {
     pub callable_module_offset: u32,
     pub callable_compiled_instructions_offset: u32,
     pub compiled_instructions_native_entry_offset: u32,
+    pub compiled_instructions_direct_native_entry_offset: u32,
 }
 
 /// Stable index assigned to each runtime helper. Embedded in cranelift `ExternalName`
@@ -205,9 +215,10 @@ pub enum HelperId {
     stack_exhaustion = 13,
     raise_trap = 14,
     check_indirect_type = 15,
+    current_interpreter = 16,
 }
 
-pub const HELPER_COUNT: u32 = 16;
+pub const HELPER_COUNT: u32 = 17;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Ladybird-specific Cranelift trap codes. The numeric values are embedded in generated code and
@@ -285,6 +296,21 @@ pub struct WasmFunctionType<'a> {
     pub results: &'a [u8],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct DirectFunctionType<'a> {
+    pub parameters: &'a [DirectValueType],
+    pub results: &'a [DirectValueType],
+}
+
+pub struct DirectCompilerInput<'a> {
+    pub instructions: &'a [DirectInstruction],
+    pub branch_targets: &'a [u32],
+    pub local_types: &'a [DirectValueType],
+    pub function_types: &'a [WasmFunctionType<'a>],
+    pub module_types: &'a [Option<DirectFunctionType<'a>>],
+    pub global_types: &'a [DirectValueType],
+}
+
 pub fn compile_to_bytes(
     insns: &[CraneliftInsn],
     layout: &RuntimeLayout,
@@ -296,19 +322,9 @@ pub fn compile_to_bytes(
 }
 
 pub fn compile_direct_to_bytes(
-    insns: &[DirectInstruction],
-    branch_targets: &[u32],
+    input: DirectCompilerInput<'_>,
     layout: &RuntimeLayout,
     options: FunctionCompilationOptions,
-    local_types: &[DirectValueType],
-    function_types: &[WasmFunctionType<'_>],
 ) -> Result<CompiledFunction, &'static str> {
-    compiler::direct::DirectCompiler::compile_to_bytes(
-        insns,
-        branch_targets,
-        layout,
-        options,
-        local_types,
-        function_types,
-    )
+    compiler::direct::DirectCompiler::compile_to_bytes(input, layout, options)
 }

@@ -50,6 +50,7 @@
 using namespace AK::SIMD;
 
 extern "C" [[noreturn]] void wasm_cl_raise_trap();
+extern "C" void* wasm_cl_current_interpreter();
 
 namespace {
 
@@ -335,6 +336,12 @@ extern "C" [[noreturn]] void wasm_cl_raise_trap()
     VERIFY(recovery);
     recovery->fault_kind = CompiledFaultKind::ExplicitTrap;
     longjmp(recovery->jump_buffer, 1);
+}
+
+extern "C" void* wasm_cl_current_interpreter()
+{
+    VERIFY(s_compiled_fault_recovery);
+    return s_compiled_fault_recovery->interpreter;
 }
 
 #ifdef AK_COMPILER_CLANG

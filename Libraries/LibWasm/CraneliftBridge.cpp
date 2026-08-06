@@ -47,6 +47,7 @@ using namespace Cranelift;
 
 extern "C" u64 wasm_cl_direct_call_with_record_fallback(void*, void*, void const*, u32, void const*, void const*);
 extern "C" [[noreturn]] void wasm_cl_raise_trap();
+extern "C" void* wasm_cl_current_interpreter();
 
 namespace {
 
@@ -55,6 +56,10 @@ struct InputHeader {
     u32 function_count;
     u32 function_type_count;
     u32 function_types_offset;
+    u32 module_type_count;
+    u32 module_types_offset;
+    u32 global_type_count;
+    u32 global_types_offset;
     u32 layout_offset;
     u64 output_size;
     u64 total_size;
@@ -85,9 +90,18 @@ struct InputFunctionTypeEntry {
     u32 result_count;
 };
 
-static_assert(sizeof(InputHeader) == 40);
+struct InputModuleTypeEntry {
+    u32 is_function;
+    u32 parameters_offset;
+    u32 parameter_count;
+    u32 results_offset;
+    u32 result_count;
+};
+
+static_assert(sizeof(InputHeader) == 56);
 static_assert(sizeof(InputFunctionEntry) == 60);
 static_assert(sizeof(InputFunctionTypeEntry) == 16);
+static_assert(sizeof(InputModuleTypeEntry) == 20);
 
 struct OutputHeader {
     u32 function_count;
@@ -332,11 +346,12 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
     hash = fnv1a(hash, layout.callable_module_offset);
     hash = fnv1a(hash, layout.callable_compiled_instructions_offset);
     hash = fnv1a(hash, layout.compiled_instructions_native_entry_offset);
+    hash = fnv1a(hash, layout.compiled_instructions_direct_native_entry_offset);
     return hash;
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 16);
+static_assert(HELPER_COUNT == 17);
 static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
@@ -1152,6 +1167,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::stack_exhaustion)] = bit_cast<uintptr_t>(&wasm_cl_stack_exhaustion);
     addresses[to_underlying(HelperId::raise_trap)] = bit_cast<uintptr_t>(&wasm_cl_raise_trap);
     addresses[to_underlying(HelperId::check_indirect_type)] = bit_cast<uintptr_t>(&wasm_cl_check_indirect_type);
+    addresses[to_underlying(HelperId::current_interpreter)] = bit_cast<uintptr_t>(&wasm_cl_current_interpreter);
     return addresses;
 }
 
@@ -1185,6 +1201,7 @@ static RuntimeLayout make_runtime_layout()
         .callable_module_offset = static_cast<u32>(CallableMetadata::module_offset()),
         .callable_compiled_instructions_offset = static_cast<u32>(CallableMetadata::compiled_instructions_offset()),
         .compiled_instructions_native_entry_offset = static_cast<u32>(offsetof(CompiledInstructions, cranelift_native_entry)),
+        .compiled_instructions_direct_native_entry_offset = static_cast<u32>(offsetof(CompiledInstructions, cranelift_direct_native_entry)),
     };
 }
 
@@ -1411,12 +1428,24 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     if (function_types_end.has_overflow() || function_types_end.value() > input.size() || header.function_types_offset != function_types_offset)
         return Error::from_string_literal("Cranelift function type entries are not canonical");
 
+    auto module_types_offset = align_up(function_types_end.value(), alignof(InputModuleTypeEntry));
+    Checked<size_t> module_types_size = sizeof(InputModuleTypeEntry);
+    module_types_size *= header.module_type_count;
+    if (module_types_size.has_overflow())
+        return Error::from_string_literal("Cranelift module type entries are too large");
+
+    Checked<size_t> module_types_end = module_types_offset;
+    module_types_end += module_types_size.value();
+    if (module_types_end.has_overflow() || module_types_end.value() > input.size() || header.module_types_offset != module_types_offset)
+        return Error::from_string_literal("Cranelift module type entries are not canonical");
+
     size_t instruction_count = 0;
     size_t direct_instruction_count = 0;
     size_t direct_branch_target_count = 0;
     size_t direct_local_count = 0;
     size_t locals_size = 0;
     size_t function_type_values_size = 0;
+    size_t module_type_value_count = 0;
     for (size_t i = 0; i < header.function_count; ++i) {
         auto entry = TRY(read_cranelift_input<InputFunctionEntry>(input, sizeof(InputHeader) + i * sizeof(InputFunctionEntry)));
         Checked<size_t> new_instruction_count = instruction_count;
@@ -1460,7 +1489,24 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         function_type_values_size = new_function_type_values_size.value();
     }
 
-    auto insn_region_offset = align_up(function_types_end.value(), alignof(CraneliftInsn));
+    for (size_t i = 0; i < header.module_type_count; ++i) {
+        auto entry = TRY(read_cranelift_input<InputModuleTypeEntry>(input, module_types_offset + i * sizeof(InputModuleTypeEntry)));
+        if (entry.is_function == 0) {
+            if (entry.parameters_offset != 0 || entry.parameter_count != 0 || entry.results_offset != 0 || entry.result_count != 0)
+                return Error::from_string_literal("Cranelift non-function module type is invalid");
+            continue;
+        }
+        if (entry.is_function != 1)
+            return Error::from_string_literal("Cranelift module type kind is invalid");
+        Checked<size_t> new_module_type_value_count = module_type_value_count;
+        new_module_type_value_count += entry.parameter_count;
+        new_module_type_value_count += entry.result_count;
+        if (new_module_type_value_count.has_overflow())
+            return Error::from_string_literal("Cranelift module type values are too large");
+        module_type_value_count = new_module_type_value_count.value();
+    }
+
+    auto insn_region_offset = align_up(module_types_end.value(), alignof(CraneliftInsn));
     Checked<size_t> insn_region_size = instruction_count;
     insn_region_size *= sizeof(CraneliftInsn);
     if (insn_region_size.has_overflow())
@@ -1509,8 +1555,32 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     if (function_type_values_offset.has_overflow())
         return Error::from_string_literal("Cranelift function type values offset overflow");
 
-    Checked<size_t> layout_offset = function_type_values_offset.value();
-    layout_offset += function_type_values_size;
+    Checked<size_t> module_type_values_offset = function_type_values_offset.value();
+    module_type_values_offset += function_type_values_size;
+    if (module_type_values_offset.has_overflow())
+        return Error::from_string_literal("Cranelift module type values offset overflow");
+    auto aligned_module_type_values_offset = align_up(module_type_values_offset.value(), alignof(DirectValueType));
+
+    Checked<size_t> module_type_values_size = module_type_value_count;
+    module_type_values_size *= sizeof(DirectValueType);
+    if (module_type_values_size.has_overflow())
+        return Error::from_string_literal("Cranelift module type values are too large");
+
+    Checked<size_t> global_types_offset = aligned_module_type_values_offset;
+    global_types_offset += module_type_values_size.value();
+    if (global_types_offset.has_overflow())
+        return Error::from_string_literal("Cranelift global types offset overflow");
+    auto aligned_global_types_offset = align_up(global_types_offset.value(), alignof(DirectValueType));
+    if (header.global_types_offset != aligned_global_types_offset)
+        return Error::from_string_literal("Cranelift global types are not canonical");
+
+    Checked<size_t> global_types_size = header.global_type_count;
+    global_types_size *= sizeof(DirectValueType);
+    if (global_types_size.has_overflow())
+        return Error::from_string_literal("Cranelift global types are too large");
+
+    Checked<size_t> layout_offset = aligned_global_types_offset;
+    layout_offset += global_types_size.value();
     if (layout_offset.has_overflow())
         return Error::from_string_literal("Cranelift layout offset overflow");
     auto aligned_layout_offset = align_up(layout_offset.value(), alignof(RuntimeLayout));
@@ -1555,6 +1625,23 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
             return Error::from_string_literal("Cranelift function type values are not canonical");
         function_type_values_cursor += entry.result_count;
     }
+    if (align_up(function_type_values_cursor, alignof(DirectValueType)) != aligned_module_type_values_offset)
+        return Error::from_string_literal("Cranelift function type values are not canonical");
+
+    size_t module_type_values_cursor = aligned_module_type_values_offset;
+    for (size_t i = 0; i < header.module_type_count; ++i) {
+        auto entry = TRY(read_cranelift_input<InputModuleTypeEntry>(input, module_types_offset + i * sizeof(InputModuleTypeEntry)));
+        if (entry.is_function == 0)
+            continue;
+        if (entry.parameters_offset != module_type_values_cursor)
+            return Error::from_string_literal("Cranelift module type values are not canonical");
+        module_type_values_cursor += static_cast<size_t>(entry.parameter_count) * sizeof(DirectValueType);
+        if (entry.results_offset != module_type_values_cursor)
+            return Error::from_string_literal("Cranelift module type values are not canonical");
+        module_type_values_cursor += static_cast<size_t>(entry.result_count) * sizeof(DirectValueType);
+    }
+    if (align_up(module_type_values_cursor, alignof(DirectValueType)) != aligned_global_types_offset)
+        return Error::from_string_literal("Cranelift module type values are not canonical");
 
     auto output_size = TRY(compute_output_buffer_size(header.function_count, instruction_count));
     if (header.output_size != output_size)
@@ -1673,8 +1760,26 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         function_types.append(&types[type_index.value()].function());
     }
 
+    Vector<FunctionType const*> module_function_types;
+    module_function_types.ensure_capacity(types.size());
+    for (auto const& type : types)
+        module_function_types.unchecked_append(type.is_function() ? &type.function() : nullptr);
+
+    Vector<DirectValueType> global_types;
+    for (auto const& import : module.import_section().imports()) {
+        import.description().visit(
+            [&](GlobalType const& global_type) {
+                global_types.append(serialize_direct_value_type(global_type.type()));
+            },
+            [&](auto const&) {});
+    }
+    for (auto const& global : module.global_section().entries())
+        global_types.append(serialize_direct_value_type(global.type().type()));
+
     auto const function_types_offset = align_up(entries_offset + entries_size, alignof(InputFunctionTypeEntry));
     auto const function_types_size = sizeof(InputFunctionTypeEntry) * function_types.size();
+    auto const module_types_offset = align_up(function_types_offset + function_types_size, alignof(InputModuleTypeEntry));
+    auto const module_types_size = sizeof(InputModuleTypeEntry) * module_function_types.size();
 
     size_t total_insn_count = 0;
     size_t total_direct_insn_count = 0;
@@ -1682,6 +1787,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     size_t total_direct_local_count = 0;
     size_t total_locals_bytes = 0;
     size_t total_function_type_bytes = 0;
+    size_t total_module_type_value_count = 0;
     for (auto const& entry : batch) {
         total_insn_count += entry.insns.size();
         if (entry.direct_input.has_value()) {
@@ -1693,8 +1799,12 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     }
     for (auto const* function_type : function_types)
         total_function_type_bytes += function_type->parameters().size() + function_type->results().size();
+    for (auto const* function_type : module_function_types) {
+        if (function_type)
+            total_module_type_value_count += function_type->parameters().size() + function_type->results().size();
+    }
 
-    auto const insn_region_offset = align_up(function_types_offset + function_types_size, alignof(CraneliftInsn));
+    auto const insn_region_offset = align_up(module_types_offset + module_types_size, alignof(CraneliftInsn));
     auto const insn_bytes = total_insn_count * sizeof(CraneliftInsn);
     auto const direct_insn_region_offset = align_up(insn_region_offset + insn_bytes, alignof(DirectInstruction));
     auto const direct_insn_bytes = total_direct_insn_count * sizeof(DirectInstruction);
@@ -1704,7 +1814,11 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     auto const direct_locals_bytes = total_direct_local_count * sizeof(DirectValueType);
     auto const locals_region_offset = direct_locals_offset + direct_locals_bytes;       // u8, no alignment needed
     auto const function_type_values_offset = locals_region_offset + total_locals_bytes; // u8, no alignment needed
-    auto const layout_offset = align_up(function_type_values_offset + total_function_type_bytes, alignof(RuntimeLayout));
+    auto const module_type_values_offset = align_up(function_type_values_offset + total_function_type_bytes, alignof(DirectValueType));
+    auto const module_type_values_bytes = total_module_type_value_count * sizeof(DirectValueType);
+    auto const global_types_offset = align_up(module_type_values_offset + module_type_values_bytes, alignof(DirectValueType));
+    auto const global_types_bytes = global_types.size() * sizeof(DirectValueType);
+    auto const layout_offset = align_up(global_types_offset + global_types_bytes, alignof(RuntimeLayout));
     auto const total_size = layout_offset + sizeof(RuntimeLayout);
     auto const output_size = TRY(compute_output_buffer_size(function_count, total_insn_count));
 
@@ -1718,6 +1832,10 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         .function_count = static_cast<u32>(function_count),
         .function_type_count = static_cast<u32>(function_types.size()),
         .function_types_offset = static_cast<u32>(function_types_offset),
+        .module_type_count = static_cast<u32>(module_function_types.size()),
+        .module_types_offset = static_cast<u32>(module_types_offset),
+        .global_type_count = static_cast<u32>(global_types.size()),
+        .global_types_offset = static_cast<u32>(global_types_offset),
         .layout_offset = static_cast<u32>(layout_offset),
         .output_size = output_size,
         .total_size = total_size,
@@ -1798,6 +1916,34 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         for (auto const& result : function_type.results())
             base[function_type_values_cursor++] = static_cast<u8>(result.kind());
     }
+
+    size_t module_type_values_cursor = module_type_values_offset;
+    for (size_t i = 0; i < module_function_types.size(); ++i) {
+        auto* entry = reinterpret_cast<InputModuleTypeEntry*>(base + module_types_offset + i * sizeof(InputModuleTypeEntry));
+        auto const* function_type = module_function_types[i];
+        if (!function_type) {
+            *entry = InputModuleTypeEntry {};
+            continue;
+        }
+        *entry = InputModuleTypeEntry {
+            .is_function = 1,
+            .parameters_offset = static_cast<u32>(module_type_values_cursor),
+            .parameter_count = static_cast<u32>(function_type->parameters().size()),
+            .results_offset = static_cast<u32>(module_type_values_cursor + function_type->parameters().size() * sizeof(DirectValueType)),
+            .result_count = static_cast<u32>(function_type->results().size()),
+        };
+        for (auto const& parameter : function_type->parameters()) {
+            *reinterpret_cast<DirectValueType*>(base + module_type_values_cursor) = serialize_direct_value_type(parameter);
+            module_type_values_cursor += sizeof(DirectValueType);
+        }
+        for (auto const& result : function_type->results()) {
+            *reinterpret_cast<DirectValueType*>(base + module_type_values_cursor) = serialize_direct_value_type(result);
+            module_type_values_cursor += sizeof(DirectValueType);
+        }
+    }
+
+    if (!global_types.is_empty())
+        __builtin_memcpy(base + global_types_offset, global_types.data(), global_types_bytes);
 
     __builtin_memcpy(base + layout_offset, &layout, sizeof(layout));
 
@@ -1953,6 +2099,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         // CRANELIFT_MAX_FN=N          skip functions with id > N.
         // CRANELIFT_SKIP_FN=a,b,c     skip listed function ids.
         // CRANELIFT_ONLY_FN=a,b,c     only compile listed function ids.
+        // CRANELIFT_DIRECT_PROBE_FN=a,b,c compile listed functions with the offline direct frontend.
         // CRANELIFT_TRACE=1           log a line per compiled function.
         static auto const read_size_env = [](char const* name, size_t fallback) {
             if (auto* env = getenv(name))
@@ -1977,6 +2124,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         static size_t s_max_fn = read_size_env("CRANELIFT_MAX_FN", NumericLimits<size_t>::max());
         static auto& s_skip_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_SKIP_FN"));
         static auto& s_only_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_ONLY_FN"));
+        static auto& s_direct_probe_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DIRECT_PROBE_FN"));
         static auto& s_dump_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DUMP_FN"));
         static bool s_trace = getenv("CRANELIFT_TRACE") != nullptr;
 
@@ -1993,6 +2141,25 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
             return false;
         if (s_trace)
             warnln("cranelift: compiling fn#{} ({} dispatches)", func_id, dispatches.size());
+
+        if (s_direct_probe_fn.contains(s_active_function_index)) {
+            auto direct_input = serialize_direct_compiler_input(function);
+            if (!direct_input.has_value()) {
+                warnln("cranelift: unable to serialize direct input for fn#{}", func_id);
+                return false;
+            }
+            cranelift_cache_state().pending_batch.append({
+                {},
+                direct_input.release_value(),
+                CraneliftFrontend::Direct,
+                result_arity,
+                s_active_function_index,
+                &compiled,
+                compiled.cranelift_local_count,
+                compiled.cranelift_param_count,
+            });
+            return false;
+        }
 
         if (s_dump_fn.contains(func_id)) {
             warnln("cranelift: dump fn#{} ({} dispatches)", func_id, dispatches.size());

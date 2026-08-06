@@ -6,8 +6,10 @@
 
 use crate::DirectBlockType as SerializedBlockType;
 use crate::DirectBlockTypeKind;
+use crate::DirectIndirectCallInstructionArguments;
 use crate::DirectInstruction;
 use crate::DirectMemoryInstructionArguments;
+use crate::DirectTableBranchInstructionArguments;
 use crate::DirectValueType as SerializedValueType;
 use crate::DirectValueTypeKind;
 
@@ -123,6 +125,24 @@ pub(super) struct MemoryArgument {
     pub(super) offset: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MemoryCopyArgument {
+    pub(super) source_memory_index: u32,
+    pub(super) destination_memory_index: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct IndirectCallArgument {
+    pub(super) type_index: usize,
+    pub(super) table_index: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TableBranchArgument<'a> {
+    pub(super) targets: &'a [u32],
+    pub(super) default_target: usize,
+}
+
 impl From<DirectMemoryInstructionArguments> for MemoryArgument {
     fn from(argument: DirectMemoryInstructionArguments) -> Self {
         Self {
@@ -151,6 +171,31 @@ impl DirectInstruction {
         usize::try_from(unsafe { self.arguments.label_index }).map_err(|_| "direct label depth overflow")
     }
 
+    pub(super) fn table_branch_argument<'a>(
+        &self,
+        branch_targets: &'a [u32],
+    ) -> Result<TableBranchArgument<'a>, &'static str> {
+        // This wire struct contains only integers, so every bit pattern is valid Rust data. The
+        // parent serializer owns the opcode/payload invariant.
+        let DirectTableBranchInstructionArguments {
+            targets_offset,
+            target_count,
+            default_target,
+        } = unsafe { self.arguments.table_branch };
+        let targets_offset = usize::try_from(targets_offset).map_err(|_| "direct branch-target offset overflow")?;
+        let target_count = usize::try_from(target_count).map_err(|_| "direct branch-target count overflow")?;
+        let targets_end = targets_offset
+            .checked_add(target_count)
+            .ok_or("direct branch-target range overflow")?;
+        let targets = branch_targets
+            .get(targets_offset..targets_end)
+            .ok_or("invalid direct branch-target range")?;
+        Ok(TableBranchArgument {
+            targets,
+            default_target: usize::try_from(default_target).map_err(|_| "direct default label depth overflow")?,
+        })
+    }
+
     pub(super) fn i32_constant(&self) -> i32 {
         // i32 accepts every bit pattern; the parent serializer owns the opcode/payload invariant.
         unsafe { self.arguments.i32_constant }
@@ -161,14 +206,62 @@ impl DirectInstruction {
         unsafe { self.arguments.i64_constant }
     }
 
+    pub(super) fn f32_constant_bits(&self) -> u32 {
+        // f32 accepts every bit pattern; return its bits so NaN payloads remain unchanged.
+        unsafe { self.arguments.f32_constant.to_bits() }
+    }
+
+    pub(super) fn f64_constant_bits(&self) -> u64 {
+        // f64 accepts every bit pattern; return its bits so NaN payloads remain unchanged.
+        unsafe { self.arguments.f64_constant.to_bits() }
+    }
+
     pub(super) fn local_index(&self) -> Result<usize, &'static str> {
         // u32 accepts every bit pattern; the parent serializer owns the opcode/payload invariant.
         usize::try_from(unsafe { self.arguments.local_index }).map_err(|_| "direct local index overflow")
+    }
+
+    pub(super) fn global_index(&self) -> Result<usize, &'static str> {
+        // u32 accepts every bit pattern; the parent serializer owns the opcode/payload invariant.
+        usize::try_from(unsafe { self.arguments.global_index }).map_err(|_| "direct global index overflow")
+    }
+
+    pub(super) fn function_index(&self) -> Result<usize, &'static str> {
+        // u32 accepts every bit pattern; the parent serializer owns the opcode/payload invariant.
+        usize::try_from(unsafe { self.arguments.function_index }).map_err(|_| "direct function index overflow")
+    }
+
+    pub(super) fn indirect_call_argument(&self) -> Result<IndirectCallArgument, &'static str> {
+        // This wire struct contains only integers, so every bit pattern is valid Rust data. The
+        // parent serializer owns the opcode/payload invariant.
+        let DirectIndirectCallInstructionArguments {
+            type_index,
+            table_index,
+        } = unsafe { self.arguments.indirect_call };
+        Ok(IndirectCallArgument {
+            type_index: usize::try_from(type_index).map_err(|_| "direct type index overflow")?,
+            table_index,
+        })
     }
 
     pub(super) fn memory_argument(&self) -> MemoryArgument {
         // This wire struct contains only integers, so every bit pattern is valid Rust data. The
         // parent serializer owns the opcode/payload invariant.
         MemoryArgument::from(unsafe { self.arguments.memory })
+    }
+
+    pub(super) fn memory_copy_argument(&self) -> MemoryCopyArgument {
+        // This wire struct contains only integers, so every bit pattern is valid Rust data. The
+        // parent serializer owns the opcode/payload invariant.
+        let argument = unsafe { self.arguments.memory_copy };
+        MemoryCopyArgument {
+            source_memory_index: argument.source_memory_index,
+            destination_memory_index: argument.destination_memory_index,
+        }
+    }
+
+    pub(super) fn memory_index(&self) -> u32 {
+        // u32 accepts every bit pattern; the parent serializer owns the opcode/payload invariant.
+        unsafe { self.arguments.memory_index }
     }
 }

@@ -17,6 +17,8 @@ use cranelift_codegen::FinalizedRelocTarget;
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::AliasRegionData;
+use cranelift_codegen::ir::Block;
+use cranelift_codegen::ir::BlockArg;
 use cranelift_codegen::ir::ExtFuncData;
 use cranelift_codegen::ir::ExternalName;
 use cranelift_codegen::ir::FuncRef;
@@ -29,6 +31,7 @@ use cranelift_codegen::ir::TrapCode;
 use cranelift_codegen::ir::Type;
 use cranelift_codegen::ir::UserExternalName;
 use cranelift_codegen::ir::Value;
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types;
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::isa::TargetIsa;
@@ -121,6 +124,7 @@ pub(super) struct RuntimeLayout {
     pub(super) callable_module_offset: i32,
     pub(super) callable_compiled_instructions_offset: i32,
     pub(super) compiled_instructions_native_entry_offset: i32,
+    pub(super) compiled_instructions_direct_native_entry_offset: i32,
 }
 
 impl RuntimeLayout {
@@ -153,8 +157,207 @@ impl RuntimeLayout {
             callable_module_offset: layout.callable_module_offset as i32,
             callable_compiled_instructions_offset: layout.callable_compiled_instructions_offset as i32,
             compiled_instructions_native_entry_offset: layout.compiled_instructions_native_entry_offset as i32,
+            compiled_instructions_direct_native_entry_offset: layout.compiled_instructions_direct_native_entry_offset
+                as i32,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NativeIndirectCallLayout {
+    pub(super) table_instances: i32,
+    pub(super) current_module: i32,
+    pub(super) current_canonical_types: i32,
+    pub(super) table_instance_size: i32,
+    pub(super) table_instance_callables: i32,
+    pub(super) callable_defined_type: i32,
+    pub(super) callable_module: i32,
+    pub(super) callable_compiled_instructions: i32,
+    pub(super) compiled_instructions_native_entry: i32,
+}
+
+pub(super) struct NativeIndirectCallTarget {
+    pub(super) native_call: Block,
+    pub(super) fallback_call: Block,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NativeIndirectCallContext {
+    pub(super) pointer_type: Type,
+    pub(super) check_type_signature: SigRef,
+    pub(super) check_type_helper: FuncRef,
+    pub(super) layout: NativeIndirectCallLayout,
+    pub(super) memory_flags: WasmMemoryFlags,
+}
+
+pub(super) fn emit_native_indirect_call_target(
+    builder: &mut FunctionBuilder<'_>,
+    table_index: u32,
+    type_index: u32,
+    configuration: Value,
+    element_index: Value,
+    context: NativeIndirectCallContext,
+) -> Result<NativeIndirectCallTarget, &'static str> {
+    let pointer_type = context.pointer_type;
+    let layout = context.layout;
+    let memory_flags = context.memory_flags;
+    let exact_type = builder.create_block();
+    let subtype_check = builder.create_block();
+    let native_entry_check = builder.create_block();
+    let native_call = builder.create_block();
+    let fallback_call = builder.create_block();
+    builder.set_cold_block(subtype_check);
+    builder.set_cold_block(fallback_call);
+    builder.append_block_param(native_call, pointer_type);
+
+    let table_instances = builder.ins().load(
+        pointer_type,
+        memory_flags.configuration,
+        configuration,
+        layout.table_instances,
+    );
+    let table_offset = i64::from(table_index)
+        .checked_mul(i64::from(pointer_type.bytes()))
+        .ok_or("table index offset overflow")?;
+    let table_offset = builder.ins().iconst(pointer_type, table_offset);
+    let table_address = builder.ins().iadd(table_instances, table_offset);
+    let table = builder.ins().load(pointer_type, memory_flags.tables, table_address, 0);
+    let table_size = builder
+        .ins()
+        .load(pointer_type, memory_flags.tables, table, layout.table_instance_size);
+    let table_size = if pointer_type == types::I64 {
+        table_size
+    } else {
+        builder.ins().uextend(types::I64, table_size)
+    };
+    let in_bounds = builder.ins().icmp(IntCC::UnsignedLessThan, element_index, table_size);
+    builder
+        .ins()
+        .trapz(in_bounds, user_trap_code(CraneliftUserTrapCode::TableOutOfBounds));
+    let callables = builder.ins().load(
+        pointer_type,
+        memory_flags.tables,
+        table,
+        layout.table_instance_callables,
+    );
+    let element_offset = if pointer_type == types::I64 {
+        builder.ins().imul_imm_s(element_index, i64::from(pointer_type.bytes()))
+    } else {
+        let element_index = builder.ins().ireduce(types::I32, element_index);
+        builder.ins().imul_imm_s(element_index, i64::from(pointer_type.bytes()))
+    };
+    let callable_address = builder.ins().iadd(callables, element_offset);
+    let callable = builder
+        .ins()
+        .load(pointer_type, memory_flags.tables, callable_address, 0);
+    let is_callable = builder.ins().icmp_imm_s(IntCC::NotEqual, callable, 0);
+    builder
+        .ins()
+        .trapz(is_callable, user_trap_code(CraneliftUserTrapCode::IndirectCallNull));
+    let actual_type = builder.ins().load(
+        pointer_type,
+        memory_flags.readonly_runtime_metadata,
+        callable,
+        layout.callable_defined_type,
+    );
+    let canonical_types = builder.ins().load(
+        pointer_type,
+        memory_flags.configuration,
+        configuration,
+        layout.current_canonical_types,
+    );
+    let type_offset = i64::from(type_index)
+        .checked_mul(i64::from(pointer_type.bytes()))
+        .ok_or("type index offset overflow")?;
+    let type_offset = builder.ins().iconst(pointer_type, type_offset);
+    let expected_type_address = builder.ins().iadd(canonical_types, type_offset);
+    let expected_type = builder.ins().load(
+        pointer_type,
+        memory_flags.readonly_runtime_metadata,
+        expected_type_address,
+        0,
+    );
+    let is_exact_type = builder.ins().icmp(IntCC::Equal, actual_type, expected_type);
+    builder.ins().brif(is_exact_type, exact_type, &[], subtype_check, &[]);
+
+    builder.switch_to_block(subtype_check);
+    builder.seal_block(subtype_check);
+    let type_check = builder.ins().func_addr(pointer_type, context.check_type_helper);
+    let type_check_call =
+        builder
+            .ins()
+            .call_indirect(context.check_type_signature, type_check, &[actual_type, expected_type]);
+    let type_mismatch = builder.inst_results(type_check_call)[0];
+    builder.ins().trapnz(
+        type_mismatch,
+        user_trap_code(CraneliftUserTrapCode::IndirectCallTypeMismatch),
+    );
+    builder.ins().jump(exact_type, &[]);
+
+    builder.switch_to_block(exact_type);
+    builder.seal_block(exact_type);
+    let callable_module = builder.ins().load(
+        pointer_type,
+        memory_flags.readonly_runtime_metadata,
+        callable,
+        layout.callable_module,
+    );
+    let current_module = builder.ins().load(
+        pointer_type,
+        memory_flags.configuration,
+        configuration,
+        layout.current_module,
+    );
+    let is_same_module = builder.ins().icmp(IntCC::Equal, callable_module, current_module);
+    builder
+        .ins()
+        .brif(is_same_module, native_entry_check, &[], fallback_call, &[]);
+
+    builder.switch_to_block(native_entry_check);
+    builder.seal_block(native_entry_check);
+    let compiled_instructions = builder.ins().load(
+        pointer_type,
+        memory_flags.readonly_runtime_metadata,
+        callable,
+        layout.callable_compiled_instructions,
+    );
+    let native_entry_address = builder.ins().iadd_imm_s(
+        compiled_instructions,
+        i64::from(layout.compiled_instructions_native_entry),
+    );
+    let native_entry = builder
+        .ins()
+        .atomic_load(pointer_type, memory_flags.runtime_metadata, native_entry_address);
+    let has_native_entry = builder.ins().icmp_imm_s(IntCC::NotEqual, native_entry, 0);
+    builder.ins().brif(
+        has_native_entry,
+        native_call,
+        &[BlockArg::Value(native_entry)],
+        fallback_call,
+        &[],
+    );
+
+    builder.seal_block(fallback_call);
+    builder.switch_to_block(native_call);
+    builder.seal_block(native_call);
+
+    Ok(NativeIndirectCallTarget {
+        native_call,
+        fallback_call,
+    })
+}
+
+pub(super) fn declare_helper(builder: &mut FunctionBuilder<'_>, signature: SigRef, id: HelperId) -> FuncRef {
+    let user_ref = builder.func.declare_imported_user_function(UserExternalName {
+        namespace: HELPER_EXTERNAL_NAMESPACE,
+        index: id as u32,
+    });
+    builder.func.import_function(ExtFuncData {
+        name: ExternalName::user(user_ref),
+        signature,
+        colocated: false,
+        patchable: false,
+    })
 }
 
 // The allocated-bytecode frontend imports this complete set in a stable order. The direct
@@ -220,19 +423,6 @@ impl LegacyImportedHelpers {
             check_indirect_type_sig: i32 fn(ptr, ptr);
         }
         let raise_trap_sig = builder.import_signature(Signature::new(host_cc));
-
-        let declare_helper = |builder: &mut FunctionBuilder<'_>, signature, id: HelperId| {
-            let user_ref = builder.func.declare_imported_user_function(UserExternalName {
-                namespace: HELPER_EXTERNAL_NAMESPACE,
-                index: id as u32,
-            });
-            builder.func.import_function(ExtFuncData {
-                name: ExternalName::user(user_ref),
-                signature,
-                colocated: false,
-                patchable: false,
-            })
-        };
 
         let h_call_fn = declare_helper(builder, call_fn_sig, HelperId::call_function);
         let h_mem_size = declare_helper(builder, mem_size_sig, HelperId::memory_size);

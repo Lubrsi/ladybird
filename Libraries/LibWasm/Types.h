@@ -1020,6 +1020,7 @@ struct CompiledInstructions {
     FlatPtr cranelift_entry = 0;
     FlatPtr cranelift_osr_entry = 0;
     FlatPtr cranelift_native_entry = 0;
+    FlatPtr cranelift_direct_native_entry = 0;
     FlatPtr cranelift_code_start = 0;
     void* cranelift_code_handle = nullptr; // Owned; freed when the owning Module is destroyed.
     size_t cranelift_code_size = 0;
@@ -1053,6 +1054,11 @@ inline FlatPtr cranelift_native_entry_acquire(CompiledInstructions const& ci)
     return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_native_entry), AK::MemoryOrder::memory_order_acquire);
 }
 
+inline FlatPtr cranelift_direct_native_entry_acquire(CompiledInstructions const& ci)
+{
+    return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_direct_native_entry), AK::MemoryOrder::memory_order_acquire);
+}
+
 inline FlatPtr cranelift_osr_entry_acquire(CompiledInstructions const& ci)
 {
     return AK::atomic_load(const_cast<FlatPtr volatile*>(&ci.cranelift_osr_entry), AK::MemoryOrder::memory_order_acquire);
@@ -1067,6 +1073,11 @@ inline void publish_cranelift_entry(CompiledInstructions& ci, FlatPtr entry)
 inline void publish_cranelift_native_entry(CompiledInstructions& ci, FlatPtr entry)
 {
     AK::atomic_store(&ci.cranelift_native_entry, entry, AK::MemoryOrder::memory_order_release);
+}
+
+inline void publish_cranelift_direct_native_entry(CompiledInstructions& ci, FlatPtr entry)
+{
+    AK::atomic_store(&ci.cranelift_direct_native_entry, entry, AK::MemoryOrder::memory_order_release);
 }
 
 inline void publish_cranelift_osr_entry(CompiledInstructions& ci, FlatPtr entry)
