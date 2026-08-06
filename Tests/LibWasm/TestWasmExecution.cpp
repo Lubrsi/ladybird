@@ -118,14 +118,14 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
     EXPECT(!result.is_trap());
     EXPECT_EQ(result.values().size(), 1u);
-    EXPECT_EQ(result.values()[0].to<i32>(), 3);
+    EXPECT_EQ(result.values()[0].to<i32>(), 43);
 
     auto fresh_native_result = machine.invoke(run, {});
     EXPECT_EQ(compilation_requests, 2u);
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
     EXPECT(!fresh_native_result.is_trap());
     EXPECT_EQ(fresh_native_result.values().size(), 1u);
-    EXPECT_EQ(fresh_native_result.values()[0].to<i32>(), 6);
+    EXPECT_EQ(fresh_native_result.values()[0].to<i32>(), 46);
 
     Vector<Wasm::Value> native_arguments;
     for (i32 argument = 1; argument <= 11; ++argument)

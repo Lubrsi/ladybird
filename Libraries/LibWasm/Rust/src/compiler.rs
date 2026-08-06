@@ -2585,6 +2585,8 @@ impl CraneliftCompiler {
             let dispatch = builder.create_block();
             let fresh = builder.create_block();
             let resume = builder.create_block();
+            builder.set_cold_block(dispatch);
+            builder.set_cold_block(resume);
             let has_tier_up_target = builder.ins().icmp_imm_s(IntCC::NotEqual, tier_up_target_ip, 0);
             let direct_call_mode = builder.use_var(direct_call_mode_var);
             let is_normal_entry = builder.ins().icmp_imm_s(IntCC::Equal, direct_call_mode, 0);
@@ -4181,6 +4183,7 @@ impl CraneliftCompiler {
                             )
                         };
                         let next_tail = builder.create_block();
+                        builder.set_cold_block(next_tail);
                         builder.switch_to_block(tail);
                         // Tier-up dispatch starts with canonical payloads loaded from the
                         // interpreter configuration. Recreate the typed banks required by this
