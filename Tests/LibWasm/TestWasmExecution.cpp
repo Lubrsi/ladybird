@@ -75,6 +75,77 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count)
     return module;
 }
 
+static Vector<u8> make_mutually_recursive_module()
+{
+    Vector<u8> module { 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
+
+    Vector<u8> type_section { 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f };
+    append_wasm_section(module, 1, move(type_section));
+
+    Vector<u8> function_section { 0x02, 0x00, 0x00 };
+    append_wasm_section(module, 3, move(function_section));
+
+    Vector<u8> export_section { 0x01, 0x03, 'r', 'u', 'n', 0x00, 0x00 };
+    append_wasm_section(module, 7, move(export_section));
+
+    Vector<u8> code_section { 0x02 };
+    for (u32 function_index = 0; function_index < 2; ++function_index) {
+        Vector<u8> body {
+            0x00,
+            0x20,
+            0x00,
+            0x45,
+            0x04,
+            0x7f,
+            0x41,
+            0x00,
+            0x05,
+            0x20,
+            0x00,
+            0x41,
+            0x01,
+            0x6b,
+            0x10,
+            static_cast<u8>(1 - function_index),
+            0x0b,
+            0x0b,
+        };
+        append_unsigned_leb128(code_section, body.size());
+        code_section.extend(move(body));
+    }
+    append_wasm_section(module, 10, move(code_section));
+
+    return module;
+}
+
+static Vector<u8> make_call_indirect_callee_module()
+{
+    Vector<u8> module { 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
+
+    Vector<u8> type_section { 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f };
+    append_wasm_section(module, 1, move(type_section));
+
+    Vector<u8> function_section { 0x02, 0x00, 0x00 };
+    append_wasm_section(module, 3, move(function_section));
+
+    Vector<u8> table_section { 0x01, 0x70, 0x00, 0x01 };
+    append_wasm_section(module, 4, move(table_section));
+
+    Vector<u8> export_section { 0x01, 0x03, 'r', 'u', 'n', 0x00, 0x00 };
+    append_wasm_section(module, 7, move(export_section));
+
+    Vector<u8> code_section { 0x02 };
+    Vector<u8> caller { 0x00, 0x20, 0x00, 0x10, 0x01, 0x0b };
+    append_unsigned_leb128(code_section, caller.size());
+    code_section.extend(move(caller));
+    Vector<u8> callee { 0x00, 0x20, 0x00, 0x41, 0x00, 0x11, 0x00, 0x00, 0x0b };
+    append_unsigned_leb128(code_section, callee.size());
+    code_section.extend(move(callee));
+    append_wasm_section(module, 10, move(code_section));
+
+    return module;
+}
+
 static bool direct_execution_selected(u32 function_index)
 {
     auto const* selected_functions = getenv("CRANELIFT_DIRECT_EXECUTE_FN");
@@ -196,6 +267,116 @@ TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallb
     EXPECT(!result.is_trap());
     EXPECT_EQ(result.values().size(), 1u);
     EXPECT_EQ(result.values()[0].to<i32>(), 42);
+}
+
+TEST_CASE(direct_frontend_only_publishes_closed_call_groups)
+{
+    auto parse_module = [] {
+        auto bytes = make_direct_call_chain_module(2);
+        FixedMemoryStream stream { bytes.span() };
+        return MUST(Wasm::Module::parse(stream));
+    };
+    auto expect_frontends = [](Wasm::Module const& module) {
+        auto const& functions = module.code_section().functions();
+        auto const& caller = functions[0].func().body().compiled_instructions;
+        auto const& callee = functions[1].func().body().compiled_instructions;
+        bool const direct_group_selected = direct_execution_selected(0) && direct_execution_selected(1);
+
+        EXPECT(caller.cranelift_compiled);
+        EXPECT(callee.cranelift_compiled);
+        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller) != 0, direct_group_selected);
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller) != 0, !direct_group_selected);
+        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(callee) != 0, direct_execution_selected(1));
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(callee) != 0, !direct_execution_selected(1));
+    };
+    auto invoke = [](Wasm::AbstractMachine& machine, Wasm::ModuleInstance const& instance) {
+        Optional<Wasm::FunctionAddress> run;
+        for (auto const& export_ : instance.exports()) {
+            if (export_.name() == "run"sv)
+                run = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(run.has_value());
+        return machine.invoke(*run, { Wasm::Value(static_cast<i32>(41)) });
+    };
+
+    ByteBuffer cache_blob;
+    {
+        auto module = parse_module();
+        Wasm::CompileCacheConfig cache_config;
+        cache_config.on_compiled = [&](ByteBuffer blob) {
+            cache_blob = move(blob);
+        };
+
+        Wasm::AbstractMachine machine;
+        MUST(machine.validate(*module, move(cache_config)));
+        expect_frontends(*module);
+        auto instance = MUST(machine.instantiate(*module, {}));
+        auto result = invoke(machine, *instance);
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values()[0].to<i32>(), 42);
+    }
+    EXPECT(!cache_blob.is_empty());
+
+    auto module = parse_module();
+    Wasm::CompileCacheConfig cache_config;
+    cache_config.existing_blob = move(cache_blob);
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, move(cache_config)));
+    expect_frontends(*module);
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto result = invoke(machine, *instance);
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
+}
+
+TEST_CASE(direct_frontend_links_mutually_recursive_group)
+{
+    auto bytes = make_mutually_recursive_module();
+    FixedMemoryStream stream { bytes.span() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    for (auto const& function : module->code_section().functions()) {
+        auto const& compiled = function.func().body().compiled_instructions;
+        EXPECT(compiled.cranelift_compiled);
+        if (direct_execution_selected(0) && direct_execution_selected(1)) {
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        }
+    }
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(6)) });
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 0);
+}
+
+TEST_CASE(direct_frontend_rejects_callers_of_ineligible_selected_callees)
+{
+    auto bytes = make_call_indirect_callee_module();
+    FixedMemoryStream stream { bytes.span() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    if (direct_execution_selected(0) && direct_execution_selected(1)) {
+        for (auto const& function : module->code_section().functions()) {
+            auto const& compiled = function.func().body().compiled_instructions;
+            EXPECT(compiled.cranelift_compiled);
+            EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        }
+    }
 }
 
 TEST_CASE(direct_frontend_explicit_trap_reaches_fault_recovery)
