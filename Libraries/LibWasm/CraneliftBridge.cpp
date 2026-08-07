@@ -164,6 +164,92 @@ static constexpr size_t oop_code_region_min_size = 256 * KiB;
 static constexpr size_t oop_code_bytes_per_insn = 256;
 static constexpr size_t oop_reloc_region_min_size = 64 * KiB;
 static constexpr size_t oop_reloc_bytes_per_insn = 128;
+static constexpr size_t native_code_alignment = 16;
+static constexpr size_t call_veneer_size = 16;
+
+#if ARCH(AARCH64)
+// https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85
+// https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst
+//
+// A64 instructions are four bytes wide. LDR (literal) encodes a signed imm19 scaled by four,
+// BL encodes a signed imm26 scaled by four, and BR encodes its source in the five-bit Rn field.
+// AAPCS64 permits linker-generated veneers to corrupt IP0 (x16), so use it to hold the absolute
+// branch target without clobbering an argument or callee-saved register.
+static constexpr u32 aarch64_instruction_size = sizeof(u32);
+static constexpr u32 aarch64_register_field_width = 5;
+static constexpr u32 aarch64_register_field_mask = (1u << aarch64_register_field_width) - 1;
+static constexpr u32 aarch64_literal_immediate_width = 19;
+static constexpr u32 aarch64_literal_immediate_mask = (1u << aarch64_literal_immediate_width) - 1;
+static constexpr u32 aarch64_branch_immediate_width = 26;
+static constexpr u32 aarch64_branch_immediate_mask = (1u << aarch64_branch_immediate_width) - 1;
+static constexpr u32 aarch64_branch_opcode_mask = ~aarch64_branch_immediate_mask;
+static constexpr u32 aarch64_64_bit_literal_load_opcode = 0x58000000;
+static constexpr u32 aarch64_branch_to_register_opcode = 0xd61f0000;
+static constexpr u32 aarch64_branch_with_link_opcode = 0x94000000;
+static constexpr u32 aarch64_veneer_target_register = 16;
+static constexpr size_t aarch64_veneer_target_offset = 2 * aarch64_instruction_size;
+static constexpr i64 aarch64_literal_minimum_byte_delta = -(1LL << (aarch64_literal_immediate_width - 1)) * aarch64_instruction_size;
+static constexpr i64 aarch64_literal_maximum_byte_delta = (1LL << (aarch64_literal_immediate_width - 1)) * aarch64_instruction_size;
+static constexpr i64 aarch64_branch_minimum_byte_delta = -(1LL << (aarch64_branch_immediate_width - 1)) * aarch64_instruction_size;
+static constexpr i64 aarch64_branch_maximum_byte_delta = (1LL << (aarch64_branch_immediate_width - 1)) * aarch64_instruction_size;
+
+static_assert(aarch64_veneer_target_register <= aarch64_register_field_mask);
+static_assert(aarch64_veneer_target_offset % aarch64_instruction_size == 0);
+static_assert(static_cast<i64>(aarch64_veneer_target_offset) >= aarch64_literal_minimum_byte_delta);
+static_assert(static_cast<i64>(aarch64_veneer_target_offset) < aarch64_literal_maximum_byte_delta);
+static_assert(aarch64_veneer_target_offset + sizeof(FlatPtr) <= call_veneer_size);
+
+static constexpr u32 encode_aarch64_64_bit_literal_load(u32 destination_register, i32 byte_delta)
+{
+    auto const immediate = static_cast<u32>(byte_delta / static_cast<i32>(aarch64_instruction_size))
+        & aarch64_literal_immediate_mask;
+    return aarch64_64_bit_literal_load_opcode | (immediate << aarch64_register_field_width) | destination_register;
+}
+
+static constexpr u32 encode_aarch64_branch_to_register(u32 source_register)
+{
+    return aarch64_branch_to_register_opcode | (source_register << aarch64_register_field_width);
+}
+
+// https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85
+//
+// 1. Require the instruction at the relocation to be BL.
+// 2. Require its byte displacement to be four-byte aligned and representable by signed imm26.
+// 3. Divide the displacement by four and replace BL's imm26 field with that value.
+static Optional<u32> encode_aarch64_branch_with_link(u32 instruction, i64 byte_delta)
+{
+    if ((instruction & aarch64_branch_opcode_mask) != aarch64_branch_with_link_opcode)
+        return {};
+    if (byte_delta % aarch64_instruction_size != 0)
+        return {};
+    if (byte_delta < aarch64_branch_minimum_byte_delta || byte_delta >= aarch64_branch_maximum_byte_delta)
+        return {};
+
+    auto const immediate = static_cast<u32>(byte_delta / aarch64_instruction_size) & aarch64_branch_immediate_mask;
+    return aarch64_branch_with_link_opcode | immediate;
+}
+#elif ARCH(X86_64)
+// https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+//
+// Intel SDM Volume 2 specifies E8 cd as CALL rel32. FF /4 is JMP r/m64; ModRM 00 100 101 selects
+// a RIP-relative memory operand, and a zero disp32 places the absolute target immediately after the
+// instruction.
+static constexpr u8 x86_call_relative_opcode = 0xe8;
+static constexpr u8 x86_group_5_opcode = 0xff;
+static constexpr u8 x86_jump_rip_relative_modrm = 0x25;
+static constexpr size_t x86_relative_displacement_size = sizeof(i32);
+static constexpr u8 x86_indirect_jump_to_next_pointer[] = {
+    x86_group_5_opcode,
+    x86_jump_rip_relative_modrm,
+    0,
+    0,
+    0,
+    0,
+};
+static constexpr size_t x86_veneer_target_offset = sizeof(x86_indirect_jump_to_next_pointer);
+
+static_assert(x86_veneer_target_offset + sizeof(FlatPtr) <= call_veneer_size);
+#endif
 
 static size_t align_up(size_t value, size_t alignment)
 {
@@ -390,29 +476,37 @@ static Optional<i64> address_delta(FlatPtr target, FlatPtr source)
 
 static Optional<FlatPtr> append_call_veneer(PendingCompiledFunction& pending, FlatPtr target)
 {
-    constexpr size_t veneer_size = 16;
-    if (pending.next_veneer_offset > pending.mapping->size || veneer_size > pending.mapping->size - pending.next_veneer_offset)
+    if (pending.next_veneer_offset > pending.mapping->size
+        || call_veneer_size > pending.mapping->size - pending.next_veneer_offset)
         return {};
 
     auto* veneer = static_cast<u8*>(pending.mapping->mapping) + pending.next_veneer_offset;
 #if ARCH(AARCH64)
-    // ldr x16, #8; br x16; .quad target
-    constexpr u32 load_target = 0x58000050;
-    constexpr u32 branch_target = 0xD61F0200;
+    // https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85
+    //
+    // 1. Load the absolute target stored after these two instructions into IP0 (x16).
+    // 2. Branch to the address in IP0 without changing the link register set by the caller's BL.
+    // 3. Store the absolute target in the eight-byte literal read by the first instruction.
+    constexpr u32 load_target = encode_aarch64_64_bit_literal_load(
+        aarch64_veneer_target_register,
+        static_cast<i32>(aarch64_veneer_target_offset));
+    constexpr u32 branch_target = encode_aarch64_branch_to_register(aarch64_veneer_target_register);
     __builtin_memcpy(veneer, &load_target, sizeof(load_target));
     __builtin_memcpy(veneer + sizeof(load_target), &branch_target, sizeof(branch_target));
-    __builtin_memcpy(veneer + 8, &target, sizeof(target));
+    __builtin_memcpy(veneer + aarch64_veneer_target_offset, &target, sizeof(target));
 #elif ARCH(X86_64)
-    // jmp qword ptr [rip]; .quad target
-    constexpr u8 jump_target[] = { 0xff, 0x25, 0, 0, 0, 0 };
-    __builtin_memcpy(veneer, jump_target, sizeof(jump_target));
-    __builtin_memcpy(veneer + sizeof(jump_target), &target, sizeof(target));
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+    //
+    // 1. Jump indirectly through the 64-bit pointer immediately following the instruction.
+    // 2. Store the absolute target in that pointer.
+    __builtin_memcpy(veneer, x86_indirect_jump_to_next_pointer, sizeof(x86_indirect_jump_to_next_pointer));
+    __builtin_memcpy(veneer + x86_veneer_target_offset, &target, sizeof(target));
 #else
     (void)target;
     return {};
 #endif
 
-    pending.next_veneer_offset += veneer_size;
+    pending.next_veneer_offset += call_veneer_size;
     return bit_cast<FlatPtr>(veneer);
 }
 
@@ -431,24 +525,30 @@ static bool patch_direct_call(PendingCompiledFunction& pending, CraneliftRelocat
 
     u32 instruction;
     __builtin_memcpy(&instruction, code_bytes + relocation.code_offset, sizeof(instruction));
-    if ((instruction & 0xfc000000) != 0x94000000)
-        return false;
 
     auto const patch_address = bit_cast<FlatPtr>(code_bytes + relocation.code_offset);
     auto delta = address_delta(resolved_target.value(), patch_address);
-    if (!delta.has_value() || delta.value() % 4 != 0 || delta.value() < -(1 << 27) || delta.value() >= (1 << 27))
+    if (!delta.has_value())
         return false;
 
-    auto const immediate = static_cast<u32>(delta.value() >> 2) & 0x03ffffff;
-    instruction = (instruction & 0xfc000000) | immediate;
-    __builtin_memcpy(code_bytes + relocation.code_offset, &instruction, sizeof(instruction));
+    auto patched_instruction = encode_aarch64_branch_with_link(instruction, delta.value());
+    if (!patched_instruction.has_value())
+        return false;
+    auto const encoded_instruction = patched_instruction.release_value();
+    __builtin_memcpy(code_bytes + relocation.code_offset, &encoded_instruction, sizeof(encoded_instruction));
     return true;
 #elif ARCH(X86_64)
+    // https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+    //
+    // 1. Require E8 immediately before Cranelift's rel32 relocation field.
+    // 2. Require the resolved displacement from that field to fit signed rel32.
+    // 3. Store the displacement; Cranelift's relocation addend accounts for RIP advancing past it.
     if (relocation.kind != CraneliftRelocationKind::X86CallPCRel4)
         return false;
-    if (relocation.code_offset == 0 || static_cast<size_t>(relocation.code_offset) + sizeof(i32) > pending.code_size)
+    if (relocation.code_offset == 0
+        || static_cast<size_t>(relocation.code_offset) + x86_relative_displacement_size > pending.code_size)
         return false;
-    if (code_bytes[relocation.code_offset - 1] != 0xe8)
+    if (code_bytes[relocation.code_offset - 1] != x86_call_relative_opcode)
         return false;
 
     auto const patch_address = bit_cast<FlatPtr>(code_bytes + relocation.code_offset);
@@ -516,10 +616,10 @@ static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes, size_
     if (code_size == 0)
         return {};
 
-    Checked<size_t> veneer_size { veneer_count };
-    veneer_size *= 16;
-    Checked<size_t> writable_size { align_up(code_size, 16) };
-    writable_size += veneer_size;
+    Checked<size_t> veneer_bytes { veneer_count };
+    veneer_bytes *= call_veneer_size;
+    Checked<size_t> writable_size { align_up(code_size, native_code_alignment) };
+    writable_size += veneer_bytes;
     if (writable_size.has_overflow())
         return {};
 
@@ -582,7 +682,7 @@ static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_
         .relocs = move(copied_relocs),
         .code_size = code_bytes.size(),
         .native_entry_offset = native_entry_offset,
-        .next_veneer_offset = align_up(code_bytes.size(), 16),
+        .next_veneer_offset = align_up(code_bytes.size(), native_code_alignment),
     };
 }
 
@@ -2682,7 +2782,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
     size_t total_size = sizeof(CacheBlobHeader);
     for (auto const& r : capture.records) {
         total_size += sizeof(CacheBlobFunctionEntry);
-        total_size += align_up(r.unpatched_code.size(), 16);
+        total_size += align_up(r.unpatched_code.size(), native_code_alignment);
         total_size += r.relocs.size() * sizeof(CraneliftRelocation);
         total_size += r.traps.size() * sizeof(CraneliftTrap);
     }
@@ -2712,7 +2812,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
         offset += sizeof(CacheBlobFunctionEntry);
 
         __builtin_memcpy(out + offset, r.unpatched_code.data(), r.unpatched_code.size());
-        offset += align_up(r.unpatched_code.size(), 16);
+        offset += align_up(r.unpatched_code.size(), native_code_alignment);
 
         auto reloc_bytes = r.relocs.size() * sizeof(CraneliftRelocation);
         if (reloc_bytes > 0)
@@ -2758,7 +2858,7 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
             return false;
 
         auto code_off = offset;
-        auto aligned_code_size = align_up(entry->code_size, 16);
+        auto aligned_code_size = align_up(entry->code_size, native_code_alignment);
         if (code_off + aligned_code_size > blob.size())
             return false;
         offset += aligned_code_size;
