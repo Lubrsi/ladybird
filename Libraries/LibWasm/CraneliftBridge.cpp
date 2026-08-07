@@ -2285,22 +2285,9 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
             if (!serialized_direct_input.has_value()) {
                 warnln("cranelift: unable to serialize direct input for fn#{}", func_id);
             } else {
-                bool direct_execution_supported = true;
-                if (execute_direct) {
-                    for (auto const& instruction : serialized_direct_input->instructions) {
-                        if (instruction.opcode == Instructions::call_indirect.value()) {
-                            warnln("cranelift: direct execution does not yet support call_indirect in fn#{}", func_id);
-                            direct_execution_supported = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (probe_direct || direct_execution_supported) {
-                    direct_input = serialized_direct_input.release_value();
-                    frontend = CraneliftFrontend::Direct;
-                    should_publish = execute_direct && !probe_direct;
-                }
+                direct_input = serialized_direct_input.release_value();
+                frontend = CraneliftFrontend::Direct;
+                should_publish = execute_direct && !probe_direct;
             }
         }
 

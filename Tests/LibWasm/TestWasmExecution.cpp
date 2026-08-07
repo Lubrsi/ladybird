@@ -134,11 +134,14 @@ static Vector<u8> make_call_indirect_callee_module()
     Vector<u8> export_section { 0x01, 0x03, 'r', 'u', 'n', 0x00, 0x00 };
     append_wasm_section(module, 7, move(export_section));
 
+    Vector<u8> element_section { 0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0x01 };
+    append_wasm_section(module, 9, move(element_section));
+
     Vector<u8> code_section { 0x02 };
-    Vector<u8> caller { 0x00, 0x20, 0x00, 0x10, 0x01, 0x0b };
+    Vector<u8> caller { 0x00, 0x20, 0x00, 0x41, 0x00, 0x11, 0x00, 0x00, 0x0b };
     append_unsigned_leb128(code_section, caller.size());
     code_section.extend(move(caller));
-    Vector<u8> callee { 0x00, 0x20, 0x00, 0x41, 0x00, 0x11, 0x00, 0x00, 0x0b };
+    Vector<u8> callee { 0x00, 0x20, 0x00, 0x41, 0x01, 0x6a, 0x0b };
     append_unsigned_leb128(code_section, callee.size());
     code_section.extend(move(callee));
     append_wasm_section(module, 10, move(code_section));
@@ -361,7 +364,7 @@ TEST_CASE(direct_frontend_links_mutually_recursive_group)
     EXPECT_EQ(result.values()[0].to<i32>(), 0);
 }
 
-TEST_CASE(direct_frontend_rejects_callers_of_ineligible_selected_callees)
+TEST_CASE(direct_frontend_executes_indirect_calls)
 {
     auto bytes = make_call_indirect_callee_module();
     FixedMemoryStream stream { bytes.span() };
@@ -373,10 +376,23 @@ TEST_CASE(direct_frontend_rejects_callers_of_ineligible_selected_callees)
         for (auto const& function : module->code_section().functions()) {
             auto const& compiled = function.func().body().compiled_instructions;
             EXPECT(compiled.cranelift_compiled);
-            EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
         }
     }
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(41)) });
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
 }
 
 TEST_CASE(direct_frontend_explicit_trap_reaches_fault_recovery)
@@ -1180,6 +1196,10 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
         auto function_index = export_.description().get<Wasm::FunctionIndex>().value();
         auto const& compiled = functions[function_index].func().body().compiled_instructions;
         EXPECT(compiled.cranelift_compiled);
+        if (direct_execution_selected(function_index)) {
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        }
         auto const expected_indirect_calls = export_.name().starts_with("run_nested_raw_"sv) ? 2u : 1u;
         EXPECT_EQ(compiled.cranelift_indirect_calls.size(), expected_indirect_calls);
     }
@@ -1288,8 +1308,14 @@ TEST_CASE(native_indirect_call_restores_context_after_cross_module_fallback)
     MUST(machine.validate(*caller_module));
 
     EXPECT(provider_module->code_section().functions()[0].func().body().compiled_instructions.cranelift_compiled);
-    for (auto const& function : caller_module->code_section().functions())
-        EXPECT(function.func().body().compiled_instructions.cranelift_compiled);
+    for (size_t function_index = 0; function_index < caller_module->code_section().functions().size(); ++function_index) {
+        auto const& compiled = caller_module->code_section().functions()[function_index].func().body().compiled_instructions;
+        EXPECT(compiled.cranelift_compiled);
+        if (direct_execution_selected(static_cast<u32>(function_index + 1))) {
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        }
+    }
 
     auto provider_instance = MUST(machine.instantiate(*provider_module, {}));
     Optional<Wasm::FunctionAddress> provider_value;

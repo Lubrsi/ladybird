@@ -122,13 +122,9 @@ static bool is_wasm_memory_fault(Wasm::Configuration& configuration, void* addre
     return false;
 }
 
-static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPtr pc)
+static bool record_cranelift_trap_in_expression(CompiledFaultRecoveryContext& recovery, Wasm::Expression const& expression, FlatPtr pc)
 {
-    auto const* expression = recovery.configuration->current_expression();
-    if (!expression)
-        return false;
-
-    auto const& compiled = expression->compiled_instructions;
+    auto const& compiled = expression.compiled_instructions;
     auto const code_start = compiled.cranelift_code_start;
     auto const code_size = compiled.cranelift_code_size;
     if (!compiled.cranelift_compiled || code_start == 0 || pc < code_start || pc >= code_start + code_size)
@@ -144,6 +140,34 @@ static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPt
         recovery.fault_kind = CompiledFaultKind::CraneliftTrap;
         recovery.cranelift_trap_code = trap.code;
         return true;
+    }
+
+    return false;
+}
+
+static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPtr pc)
+{
+    auto const* current_expression = recovery.configuration->current_expression();
+    if (current_expression && record_cranelift_trap_in_expression(recovery, *current_expression, pc))
+        return true;
+
+    // Native callees are frameless and deliberately do not update current_expression around each
+    // call. Trap lookup is cold, so find the callee by its code range instead of adding state
+    // traffic to every native call. Resolve the module's function addresses directly because an
+    // incrementally published callee may not yet be reflected in the current compiled-call table.
+    auto const* module = recovery.configuration->current_module();
+    if (!module)
+        return false;
+    for (auto function_address : module->functions()) {
+        auto const* function_instance = recovery.configuration->store().unsafe_get(function_address);
+        auto const* wasm_function = function_instance->get_pointer<Wasm::WasmFunction>();
+        if (!wasm_function)
+            continue;
+        auto const& expression = wasm_function->code().func().body();
+        if (&expression == current_expression)
+            continue;
+        if (record_cranelift_trap_in_expression(recovery, expression, pc))
+            return true;
     }
 
     return false;
