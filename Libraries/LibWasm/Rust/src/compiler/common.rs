@@ -39,6 +39,7 @@ use cranelift_frontend::FunctionBuilder;
 
 pub(super) const HELPER_EXTERNAL_NAMESPACE: u32 = 0;
 pub(super) const WASM_FUNCTION_EXTERNAL_NAMESPACE: u32 = 1;
+pub(super) const NATIVE_CODE_ALIGNMENT: usize = 16;
 pub(super) const I32_KIND: u8 = 0;
 pub(super) const I64_KIND: u8 = 1;
 pub(super) const F32_KIND: u8 = 2;
@@ -470,6 +471,20 @@ pub(super) fn wasm_abi_type(kind: u8) -> Result<Type, &'static str> {
         F64_KIND => Ok(types::F64),
         _ => Err("unsupported native Wasm ABI type"),
     }
+}
+
+pub(super) fn interpreter_handler_signature(isa: &dyn TargetIsa) -> Signature {
+    // void fn(void* interpreter, void* configuration, void* instruction,
+    //     u32 short_ip, void* dispatch, void* addresses)
+    let pointer_type = isa.pointer_type();
+    let mut signature = Signature::new(isa.default_call_conv());
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(types::I32));
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(pointer_type));
+    signature
 }
 
 pub(super) fn value_to_payload(
