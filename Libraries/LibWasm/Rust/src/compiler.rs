@@ -54,12 +54,14 @@ use common::HELPER_EXTERNAL_NAMESPACE;
 use common::I32_KIND;
 use common::I64_KIND;
 use common::LegacyImportedHelpers;
+use common::NATIVE_CODE_ALIGNMENT;
 use common::NativeIndirectCallLayout;
 use common::NativeIndirectCallTarget;
 use common::RuntimeLayout;
 use common::WASM_FUNCTION_EXTERNAL_NAMESPACE;
 use common::WasmMemoryFlags;
 use common::compile_function;
+use common::interpreter_handler_signature;
 use common::payload_to_value;
 use common::user_trap_code;
 use common::value_to_payload;
@@ -769,19 +771,9 @@ impl CraneliftCompiler {
             .finish(flags)
             .map_err(|_| "failed to build ISA")?;
 
-        // Function signature uses the handler_ptr parameters, but has no return value: entering
-        // through this adapter transfers the current activation to native code until completion.
-        //   void fn(void* interpreter, void* configuration, void* insn, u32 short_ip, void* cc, void* addrs)
         let ptr_type = isa.pointer_type();
         let host_cc = isa.default_call_conv();
-        let mut sig = Signature::new(host_cc);
-        sig.params.push(AbiParam::new(ptr_type)); // interpreter
-        sig.params.push(AbiParam::new(ptr_type)); // configuration
-        sig.params.push(AbiParam::new(ptr_type)); // instruction (unused)
-        sig.params.push(AbiParam::new(types::I32)); // short_ip (unused)
-        sig.params.push(AbiParam::new(ptr_type)); // cc (unused)
-        sig.params.push(AbiParam::new(ptr_type)); // addresses_ptr (unused)
-        let handler_signature = sig;
+        let handler_signature = interpreter_handler_signature(&*isa);
         let native_signature = Self::native_signature(&*isa, function_type)?;
         let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), native_signature.clone());
         let memory_flags = WasmMemoryFlags::new(&mut func);
@@ -4198,7 +4190,7 @@ impl CraneliftCompiler {
         adapter_builder.finalize(isa.frontend_config());
         let adapter = compile_function(&*isa, adapter)?;
 
-        let native_entry_offset = adapter.code.len().div_ceil(16) * 16;
+        let native_entry_offset = adapter.code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
         let native_entry_offset = u32::try_from(native_entry_offset).map_err(|_| "native entry offset overflow")?;
         let mut code = adapter.code;
         code.resize(native_entry_offset as usize, 0);
@@ -4207,7 +4199,7 @@ impl CraneliftCompiler {
         let mut positioned_fallbacks = Vec::with_capacity(fallback_functions.len());
         let mut fallback_offsets = HashMap::with_capacity(fallback_functions.len());
         for (target_index, fallback) in fallback_functions {
-            let fallback_offset = code.len().div_ceil(16) * 16;
+            let fallback_offset = code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
             code.resize(fallback_offset, 0);
             let fallback_offset = u32::try_from(fallback_offset).map_err(|_| "fallback entry offset overflow")?;
             fallback_offsets.insert(target_index, fallback_offset);

@@ -36,6 +36,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::immediates::Ieee32;
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::types;
+use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::Configurable;
 use cranelift_codegen::settings::{self};
@@ -44,7 +45,9 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_frontend::Variable;
 use std::collections::HashMap;
 
+use super::common::CompiledCodeParts;
 use super::common::HELPER_EXTERNAL_NAMESPACE;
+use super::common::NATIVE_CODE_ALIGNMENT;
 use super::common::NativeIndirectCallContext;
 use super::common::NativeIndirectCallLayout;
 use super::common::RuntimeLayout;
@@ -53,7 +56,9 @@ use super::common::WasmMemoryFlags;
 use super::common::compile_function;
 use super::common::declare_helper;
 use super::common::emit_native_indirect_call_target;
+use super::common::interpreter_handler_signature;
 use super::common::user_trap_code;
+use super::common::value_to_payload;
 use super::common::wasm_abi_type;
 use super::direct_input::BlockType;
 use super::direct_input::ValueType as CheckedValueType;
@@ -104,6 +109,16 @@ struct DirectBulkMemoryHelpers {
 pub(crate) struct DirectCompiler;
 
 impl DirectCompiler {
+    fn host_isa() -> Result<OwnedTargetIsa, &'static str> {
+        let mut flag_builder = settings::builder();
+        flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("is_pic", "false").unwrap();
+        cranelift_native::builder()
+            .map_err(|_| "unsupported host architecture")?
+            .finish(settings::Flags::new(flag_builder))
+            .map_err(|_| "failed to build ISA")
+    }
+
     fn checked_direct_type(value_type: CheckedValueType) -> Result<Type, &'static str> {
         match value_type.kind {
             ValueTypeKind::I32 => Ok(types::I32),
@@ -406,11 +421,178 @@ impl DirectCompiler {
         Ok(builder.ins().iadd(address, offset))
     }
 
+    fn compile_fresh_entry_adapter(
+        isa: &dyn TargetIsa,
+        function_index: u32,
+        function_type: WasmFunctionType<'_>,
+        layout: &SerializedRuntimeLayout,
+    ) -> Result<CompiledCodeParts, &'static str> {
+        const VALUE_PAYLOAD_OFFSET: i32 = 0;
+        const VALUE_TAG_OFFSET: i32 = size_of::<u64>() as i32;
+        const MINIMUM_VALUE_SIZE: i32 = VALUE_TAG_OFFSET + size_of::<u64>() as i32;
+        const CONFIGURATION_ARGUMENT_INDEX: usize = 1;
+        const DIRECT_ADAPTER_FUNCTION_NAMESPACE: u32 = 2;
+
+        let runtime_layout = RuntimeLayout::new(layout);
+        if (!function_type.parameters.is_empty() || !function_type.results.is_empty())
+            && runtime_layout.value_size < MINIMUM_VALUE_SIZE
+        {
+            return Err("value layout is too small for direct entry marshalling");
+        }
+
+        let pointer_type = isa.pointer_type();
+        let handler_signature = interpreter_handler_signature(isa);
+        let clean_signature = Self::clean_signature(isa, function_type)?;
+        let mut adapter = Function::with_name_signature(
+            UserFuncName::user(DIRECT_ADAPTER_FUNCTION_NAMESPACE, function_index),
+            handler_signature,
+        );
+        let memory_flags = WasmMemoryFlags::new(&mut adapter);
+        let mut builder_context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut adapter, &mut builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+
+        let handler_arguments = builder.block_params(entry).to_vec();
+        let configuration = handler_arguments[CONFIGURATION_ARGUMENT_INDEX];
+        let locals_base = if function_type.parameters.is_empty() {
+            None
+        } else {
+            Some(builder.ins().load(
+                pointer_type,
+                memory_flags.configuration,
+                configuration,
+                runtime_layout.locals_base_offset,
+            ))
+        };
+        let mut body_arguments = Vec::with_capacity(1 + function_type.parameters.len());
+        body_arguments.push(configuration);
+        if let Some(locals_base) = locals_base {
+            for (parameter_index, &parameter_kind) in function_type.parameters.iter().enumerate() {
+                let parameter_offset = parameter_index
+                    .checked_mul(runtime_layout.value_size as usize)
+                    .and_then(|offset| i32::try_from(offset).ok())
+                    .ok_or("direct adapter parameter offset overflow")?;
+                let parameter_type = wasm_abi_type(parameter_kind)?;
+                body_arguments.push(builder.ins().load(
+                    parameter_type,
+                    memory_flags.activation,
+                    locals_base,
+                    parameter_offset,
+                ));
+            }
+        }
+
+        let body_signature = builder.import_signature(clean_signature);
+        let body_name = builder.func.declare_imported_user_function(UserExternalName {
+            namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
+            index: function_index,
+        });
+        let body_function = builder.func.import_function(ExtFuncData {
+            name: ExternalName::user(body_name),
+            signature: body_signature,
+            colocated: true,
+            patchable: false,
+        });
+        let call = builder.ins().call(body_function, &body_arguments);
+
+        if !function_type.results.is_empty() {
+            let mut value_stack_top = builder.ins().load(
+                pointer_type,
+                memory_flags.configuration,
+                configuration,
+                runtime_layout.value_stack_top_offset,
+            );
+            let zero_tag = builder.ins().iconst(types::I64, 0);
+            let results = builder.inst_results(call).to_vec();
+            for (&result, &result_kind) in results.iter().zip(function_type.results) {
+                let payload = value_to_payload(&mut builder, result, result_kind)?;
+                builder
+                    .ins()
+                    .store(memory_flags.activation, payload, value_stack_top, VALUE_PAYLOAD_OFFSET);
+                builder
+                    .ins()
+                    .store(memory_flags.activation, zero_tag, value_stack_top, VALUE_TAG_OFFSET);
+                value_stack_top = builder
+                    .ins()
+                    .iadd_imm_s(value_stack_top, i64::from(runtime_layout.value_size));
+            }
+            builder.ins().store(
+                memory_flags.configuration,
+                value_stack_top,
+                configuration,
+                runtime_layout.value_stack_top_offset,
+            );
+        }
+
+        builder.ins().return_(&[]);
+        builder.finalize(isa.frontend_config());
+        compile_function(isa, adapter)
+    }
+
+    fn combine_fresh_entry_adapter(
+        adapter: CompiledCodeParts,
+        body: CompiledCodeParts,
+    ) -> Result<CompiledFunction, &'static str> {
+        let native_entry_offset = adapter.code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
+        let native_entry_offset = u32::try_from(native_entry_offset).map_err(|_| "native entry offset overflow")?;
+
+        let mut code = adapter.code;
+        code.resize(native_entry_offset as usize, 0);
+        code.extend_from_slice(&body.code);
+
+        let mut relocs = adapter.relocs;
+        relocs.reserve(body.relocs.len());
+        for mut relocation in body.relocs {
+            relocation.code_offset = relocation
+                .code_offset
+                .checked_add(native_entry_offset)
+                .ok_or("relocation offset overflow")?;
+            relocs.push(relocation);
+        }
+
+        let mut traps = adapter.traps;
+        traps.reserve(body.traps.len());
+        for mut trap in body.traps {
+            trap.offset = trap
+                .offset
+                .checked_add(native_entry_offset)
+                .ok_or("trap offset overflow")?;
+            traps.push(trap);
+        }
+
+        Ok(CompiledFunction {
+            code,
+            native_entry_offset,
+            relocs,
+            traps,
+        })
+    }
+
     pub(crate) fn compile_to_bytes(
         input: DirectCompilerInput<'_>,
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
     ) -> Result<CompiledFunction, &'static str> {
+        let function_index = usize::try_from(options.function_index).map_err(|_| "direct function index overflow")?;
+        let function_type = *input
+            .function_types
+            .get(function_index)
+            .ok_or("missing direct function type")?;
+        let isa = Self::host_isa()?;
+        let body = Self::compile_clean_body(input, layout, options, &*isa)?;
+        let adapter = Self::compile_fresh_entry_adapter(&*isa, options.function_index, function_type, layout)?;
+        Self::combine_fresh_entry_adapter(adapter, body)
+    }
+
+    fn compile_clean_body(
+        input: DirectCompilerInput<'_>,
+        layout: &SerializedRuntimeLayout,
+        options: FunctionCompilationOptions,
+        isa: &dyn TargetIsa,
+    ) -> Result<CompiledCodeParts, &'static str> {
         let DirectCompilerInput {
             instructions,
             branch_targets,
@@ -433,15 +615,8 @@ impl DirectCompiler {
             return Err("direct local type count does not match compilation options");
         }
 
-        let mut flag_builder = settings::builder();
-        flag_builder.set("opt_level", "speed").unwrap();
-        flag_builder.set("is_pic", "false").unwrap();
-        let isa = cranelift_native::builder()
-            .map_err(|_| "unsupported host architecture")?
-            .finish(settings::Flags::new(flag_builder))
-            .map_err(|_| "failed to build ISA")?;
         let pointer_type = isa.pointer_type();
-        let signature = Self::clean_signature(&*isa, function_type)?;
+        let signature = Self::clean_signature(isa, function_type)?;
         let mut function = Function::with_name_signature(
             UserFuncName::user(WASM_FUNCTION_EXTERNAL_NAMESPACE, options.function_index),
             signature,
@@ -597,7 +772,7 @@ impl DirectCompiler {
                 .copied()
                 .flatten()
                 .ok_or("direct indirect-call type is not a function type")?;
-            let signature = builder.import_signature(Self::clean_direct_signature(&*isa, target_type)?);
+            let signature = builder.import_signature(Self::clean_direct_signature(isa, target_type)?);
             indirect_call_signatures.insert(argument.type_index, signature);
         }
         let mut direct_call_targets = HashMap::new();
@@ -609,7 +784,7 @@ impl DirectCompiler {
             let target_type = *function_types
                 .get(target_index)
                 .ok_or("missing direct-call function type")?;
-            let target_signature = builder.import_signature(Self::clean_signature(&*isa, target_type)?);
+            let target_signature = builder.import_signature(Self::clean_signature(isa, target_type)?);
             let target_index_u32 = u32::try_from(target_index).map_err(|_| "direct-call function index overflow")?;
             let user_ref = builder.func.declare_imported_user_function(UserExternalName {
                 namespace: WASM_FUNCTION_EXTERNAL_NAMESPACE,
@@ -1812,13 +1987,7 @@ impl DirectCompiler {
             return Err("unterminated direct function");
         }
         builder.finalize(isa.frontend_config());
-        let body = compile_function(&*isa, function)?;
-        Ok(CompiledFunction {
-            code: body.code,
-            native_entry_offset: 0,
-            relocs: body.relocs,
-            traps: body.traps,
-        })
+        compile_function(isa, function)
     }
 }
 
@@ -1837,6 +2006,15 @@ mod tests {
 
     fn instruction(opcode: u64, arguments: DirectInstructionArguments) -> DirectInstruction {
         DirectInstruction { opcode, arguments }
+    }
+
+    fn runtime_layout() -> SerializedRuntimeLayout {
+        SerializedRuntimeLayout {
+            value_size: 16,
+            locals_base_offset: 32,
+            value_stack_top_offset: 64,
+            ..SerializedRuntimeLayout::default()
+        }
     }
 
     fn no_arguments(opcode: u64) -> DirectInstruction {
@@ -1930,7 +2108,7 @@ mod tests {
                 module_types: &[],
                 global_types: &[],
             },
-            &SerializedRuntimeLayout::default(),
+            &runtime_layout(),
             FunctionCompilationOptions {
                 result_arity: 0,
                 num_locals: 2,
@@ -1972,7 +2150,7 @@ mod tests {
                 module_types: &[],
                 global_types: &[v128_type],
             },
-            &SerializedRuntimeLayout::default(),
+            &runtime_layout(),
             FunctionCompilationOptions {
                 result_arity: 0,
                 num_locals: 1,
@@ -2019,7 +2197,7 @@ mod tests {
                 module_types: &[],
                 global_types: &[],
             },
-            &SerializedRuntimeLayout::default(),
+            &runtime_layout(),
             FunctionCompilationOptions {
                 result_arity: 0,
                 num_locals: 0,
@@ -2067,7 +2245,7 @@ mod tests {
                 module_types: &[],
                 global_types: &[],
             },
-            &SerializedRuntimeLayout::default(),
+            &runtime_layout(),
             FunctionCompilationOptions {
                 result_arity: 0,
                 num_locals: 0,
@@ -2090,6 +2268,95 @@ mod tests {
                 .relocs
                 .iter()
                 .any(|relocation| relocation.target_index == HelperId::memory_fill as u32)
+        );
+    }
+
+    #[test]
+    fn fresh_entry_adapter_preserves_clean_body_bytes() {
+        let instructions = [
+            local(op::LOCAL_GET, 0),
+            local(op::LOCAL_GET, 1),
+            local(op::LOCAL_GET, 2),
+            local(op::LOCAL_GET, 3),
+            no_arguments(op::END),
+        ];
+        let parameters = [
+            I32_KIND,
+            super::super::common::I64_KIND,
+            super::super::common::F32_KIND,
+            super::super::common::F64_KIND,
+        ];
+        let function_types = [WasmFunctionType {
+            parameters: &parameters,
+            results: &parameters,
+        }];
+        let options = FunctionCompilationOptions {
+            result_arity: 4,
+            num_locals: 4,
+            num_params: 4,
+            function_index: 0,
+            max_call_rec_size: 0,
+        };
+        let input = || DirectCompilerInput {
+            instructions: &instructions,
+            branch_targets: &[],
+            local_types: &[],
+            function_types: &function_types,
+            module_types: &[],
+            global_types: &[],
+        };
+        let layout = runtime_layout();
+        let isa = DirectCompiler::host_isa().expect("host ISA should be available");
+        let clean_body = DirectCompiler::compile_clean_body(input(), &layout, options, &*isa)
+            .expect("clean direct compilation should succeed");
+        let compiled = DirectCompiler::compile_to_bytes(input(), &layout, options)
+            .expect("direct compilation with a fresh-entry adapter should succeed");
+        let native_entry_offset = compiled.native_entry_offset as usize;
+
+        assert!(native_entry_offset > 0);
+        assert_eq!(native_entry_offset % NATIVE_CODE_ALIGNMENT, 0);
+        assert_eq!(&compiled.code[native_entry_offset..], clean_body.code);
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.code_offset < compiled.native_entry_offset
+                && relocation.target_kind == crate::CraneliftRelocationTargetKind::WasmFunction
+                && relocation.target_index == options.function_index
+        }));
+    }
+
+    #[test]
+    fn fresh_entry_adapter_offsets_clean_body_traps() {
+        let instructions = [no_arguments(op::UNREACHABLE), no_arguments(op::END)];
+        let results = [I32_KIND];
+        let function_types = [WasmFunctionType {
+            parameters: &[],
+            results: &results,
+        }];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[],
+                function_types: &function_types,
+                module_types: &[],
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 1,
+                num_locals: 0,
+                num_params: 0,
+                function_index: 0,
+                max_call_rec_size: 0,
+            },
+        )
+        .expect("direct trap compilation should succeed");
+
+        assert!(!compiled.traps.is_empty());
+        assert!(
+            compiled
+                .traps
+                .iter()
+                .all(|trap| trap.offset >= compiled.native_entry_offset)
         );
     }
 }
