@@ -57,6 +57,7 @@ use super::common::compile_function;
 use super::common::declare_helper;
 use super::common::emit_native_indirect_call_target;
 use super::common::interpreter_handler_signature;
+use super::common::payload_to_value;
 use super::common::user_trap_code;
 use super::common::value_to_payload;
 use super::common::wasm_abi_type;
@@ -532,9 +533,133 @@ impl DirectCompiler {
         compile_function(isa, adapter)
     }
 
+    fn compile_interpreter_call_fallback(
+        isa: &dyn TargetIsa,
+        function_index: u32,
+        function_type: WasmFunctionType<'_>,
+        layout: &SerializedRuntimeLayout,
+    ) -> Result<CompiledCodeParts, &'static str> {
+        const DIRECT_FALLBACK_FUNCTION_NAMESPACE: u32 = 3;
+
+        if function_type.results.len() > 1 {
+            return Err("multi-value direct call fallback is not yet supported");
+        }
+
+        let pointer_type = isa.pointer_type();
+        let signature = Self::clean_signature(isa, function_type)?;
+        let mut fallback = Function::with_name_signature(
+            UserFuncName::user(DIRECT_FALLBACK_FUNCTION_NAMESPACE, function_index),
+            signature,
+        );
+        let memory_flags = WasmMemoryFlags::new(&mut fallback);
+        let runtime_layout = RuntimeLayout::new(layout);
+        let mut builder_context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut fallback, &mut builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+
+        let entry_parameters = builder.block_params(entry).to_vec();
+        let configuration = entry_parameters[0];
+        let original_top = builder.ins().load(
+            pointer_type,
+            memory_flags.configuration,
+            configuration,
+            runtime_layout.value_stack_top_offset,
+        );
+        let zero_tag = builder.ins().iconst(types::I64, 0);
+        for (index, (&argument, &kind)) in entry_parameters[1..].iter().zip(function_type.parameters).enumerate() {
+            let offset = i32::try_from(index * runtime_layout.value_size as usize)
+                .map_err(|_| "direct call fallback argument offset overflow")?;
+            let payload = value_to_payload(&mut builder, argument, kind)?;
+            builder
+                .ins()
+                .store(memory_flags.activation, payload, original_top, offset);
+            builder
+                .ins()
+                .store(memory_flags.activation, zero_tag, original_top, offset + 8);
+        }
+        let arguments_size = i64::try_from(function_type.parameters.len() * runtime_layout.value_size as usize)
+            .map_err(|_| "direct call fallback argument size overflow")?;
+        let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
+        builder.ins().store(
+            memory_flags.configuration,
+            arguments_top,
+            configuration,
+            runtime_layout.value_stack_top_offset,
+        );
+
+        let mut current_interpreter_signature = Signature::new(isa.default_call_conv());
+        current_interpreter_signature.returns.push(AbiParam::new(pointer_type));
+        let current_interpreter_signature = builder.import_signature(current_interpreter_signature);
+        let current_interpreter = declare_helper(
+            &mut builder,
+            current_interpreter_signature,
+            HelperId::current_interpreter,
+        );
+        let current_interpreter_address = builder.ins().func_addr(pointer_type, current_interpreter);
+        let current_interpreter_call =
+            builder
+                .ins()
+                .call_indirect(current_interpreter_signature, current_interpreter_address, &[]);
+        let interpreter = builder.inst_results(current_interpreter_call)[0];
+
+        let mut call_signature = Signature::new(isa.default_call_conv());
+        call_signature.params.push(AbiParam::new(pointer_type));
+        call_signature.params.push(AbiParam::new(pointer_type));
+        call_signature.params.push(AbiParam::new(types::I32));
+        call_signature.returns.push(AbiParam::new(types::I32));
+        let call_signature = builder.import_signature(call_signature);
+        let call_function = declare_helper(&mut builder, call_signature, HelperId::call_function);
+        let call_address = builder.ins().func_addr(pointer_type, call_function);
+        let target_index = builder.ins().iconst(types::I32, i64::from(function_index));
+        let call = builder.ins().call_indirect(
+            call_signature,
+            call_address,
+            &[interpreter, configuration, target_index],
+        );
+        let status = builder.inst_results(call)[0];
+        let trapped = builder.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
+        let trap_block = builder.create_block();
+        let return_block = builder.create_block();
+        builder.set_cold_block(trap_block);
+        builder.ins().brif(trapped, trap_block, &[], return_block, &[]);
+
+        builder.switch_to_block(trap_block);
+        builder.seal_block(trap_block);
+        let raise_trap_signature = builder.import_signature(Signature::new(isa.default_call_conv()));
+        let raise_trap = declare_helper(&mut builder, raise_trap_signature, HelperId::raise_trap);
+        let raise_trap_address = builder.ins().func_addr(pointer_type, raise_trap);
+        builder
+            .ins()
+            .call_indirect(raise_trap_signature, raise_trap_address, &[]);
+        builder.ins().trap(user_trap_code(CraneliftUserTrapCode::Unreachable));
+
+        builder.switch_to_block(return_block);
+        builder.seal_block(return_block);
+        builder.ins().store(
+            memory_flags.configuration,
+            original_top,
+            configuration,
+            runtime_layout.value_stack_top_offset,
+        );
+        if let Some(&result_kind) = function_type.results.first() {
+            let payload = builder.ins().load(types::I64, memory_flags.activation, original_top, 0);
+            let result = payload_to_value(&mut builder, payload, result_kind)?;
+            builder.ins().return_(&[result]);
+        } else {
+            builder.ins().return_(&[]);
+        }
+
+        builder.finalize(isa.frontend_config());
+        compile_function(isa, fallback)
+    }
+
     fn combine_fresh_entry_adapter(
         adapter: CompiledCodeParts,
         body: CompiledCodeParts,
+        fallback_functions: Vec<(u32, CompiledCodeParts)>,
     ) -> Result<CompiledFunction, &'static str> {
         let native_entry_offset = adapter.code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
         let native_entry_offset = u32::try_from(native_entry_offset).map_err(|_| "native entry offset overflow")?;
@@ -543,24 +668,66 @@ impl DirectCompiler {
         code.resize(native_entry_offset as usize, 0);
         code.extend_from_slice(&body.code);
 
+        let mut positioned_fallbacks = Vec::with_capacity(fallback_functions.len());
+        let mut fallback_offsets = HashMap::with_capacity(fallback_functions.len());
+        for (target_index, fallback) in fallback_functions {
+            let fallback_offset = code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
+            code.resize(fallback_offset, 0);
+            let fallback_offset = u32::try_from(fallback_offset).map_err(|_| "fallback entry offset overflow")?;
+            fallback_offsets.insert(target_index, fallback_offset);
+            code.extend_from_slice(&fallback.code);
+            positioned_fallbacks.push((fallback_offset, fallback));
+        }
+
         let mut relocs = adapter.relocs;
-        relocs.reserve(body.relocs.len());
+        let fallback_reloc_count = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.relocs.len())
+            .sum::<usize>();
+        relocs.reserve(body.relocs.len() + fallback_reloc_count);
         for mut relocation in body.relocs {
             relocation.code_offset = relocation
                 .code_offset
                 .checked_add(native_entry_offset)
                 .ok_or("relocation offset overflow")?;
+            if relocation.target_kind == crate::CraneliftRelocationTargetKind::WasmFunction {
+                relocation.fallback_offset = *fallback_offsets
+                    .get(&relocation.target_index)
+                    .ok_or("missing direct-call fallback")?;
+            }
             relocs.push(relocation);
+        }
+        for (fallback_offset, fallback) in &positioned_fallbacks {
+            for mut relocation in fallback.relocs.iter().copied() {
+                relocation.code_offset = relocation
+                    .code_offset
+                    .checked_add(*fallback_offset)
+                    .ok_or("fallback relocation offset overflow")?;
+                relocs.push(relocation);
+            }
         }
 
         let mut traps = adapter.traps;
-        traps.reserve(body.traps.len());
+        let fallback_trap_count = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.traps.len())
+            .sum::<usize>();
+        traps.reserve(body.traps.len() + fallback_trap_count);
         for mut trap in body.traps {
             trap.offset = trap
                 .offset
                 .checked_add(native_entry_offset)
                 .ok_or("trap offset overflow")?;
             traps.push(trap);
+        }
+        for (fallback_offset, fallback) in positioned_fallbacks {
+            for mut trap in fallback.traps {
+                trap.offset = trap
+                    .offset
+                    .checked_add(fallback_offset)
+                    .ok_or("fallback trap offset overflow")?;
+                traps.push(trap);
+            }
         }
 
         Ok(CompiledFunction {
@@ -577,14 +744,33 @@ impl DirectCompiler {
         options: FunctionCompilationOptions,
     ) -> Result<CompiledFunction, &'static str> {
         let function_index = usize::try_from(options.function_index).map_err(|_| "direct function index overflow")?;
-        let function_type = *input
-            .function_types
+        let function_types = input.function_types;
+        let function_type = *function_types
             .get(function_index)
             .ok_or("missing direct function type")?;
+        let mut fallback_target_indices = input
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == op::CALL)
+            .map(|instruction| {
+                let target_index = instruction.function_index()?;
+                u32::try_from(target_index).map_err(|_| "direct-call function index overflow")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        fallback_target_indices.sort_unstable();
+        fallback_target_indices.dedup();
         let isa = Self::host_isa()?;
         let body = Self::compile_clean_body(input, layout, options, &*isa)?;
         let adapter = Self::compile_fresh_entry_adapter(&*isa, options.function_index, function_type, layout)?;
-        Self::combine_fresh_entry_adapter(adapter, body)
+        let mut fallback_functions = Vec::with_capacity(fallback_target_indices.len());
+        for target_index in fallback_target_indices {
+            let target_type = *function_types
+                .get(target_index as usize)
+                .ok_or("missing direct-call fallback function type")?;
+            let fallback = Self::compile_interpreter_call_fallback(&*isa, target_index, target_type, layout)?;
+            fallback_functions.push((target_index, fallback));
+        }
+        Self::combine_fresh_entry_adapter(adapter, body, fallback_functions)
     }
 
     fn compile_clean_body(
@@ -2209,6 +2395,61 @@ mod tests {
         .expect("direct compilation should support branch tables");
 
         assert!(!compiled.code.is_empty());
+    }
+
+    #[test]
+    fn direct_calls_have_interpreter_fallbacks() {
+        let instructions = [
+            local(op::LOCAL_GET, 0),
+            instruction(op::CALL, DirectInstructionArguments { function_index: 1 }),
+            no_arguments(op::END),
+        ];
+        let parameters = [I32_KIND];
+        let results = [I32_KIND];
+        let function_types = [
+            WasmFunctionType {
+                parameters: &parameters,
+                results: &results,
+            },
+            WasmFunctionType {
+                parameters: &parameters,
+                results: &results,
+            },
+        ];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[],
+                function_types: &function_types,
+                module_types: &[],
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 1,
+                num_locals: 1,
+                num_params: 1,
+                function_index: 0,
+                max_call_rec_size: 1,
+            },
+        )
+        .expect("direct compilation should include a static-call fallback");
+
+        let direct_call = compiled
+            .relocs
+            .iter()
+            .find(|relocation| {
+                relocation.target_kind == crate::CraneliftRelocationTargetKind::WasmFunction
+                    && relocation.target_index == 1
+            })
+            .expect("direct call relocation should be present");
+        assert_ne!(direct_call.fallback_offset, u32::MAX);
+        assert!((direct_call.fallback_offset as usize) < compiled.code.len());
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
+                && relocation.target_index == HelperId::call_function as u32
+        }));
     }
 
     #[test]

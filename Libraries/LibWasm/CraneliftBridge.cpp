@@ -2379,6 +2379,16 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
     VERIFY(indirect_call_index == compiled.cranelift_indirect_calls.size());
 
+    auto num_locals = compiled.cranelift_local_count;
+    if (frontend == CraneliftFrontend::Direct) {
+        VERIFY(direct_input.has_value());
+        Checked<u32> direct_local_count = compiled.cranelift_param_count;
+        direct_local_count += direct_input->local_types.size();
+        if (direct_local_count.has_overflow())
+            return false;
+        num_locals = direct_local_count.value();
+    }
+
     cranelift_cache_state().pending_batch.append({
         move(flat),
         move(direct_input),
@@ -2387,7 +2397,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         result_arity,
         s_active_function_index,
         &compiled,
-        compiled.cranelift_local_count,
+        num_locals,
         compiled.cranelift_param_count,
     });
     return false; // Not compiled yet, will be compiled in flush.
@@ -2418,48 +2428,8 @@ static Optional<FunctionIndex> native_direct_call_target(DirectInstruction const
     return FunctionIndex { instruction.arguments.function_index };
 }
 
-static void finalize_direct_execution_groups(Vector<BatchInput>& inputs, Module const& module)
+static void finalize_frontend_inputs(Vector<BatchInput>& inputs)
 {
-    HashTable<FunctionIndex> direct_targets;
-    auto function_index = imported_function_count(module);
-    for (auto const& function : module.code_section().functions()) {
-        auto const& compiled = function.func().body().compiled_instructions;
-        if (cranelift_direct_native_entry_acquire(compiled) != 0)
-            direct_targets.set(FunctionIndex { static_cast<u32>(function_index) });
-        ++function_index;
-    }
-    for (auto const& input : inputs) {
-        if (input.frontend == CraneliftFrontend::Direct && input.should_publish)
-            direct_targets.set(FunctionIndex { input.function_index });
-    }
-
-    bool changed;
-    do {
-        changed = false;
-        for (auto& input : inputs) {
-            if (input.frontend != CraneliftFrontend::Direct || !input.should_publish)
-                continue;
-
-            VERIFY(input.direct_input.has_value());
-            Optional<FunctionIndex> unavailable_target;
-            for (auto const& instruction : input.direct_input->instructions) {
-                auto target = native_direct_call_target(instruction);
-                if (target.has_value() && !direct_targets.contains(target.value())) {
-                    unavailable_target = target;
-                    break;
-                }
-            }
-            if (!unavailable_target.has_value())
-                continue;
-
-            warnln("cranelift: direct fn#{} cannot link direct fn#{}; using allocated-bytecode frontend", input.function_index, unavailable_target->value());
-            direct_targets.remove(FunctionIndex { input.function_index });
-            input.frontend = CraneliftFrontend::AllocatedBytecode;
-            input.direct_input.clear();
-            changed = true;
-        }
-    } while (changed);
-
     for (auto& input : inputs) {
         if (input.frontend == CraneliftFrontend::Direct)
             input.insns.clear();
@@ -2820,7 +2790,7 @@ void flush_cranelift_batch(Module const& module)
         return;
 
     if (!state.pending_batch.is_empty()) {
-        finalize_direct_execution_groups(state.pending_batch, module);
+        finalize_frontend_inputs(state.pending_batch);
         auto result = compile_incremental_batches(state.pending_batch, module);
         if (result.is_error())
             warnln("Cranelift compilation failed: {}", result.error());

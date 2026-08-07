@@ -272,7 +272,7 @@ TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallb
     EXPECT_EQ(result.values()[0].to<i32>(), 42);
 }
 
-TEST_CASE(direct_frontend_only_publishes_closed_call_groups)
+TEST_CASE(direct_frontend_static_call_falls_back_to_interpreter)
 {
     auto parse_module = [] {
         auto bytes = make_direct_call_chain_module(2);
@@ -283,12 +283,10 @@ TEST_CASE(direct_frontend_only_publishes_closed_call_groups)
         auto const& functions = module.code_section().functions();
         auto const& caller = functions[0].func().body().compiled_instructions;
         auto const& callee = functions[1].func().body().compiled_instructions;
-        bool const direct_group_selected = direct_execution_selected(0) && direct_execution_selected(1);
-
         EXPECT(caller.cranelift_compiled);
         EXPECT(callee.cranelift_compiled);
-        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller) != 0, direct_group_selected);
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller) != 0, !direct_group_selected);
+        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller) != 0, direct_execution_selected(0));
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller) != 0, !direct_execution_selected(0));
         EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(callee) != 0, direct_execution_selected(1));
         EXPECT_EQ(Wasm::cranelift_native_entry_acquire(callee) != 0, !direct_execution_selected(1));
     };
@@ -1022,6 +1020,10 @@ TEST_CASE(native_direct_call_falls_back_for_imported_callee)
 
     auto const& caller = module->code_section().functions()[0].func().body().compiled_instructions;
     EXPECT(caller.cranelift_compiled);
+    if (direct_execution_selected(1)) {
+        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(caller), 0u);
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller), 0u);
+    }
 
     Wasm::FunctionType sum_type {
         { Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32) },
@@ -1062,8 +1064,14 @@ TEST_CASE(native_direct_call_restores_context_after_trap)
     Wasm::AbstractMachine machine;
     MUST(machine.validate(*module));
 
-    for (auto const& function : module->code_section().functions())
-        EXPECT(function.func().body().compiled_instructions.cranelift_compiled);
+    for (size_t function_index = 0; function_index < module->code_section().functions().size(); ++function_index) {
+        auto const& compiled = module->code_section().functions()[function_index].func().body().compiled_instructions;
+        EXPECT(compiled.cranelift_compiled);
+        if (direct_execution_selected(static_cast<u32>(function_index))) {
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        }
+    }
 
     auto instance = MUST(machine.instantiate(*module, {}));
     auto find_export = [&](StringView name) {
