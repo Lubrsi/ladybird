@@ -5,6 +5,7 @@
  */
 
 #include <AK/Array.h>
+#include <AK/AnyOf.h>
 #include <AK/ByteString.h>
 #include <AK/Checked.h>
 #include <AK/DistinctNumeric.h>
@@ -153,6 +154,7 @@ struct CodeMapping {
 struct PendingCompiledFunction {
     u32 function_index;
     CompiledInstructions* target;
+    CraneliftFrontend frontend;
     OwnPtr<CodeMapping> mapping;
     Vector<CraneliftRelocation> relocs;
     size_t code_size;
@@ -313,6 +315,7 @@ struct BatchInput {
     Vector<CraneliftInsn> insns;
     Optional<DirectCompilerInput> direct_input;
     CraneliftFrontend frontend;
+    bool should_publish;
     u32 result_arity;
     u32 function_index;
     CompiledInstructions* target;
@@ -320,11 +323,18 @@ struct BatchInput {
     u32 num_params;
 };
 
+static size_t compiler_instruction_count(BatchInput const& input)
+{
+    if (input.direct_input.has_value())
+        return input.direct_input->instructions.size();
+    return input.insns.size();
+}
+
 // Disk-cache blob format. Stable: cached files name format_version + layout_hash so
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 30;
+constexpr u32 cache_blob_format_version = 31;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -343,13 +353,14 @@ struct CacheBlobFunctionEntry {
     u32 native_entry_offset;
     u32 reloc_count;
     u32 trap_count;
-    u32 _pad;
+    u32 frontend;
 };
 static_assert(sizeof(CacheBlobFunctionEntry) == 24);
 
 struct CacheRecord {
     u32 function_index;
     u32 native_entry_offset;
+    CraneliftFrontend frontend;
     ByteBuffer unpatched_code;
     Vector<CraneliftRelocation> relocs;
     Vector<CraneliftTrap> traps;
@@ -596,8 +607,13 @@ static bool apply_relocations(PendingCompiledFunction& pending, RuntimeHelperAdd
                 if (relocation.fallback_offset >= pending.code_size)
                     return false;
                 target = bit_cast<FlatPtr>(code_bytes + relocation.fallback_offset);
-            } else {
+            } else if (pending.frontend == CraneliftFrontend::AllocatedBytecode) {
                 target = bit_cast<FlatPtr>(&wasm_cl_direct_call_with_record_fallback);
+            } else {
+                // The direct frontend's typed call ABI is not compatible with the allocated-
+                // bytecode bridge. Direct functions are currently selected for publication only
+                // when every Wasm-function relocation resolves to another direct body.
+                return false;
             }
         }
         if (patch_direct_call(pending, relocation, target, true))
@@ -655,7 +671,7 @@ static OwnPtr<CodeMapping> allocate_code_mapping(ReadonlyBytes code_bytes, size_
 #endif
 }
 
-static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_index, CompiledInstructions& target, ReadonlyBytes code_bytes, size_t native_entry_offset, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps)
+static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_index, CompiledInstructions& target, CraneliftFrontend frontend, ReadonlyBytes code_bytes, size_t native_entry_offset, ReadonlySpan<CraneliftRelocation> relocs, ReadonlySpan<CraneliftTrap> traps)
 {
     if (target.dispatches.is_empty())
         return {};
@@ -678,6 +694,7 @@ static Optional<PendingCompiledFunction> prepare_compiled_function(u32 function_
     return PendingCompiledFunction {
         .function_index = function_index,
         .target = &target,
+        .frontend = frontend,
         .mapping = move(mapping),
         .relocs = move(copied_relocs),
         .code_size = code_bytes.size(),
@@ -725,9 +742,14 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
     pending.target->cranelift_traps = handle->traps.data();
     pending.target->cranelift_trap_count = handle->traps.size();
     pending.target->cranelift_compiled = true;
-    publish_cranelift_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
-    publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
-    publish_cranelift_osr_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+    if (pending.frontend == CraneliftFrontend::Direct) {
+        publish_cranelift_direct_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
+        publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+    } else {
+        publish_cranelift_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
+        publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+        publish_cranelift_osr_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
+    }
 }
 
 static size_t imported_function_count(Module const& module)
@@ -748,21 +770,26 @@ static size_t imported_function_count(Module const& module)
 
 static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelperAddresses const& helper_addresses, Module const& module)
 {
-    HashMap<u32, FlatPtr> native_targets;
+    HashMap<u32, FlatPtr> allocated_bytecode_targets;
+    HashMap<u32, FlatPtr> direct_targets;
     auto function_index = imported_function_count(module);
     for (auto const& function : module.code_section().functions()) {
         auto const& compiled = function.func().body().compiled_instructions;
         if (auto native_entry = cranelift_native_entry_acquire(compiled); native_entry != 0)
-            native_targets.set(static_cast<u32>(function_index), native_entry);
+            allocated_bytecode_targets.set(static_cast<u32>(function_index), native_entry);
+        if (auto direct_native_entry = cranelift_direct_native_entry_acquire(compiled); direct_native_entry != 0)
+            direct_targets.set(static_cast<u32>(function_index), direct_native_entry);
         ++function_index;
     }
     for (auto const& pending : pending_functions) {
         auto* native_entry = static_cast<u8*>(pending.mapping->mapping) + pending.native_entry_offset;
-        native_targets.set(pending.function_index, bit_cast<FlatPtr>(native_entry));
+        auto& targets = pending.frontend == CraneliftFrontend::Direct ? direct_targets : allocated_bytecode_targets;
+        targets.set(pending.function_index, bit_cast<FlatPtr>(native_entry));
     }
 
     for (auto& pending : pending_functions) {
-        if (!link_compiled_function(pending, helper_addresses, native_targets))
+        auto const& targets = pending.frontend == CraneliftFrontend::Direct ? direct_targets : allocated_bytecode_targets;
+        if (!link_compiled_function(pending, helper_addresses, targets))
             return;
     }
 
@@ -1743,7 +1770,11 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     if (align_up(module_type_values_cursor, alignof(DirectValueType)) != aligned_global_types_offset)
         return Error::from_string_literal("Cranelift module type values are not canonical");
 
-    auto output_size = TRY(compute_output_buffer_size(header.function_count, instruction_count));
+    Checked<size_t> compiler_instruction_count = instruction_count;
+    compiler_instruction_count += direct_instruction_count;
+    if (compiler_instruction_count.has_overflow())
+        return Error::from_string_literal("Cranelift compiler instruction count overflow");
+    auto output_size = TRY(compute_output_buffer_size(header.function_count, compiler_instruction_count.value()));
     if (header.output_size != output_size)
         return Error::from_string_literal("Cranelift output size does not match its input");
 
@@ -1920,7 +1951,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     auto const global_types_bytes = global_types.size() * sizeof(DirectValueType);
     auto const layout_offset = align_up(global_types_offset + global_types_bytes, alignof(RuntimeLayout));
     auto const total_size = layout_offset + sizeof(RuntimeLayout);
-    auto const output_size = TRY(compute_output_buffer_size(function_count, total_insn_count));
+    auto const total_compiler_instruction_count = total_insn_count + total_direct_insn_count;
+    auto const output_size = TRY(compute_output_buffer_size(function_count, total_compiler_instruction_count));
 
     auto buffer = TRY(Core::AnonymousBuffer::create_with_size(total_size, Core::AnonymousBuffer::Sealability::Sealable));
     auto* base = buffer.data<u8>();
@@ -2047,7 +2079,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     __builtin_memcpy(base + layout_offset, &layout, sizeof(layout));
 
-    dbgln("Cranelift: submitting batch of {} functions ({} instructions)", function_count, total_insn_count);
+    dbgln("Cranelift: submitting batch of {} functions ({} instructions)", function_count, total_compiler_instruction_count);
     auto output_buffer = TRY([&]() -> ErrorOr<Core::AnonymousBuffer> {
         if (auto& callback = cranelift_compile_callback()) {
             auto output = callback(buffer);
@@ -2061,7 +2093,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     }
     if (!output_buffer.is_valid() || output_buffer.size() < sizeof(OutputHeader))
         return Error::from_string_literal("Failed to compile a WebAssembly module");
-    dbgln("Cranelift: received batch of {} functions ({} instructions)", function_count, total_insn_count);
+    dbgln("Cranelift: received batch of {} functions ({} instructions)", function_count, total_compiler_instruction_count);
 
     // Extract results for each function.
     auto const* output_base = output_buffer.data<u8>();
@@ -2129,9 +2161,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             ? ReadonlySpan<CraneliftTrap> {}
             : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(output_base + reloc_region_start + trap_offset), trap_count };
 
-        // Direct bodies use the clean native ABI and are not interpreter-facing entries. They are
-        // compiled offline until the clean-entry adapter is available.
-        if (batch[i].frontend == CraneliftFrontend::Direct)
+        if (!batch[i].should_publish)
             continue;
 
         auto& capture = cranelift_cache_state().cache_capture;
@@ -2140,6 +2170,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
                 CacheRecord rec;
                 rec.function_index = batch[i].function_index;
                 rec.native_entry_offset = output.native_entry_offset;
+                rec.frontend = batch[i].frontend;
                 rec.unpatched_code = copy.release_value();
                 rec.relocs.ensure_capacity(reloc_count);
                 for (size_t j = 0; j < reloc_count; ++j)
@@ -2151,7 +2182,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             }
         }
 
-        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, code_bytes, output.native_entry_offset, relocs, traps); pending.has_value())
+        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, batch[i].frontend, code_bytes, output.native_entry_offset, relocs, traps); pending.has_value())
             pending_functions.append(pending.release_value());
     }
 
@@ -2200,6 +2231,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         // CRANELIFT_SKIP_FN=a,b,c     skip listed function ids.
         // CRANELIFT_ONLY_FN=a,b,c     only compile listed function ids.
         // CRANELIFT_DIRECT_PROBE_FN=a,b,c compile listed functions with the offline direct frontend.
+        // CRANELIFT_DIRECT_EXECUTE_FN=a,b,c compile and publish listed call-free direct functions.
         // CRANELIFT_TRACE=1           log a line per compiled function.
         static auto const read_size_env = [](char const* name, size_t fallback) {
             if (auto* env = getenv(name))
@@ -2225,6 +2257,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         static auto& s_skip_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_SKIP_FN"));
         static auto& s_only_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_ONLY_FN"));
         static auto& s_direct_probe_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DIRECT_PROBE_FN"));
+        static auto& s_direct_execute_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DIRECT_EXECUTE_FN"));
         static auto& s_dump_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DUMP_FN"));
         static bool s_trace = getenv("CRANELIFT_TRACE") != nullptr;
 
@@ -2242,23 +2275,36 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         if (s_trace)
             warnln("cranelift: compiling fn#{} ({} dispatches)", func_id, dispatches.size());
 
-        if (s_direct_probe_fn.contains(s_active_function_index)) {
+        bool const probe_direct = s_direct_probe_fn.contains(s_active_function_index);
+        bool const execute_direct = s_direct_execute_fn.contains(s_active_function_index);
+        if (probe_direct || execute_direct) {
             auto direct_input = serialize_direct_compiler_input(function);
             if (!direct_input.has_value()) {
                 warnln("cranelift: unable to serialize direct input for fn#{}", func_id);
-                return false;
+            } else {
+                bool const has_call = any_of(direct_input->instructions, [](auto const& instruction) {
+                    return instruction.opcode == Instructions::call.value()
+                        || instruction.opcode == Instructions::call_indirect.value();
+                });
+                if (execute_direct && has_call)
+                    warnln("cranelift: direct execution requires call-free fn#{}", func_id);
+
+                if (probe_direct || !has_call) {
+                    bool const should_publish = execute_direct && !probe_direct;
+                    cranelift_cache_state().pending_batch.append({
+                        {},
+                        direct_input.release_value(),
+                        CraneliftFrontend::Direct,
+                        should_publish,
+                        result_arity,
+                        s_active_function_index,
+                        &compiled,
+                        compiled.cranelift_local_count,
+                        compiled.cranelift_param_count,
+                    });
+                    return false;
+                }
             }
-            cranelift_cache_state().pending_batch.append({
-                {},
-                direct_input.release_value(),
-                CraneliftFrontend::Direct,
-                result_arity,
-                s_active_function_index,
-                &compiled,
-                compiled.cranelift_local_count,
-                compiled.cranelift_param_count,
-            });
-            return false;
         }
 
         if (s_dump_fn.contains(func_id)) {
@@ -2353,6 +2399,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         move(flat),
         {},
         CraneliftFrontend::AllocatedBytecode,
+        true,
         result_arity,
         s_active_function_index,
         &compiled,
@@ -2532,7 +2579,7 @@ private:
             auto function_index = work_list.take_last();
             auto& current_node = node(function_index);
 
-            component.instruction_count += current_node.input.insns.size();
+            component.instruction_count += compiler_instruction_count(current_node.input);
             component.inputs.append(move(current_node.input));
 
             for (auto caller : current_node.callers) {
@@ -2702,6 +2749,7 @@ static void install_cached_functions(Vector<PendingCachedFunction>& functions, M
         auto pending = prepare_compiled_function(
             function.function_index,
             *function.target,
+            record.frontend,
             record.unpatched_code.bytes(),
             record.native_entry_offset,
             record.relocs.span(),
@@ -2809,6 +2857,7 @@ Optional<ByteBuffer> serialize_cranelift_cache_blob(ReadonlyBytes wasm_hash)
         entry->native_entry_offset = r.native_entry_offset;
         entry->reloc_count = static_cast<u32>(r.relocs.size());
         entry->trap_count = static_cast<u32>(r.traps.size());
+        entry->frontend = static_cast<u32>(r.frontend);
         offset += sizeof(CacheBlobFunctionEntry);
 
         __builtin_memcpy(out + offset, r.unpatched_code.data(), r.unpatched_code.size());
@@ -2856,6 +2905,8 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
         offset += sizeof(CacheBlobFunctionEntry);
         if (entry->native_entry_offset >= entry->code_size)
             return false;
+        if (entry->frontend > static_cast<u32>(CraneliftFrontend::Direct))
+            return false;
 
         auto code_off = offset;
         auto aligned_code_size = align_up(entry->code_size, native_code_alignment);
@@ -2882,6 +2933,7 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
         CacheRecord rec;
         rec.function_index = entry->function_index;
         rec.native_entry_offset = entry->native_entry_offset;
+        rec.frontend = static_cast<CraneliftFrontend>(entry->frontend);
         rec.unpatched_code = code_copy.release_value();
         rec.relocs.ensure_capacity(entry->reloc_count);
         for (u32 j = 0; j < entry->reloc_count; ++j) {

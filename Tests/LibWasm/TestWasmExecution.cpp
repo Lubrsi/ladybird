@@ -11,6 +11,8 @@
 #include <LibWasm/AbstractMachine/Configuration.h>
 #include <LibWasm/AbstractMachine/Validator.h>
 #include <LibWasm/Constants.h>
+#include <stdlib.h>
+#include <string.h>
 
 static void append_unsigned_leb128(Vector<u8>& output, u32 value)
 {
@@ -52,16 +54,16 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count)
     append_unsigned_leb128(code_section, function_count);
     for (u32 function_index = 0; function_index < function_count; ++function_index) {
         Vector<u8> body { 0x00 };
-        if (function_index == 0) {
+        if (function_index + 1 == function_count) {
+            body.extend(Vector<u8> { 0x20, 0x00, 0x41, 0x01, 0x6a });
+        } else if (function_index == 0) {
             body.extend(Vector<u8> { 0x20, 0x00 });
             body.append(0x10);
             append_unsigned_leb128(body, 1);
-        } else if (function_index + 1 < function_count) {
+        } else {
             body.extend(Vector<u8> { 0x20, 0x00, 0x04, 0x7f, 0x20, 0x00, 0x10 });
             append_unsigned_leb128(body, function_index + 1);
             body.extend(Vector<u8> { 0x05, 0x41, 0x01, 0x0b });
-        } else {
-            body.extend(Vector<u8> { 0x20, 0x00, 0x41, 0x01, 0x6a });
         }
         body.append(0x0b);
 
@@ -71,6 +73,190 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count)
     append_wasm_section(module, 10, move(code_section));
 
     return module;
+}
+
+static bool direct_execution_selected(u32 function_index)
+{
+    auto const* selected_functions = getenv("CRANELIFT_DIRECT_EXECUTE_FN");
+    if (!selected_functions)
+        return false;
+
+    bool selected = false;
+    StringView { selected_functions, strlen(selected_functions) }.for_each_split_view(',', SplitBehavior::Nothing, [&](auto part) {
+        if (auto value = part.template to_number<u32>(); value.has_value() && value.value() == function_index)
+            selected = true;
+    });
+    return selected;
+}
+
+TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
+{
+    auto const initial_tier_up_count = Wasm::tier_up_taken_count();
+    auto parse_module = [] {
+        auto bytes = make_direct_call_chain_module(1);
+        FixedMemoryStream stream { bytes.span() };
+        return MUST(Wasm::Module::parse(stream));
+    };
+    auto expect_frontend = [](Wasm::CompiledInstructions const& compiled) {
+        EXPECT(compiled.cranelift_compiled);
+        EXPECT_NE(Wasm::cranelift_entry_acquire(compiled), 0u);
+        if (direct_execution_selected(0)) {
+            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+            EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+        } else {
+            EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+            EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+            EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+        }
+    };
+    auto invoke = [](Wasm::AbstractMachine& machine, Wasm::ModuleInstance const& instance) {
+        Optional<Wasm::FunctionAddress> run;
+        for (auto const& export_ : instance.exports()) {
+            if (export_.name() == "run"sv)
+                run = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(run.has_value());
+        return machine.invoke(*run, { Wasm::Value(static_cast<i32>(41)) });
+    };
+
+    ByteBuffer cache_blob;
+    {
+        auto module = parse_module();
+        Wasm::CompileCacheConfig cache_config;
+        cache_config.on_compiled = [&](ByteBuffer blob) {
+            cache_blob = move(blob);
+        };
+
+        Wasm::AbstractMachine machine;
+        MUST(machine.validate(*module, move(cache_config)));
+        expect_frontend(module->code_section().functions()[0].func().body().compiled_instructions);
+        auto instance = MUST(machine.instantiate(*module, {}));
+        auto result = invoke(machine, *instance);
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        EXPECT_EQ(result.values()[0].to<i32>(), 42);
+    }
+    EXPECT(!cache_blob.is_empty());
+
+    auto module = parse_module();
+    bool produced_replacement_blob = false;
+    Wasm::CompileCacheConfig cache_config;
+    cache_config.existing_blob = move(cache_blob);
+    cache_config.on_compiled = [&](ByteBuffer) {
+        produced_replacement_blob = true;
+    };
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, move(cache_config)));
+    EXPECT(!produced_replacement_blob);
+    expect_frontend(module->code_section().functions()[0].func().body().compiled_instructions);
+    auto instance = MUST(machine.instantiate(*module, {}));
+    auto result = invoke(machine, *instance);
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
+    EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count);
+}
+
+TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallback)
+{
+    auto bytes = make_direct_call_chain_module(2);
+    FixedMemoryStream stream { bytes.span() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    auto const& functions = module->code_section().functions();
+    auto const& caller = functions[0].func().body().compiled_instructions;
+    auto const& callee = functions[1].func().body().compiled_instructions;
+    EXPECT(caller.cranelift_compiled);
+    EXPECT(callee.cranelift_compiled);
+    EXPECT_NE(Wasm::cranelift_native_entry_acquire(caller), 0u);
+    EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller), 0u);
+    if (direct_execution_selected(1)) {
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(callee), 0u);
+        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(callee), 0u);
+        EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(callee), 0u);
+    } else {
+        EXPECT_NE(Wasm::cranelift_native_entry_acquire(callee), 0u);
+        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(callee), 0u);
+        EXPECT_NE(Wasm::cranelift_osr_entry_acquire(callee), 0u);
+    }
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(41)) });
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
+}
+
+TEST_CASE(direct_frontend_explicit_trap_reaches_fault_recovery)
+{
+    Vector<u8> bytes {
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x04,
+        0x01,
+        0x60,
+        0x00,
+        0x00,
+        0x03,
+        0x02,
+        0x01,
+        0x00,
+        0x07,
+        0x07,
+        0x01,
+        0x03,
+        'r',
+        'u',
+        'n',
+        0x00,
+        0x00,
+        0x0a,
+        0x05,
+        0x01,
+        0x03,
+        0x00,
+        0x00,
+        0x0b,
+    };
+    FixedMemoryStream stream { bytes.span() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    auto const& compiled = module->code_section().functions()[0].func().body().compiled_instructions;
+    EXPECT(compiled.cranelift_compiled);
+    if (direct_execution_selected(0)) {
+        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+        EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+    }
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+    EXPECT(machine.invoke(*run, {}).is_trap());
 }
 
 TEST_CASE(tier_up_does_not_resume_interpreter_frame)
