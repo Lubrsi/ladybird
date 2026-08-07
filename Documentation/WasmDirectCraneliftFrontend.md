@@ -270,17 +270,267 @@ Suggested implementation checkpoints:
 2. Extract `compiler/common.rs` with no generated-code change.
 3. Define and version the direct instruction and module-context serialization.
 4. Separate clean-entry and OSR-capable runtime publication before a direct body can publish.
-5. Add `compiler/direct.rs` with typed operand and structured control stacks.
-6. Compile clean entry-only scalar functions through the direct path, with per-function fallback.
-7. Add structured control flow early enough to test the architectural premise rather than
-   measuring only straight-line code.
-8. Migrate memory, globals, tables, direct calls, indirect calls, conversions, references,
-   exceptions, and SIMD as complete instruction families.
-9. Re-profile `unzReadCurrentFile`, `AddActiveInteraction`, SHA-512, CoreMark's reported score, and
-   the full Wasm benchmark set before considering new state or pressure policies.
+5. Add `compiler/direct.rs` with typed operand and structured control stacks, and produce offline
+   CLIF and native code for the first structural milestone below without publishing it at runtime.
+6. Execute that milestone through the direct path using the existing interpreter/helper boundary
+   for cross-flavor calls. Do not enable mixed direct-to-legacy native relocations yet.
+7. Define the durable typed body ABI before enabling direct calls. Update the old frontend with
+   only the temporary marshalling required to consume it, then compile clean entry-only functions
+   through the direct path with per-function fallback.
+8. Complete scalar integer and floating-point numeric operations, conversions, locals, and globals.
+9. Complete memory operations, bulk memory, and direct calls.
+10. Complete tables, indirect calls, and references.
+11. Complete exceptions.
+12. Complete SIMD.
+13. Re-profile `unzReadCurrentFile`, `AddActiveInteraction`, SHA-512, CoreMark's reported score, and
+    the full Wasm benchmark set before considering new state or pressure policies.
 
 Each checkpoint should be independently testable and committed. Do not port a legacy bank,
 location-liveness, or synthetic-op optimization merely to preserve existing work.
+
+### First structural milestone
+
+The first direct-generated baseline is function 16,
+`sha2::sha512::soft::compress`, in
+`~/Repositories/js-benchmarks/WasmRustBench/sha512-bench.wasm`, SHA-256
+`301eb9c21fa4eeda2aca6133a2a7c0cfbab55a2ac58daabc2c41c24a87d8d4a8`. It was part of the
+historical SHA-512 measurements and exercises the architectural premise without requiring the
+whole opcode surface.
+
+Its current instruction inventory is:
+
+- typed parameters and `i32`/`i64` locals using `local.get`, `local.set`, and `local.tee`;
+- `block`, `loop`, `br_if`, and function `end`;
+- `i32.const`, `i32.add`, `i32.eqz`, `i32.ne`, and `i32.shl`;
+- `i64.const`, `i64.add`, `i64.and`, `i64.or`, `i64.xor`, `i64.shl`, `i64.shr_u`, and
+  `i64.rotl`; and
+- `i64.load` and `i64.store`.
+
+Implement these as general opcode-family support, not as special cases for the named function.
+Checkpoint 5 is complete when this pinned function produces valid direct CLIF and native code and
+its structural metrics can be compared with the old frontend and Wasmtime. Checkpoint 6 then adds
+end-to-end differential execution. This provides a real structured-loop and memory workload before
+the broad feature migration, while keeping calls, indirect calls, floating point, exceptions, and
+SIMD outside the first lowering slice.
+
+#### Checkpoint 5 result
+
+Commit `40bb79a24f8` implements this first lowering slice. The direct frontend consumes the checked
+parsed-instruction serialization, rebuilds a typed operand and control stack, represents Wasm
+locals with typed Cranelift variables, and emits the pinned function as one clean native body. The
+body is deliberately not published or executable through the normal runtime yet: this checkpoint
+tests the frontend and generated-code premise, while checkpoint 6 adds the clean-entry adapter and
+differential execution.
+
+The final AArch64 native-code comparison is:
+
+| Metric | Direct frontend | Wasmtime 47.0.3 | Allocated-bytecode frontend |
+| --- | ---: | ---: | ---: |
+| Code bytes | 13,504 | 13,504 | 14,108 |
+| Instructions | 3,375 | 3,374 | 3,524 |
+| Memory operations | 226 | 226 | 333 |
+| Loads | 174 | 173 | 230 |
+| Stores | 52 | 53 | 103 |
+| Stack-memory operations | 189 | 191 | 218 |
+| Branches | 5 | 5 | 16 |
+| Calls | 0 | 0 | 2 |
+| Fixed frame | 208 bytes | 224 bytes | 288 bytes |
+
+The allocated-bytecode size excludes its 48-byte interpreter adapter. Wasmtime has a VMContext
+stack-limit check, while Ladybird obtains linear-memory storage through `Configuration` and the
+primitive-storage cage. Equal direct and Wasmtime code size is therefore partly coincidental; the
+matching instruction and memory-operation shape is the stronger result.
+
+An instruction-sequence diff confirms that similarity. The comparison was made first using only
+mnemonics, then using instruction shapes with physical registers and numeric literals normalized.
+This avoids treating different register-allocation names or decimal-versus-hexadecimal formatting
+as different lowering. The default Myers diff aligned:
+
+| Comparison | Aligned mnemonics | Aligned normalized instruction shapes |
+| --- | ---: | ---: |
+| Direct and Wasmtime | 3,356 (99.4% of each body) | 3,355 (99.4% of each body) |
+| Direct and allocated bytecode | 3,261 (96.6% of direct; 92.5% of old) | 3,239 (96.0% of direct; 91.9% of old) |
+
+The high old-frontend percentage does not mean that its overhead is insignificant: SHA-512 is a
+large repeated round sequence, so most arithmetic mnemonics necessarily align. Its differences
+are concentrated in entry and tier-up handling, interpreter-state traffic, spills, and control
+flow, which explains the extra 149 instructions, 107 memory operations, 29 stack-memory
+operations, 11 branches, and two calls.
+
+For example, the first SHA-512 round contains the same operation sequence in all three bodies.
+Direct and Wasmtime are effectively the same native lowering with different physical registers
+and stack slots:
+
+```text
+Direct                         Wasmtime                       Allocated bytecode
+rev   x13, x4                  rev   x13, x4                  rev   x23, x13
+add   x4, x7, x13             add   x4, x9, x13             add   x13, x14, x23
+mov   x7, #0xae22             mov   x9, #0xae22             mov   x14, #0xae22
+movk  x7, #0xd728, lsl #16    movk  x9, #0xd728, lsl #16    movk  x14, #0xd728, lsl #16
+movk  x7, #0x2f98, lsl #32    movk  x9, #0x2f98, lsl #32    movk  x14, #0x2f98, lsl #32
+movk  x7, #0x428a, lsl #48    movk  x9, #0x428a, lsl #48    movk  x14, #0x428a, lsl #48
+add   x7, x4, x7              add   x9, x4, x9              add   x14, x13, x14
+add   x4, x0, x7              add   x4, x0, x9              add   x13, x4, x14
+ror   x0, x4, #28             ror   x0, x4, #28             ror   x4, x13, #28
+ror   x11, x4, #34            ror   x11, x4, #34            ror   x28, x13, #34
+eor   x0, x0, x11            eor   x0, x0, x11            eor   x4, x4, x28
+ror   x11, x4, #39            ror   x11, x4, #39            ror   x28, x13, #39
+eor   x0, x0, x11            eor   x0, x0, x11            eor   x4, x4, x28
+```
+
+One lowering detail was independently measured before retaining it. Forming a linear-memory
+address as `(base + zero_extend(index)) + offset`, matching Wasmtime's shape, uses 12 more code
+bytes and three more static instructions than `base + (zero_extend(index) + offset)`, but removes
+six memory operations and reduces the fixed frame from 272 to 208 bytes. The former shape lets
+Cranelift rematerialize offsets near the final stores instead of keeping full derived addresses
+live through the large unrolled region.
+
+This checkpoint therefore validates the architectural premise at native-instruction granularity:
+given typed parsed Wasm rather than allocated interpreter locations, the same Cranelift backend
+produces a SHA-512 body structurally almost identical to Wasmtime's. It does not yet establish
+runtime correctness or performance because the direct body cannot be entered until checkpoint 6.
+
+### d3wasm structural milestone (2026-08-06)
+
+The next lowering slice covers the two representative d3wasm functions used throughout the
+allocated-bytecode investigation:
+
+- function 1574, `unzReadCurrentFile()`, a primary loading function; and
+- function 2445, `idInteraction::AddActiveInteraction()`, a hot lighting function in the heavy
+  gameplay scene.
+
+This required general scalar floating-point and conversion lowering, globals, direct calls,
+`call_indirect`, `br_table`, and bulk-memory operations in addition to the integer, local,
+structured-control, and scalar-memory families from the SHA-512 checkpoint. Both functions now
+produce valid direct native code with Cranelift 0.134.3. The clean bodies remain offline and are not
+published, so these are structural code-generation results rather than runtime measurements.
+
+The AArch64 comparison uses Wasmtime 47.0.3, which uses the same Cranelift 0.134.3 release. Memory
+operations count `ld*` and `st*` instructions, and stack-memory operations are that subset whose
+address uses `sp`. The allocated-bytecode figures start at `native_entry_offset`, excluding its
+interpreter adapter. A temporary diagnostic capture wrote the unpatched code bytes returned by the
+compiler subprocess; that hook was removed after measurement.
+
+| `unzReadCurrentFile()` metric | Direct frontend | Wasmtime 47.0.3 | Allocated-bytecode frontend |
+| --- | ---: | ---: | ---: |
+| Code bytes | 22,412 | 21,000 | 29,780 |
+| Instructions | 5,561 | 5,250 | 7,400 |
+| Memory operations | 1,971 | 1,866 | 3,059 |
+| Stack-memory operations | 1,098 | 1,044 | 1,948 |
+| Calls | 47 | 31 | 43 |
+| Fixed frame | 400 bytes | 400 bytes | 592 bytes |
+
+| `AddActiveInteraction()` metric | Direct frontend | Wasmtime 47.0.3 | Allocated-bytecode frontend |
+| --- | ---: | ---: | ---: |
+| Code bytes | 108,000 | 93,768 | 151,160 |
+| Instructions | 26,804 | 23,442 | 37,528 |
+| Memory operations | 12,932 | 11,039 | 22,398 |
+| Stack-memory operations | 8,459 | 7,460 | 15,772 |
+| Calls | 440 | 284 | 424 |
+| Fixed frame | 2,848 bytes | 3,216 bytes | 4,800 bytes |
+
+Against the allocated-bytecode frontend, direct lowering reduces `unzReadCurrentFile()` native
+instructions by 25.1%, memory operations by 35.6%, and stack-memory operations by 43.6%. For
+`AddActiveInteraction()`, the reductions are 28.6%, 42.3%, and 46.4%.
+
+The assembly directly verifies the removal of interpreter-register state traffic. The old native
+entry imports the low payload of all eight interpreter registers from the `Value` array in
+`Configuration`; after the body, both probes write all eight dirty payloads back and zero all eight
+tags. The direct body does neither:
+
+| Verified interpreter-register traffic | Direct frontend | Allocated-bytecode frontend |
+| --- | ---: | ---: |
+| Entry payload loads | 0 | 8 |
+| Exit payload stores | 0 | 8 |
+| Exit tag stores | 0 | 8 |
+
+For example, the old `unzReadCurrentFile()` body starts by importing R0-R7 from the 16-byte-spaced
+`Value` array. Some imported values are immediately spilled into the native frame:
+
+```asm
+ldr x26, [x1]
+str x26, [sp, #0x148]
+ldr x21, [x1, #0x10]
+ldr x25, [x1, #0x20]
+str x25, [sp, #0x160]
+ldr x28, [x1, #0x30]
+...
+ldr x26, [x1, #0x70]
+```
+
+Its epilogue exports those registers as eight payload/tag pairs:
+
+```asm
+str x9,  [x3]
+str x10, [x3, #0x8]
+str x11, [x4, #0x10]
+str x10, [x6, #0x18]
+...
+str x2,  [x1, #0x70]
+str x10, [x1, #0x78]
+```
+
+The old body also branches on the resume token and loads or saves interpreter call-record, current
+expression, depth, and stack state. The clean direct entry takes `Configuration` directly and its
+first loads obtain required linear-memory and global metadata instead; there is no resume-token
+branch or R0-R7 import/export sequence:
+
+```asm
+ldr x4,  [x0, #0xdd8]
+ldr x4,  [x4]
+ldr x7,  [x4, #0x68]
+ldr x4,  [x0, #0xde0]
+ldr x22, [x4]
+ldr x28, [x4, #0x8]
+ldr x21, [x4, #0x10]
+```
+
+This proves that direct lowering removes the old frontend's explicit interpreter-state
+import/export and entry-mode setup. It does not prove that every operation removed by the aggregate
+counts was interpreter-state traffic. Most of the much larger reduction in `sp`-relative accesses
+is native spill and home traffic, consistent with shorter semantic-value live ranges and lower
+register pressure but not separately attributable from this static comparison. Direct code still
+has ordinary Wasm-local initialization and Cranelift spills. The structural result is therefore
+both a directly verified removal of legacy state traffic and a large, separately observed reduction
+in native frame traffic, rather than evidence that all frame traffic was legacy state traffic.
+
+The change is not confined to function entry and exit. The silhouette-edge loop previously
+identified by profiling as a dominant `AddActiveInteraction()` range was matched by its two facing
+byte loads, comparison, and six shadow-index stores in all three current bodies. The current ranges
+are `0x13d98-0x13e94` in the allocated-bytecode body, `0xefe8-0xf0b4` in the direct body, and
+function-relative `0xe748-0xe810` in Wasmtime. Their loop-local counts are:
+
+| Silhouette-edge loop metric | Direct frontend | Wasmtime 47.0.3 | Allocated-bytecode frontend |
+| --- | ---: | ---: | ---: |
+| Complete continuing path instructions | 51 | 50 | 63 |
+| Complete continuing path memory operations | 18 | 19 | 27 |
+| Complete continuing path native-frame operations | 6 | 7 | 15 |
+| Complete continuing path linear-memory operations | 12 | 12 | 12 |
+| Equal-facing continuing path instructions | 25 | 23 | 30 |
+| Equal-facing continuing path memory operations | 7 | 7 | 11 |
+| Equal-facing continuing path native-frame operations | 3 | 3 | 7 |
+| Equal-facing continuing path linear-memory operations | 4 | 4 | 4 |
+
+The required linear-memory work is unchanged. On the complete path, direct lowering removes twelve
+instructions and nine native-frame accesses from the old body and is within one instruction and one
+memory operation of Wasmtime. This is direct evidence that the typed frontend changes generated
+code on an executed hot loop, not only in interpreter-facing boundary machinery. The remaining
+frame accesses are ordinary backend spills, and the counts do not establish runtime speed until the
+direct body is published and profiled.
+
+The remaining gap to Wasmtime is 5.9% in instructions for `unzReadCurrentFile()` and 14.3% for
+`AddActiveInteraction()`. Call lowering is one concrete contributor: the direct bodies contain 47
+and 440 call instructions, versus Wasmtime's 31 and 284. Each current `call_indirect` site emits
+its native path plus local cold subtype-check, interpreter-fallback, and trap paths. `memory.copy`
+and `memory.fill` deliberately use the existing runtime helpers as a correctness-first stopgap;
+from the clean ABI this currently calls `current_interpreter` and then the operation helper. This
+preserves `MemoryBuffer` bounds, trap, and storage behavior without introducing a separate libc
+relocation and cache-patching design. This is not only abstraction hygiene: `MemoryBuffer` splits
+operations at the primitive-storage cage wrap using `contiguous_bytes_from()` and
+`contiguous_bytes_before()`, so one unconditional libc `memmove` or `memset` would not implement
+the general storage layout correctly. Hoisting or sharing cold indirect-call paths and giving bulk
+memory a cleaner direct helper ABI are later code-size and call-overhead work, not prerequisites
+for typed direct lowering.
 
 ### Retirement of the allocated-bytecode frontend
 
@@ -333,6 +583,26 @@ should make it easy for every newly migrated instruction family to run in both m
 native cache reuse when a cold compilation is required and must distinguish harness wall time from
 the program's measured compilation and execution phases.
 
+### Randomized differential coverage
+
+Curated differential cases establish readable intent but do not explore enough combinations of
+operand-stack shape, reachability, nested control flow, branch arity, and state mutation. Add a
+wasm-smith-style valid-module generator to the same harness. Each generated case must:
+
+1. be limited to instruction families that the direct frontend claims to support;
+2. use a recorded seed and bounded module, memory, table, call-depth, and execution limits;
+3. prove that each function under test actually used the direct frontend rather than silently
+   falling back;
+4. execute equivalent fresh instances through the direct compiler and interpreter-only oracle;
+5. compare results, traps, memory, globals, tables, imports, and repeated-call effects using the
+   same floating-point policy as curated tests; and
+6. retain the seed and reduce every mismatch to a focused permanent regression test.
+
+Parser and validator fuzzing are separate concerns. This generator should primarily produce valid
+modules so its budget exercises typed lowering, structured control flow, and execution. As direct
+coverage grows, expand the generator's enabled feature set at the same checkpoint as each complete
+instruction family.
+
 ### Floating-point and relaxed-result policy
 
 The local WebAssembly specification states that some numeric operators are non-deterministic
@@ -363,7 +633,7 @@ the current native body ABI.
 The current ABI is only partly representation-neutral:
 
 - every body receives interpreter and configuration pointers plus an entry/resume token;
-- functions with at most eight parameters receive typed arguments; and
+- functions with at most eight parameters receive typed arguments;
 - functions above that cutoff receive a pointer to call-record locals; and
 - functions with more than one result are rejected from native compilation.
 
@@ -373,7 +643,7 @@ interpreter-derived entry arguments and the high-arity call-record convention in
 call sequences. The existing ABI must therefore not become permanent merely because it is moved to
 `common.rs`.
 
-Before mixed direct-to-legacy relocations are enabled, choose and measure one of these boundaries:
+The possible migration boundaries are:
 
 1. Define a durable typed native body ABI and update the old frontend to consume it. The old
    frontend may need temporary marshalling from call-record storage for high-arity calls. Define
@@ -389,6 +659,12 @@ Before mixed direct-to-legacy relocations are enabled, choose and measure one of
    interpreter/helper boundary for mixed calls. This avoids ABI commitment but distorts call-heavy
    performance and cannot be the final mixed-module path.
 
+The checkpoint sequence chooses option 3 for the first executable SHA-512 milestone, with an
+explicit expiry at checkpoint 7. Checkpoint 7 then chooses option 1: define the durable typed ABI
+and make the old frontend consume it temporarily before mixed native relocations are enabled.
+Option 2 is contingency migration machinery only if implementing option 1 exposes a measured
+blocking problem; it is not the planned steady state.
+
 The dependency direction remains important: neither frontend should privately define the eventual
 body ABI. Once selected, a shared ABI module owns signatures, entry symbols, and relocation
 contracts. Per-flavor ABI divergence is prohibited unless an explicit adapter owns the boundary.
@@ -400,30 +676,50 @@ legacy locations into direct lowering.
 The first direct frontend should produce clean entry-only code. It does not need to solve direct
 OSR before demonstrating the generated-code benefit.
 
+### Fresh interpreter entry into a clean direct body
+
+Interpreter compatibility does not require adding interpreter state to the clean direct body. The
+interpreter has already created the activation's `Frame`, initialized its locals, and installed the
+compiled-fault recovery context before it decides whether to enter native code. A separate, small
+entry adapter can therefore:
+
+1. receive the existing interpreter-handler arguments;
+2. load the function parameters from `Configuration::locals_base()` according to the function's
+   fixed local-type table;
+3. call the clean direct body with `Configuration*` followed by typed Wasm parameters;
+4. convert every typed result to `Value` and append it to the interpreter `ValueStack`; and
+5. return after native code has completed the current interpreter frame.
+
+Generate this adapter as a separate Cranelift function, not as an entry block in the clean body.
+Publish it through `cranelift_entry` for fresh interpreter calls, while direct native callers use
+`cranelift_direct_native_entry` and never execute the adapter. This preserves byte-for-byte clean
+body code generation and localizes interpreter payload conversion to the actual boundary.
+
+The allocated-bytecode adapter already demonstrates the surrounding frame, fault, trap, and result
+machinery. The direct adapter is narrower because it imports parameters rather than interpreter
+scratch-register state and has no resume-token dispatch. Scalar leaf functions are the first
+bounded milestone. Complete support must also define typed multi-value result marshalling, `v128`
+payload handling, reference rooting, and the behavior of calls whose target is not yet available
+through the direct ABI.
+
 ### Runtime publication capability
 
-The current runtime publishes one interpreter-facing `cranelift_entry` pointer alongside the
-`cranelift_native_entry` body pointer used by compiled callers. Fresh interpreter entry calls
-`cranelift_entry` when non-null, and `synthetic_tier_up` polls that same pointer and enters it with a
-nonzero checkpoint IP. That is safe only while every published adapter understands both entry
-modes. A clean direct adapter has no resume dispatch and must never be entered by a polling
-checkpoint.
+Runtime metadata now distinguishes:
 
-Before any clean direct body can publish, runtime metadata must distinguish at least:
+- an entry capable of starting a fresh activation;
+- an entry capable of resuming the current bytecode activation at a checkpoint;
+- the allocated-bytecode native body used by legacy compiled callers; and
+- the clean direct native body.
 
-- an entry capable of starting a fresh activation; and
-- an entry capable of resuming this bytecode activation at a checkpoint.
-
-Separate acquire/release-published entry pointers are preferable to treating one pointer plus a
-flavor bit as mutually exclusive, because a clean direct body and a temporary OSR body may coexist.
-Fresh calls select the clean entry. A synthetic checkpoint polls only the OSR-capable entry; seeing
-only a clean entry must keep interpreting and may register or trigger demand for the temporary OSR
-flavor. Publication, request suppression, cancellation, and reclamation must remain safe when the
-interpreter and compiler processes race.
+These are acquire/release-published through `cranelift_entry`, `cranelift_osr_entry`,
+`cranelift_native_entry`, and `cranelift_direct_native_entry`. Fresh calls select only the fresh
+entry, while `synthetic_tier_up` polls only the OSR-capable entry. Seeing only a clean entry keeps
+interpreting. This permits a persistent clean direct body and a temporary OSR body to coexist
+without making a polling checkpoint enter an entry-only adapter with a checkpoint token.
 
 The successful-transfer counter continues to count only an actual checkpoint-to-OSR handoff, not
-clean publication or an OSR request. Its trace should identify the function, checkpoint, and code
-flavor or generation. The one-way regression test must add the two-flavor seam:
+clean publication or an OSR request. Its trace identifies the function and checkpoint. The one-way
+regression test covers the two-flavor seam:
 
 1. publish a clean-only entry while an activation is interpreting;
 2. prove a checkpoint does not enter it or increment the transfer counter;
@@ -431,12 +727,43 @@ flavor or generation. The one-way regression test must add the two-flavor seam:
 4. prove the following fresh call uses clean code without another OSR transfer; and
 5. keep the OSR code alive until the transferred activation returns.
 
-This publication split is independently testable with the old frontend before `compiler/direct.rs`
-exists. Publish its interpreter-facing adapter as clean-entry-capable while withholding the
-OSR-capable pointer, prove checkpoints continue interpreting, then publish the same capable adapter
-for OSR and prove the handoff. The existing counter increment currently occurs immediately after a
-non-null `cranelift_entry` poll; it must move to the successful OSR-capable path for this test to
-retain its meaning.
+The existing seam test exercises this with the allocated-bytecode adapter: it publishes a fresh
+entry while withholding the OSR entry, proves that the checkpoint continues interpreting, then
+publishes the OSR entry and proves the one-way handoff. The counter increment is on the successful
+OSR path rather than the fresh-entry poll.
+
+### Tier-up checkpoint state
+
+Wasm locals are function-scoped indexed storage, not lexically scoped variables. Their types are
+fixed for the lifetime of the activation and are already available to the direct frontend from the
+function signature and serialized declared-local types. Duplicating all local types at every
+checkpoint would therefore add no information. The useful per-checkpoint fact is which typed
+locals are live into that continuation.
+
+The current validator deliberately restricts tier-up eligibility to loop headers with no loop
+parameters and an empty operand stack. The bytecode generator inserts `synthetic_tier_up`
+immediately after only those eligible loop headers. Consequently, the first direct OSR path does
+not need to reconstruct R0-R7 or `ValueStack` temporaries: they contain no live semantic operand at
+the transfer point. Its input state consists of canonical Wasm locals plus normal runtime state in
+`Configuration`.
+
+Preserve an explicit checkpoint descriptor while the validated parsed instruction and generated
+interpreter dispatch are both available:
+
+```text
+TierUpCheckpoint {
+    checkpoint_id,
+    interpreter_dispatch_index,
+    parsed_loop_instruction_index,
+    live_local_indices,
+}
+```
+
+The function-wide local-type table supplies each live local's type. Compute `live_local_indices`
+with backwards dataflow over the parsed Wasm CFG; bytecode location access counts and write sets are
+not substitutes for edge liveness. A bitmap is sufficient for the indexed local set. If checkpoint
+eligibility later expands, the descriptor must also carry the typed operand/control-stack live-ins
+and, for non-defaultable references, the validator's definite-initialization state.
 
 When a function is compiling while an interpreter activation is already running:
 
@@ -451,11 +778,42 @@ This policy preserves the demonstrated d3wasm tier-up staircase without permanen
 or cached calls for OSR dispatch and resume predecessors.
 
 The expected replacement for the temporary allocated-bytecode OSR compiler is a direct OSR
-variant. It would require a side table mapping the live typed Wasm state at each checkpoint to its
-interpreter R0-R7, `ValueStack`, local, and runtime locations. The resume adapter would import only
-those values into an OSR-specific direct variant. This is not a prerequisite for the first direct
-frontend, but it is part of retiring the old compiler and must not add resume state to the
-persistent clean body.
+variant. It is compiled separately from the persistent clean body, is not stored in the normal
+native cache, and is requested only while an interpreting activation can use it. Its cold resume
+adapter receives `Configuration` and the checkpoint identity, selects the corresponding resume
+entry, loads only the checkpoint's live typed locals from `Configuration::locals_base()`, and
+continues at the native loop header. Native completion completes the interpreter frame; there is no
+tier-down path and no need to synchronize locals back to interpreter storage.
+
+The first correct direct OSR variant may compile the complete function with both fresh and resume
+predecessors even if only the resume entry is published. The direct frontend currently emits
+structured control flow in one pass. A continuation entered inside a nested loop may later branch
+to an enclosing loop header encountered earlier in the instruction stream, so simply omitting the
+prefix does not necessarily emit the complete reachable cyclic CFG. Paying resume merges in a
+temporary OSR flavor is acceptable because it does not affect clean cached code. A later two-pass
+CFG/control plan can produce a narrower OSR-only variant if measurements justify it.
+
+Temporary OSR code also requires the runtime to own more than one native mapping and trap range for
+one function. The first correctness implementation may retain every published OSR artifact until
+module destruction. Safe early reclamation, request cancellation, and generation replacement are
+later policy work and must not precede correct fault lookup and activation lifetime.
+
+This restricted empty-stack OSR path is materially smaller than general OSR. Supporting loop
+parameters, a non-empty operand stack, arbitrary control positions, exceptions, or live references
+would require typed operand/control-stack maps, reference rooting, and additional validator state.
+Do not broaden checkpoint eligibility until the restricted path is correct and measured.
+
+Suggested interpreter-compatibility sequence:
+
+1. Generate the fresh-entry adapter and execute a scalar leaf direct function end to end.
+2. Complete the direct-call ABI and mixed-call fallback needed to publish call-heavy functions.
+3. Persist stable checkpoint descriptors and compute exact local live-ins.
+4. Compile an uncached full-function direct OSR variant for the existing empty-stack checkpoints,
+   retaining its mapping until module destruction.
+5. Preserve byte-for-byte clean body output and verify fresh execution, one-way tier-up, traps,
+   multiple results, and concurrent publication independently.
+6. Only then consider a two-pass OSR-only CFG, earlier reclamation, or broader checkpoint
+   eligibility.
 
 ## Success criteria
 
@@ -483,12 +841,12 @@ judged by an expectation of zero block parameters or exact Wasmtime parity.
 
 ## Open decisions
 
-- Exact direct-instruction serialization and variable-length side-table layout.
+- The remaining variable-length direct-input side tables needed by instruction families outside
+  checkpoint 5.
 - Whether the direct frontend reconstructs all validation types or receives selected persisted
   validator metadata.
-- The durable native body ABI and the temporary cross-flavor boundary used before it is available.
+- The exact durable typed native body ABI selected at checkpoint 7.
 - The typed multi-value return convention and interpreter/legacy adapter marshalling.
-- The smallest complete opcode-family milestone that usefully exercises structured control flow.
 - Ownership and lifetime model for temporary OSR code.
 - Whether native-only inlining begins as an `Expression` transform or is deferred until the direct
   frontend has a stable typed representation.
