@@ -43,7 +43,7 @@ struct InputHeader {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct InputFunctionEntry {
-    frontend: u32,
+    preferred_frontend: u32,
     insn_offset: u32,
     insn_count: u32,
     direct_insn_offset: u32,
@@ -54,6 +54,7 @@ struct InputFunctionEntry {
     direct_local_count: u32,
     result_arity: u32,
     num_locals: u32,
+    direct_num_locals: u32,
     locals_offset: u32,
     num_params: u32,
     function_index: u32,
@@ -97,7 +98,7 @@ struct OutputFunctionEntry {
     compiled: u32,
     reloc_offset: u64,
     reloc_count: u32,
-    _padding_after_reloc_count: u32,
+    frontend: u32,
     trap_offset: u64,
     trap_count: u32,
     native_entry_offset: u32,
@@ -474,15 +475,116 @@ fn parse_input<'a>(
     Ok((header, entries, layout, function_types, module_types, global_types))
 }
 
+fn compilation_options(entry: &InputFunctionEntry, num_locals: u32) -> FunctionCompilationOptions {
+    FunctionCompilationOptions {
+        result_arity: entry.result_arity,
+        num_locals,
+        num_params: entry.num_params,
+        function_index: entry.function_index,
+        max_call_rec_size: entry.max_call_rec_size,
+    }
+}
+
+fn compile_allocated_bytecode_entry(
+    input: &[u8],
+    entry: &InputFunctionEntry,
+    layout: &RuntimeLayout,
+    function_types: &[WasmFunctionType<'_>],
+) -> Result<CompiledFunction, &'static str> {
+    if entry.insn_count == 0 {
+        return Err("allocated-bytecode instruction stream is empty");
+    }
+
+    let insns = read_pod_slice::<CraneliftInsn>(input, entry.insn_offset, entry.insn_count)?;
+    let locals_offset = usize::try_from(entry.locals_offset).map_err(|_| "local-types offset overflow")?;
+    let num_locals = usize::try_from(entry.num_locals).map_err(|_| "local-types count overflow")?;
+    let locals_end = locals_offset
+        .checked_add(num_locals)
+        .ok_or("local-types end overflow")?;
+    let local_types = input
+        .get(locals_offset..locals_end)
+        .ok_or("local types out of bounds")?;
+
+    compile_to_bytes(
+        insns,
+        layout,
+        compilation_options(entry, entry.num_locals),
+        local_types,
+        function_types,
+    )
+}
+
+fn compile_direct_entry(
+    input: &[u8],
+    entry: &InputFunctionEntry,
+    layout: &RuntimeLayout,
+    function_types: &[WasmFunctionType<'_>],
+    module_types: &[Option<DirectFunctionType<'_>>],
+    global_types: &[DirectValueType],
+) -> Result<CompiledFunction, &'static str> {
+    let instructions = read_pod_slice::<DirectInstruction>(input, entry.direct_insn_offset, entry.direct_insn_count)?;
+    let branch_targets = read_pod_slice::<u32>(
+        input,
+        entry.direct_branch_targets_offset,
+        entry.direct_branch_target_count,
+    )?;
+    let local_types = read_pod_slice::<DirectValueType>(input, entry.direct_locals_offset, entry.direct_local_count)?;
+
+    compile_direct_to_bytes(
+        DirectCompilerInput {
+            instructions,
+            branch_targets,
+            local_types,
+            function_types,
+            module_types,
+            global_types,
+        },
+        layout,
+        compilation_options(entry, entry.direct_num_locals),
+    )
+}
+
+fn compile_entry(
+    input: &[u8],
+    entry: &InputFunctionEntry,
+    layout: &RuntimeLayout,
+    function_types: &[WasmFunctionType<'_>],
+    module_types: &[Option<DirectFunctionType<'_>>],
+    global_types: &[DirectValueType],
+) -> Result<(CraneliftFrontend, CompiledFunction), &'static str> {
+    match entry.preferred_frontend {
+        frontend if frontend == CraneliftFrontend::Direct as u32 => {
+            match compile_direct_entry(input, entry, layout, function_types, module_types, global_types) {
+                Ok(compiled) => Ok((CraneliftFrontend::Direct, compiled)),
+                Err(error) => {
+                    if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
+                        eprintln!(
+                            "direct compilation of function {} failed: {error}; using allocated-bytecode frontend",
+                            entry.function_index
+                        );
+                    }
+                    compile_allocated_bytecode_entry(input, entry, layout, function_types)
+                        .map(|compiled| (CraneliftFrontend::AllocatedBytecode, compiled))
+                }
+            }
+        }
+        frontend if frontend == CraneliftFrontend::AllocatedBytecode as u32 => {
+            compile_allocated_bytecode_entry(input, entry, layout, function_types)
+                .map(|compiled| (CraneliftFrontend::AllocatedBytecode, compiled))
+        }
+        _ => Err("invalid preferred frontend"),
+    }
+}
+
 fn select_compiled_functions(
-    compiled_chunks: Vec<Vec<(usize, CompiledFunction)>>,
+    compiled_chunks: Vec<Vec<(usize, CraneliftFrontend, CompiledFunction)>>,
     code_base_offset: usize,
     output_size: usize,
-) -> (Vec<(usize, CompiledFunction)>, usize, usize) {
+) -> (Vec<(usize, CraneliftFrontend, CompiledFunction)>, usize, usize) {
     let mut compiled_functions = Vec::new();
     let mut code_size = 0usize;
     let mut reloc_size = 0usize;
-    for (index, compiled) in compiled_chunks.into_iter().flatten() {
+    for (index, frontend, compiled) in compiled_chunks.into_iter().flatten() {
         let Some(aligned_code_size) = align_up(compiled.code.len(), SERIALIZED_CODE_ALIGNMENT).ok() else {
             continue;
         };
@@ -519,7 +621,7 @@ fn select_compiled_functions(
 
         code_size = candidate_code_size;
         reloc_size = candidate_reloc_size;
-        compiled_functions.push((index, compiled));
+        compiled_functions.push((index, frontend, compiled));
     }
 
     (compiled_functions, code_size, reloc_size)
@@ -551,90 +653,20 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
             let end = (start + chunk_size).min(func_count);
             let chunk_entries = &entries[start..end];
             handles.push(scope.spawn(move || {
-                let mut out: Vec<(usize, CompiledFunction)> = Vec::with_capacity(end - start);
+                let mut out = Vec::with_capacity(end - start);
                 for (offset_in_chunk, entry) in chunk_entries.iter().enumerate() {
                     let i = start + offset_in_chunk;
-                    let options = FunctionCompilationOptions {
-                        result_arity: entry.result_arity,
-                        num_locals: entry.num_locals,
-                        num_params: entry.num_params,
-                        function_index: entry.function_index,
-                        max_call_rec_size: entry.max_call_rec_size,
-                    };
-                    if entry.frontend == CraneliftFrontend::Direct as u32 {
-                        let Ok(direct_insns) = read_pod_slice::<DirectInstruction>(
-                            mapped_ref,
-                            entry.direct_insn_offset,
-                            entry.direct_insn_count,
-                        ) else {
-                            continue;
-                        };
-                        let Ok(direct_branch_targets) = read_pod_slice::<u32>(
-                            mapped_ref,
-                            entry.direct_branch_targets_offset,
-                            entry.direct_branch_target_count,
-                        ) else {
-                            continue;
-                        };
-                        let Ok(direct_local_types) = read_pod_slice::<DirectValueType>(
-                            mapped_ref,
-                            entry.direct_locals_offset,
-                            entry.direct_local_count,
-                        ) else {
-                            continue;
-                        };
-                        if let Ok(compiled) = compile_direct_to_bytes(
-                            DirectCompilerInput {
-                                instructions: direct_insns,
-                                branch_targets: direct_branch_targets,
-                                local_types: direct_local_types,
-                                function_types: function_types_ref,
-                                module_types: module_types_ref,
-                                global_types: global_types_ref,
-                            },
-                            layout_ref,
-                            options,
-                        ) {
-                            out.push((i, compiled));
-                        }
-                        continue;
-                    }
-                    if entry.frontend != CraneliftFrontend::AllocatedBytecode as u32 {
-                        continue;
-                    }
-                    if entry.insn_count == 0 {
-                        continue;
-                    }
-                    let Ok(insn_offset) = usize::try_from(entry.insn_offset) else {
+                    let Ok((frontend, compiled)) = compile_entry(
+                        mapped_ref,
+                        entry,
+                        layout_ref,
+                        function_types_ref,
+                        module_types_ref,
+                        global_types_ref,
+                    ) else {
                         continue;
                     };
-                    let insn_count = entry.insn_count as usize;
-                    let Some(insn_bytes_len) = insn_count.checked_mul(size_of::<CraneliftInsn>()) else {
-                        continue;
-                    };
-                    let Some(insn_end) = insn_offset.checked_add(insn_bytes_len) else {
-                        continue;
-                    };
-                    let Some(insn_bytes) = mapped_ref.get(insn_offset..insn_end) else {
-                        continue;
-                    };
-                    if insn_offset % align_of::<CraneliftInsn>() != 0 {
-                        continue;
-                    }
-                    let (prefix, insns, suffix) = unsafe { insn_bytes.align_to::<CraneliftInsn>() };
-                    if !prefix.is_empty() || !suffix.is_empty() || insns.len() != insn_count {
-                        continue;
-                    }
-                    let num_locals = entry.num_locals as usize;
-                    let local_types = usize::try_from(entry.locals_offset)
-                        .ok()
-                        .and_then(|offset| offset.checked_add(num_locals).map(|end| (offset, end)))
-                        .and_then(|(offset, end)| mapped_ref.get(offset..end))
-                        .unwrap_or(&[]);
-                    if let Ok(compiled) = compile_to_bytes(insns, layout_ref, options, local_types, function_types_ref)
-                    {
-                        out.push((i, compiled));
-                    }
+                    out.push((i, frontend, compiled));
                 }
                 out
             }));
@@ -698,7 +730,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
 
     let mut code_cursor = 0usize;
     let mut reloc_cursor = 0usize;
-    for (i, compiled) in compiled_functions {
+    for (i, frontend, compiled) in compiled_functions {
         let CompiledFunction {
             code,
             native_entry_offset,
@@ -775,7 +807,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
             compiled: 1,
             reloc_offset: u64::try_from(reloc_offset).map_err(|_| "reloc offset overflow")?,
             reloc_count: u32::try_from(relocs.len()).map_err(|_| "reloc count overflow")?,
-            _padding_after_reloc_count: 0,
+            frontend: frontend as u32,
             trap_offset: u64::try_from(trap_offset).map_err(|_| "trap offset overflow")?,
             trap_count: u32::try_from(traps.len()).map_err(|_| "trap count overflow")?,
             native_entry_offset,
@@ -867,6 +899,7 @@ mod tests {
         let compiled = vec![vec![
             (
                 0,
+                CraneliftFrontend::AllocatedBytecode,
                 CompiledFunction {
                     code: vec![0; 16],
                     native_entry_offset: 0,
@@ -876,6 +909,7 @@ mod tests {
             ),
             (
                 1,
+                CraneliftFrontend::AllocatedBytecode,
                 CompiledFunction {
                     code: vec![0; 64],
                     native_entry_offset: 0,
@@ -885,6 +919,7 @@ mod tests {
             ),
             (
                 2,
+                CraneliftFrontend::AllocatedBytecode,
                 CompiledFunction {
                     code: vec![0; 16],
                     native_entry_offset: 0,
@@ -895,7 +930,10 @@ mod tests {
         ]];
 
         let (selected, code_size, reloc_size) = select_compiled_functions(compiled, 32, 64);
-        assert_eq!(selected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(
+            selected.iter().map(|(index, _, _)| *index).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
         assert_eq!(code_size, 32);
         assert_eq!(reloc_size, 0);
     }

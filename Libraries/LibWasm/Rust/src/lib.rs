@@ -9,7 +9,7 @@ pub mod serialized;
 
 use compiler::CraneliftCompiler;
 
-pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 3;
+pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 4;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

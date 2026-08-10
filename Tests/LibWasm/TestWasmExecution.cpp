@@ -32,9 +32,10 @@ static void append_wasm_section(Vector<u8>& module, u8 section_id, Vector<u8>&& 
     module.extend(move(contents));
 }
 
-static Vector<u8> make_direct_call_chain_module(u32 function_count)
+static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32> allocated_bytecode_function = {})
 {
     VERIFY(function_count > 0);
+    VERIFY(!allocated_bytecode_function.has_value() || allocated_bytecode_function.value() < function_count);
 
     Vector<u8> module { 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
 
@@ -47,6 +48,11 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count)
         function_section.append(0);
     append_wasm_section(module, 3, move(function_section));
 
+    if (allocated_bytecode_function.has_value()) {
+        Vector<u8> memory_section { 0x01, 0x00, 0x01 };
+        append_wasm_section(module, 5, move(memory_section));
+    }
+
     Vector<u8> export_section { 0x01, 0x03, 'r', 'u', 'n', 0x00, 0x00 };
     append_wasm_section(module, 7, move(export_section));
 
@@ -54,6 +60,8 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count)
     append_unsigned_leb128(code_section, function_count);
     for (u32 function_index = 0; function_index < function_count; ++function_index) {
         Vector<u8> body { 0x00 };
+        if (allocated_bytecode_function == function_index)
+            body.extend(Vector<u8> { 0x3f, 0x00, 0x1a }); // memory.size 0; drop
         if (function_index + 1 == function_count) {
             body.extend(Vector<u8> { 0x20, 0x00, 0x41, 0x01, 0x6a });
         } else if (function_index == 0) {
@@ -149,18 +157,22 @@ static Vector<u8> make_call_indirect_callee_module()
     return module;
 }
 
-static bool direct_execution_selected(u32 function_index)
+static void expect_direct_frontend(Wasm::CompiledInstructions const& compiled)
 {
-    auto const* selected_functions = getenv("CRANELIFT_DIRECT_EXECUTE_FN");
-    if (!selected_functions)
-        return false;
+    EXPECT(compiled.cranelift_compiled);
+    EXPECT_NE(Wasm::cranelift_entry_acquire(compiled), 0u);
+    EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+    EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+    EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+}
 
-    bool selected = false;
-    StringView { selected_functions, strlen(selected_functions) }.for_each_split_view(',', SplitBehavior::Nothing, [&](auto part) {
-        if (auto value = part.template to_number<u32>(); value.has_value() && value.value() == function_index)
-            selected = true;
-    });
-    return selected;
+static void expect_allocated_bytecode_frontend(Wasm::CompiledInstructions const& compiled)
+{
+    EXPECT(compiled.cranelift_compiled);
+    EXPECT_NE(Wasm::cranelift_entry_acquire(compiled), 0u);
+    EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
+    EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+    EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
 }
 
 TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
@@ -172,17 +184,7 @@ TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
         return MUST(Wasm::Module::parse(stream));
     };
     auto expect_frontend = [](Wasm::CompiledInstructions const& compiled) {
-        EXPECT(compiled.cranelift_compiled);
-        EXPECT_NE(Wasm::cranelift_entry_acquire(compiled), 0u);
-        if (direct_execution_selected(0)) {
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
-        } else {
-            EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-            EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
-        }
+        expect_direct_frontend(compiled);
     };
     auto invoke = [](Wasm::AbstractMachine& machine, Wasm::ModuleInstance const& instance) {
         Optional<Wasm::FunctionAddress> run;
@@ -235,7 +237,7 @@ TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
 
 TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallback)
 {
-    auto bytes = make_direct_call_chain_module(2);
+    auto bytes = make_direct_call_chain_module(2, 0);
     FixedMemoryStream stream { bytes.span() };
     auto module = MUST(Wasm::Module::parse(stream));
 
@@ -244,19 +246,8 @@ TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallb
     auto const& functions = module->code_section().functions();
     auto const& caller = functions[0].func().body().compiled_instructions;
     auto const& callee = functions[1].func().body().compiled_instructions;
-    EXPECT(caller.cranelift_compiled);
-    EXPECT(callee.cranelift_compiled);
-    EXPECT_NE(Wasm::cranelift_native_entry_acquire(caller), 0u);
-    EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller), 0u);
-    if (direct_execution_selected(1)) {
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(callee), 0u);
-        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(callee), 0u);
-        EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(callee), 0u);
-    } else {
-        EXPECT_NE(Wasm::cranelift_native_entry_acquire(callee), 0u);
-        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(callee), 0u);
-        EXPECT_NE(Wasm::cranelift_osr_entry_acquire(callee), 0u);
-    }
+    expect_allocated_bytecode_frontend(caller);
+    expect_direct_frontend(callee);
 
     auto instance = MUST(machine.instantiate(*module, {}));
     Optional<Wasm::FunctionAddress> run;
@@ -275,7 +266,7 @@ TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallb
 TEST_CASE(direct_frontend_static_call_falls_back_to_interpreter)
 {
     auto parse_module = [] {
-        auto bytes = make_direct_call_chain_module(2);
+        auto bytes = make_direct_call_chain_module(2, 1);
         FixedMemoryStream stream { bytes.span() };
         return MUST(Wasm::Module::parse(stream));
     };
@@ -283,12 +274,8 @@ TEST_CASE(direct_frontend_static_call_falls_back_to_interpreter)
         auto const& functions = module.code_section().functions();
         auto const& caller = functions[0].func().body().compiled_instructions;
         auto const& callee = functions[1].func().body().compiled_instructions;
-        EXPECT(caller.cranelift_compiled);
-        EXPECT(callee.cranelift_compiled);
-        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(caller) != 0, direct_execution_selected(0));
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller) != 0, !direct_execution_selected(0));
-        EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(callee) != 0, direct_execution_selected(1));
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(callee) != 0, !direct_execution_selected(1));
+        expect_direct_frontend(caller);
+        expect_allocated_bytecode_frontend(callee);
     };
     auto invoke = [](Wasm::AbstractMachine& machine, Wasm::ModuleInstance const& instance) {
         Optional<Wasm::FunctionAddress> run;
@@ -339,14 +326,8 @@ TEST_CASE(direct_frontend_links_mutually_recursive_group)
 
     Wasm::AbstractMachine machine;
     MUST(machine.validate(*module));
-    for (auto const& function : module->code_section().functions()) {
-        auto const& compiled = function.func().body().compiled_instructions;
-        EXPECT(compiled.cranelift_compiled);
-        if (direct_execution_selected(0) && direct_execution_selected(1)) {
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        }
-    }
+    for (auto const& function : module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
 
     auto instance = MUST(machine.instantiate(*module, {}));
     Optional<Wasm::FunctionAddress> run;
@@ -370,14 +351,8 @@ TEST_CASE(direct_frontend_executes_indirect_calls)
 
     Wasm::AbstractMachine machine;
     MUST(machine.validate(*module));
-    if (direct_execution_selected(0) && direct_execution_selected(1)) {
-        for (auto const& function : module->code_section().functions()) {
-            auto const& compiled = function.func().body().compiled_instructions;
-            EXPECT(compiled.cranelift_compiled);
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        }
-    }
+    for (auto const& function : module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
 
     auto instance = MUST(machine.instantiate(*module, {}));
     Optional<Wasm::FunctionAddress> run;
@@ -437,12 +412,7 @@ TEST_CASE(direct_frontend_explicit_trap_reaches_fault_recovery)
     Wasm::AbstractMachine machine;
     MUST(machine.validate(*module));
     auto const& compiled = module->code_section().functions()[0].func().body().compiled_instructions;
-    EXPECT(compiled.cranelift_compiled);
-    if (direct_execution_selected(0)) {
-        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
-    }
+    expect_direct_frontend(compiled);
 
     auto instance = MUST(machine.instantiate(*module, {}));
     Optional<Wasm::FunctionAddress> run;
@@ -1019,11 +989,7 @@ TEST_CASE(native_direct_call_falls_back_for_imported_callee)
     MUST(machine.validate(*module));
 
     auto const& caller = module->code_section().functions()[0].func().body().compiled_instructions;
-    EXPECT(caller.cranelift_compiled);
-    if (direct_execution_selected(1)) {
-        EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(caller), 0u);
-        EXPECT_EQ(Wasm::cranelift_native_entry_acquire(caller), 0u);
-    }
+    expect_direct_frontend(caller);
 
     Wasm::FunctionType sum_type {
         { Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32), Wasm::ValueType(Wasm::ValueType::I32) },
@@ -1064,14 +1030,8 @@ TEST_CASE(native_direct_call_restores_context_after_trap)
     Wasm::AbstractMachine machine;
     MUST(machine.validate(*module));
 
-    for (size_t function_index = 0; function_index < module->code_section().functions().size(); ++function_index) {
-        auto const& compiled = module->code_section().functions()[function_index].func().body().compiled_instructions;
-        EXPECT(compiled.cranelift_compiled);
-        if (direct_execution_selected(static_cast<u32>(function_index))) {
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        }
-    }
+    for (auto const& function : module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
 
     auto instance = MUST(machine.instantiate(*module, {}));
     auto find_export = [&](StringView name) {
@@ -1115,8 +1075,8 @@ TEST_CASE(native_direct_call_uses_typed_abi)
         EXPECT(functions[index].func().body().compiled_instructions.cranelift_compiled);
 
     auto const& sum4_compiled = functions[17].func().body().compiled_instructions;
-    EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), 0u);
-    EXPECT_NE(Wasm::cranelift_native_entry_acquire(sum4_compiled), Wasm::cranelift_entry_acquire(sum4_compiled));
+    expect_direct_frontend(sum4_compiled);
+    EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(sum4_compiled), Wasm::cranelift_entry_acquire(sum4_compiled));
 
     Vector<Wasm::FunctionIndex> raw_caller_indices;
     for (auto const& export_ : module->export_section().entries()) {
@@ -1204,10 +1164,7 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
         auto function_index = export_.description().get<Wasm::FunctionIndex>().value();
         auto const& compiled = functions[function_index].func().body().compiled_instructions;
         EXPECT(compiled.cranelift_compiled);
-        if (direct_execution_selected(function_index)) {
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        }
+        expect_direct_frontend(compiled);
         auto const expected_indirect_calls = export_.name().starts_with("run_nested_raw_"sv) ? 2u : 1u;
         EXPECT_EQ(compiled.cranelift_indirect_calls.size(), expected_indirect_calls);
     }
@@ -1316,14 +1273,8 @@ TEST_CASE(native_indirect_call_restores_context_after_cross_module_fallback)
     MUST(machine.validate(*caller_module));
 
     EXPECT(provider_module->code_section().functions()[0].func().body().compiled_instructions.cranelift_compiled);
-    for (size_t function_index = 0; function_index < caller_module->code_section().functions().size(); ++function_index) {
-        auto const& compiled = caller_module->code_section().functions()[function_index].func().body().compiled_instructions;
-        EXPECT(compiled.cranelift_compiled);
-        if (direct_execution_selected(static_cast<u32>(function_index + 1))) {
-            EXPECT_NE(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-            EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-        }
-    }
+    for (auto const& function : caller_module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
 
     auto provider_instance = MUST(machine.instantiate(*provider_module, {}));
     Optional<Wasm::FunctionAddress> provider_value;

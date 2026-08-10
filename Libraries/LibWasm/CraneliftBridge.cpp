@@ -66,7 +66,7 @@ struct InputHeader {
 };
 
 struct InputFunctionEntry {
-    u32 frontend;
+    u32 preferred_frontend;
     u32 insn_offset;
     u32 insn_count;
     u32 direct_insn_offset;
@@ -77,6 +77,7 @@ struct InputFunctionEntry {
     u32 direct_local_count;
     u32 result_arity;
     u32 num_locals;
+    u32 direct_num_locals;
     u32 locals_offset;
     u32 num_params;
     u32 function_index;
@@ -99,7 +100,7 @@ struct InputModuleTypeEntry {
 };
 
 static_assert(sizeof(InputHeader) == 56);
-static_assert(sizeof(InputFunctionEntry) == 60);
+static_assert(sizeof(InputFunctionEntry) == 64);
 static_assert(sizeof(InputFunctionTypeEntry) == 16);
 static_assert(sizeof(InputModuleTypeEntry) == 20);
 
@@ -119,7 +120,7 @@ struct OutputFunctionEntry {
     // `CraneliftRelocation` entries describing process-specific code targets.
     u64 reloc_offset;
     u32 reloc_count;
-    u32 _padding_after_reloc_count;
+    u32 frontend;
     u64 trap_offset;
     u32 trap_count;
     u32 native_entry_offset;
@@ -313,27 +314,26 @@ static ErrorOr<size_t> compute_output_buffer_size(size_t function_count, size_t 
 struct BatchInput {
     Vector<CraneliftInsn> insns;
     Optional<DirectCompilerInput> direct_input;
-    CraneliftFrontend frontend;
-    bool should_publish;
+    CraneliftFrontend preferred_frontend;
     u32 result_arity;
     u32 function_index;
     CompiledInstructions* target;
     u32 num_locals;
+    u32 direct_num_locals;
     u32 num_params;
 };
 
 static size_t compiler_instruction_count(BatchInput const& input)
 {
-    if (input.direct_input.has_value())
-        return input.direct_input->instructions.size();
-    return input.insns.size();
+    auto const direct_instruction_count = input.direct_input.has_value() ? input.direct_input->instructions.size() : 0;
+    return max(input.insns.size(), direct_instruction_count);
 }
 
 // Disk-cache blob format. Stable: cached files name format_version + layout_hash so
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 31;
+constexpr u32 cache_blob_format_version = 32;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -1987,11 +1987,11 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         u32 function_direct_local_count = 0;
         if (input.direct_input.has_value()) {
             auto const& direct_input = input.direct_input.value();
-            function_direct_insn_offset = static_cast<u32>(direct_insn_cursor);
+            function_direct_insn_offset = direct_input.instructions.is_empty() ? 0 : static_cast<u32>(direct_insn_cursor);
             function_direct_insn_count = static_cast<u32>(direct_input.instructions.size());
-            function_direct_branch_targets_offset = static_cast<u32>(direct_branch_targets_cursor);
+            function_direct_branch_targets_offset = direct_input.branch_targets.is_empty() ? 0 : static_cast<u32>(direct_branch_targets_cursor);
             function_direct_branch_target_count = static_cast<u32>(direct_input.branch_targets.size());
-            function_direct_locals_offset = static_cast<u32>(direct_locals_cursor);
+            function_direct_locals_offset = direct_input.local_types.is_empty() ? 0 : static_cast<u32>(direct_locals_cursor);
             function_direct_local_count = static_cast<u32>(direct_input.local_types.size());
 
             if (!direct_input.instructions.is_empty())
@@ -2007,7 +2007,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
         auto* entry = reinterpret_cast<InputFunctionEntry*>(base + entries_offset + i * sizeof(InputFunctionEntry));
         *entry = InputFunctionEntry {
-            .frontend = static_cast<u32>(input.frontend),
+            .preferred_frontend = static_cast<u32>(input.preferred_frontend),
             .insn_offset = static_cast<u32>(insn_cursor),
             .insn_count = static_cast<u32>(input.insns.size()),
             .direct_insn_offset = function_direct_insn_offset,
@@ -2018,6 +2018,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             .direct_local_count = function_direct_local_count,
             .result_arity = input.result_arity,
             .num_locals = input.num_locals,
+            .direct_num_locals = input.direct_num_locals,
             .locals_offset = static_cast<u32>(locals_cursor),
             .num_params = input.num_params,
             .function_index = input.function_index,
@@ -2119,6 +2120,9 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         auto const& output = *reinterpret_cast<OutputFunctionEntry const*>(output_base + output_entries_offset + i * sizeof(OutputFunctionEntry));
         if (!output.compiled)
             continue;
+        if (output.frontend > static_cast<u32>(CraneliftFrontend::Direct))
+            continue;
+        auto const frontend = static_cast<CraneliftFrontend>(output.frontend);
 
         auto code_offset = static_cast<size_t>(output.code_offset);
         auto code_size = static_cast<size_t>(output.code_size);
@@ -2160,16 +2164,13 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             ? ReadonlySpan<CraneliftTrap> {}
             : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(output_base + reloc_region_start + trap_offset), trap_count };
 
-        if (!batch[i].should_publish)
-            continue;
-
         auto& capture = cranelift_cache_state().cache_capture;
         if (capture.capturing && batch[i].function_index != NumericLimits<u32>::max()) {
             if (auto copy = ByteBuffer::copy(code_bytes.data(), code_bytes.size()); !copy.is_error()) {
                 CacheRecord rec;
                 rec.function_index = batch[i].function_index;
                 rec.native_entry_offset = output.native_entry_offset;
-                rec.frontend = batch[i].frontend;
+                rec.frontend = frontend;
                 rec.unpatched_code = copy.release_value();
                 rec.relocs.ensure_capacity(reloc_count);
                 for (size_t j = 0; j < reloc_count; ++j)
@@ -2181,7 +2182,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             }
         }
 
-        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, batch[i].frontend, code_bytes, output.native_entry_offset, relocs, traps); pending.has_value())
+        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, frontend, code_bytes, output.native_entry_offset, relocs, traps); pending.has_value())
             pending_functions.append(pending.release_value());
     }
 
@@ -2222,9 +2223,8 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         }
     }
 
-    Optional<DirectCompilerInput> direct_input;
-    auto frontend = CraneliftFrontend::AllocatedBytecode;
-    bool should_publish = true;
+    auto direct_input = serialize_direct_compiler_input(function);
+    auto preferred_frontend = direct_input.has_value() ? CraneliftFrontend::Direct : CraneliftFrontend::AllocatedBytecode;
 
     if constexpr (WASM_CRANELIFT_DEBUG) {
         // CRANELIFT_MAX_INSNS=N       skip functions with more than N dispatches.
@@ -2233,8 +2233,6 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         // CRANELIFT_MAX_FN=N          skip functions with id > N.
         // CRANELIFT_SKIP_FN=a,b,c     skip listed function ids.
         // CRANELIFT_ONLY_FN=a,b,c     only compile listed function ids.
-        // CRANELIFT_DIRECT_PROBE_FN=a,b,c compile listed functions with the offline direct frontend.
-        // CRANELIFT_DIRECT_EXECUTE_FN=a,b,c compile and publish a closed group of listed direct functions.
         // CRANELIFT_TRACE=1           log a line per compiled function.
         static auto const read_size_env = [](char const* name, size_t fallback) {
             if (auto* env = getenv(name))
@@ -2259,8 +2257,6 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
         static size_t s_max_fn = read_size_env("CRANELIFT_MAX_FN", NumericLimits<size_t>::max());
         static auto& s_skip_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_SKIP_FN"));
         static auto& s_only_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_ONLY_FN"));
-        static auto& s_direct_probe_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DIRECT_PROBE_FN"));
-        static auto& s_direct_execute_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DIRECT_EXECUTE_FN"));
         static auto& s_dump_fn = *new HashTable<size_t>(read_set_env("CRANELIFT_DUMP_FN"));
         static bool s_trace = getenv("CRANELIFT_TRACE") != nullptr;
 
@@ -2277,19 +2273,6 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
             return false;
         if (s_trace)
             warnln("cranelift: compiling fn#{} ({} dispatches)", func_id, dispatches.size());
-
-        bool const probe_direct = s_direct_probe_fn.contains(s_active_function_index);
-        bool const execute_direct = s_direct_execute_fn.contains(s_active_function_index);
-        if (probe_direct || execute_direct) {
-            auto serialized_direct_input = serialize_direct_compiler_input(function);
-            if (!serialized_direct_input.has_value()) {
-                warnln("cranelift: unable to serialize direct input for fn#{}", func_id);
-            } else {
-                direct_input = serialized_direct_input.release_value();
-                frontend = CraneliftFrontend::Direct;
-                should_publish = execute_direct && !probe_direct;
-            }
-        }
 
         if (s_dump_fn.contains(func_id)) {
             warnln("cranelift: dump fn#{} ({} dispatches)", func_id, dispatches.size());
@@ -2379,25 +2362,24 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
     VERIFY(raw_call_index == compiled.cranelift_raw_calls.size());
     VERIFY(indirect_call_index == compiled.cranelift_indirect_calls.size());
 
-    auto num_locals = compiled.cranelift_local_count;
-    if (frontend == CraneliftFrontend::Direct) {
-        VERIFY(direct_input.has_value());
+    u32 direct_num_locals = 0;
+    if (direct_input.has_value()) {
         Checked<u32> direct_local_count = compiled.cranelift_param_count;
         direct_local_count += direct_input->local_types.size();
         if (direct_local_count.has_overflow())
             return false;
-        num_locals = direct_local_count.value();
+        direct_num_locals = direct_local_count.value();
     }
 
     cranelift_cache_state().pending_batch.append({
         move(flat),
         move(direct_input),
-        frontend,
-        should_publish,
+        preferred_frontend,
         result_arity,
         s_active_function_index,
         &compiled,
-        num_locals,
+        compiled.cranelift_local_count,
+        direct_num_locals,
         compiled.cranelift_param_count,
     });
     return false; // Not compiled yet, will be compiled in flush.
@@ -2426,16 +2408,6 @@ static Optional<FunctionIndex> native_direct_call_target(DirectInstruction const
     if (instruction.opcode != Instructions::call.value())
         return {};
     return FunctionIndex { instruction.arguments.function_index };
-}
-
-static void finalize_frontend_inputs(Vector<BatchInput>& inputs)
-{
-    for (auto& input : inputs) {
-        if (input.frontend == CraneliftFrontend::Direct)
-            input.insns.clear();
-        else
-            input.direct_input.clear();
-    }
 }
 
 // A component is keyed by the function index of the node it was discovered from.
@@ -2790,7 +2762,6 @@ void flush_cranelift_batch(Module const& module)
         return;
 
     if (!state.pending_batch.is_empty()) {
-        finalize_frontend_inputs(state.pending_batch);
         auto result = compile_incremental_batches(state.pending_batch, module);
         if (result.is_error())
             warnln("Cranelift compilation failed: {}", result.error());
