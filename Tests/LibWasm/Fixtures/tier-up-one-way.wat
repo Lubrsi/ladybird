@@ -2,6 +2,7 @@
   (import "env" "compile" (func $compile))
 
   (global $iterations (mut i32) (i32.const 0))
+  (memory 1)
 
   (func (export "run") (result i32)
     ;; Keep the loop counter after more than 256 declared locals. This covers both OSR and fresh
@@ -42,6 +43,10 @@
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
+
+    ;; Keep this function on the OSR-capable allocated-bytecode frontend until the direct
+    ;; frontend has its own OSR variant.
+    (drop (memory.size))
 
     (local.set $stable0 (i32.const 40))
     (call $compile)
