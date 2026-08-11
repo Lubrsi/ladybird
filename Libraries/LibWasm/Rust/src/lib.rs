@@ -9,7 +9,7 @@ pub mod serialized;
 
 use compiler::CraneliftCompiler;
 
-pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 4;
+pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 5;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +135,16 @@ pub union DirectInstructionArguments {
 pub struct DirectInstruction {
     pub opcode: u64,
     pub arguments: DirectInstructionArguments,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct DirectTierUpCheckpoint {
+    pub checkpoint_id: u32,
+    pub interpreter_dispatch_index: u32,
+    pub loop_instruction_index: u32,
+    pub live_local_indices_offset: u32,
+    pub live_local_index_count: u32,
 }
 
 /// Immediates:
@@ -306,6 +316,8 @@ pub struct DirectCompilerInput<'a> {
     pub instructions: &'a [DirectInstruction],
     pub branch_targets: &'a [u32],
     pub local_types: &'a [DirectValueType],
+    pub tier_up_checkpoints: &'a [DirectTierUpCheckpoint],
+    pub tier_up_live_local_indices: &'a [u32],
     pub function_types: &'a [WasmFunctionType<'a>],
     pub module_types: &'a [Option<DirectFunctionType<'a>>],
     pub global_types: &'a [DirectValueType],
