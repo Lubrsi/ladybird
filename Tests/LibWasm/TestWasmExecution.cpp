@@ -239,9 +239,10 @@ TEST_CASE(direct_osr_does_not_resume_interpreter_frame)
     EXPECT_EQ(checkpoint.checkpoint_id, Wasm::TierUpCheckpointIndex { 0 });
     EXPECT_EQ(compiled.dispatches[checkpoint.interpreter_dispatch_index.value()].instruction->opcode(), Wasm::Instructions::synthetic_tier_up);
     EXPECT_EQ(module->code_section().functions()[0].func().body().instructions()[checkpoint.parsed_loop_instruction_index.value()].opcode(), Wasm::Instructions::loop);
-    EXPECT_EQ(checkpoint.live_local_indices.size(), 2u);
+    EXPECT_EQ(checkpoint.live_local_indices.size(), 3u);
     EXPECT_EQ(checkpoint.live_local_indices[0], Wasm::LocalIndex { 0 });
     EXPECT_EQ(checkpoint.live_local_indices[1], Wasm::LocalIndex { 1 });
+    EXPECT_EQ(checkpoint.live_local_indices[2], Wasm::LocalIndex { 2 });
 
     size_t compilation_requests = 0;
     Wasm::FunctionType compile_type { {}, {} };
@@ -268,19 +269,30 @@ TEST_CASE(direct_osr_does_not_resume_interpreter_frame)
     VERIFY(run.has_value());
 
     auto const initial_tier_up_count = Wasm::tier_up_taken_count();
-    auto osr_result = machine.invoke(*run, {});
+    auto osr_result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(0)) });
     EXPECT_EQ(compilation_requests, 1u);
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
     EXPECT(!osr_result.is_trap());
-    EXPECT_EQ(osr_result.values().size(), 1u);
-    EXPECT_EQ(osr_result.values()[0].to<i32>(), 43);
+    EXPECT_EQ(osr_result.values().size(), 2u);
+    EXPECT_EQ(osr_result.values()[0].to<double>(), 3.0);
+    EXPECT_EQ(osr_result.values()[1].to<i32>(), 43);
 
-    auto fresh_result = machine.invoke(*run, {});
+    auto fresh_result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(0)) });
     EXPECT_EQ(compilation_requests, 2u);
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 1);
     EXPECT(!fresh_result.is_trap());
-    EXPECT_EQ(fresh_result.values().size(), 1u);
-    EXPECT_EQ(fresh_result.values()[0].to<i32>(), 46);
+    EXPECT_EQ(fresh_result.values().size(), 2u);
+    EXPECT_EQ(fresh_result.values()[0].to<double>(), 6.0);
+    EXPECT_EQ(fresh_result.values()[1].to<i32>(), 46);
+
+    auto const fresh_entry = Wasm::cranelift_entry_acquire(compiled);
+    Wasm::publish_cranelift_entry(compiled, 0);
+    auto trapped = machine.invoke(*run, { Wasm::Value(static_cast<i32>(1)) });
+    EXPECT_EQ(compilation_requests, 3u);
+    EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count + 2);
+    EXPECT(trapped.is_trap());
+    EXPECT_EQ(trapped.trap().format(), "unreachable executed"sv);
+    Wasm::publish_cranelift_entry(compiled, fresh_entry);
 }
 
 TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)

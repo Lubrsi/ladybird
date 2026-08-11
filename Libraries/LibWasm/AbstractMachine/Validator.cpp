@@ -5165,9 +5165,6 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
                 }
             }
         }
-        // Also skip multi-value return functions.
-        if (result_types.size() > 1)
-            cranelift_candidate = false;
     }
 
     // Now that we're in happy land, try to compile the expression down to a list of labels to help dispatch.

@@ -493,11 +493,11 @@ pub(super) fn value_to_payload(
     kind: u8,
 ) -> Result<Value, &'static str> {
     match kind {
-        I32_KIND => Ok(builder.ins().uextend(types::I64, value)),
+        I32_KIND => Ok(builder.ins().sextend(types::I64, value)),
         I64_KIND => Ok(value),
         F32_KIND => {
             let bits = builder.ins().bitcast(types::I32, MemFlags::new(), value);
-            Ok(builder.ins().uextend(types::I64, bits))
+            Ok(builder.ins().sextend(types::I64, bits))
         }
         F64_KIND => Ok(builder.ins().bitcast(types::I64, MemFlags::new(), value)),
         _ => Err("unsupported native Wasm ABI type"),
