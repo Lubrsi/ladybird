@@ -36,9 +36,9 @@
   (func (export "trap") (result i32)
     (i32.load (i32.const 65535)))
 
-  ;; The current native frontend deliberately rejects multi-value functions. Keep this function in
-  ;; the fixture to prove that native mode falls back per function instead of silently changing the
-  ;; whole module's execution mode.
+  ;; Keep a multi-value leaf in the differential fixture so native result marshalling is compared
+  ;; directly with interpreter execution.
   (func (export "fallback") (result i32 i64)
+    (drop (global.get $state))
     (i32.const -7)
     (i64.const 1234605616436508552)))
