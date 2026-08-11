@@ -977,6 +977,19 @@ private:
 
 void free_cranelift_code(void* handle);
 
+class CraneliftCodeOwner {
+public:
+    explicit CraneliftCodeOwner(void*);
+    CraneliftCodeOwner(CraneliftCodeOwner const&) = delete;
+    CraneliftCodeOwner& operator=(CraneliftCodeOwner const&) = delete;
+    CraneliftCodeOwner(CraneliftCodeOwner&&);
+    CraneliftCodeOwner& operator=(CraneliftCodeOwner&&);
+    ~CraneliftCodeOwner();
+
+private:
+    void* m_handle { nullptr };
+};
+
 struct CraneliftTrap {
     u32 offset { 0 };
     u8 code { 0 };
@@ -1031,10 +1044,13 @@ struct CompiledInstructions {
     FlatPtr cranelift_native_entry = 0;
     FlatPtr cranelift_direct_native_entry = 0;
     FlatPtr cranelift_code_start = 0;
-    void* cranelift_code_handle = nullptr; // Owned; freed when the owning Module is destroyed.
     size_t cranelift_code_size = 0;
-    CraneliftTrap const* cranelift_traps = nullptr; // Owned by cranelift_code_handle.
+    CraneliftTrap const* cranelift_traps = nullptr; // Retained by the owning Module.
     size_t cranelift_trap_count = 0;
+    FlatPtr cranelift_osr_code_start = 0;
+    size_t cranelift_osr_code_size = 0;
+    CraneliftTrap const* cranelift_osr_traps = nullptr; // Retained by the owning Module.
+    size_t cranelift_osr_trap_count = 0;
     size_t max_call_arg_count = 0;
     size_t max_call_rec_size = 0;
 
@@ -1751,6 +1767,7 @@ public:
     static constexpr Array<u8, 4> wasm_version { 1, 0, 0, 0 };
 
     Module() = default;
+    ~Module();
 
     auto& custom_sections() { return m_custom_sections; }
     auto& custom_sections() const { return m_custom_sections; }
@@ -1841,6 +1858,8 @@ public:
         return publications;
     }
 
+    void retain_cranelift_code_handle(void*) const;
+
     // Disk-cache config for native compilation. Parked here by the embedder before compilation is kicked off, and consumed by whichever path ends up driving compile_module_to_native() first.
     void set_cranelift_cache_config(CompileCacheConfig config) { m_cranelift_cache_config = move(config); }
     Optional<CompileCacheConfig> take_cranelift_cache_config() { return move(m_cranelift_cache_config); }
@@ -1886,6 +1905,8 @@ private:
     mutable Atomic<size_t> m_cranelift_publication_count { 0 };
     mutable Sync::Mutex m_cranelift_publications_mutex;
     mutable Vector<FunctionIndex> m_cranelift_publications;
+    mutable Sync::Mutex m_cranelift_code_handles_mutex;
+    mutable Vector<CraneliftCodeOwner> m_cranelift_code_handles;
     Optional<CompileCacheConfig> m_cranelift_cache_config;
     Optional<ModuleStats> m_compile_stats;
 

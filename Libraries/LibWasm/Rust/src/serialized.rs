@@ -19,6 +19,7 @@ use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
 use crate::SERIALIZED_CODE_ALIGNMENT;
 use crate::WasmFunctionType;
+use crate::compile_direct_osr_to_bytes;
 use crate::compile_direct_to_bytes;
 use crate::compile_to_bytes;
 use std::mem::align_of;
@@ -97,16 +98,31 @@ struct OutputHeader {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct OutputFunctionEntry {
+struct OutputCompiledArtifact {
     code_offset: u64,
-    code_size: u32,
-    compiled: u32,
     reloc_offset: u64,
-    reloc_count: u32,
-    frontend: u32,
     trap_offset: u64,
+    code_size: u32,
+    reloc_count: u32,
     trap_count: u32,
     native_entry_offset: u32,
+    compiled: u32,
+    _padding: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct OutputFunctionEntry {
+    clean: OutputCompiledArtifact,
+    osr: OutputCompiledArtifact,
+    frontend: u32,
+    _padding: u32,
+}
+
+struct CompiledEntry {
+    frontend: CraneliftFrontend,
+    clean: CompiledFunction,
+    osr: Option<CompiledFunction>,
 }
 
 fn align_up(value: usize, alignment: usize) -> Result<usize, &'static str> {
@@ -567,14 +583,13 @@ fn compile_allocated_bytecode_entry(
     )
 }
 
-fn compile_direct_entry(
-    input: &[u8],
+fn read_direct_input<'a>(
+    input: &'a [u8],
     entry: &InputFunctionEntry,
-    layout: &RuntimeLayout,
-    function_types: &[WasmFunctionType<'_>],
-    module_types: &[Option<DirectFunctionType<'_>>],
-    global_types: &[DirectValueType],
-) -> Result<CompiledFunction, &'static str> {
+    function_types: &'a [WasmFunctionType<'a>],
+    module_types: &'a [Option<DirectFunctionType<'a>>],
+    global_types: &'a [DirectValueType],
+) -> Result<DirectCompilerInput<'a>, &'static str> {
     let instructions = read_pod_slice::<DirectInstruction>(input, entry.direct_insn_offset, entry.direct_insn_count)?;
     let branch_targets = read_pod_slice::<u32>(
         input,
@@ -593,20 +608,47 @@ fn compile_direct_entry(
         entry.direct_tier_up_live_local_index_count,
     )?;
 
-    compile_direct_to_bytes(
-        DirectCompilerInput {
-            instructions,
-            branch_targets,
-            local_types,
-            tier_up_checkpoints,
-            tier_up_live_local_indices,
-            function_types,
-            module_types,
-            global_types,
-        },
-        layout,
-        compilation_options(entry, entry.direct_num_locals),
-    )
+    Ok(DirectCompilerInput {
+        instructions,
+        branch_targets,
+        local_types,
+        tier_up_checkpoints,
+        tier_up_live_local_indices,
+        function_types,
+        module_types,
+        global_types,
+    })
+}
+
+fn compile_direct_entry(
+    input: &[u8],
+    entry: &InputFunctionEntry,
+    layout: &RuntimeLayout,
+    function_types: &[WasmFunctionType<'_>],
+    module_types: &[Option<DirectFunctionType<'_>>],
+    global_types: &[DirectValueType],
+) -> Result<(CompiledFunction, Option<CompiledFunction>), &'static str> {
+    let direct_input = read_direct_input(input, entry, function_types, module_types, global_types)?;
+    let options = compilation_options(entry, entry.direct_num_locals);
+    let clean = compile_direct_to_bytes(direct_input, layout, options)?;
+    if direct_input.tier_up_checkpoints.is_empty() {
+        return Ok((clean, None));
+    }
+
+    let interpreter_instructions = read_pod_slice::<CraneliftInsn>(input, entry.insn_offset, entry.insn_count)?;
+    let osr = match compile_direct_osr_to_bytes(direct_input, interpreter_instructions, layout, options) {
+        Ok(compiled) => Some(compiled),
+        Err(error) => {
+            if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
+                eprintln!(
+                    "direct OSR compilation of function {} failed: {error}; retaining only the clean body",
+                    entry.function_index
+                );
+            }
+            None
+        }
+    };
+    Ok((clean, osr))
 }
 
 fn compile_entry(
@@ -616,11 +658,15 @@ fn compile_entry(
     function_types: &[WasmFunctionType<'_>],
     module_types: &[Option<DirectFunctionType<'_>>],
     global_types: &[DirectValueType],
-) -> Result<(CraneliftFrontend, CompiledFunction), &'static str> {
+) -> Result<CompiledEntry, &'static str> {
     match entry.preferred_frontend {
         frontend if frontend == CraneliftFrontend::Direct as u32 => {
             match compile_direct_entry(input, entry, layout, function_types, module_types, global_types) {
-                Ok(compiled) => Ok((CraneliftFrontend::Direct, compiled)),
+                Ok((clean, osr)) => Ok(CompiledEntry {
+                    frontend: CraneliftFrontend::Direct,
+                    clean,
+                    osr,
+                }),
                 Err(error) => {
                     if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
                         eprintln!(
@@ -628,68 +674,179 @@ fn compile_entry(
                             entry.function_index
                         );
                     }
-                    compile_allocated_bytecode_entry(input, entry, layout, function_types)
-                        .map(|compiled| (CraneliftFrontend::AllocatedBytecode, compiled))
+                    compile_allocated_bytecode_entry(input, entry, layout, function_types).map(|clean| CompiledEntry {
+                        frontend: CraneliftFrontend::AllocatedBytecode,
+                        clean,
+                        osr: None,
+                    })
                 }
             }
         }
         frontend if frontend == CraneliftFrontend::AllocatedBytecode as u32 => {
-            compile_allocated_bytecode_entry(input, entry, layout, function_types)
-                .map(|compiled| (CraneliftFrontend::AllocatedBytecode, compiled))
+            compile_allocated_bytecode_entry(input, entry, layout, function_types).map(|clean| CompiledEntry {
+                frontend: CraneliftFrontend::AllocatedBytecode,
+                clean,
+                osr: None,
+            })
         }
         _ => Err("invalid preferred frontend"),
     }
 }
 
+fn compiled_artifact_sizes(compiled: &CompiledFunction) -> Option<(usize, usize)> {
+    let code_size = align_up(compiled.code.len(), SERIALIZED_CODE_ALIGNMENT).ok()?;
+    let reloc_size = compiled
+        .relocs
+        .len()
+        .checked_mul(size_of::<CraneliftRelocation>())?
+        .checked_add(compiled.traps.len().checked_mul(size_of::<CraneliftTrap>())?)?;
+    Some((code_size, reloc_size))
+}
+
+fn compiled_output_fits(code_base_offset: usize, code_size: usize, reloc_size: usize, output_size: usize) -> bool {
+    code_base_offset
+        .checked_add(code_size)
+        .and_then(|offset| align_up(offset, align_of::<CraneliftRelocation>()).ok())
+        .and_then(|offset| offset.checked_add(reloc_size))
+        .is_some_and(|total_size| total_size <= output_size)
+}
+
 fn select_compiled_functions(
-    compiled_chunks: Vec<Vec<(usize, CraneliftFrontend, CompiledFunction)>>,
+    compiled_chunks: Vec<Vec<(usize, CompiledEntry)>>,
     code_base_offset: usize,
     output_size: usize,
-) -> (Vec<(usize, CraneliftFrontend, CompiledFunction)>, usize, usize) {
+) -> (Vec<(usize, CompiledEntry)>, usize, usize) {
     let mut compiled_functions = Vec::new();
     let mut code_size = 0usize;
     let mut reloc_size = 0usize;
-    for (index, frontend, compiled) in compiled_chunks.into_iter().flatten() {
-        let Some(aligned_code_size) = align_up(compiled.code.len(), SERIALIZED_CODE_ALIGNMENT).ok() else {
+    for (index, mut compiled) in compiled_chunks.into_iter().flatten() {
+        let Some((clean_code_size, clean_reloc_size)) = compiled_artifact_sizes(&compiled.clean) else {
             continue;
         };
-        let Some(function_reloc_size) = compiled
-            .relocs
-            .len()
-            .checked_mul(size_of::<CraneliftRelocation>())
-            .and_then(|size| {
-                compiled
-                    .traps
-                    .len()
-                    .checked_mul(size_of::<CraneliftTrap>())
-                    .and_then(|trap_size| size.checked_add(trap_size))
-            })
-        else {
+        let Some(candidate_code_size) = code_size.checked_add(clean_code_size) else {
             continue;
         };
-        let Some(candidate_code_size) = code_size.checked_add(aligned_code_size) else {
+        let Some(candidate_reloc_size) = reloc_size.checked_add(clean_reloc_size) else {
             continue;
         };
-        let Some(candidate_reloc_size) = reloc_size.checked_add(function_reloc_size) else {
-            continue;
-        };
-        let Some(candidate_total_size) = code_base_offset
-            .checked_add(candidate_code_size)
-            .and_then(|offset| align_up(offset, align_of::<CraneliftRelocation>()).ok())
-            .and_then(|offset| offset.checked_add(candidate_reloc_size))
-        else {
-            continue;
-        };
-        if candidate_total_size > output_size {
+        if !compiled_output_fits(code_base_offset, candidate_code_size, candidate_reloc_size, output_size) {
             continue;
         }
 
         code_size = candidate_code_size;
         reloc_size = candidate_reloc_size;
-        compiled_functions.push((index, frontend, compiled));
+        if let Some(osr) = &compiled.osr {
+            let Some((osr_code_size, osr_reloc_size)) = compiled_artifact_sizes(osr) else {
+                compiled.osr = None;
+                compiled_functions.push((index, compiled));
+                continue;
+            };
+            let Some(candidate_code_size) = code_size.checked_add(osr_code_size) else {
+                compiled.osr = None;
+                compiled_functions.push((index, compiled));
+                continue;
+            };
+            let Some(candidate_reloc_size) = reloc_size.checked_add(osr_reloc_size) else {
+                compiled.osr = None;
+                compiled_functions.push((index, compiled));
+                continue;
+            };
+            if compiled_output_fits(code_base_offset, candidate_code_size, candidate_reloc_size, output_size) {
+                code_size = candidate_code_size;
+                reloc_size = candidate_reloc_size;
+            } else {
+                compiled.osr = None;
+            }
+        }
+        compiled_functions.push((index, compiled));
     }
 
     (compiled_functions, code_size, reloc_size)
+}
+
+fn write_compiled_artifact(
+    output: &mut [u8],
+    code_base_offset: usize,
+    reloc_region_start: usize,
+    code_cursor: &mut usize,
+    reloc_cursor: &mut usize,
+    compiled: CompiledFunction,
+) -> Result<OutputCompiledArtifact, &'static str> {
+    let CompiledFunction {
+        code,
+        native_entry_offset,
+        relocs,
+        traps,
+    } = compiled;
+    let aligned_code_size = align_up(code.len(), SERIALIZED_CODE_ALIGNMENT)?;
+    let reloc_bytes_len = relocs
+        .len()
+        .checked_mul(size_of::<CraneliftRelocation>())
+        .ok_or("relocation size overflow")?;
+    let trap_bytes_len = traps
+        .len()
+        .checked_mul(size_of::<CraneliftTrap>())
+        .ok_or("trap size overflow")?;
+
+    let code_offset = *code_cursor;
+    let code_destination = code_base_offset
+        .checked_add(code_offset)
+        .ok_or("code destination overflow")?;
+    let code_end = code_destination
+        .checked_add(code.len())
+        .ok_or("code destination overflow")?;
+    output
+        .get_mut(code_destination..code_end)
+        .ok_or("code destination out of bounds")?
+        .copy_from_slice(&code);
+
+    let reloc_offset = *reloc_cursor;
+    if !relocs.is_empty() {
+        let reloc_destination = reloc_region_start
+            .checked_add(reloc_offset)
+            .ok_or("relocation destination overflow")?;
+        let reloc_end = reloc_destination
+            .checked_add(reloc_bytes_len)
+            .ok_or("relocation destination overflow")?;
+        output
+            .get_mut(reloc_destination..reloc_end)
+            .ok_or("relocation destination out of bounds")?
+            .copy_from_slice(as_bytes_slice(&relocs));
+    }
+
+    let trap_offset = reloc_offset
+        .checked_add(reloc_bytes_len)
+        .ok_or("trap offset overflow")?;
+    if !traps.is_empty() {
+        let trap_destination = reloc_region_start
+            .checked_add(trap_offset)
+            .ok_or("trap destination overflow")?;
+        let trap_end = trap_destination
+            .checked_add(trap_bytes_len)
+            .ok_or("trap destination overflow")?;
+        output
+            .get_mut(trap_destination..trap_end)
+            .ok_or("trap destination out of bounds")?
+            .copy_from_slice(as_bytes_slice(&traps));
+    }
+
+    *code_cursor = code_offset
+        .checked_add(aligned_code_size)
+        .ok_or("code cursor overflow")?;
+    *reloc_cursor = trap_offset
+        .checked_add(trap_bytes_len)
+        .ok_or("relocation cursor overflow")?;
+    Ok(OutputCompiledArtifact {
+        code_offset: u64::try_from(code_offset).map_err(|_| "code offset overflow")?,
+        reloc_offset: u64::try_from(reloc_offset).map_err(|_| "relocation offset overflow")?,
+        trap_offset: u64::try_from(trap_offset).map_err(|_| "trap offset overflow")?,
+        code_size: u32::try_from(code.len()).map_err(|_| "code size overflow")?,
+        reloc_count: u32::try_from(relocs.len()).map_err(|_| "relocation count overflow")?,
+        trap_count: u32::try_from(traps.len()).map_err(|_| "trap count overflow")?,
+        native_entry_offset,
+        compiled: 1,
+        _padding: 0,
+    })
 }
 
 pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
@@ -721,7 +878,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                 let mut out = Vec::with_capacity(end - start);
                 for (offset_in_chunk, entry) in chunk_entries.iter().enumerate() {
                     let i = start + offset_in_chunk;
-                    let Ok((frontend, compiled)) = compile_entry(
+                    let Ok(compiled) = compile_entry(
                         mapped_ref,
                         entry,
                         layout_ref,
@@ -731,7 +888,7 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
                     ) else {
                         continue;
                     };
-                    out.push((i, frontend, compiled));
+                    out.push((i, compiled));
                 }
                 out
             }));
@@ -795,87 +952,31 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
 
     let mut code_cursor = 0usize;
     let mut reloc_cursor = 0usize;
-    for (i, frontend, compiled) in compiled_functions {
-        let CompiledFunction {
-            code,
-            native_entry_offset,
-            relocs,
-            traps,
-        } = compiled;
-        let aligned = align_up(code.len(), SERIALIZED_CODE_ALIGNMENT).map_err(|_| "code alignment overflow")?;
-        let reloc_bytes_len = relocs
-            .len()
-            .checked_mul(size_of::<CraneliftRelocation>())
-            .ok_or("relocation size overflow")?;
-        let trap_bytes_len = traps
-            .len()
-            .checked_mul(size_of::<CraneliftTrap>())
-            .ok_or("trap size overflow")?;
-        let Some(code_end) = code_cursor.checked_add(aligned) else {
-            continue;
+    for (i, compiled) in compiled_functions {
+        let clean = write_compiled_artifact(
+            output,
+            code_base_offset,
+            reloc_region_start,
+            &mut code_cursor,
+            &mut reloc_cursor,
+            compiled.clean,
+        )?;
+        let osr = match compiled.osr {
+            Some(osr) => write_compiled_artifact(
+                output,
+                code_base_offset,
+                reloc_region_start,
+                &mut code_cursor,
+                &mut reloc_cursor,
+                osr,
+            )?,
+            None => OutputCompiledArtifact::default(),
         };
-        if code_end > code_size {
-            continue;
-        }
-        let Some(reloc_end) = reloc_cursor
-            .checked_add(reloc_bytes_len)
-            .and_then(|end| end.checked_add(trap_bytes_len))
-        else {
-            continue;
-        };
-        if reloc_end > reloc_size {
-            continue;
-        }
-        let code_offset = code_cursor;
-        let code_dst = code_base_offset
-            .checked_add(code_offset)
-            .ok_or("code destination overflow")?;
-        let code_dst_end = code_dst.checked_add(code.len()).ok_or("code destination overflow")?;
-        output
-            .get_mut(code_dst..code_dst_end)
-            .ok_or("code destination out of bounds")?
-            .copy_from_slice(&code);
-
-        let reloc_offset = reloc_cursor;
-        if !relocs.is_empty() {
-            let reloc_dst = reloc_region_start
-                .checked_add(reloc_offset)
-                .ok_or("relocation destination overflow")?;
-            let reloc_dst_end = reloc_dst
-                .checked_add(reloc_bytes_len)
-                .ok_or("relocation destination overflow")?;
-            output
-                .get_mut(reloc_dst..reloc_dst_end)
-                .ok_or("relocation destination out of bounds")?
-                .copy_from_slice(as_bytes_slice(&relocs));
-        }
-
-        let trap_offset = reloc_cursor
-            .checked_add(reloc_bytes_len)
-            .ok_or("trap offset overflow")?;
-        if !traps.is_empty() {
-            let trap_dst = reloc_region_start
-                .checked_add(trap_offset)
-                .ok_or("trap destination overflow")?;
-            let trap_dst_end = trap_dst
-                .checked_add(trap_bytes_len)
-                .ok_or("trap destination overflow")?;
-            output
-                .get_mut(trap_dst..trap_dst_end)
-                .ok_or("trap destination out of bounds")?
-                .copy_from_slice(as_bytes_slice(&traps));
-        }
-
         let entry = OutputFunctionEntry {
-            code_offset: u64::try_from(code_offset).map_err(|_| "code offset overflow")?,
-            code_size: u32::try_from(code.len()).map_err(|_| "code size overflow")?,
-            compiled: 1,
-            reloc_offset: u64::try_from(reloc_offset).map_err(|_| "reloc offset overflow")?,
-            reloc_count: u32::try_from(relocs.len()).map_err(|_| "reloc count overflow")?,
-            frontend: frontend as u32,
-            trap_offset: u64::try_from(trap_offset).map_err(|_| "trap offset overflow")?,
-            trap_count: u32::try_from(traps.len()).map_err(|_| "trap count overflow")?,
-            native_entry_offset,
+            clean,
+            osr,
+            frontend: compiled.frontend as u32,
+            _padding: 0,
         };
         let entry_dst = i
             .checked_mul(size_of::<OutputFunctionEntry>())
@@ -889,10 +990,10 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
             .get_mut(entry_dst..entry_dst_end)
             .ok_or("output entry out of bounds")?
             .copy_from_slice(entry_bytes);
-
-        code_cursor = code_end;
-        reloc_cursor = reloc_end;
     }
+
+    debug_assert_eq!(code_cursor, code_size);
+    debug_assert_eq!(reloc_cursor, reloc_size);
 
     Ok(total_size)
 }
@@ -903,8 +1004,10 @@ mod tests {
 
     #[test]
     fn output_function_entry_layout_has_no_implicit_padding() {
-        assert_eq!(size_of::<OutputFunctionEntry>(), 48);
-        assert_eq!(std::mem::offset_of!(OutputFunctionEntry, trap_offset), 32);
+        assert_eq!(size_of::<OutputCompiledArtifact>(), 48);
+        assert_eq!(std::mem::offset_of!(OutputCompiledArtifact, trap_offset), 16);
+        assert_eq!(size_of::<OutputFunctionEntry>(), 104);
+        assert_eq!(std::mem::offset_of!(OutputFunctionEntry, frontend), 96);
     }
 
     #[test]
@@ -964,41 +1067,47 @@ mod tests {
         let compiled = vec![vec![
             (
                 0,
-                CraneliftFrontend::AllocatedBytecode,
-                CompiledFunction {
-                    code: vec![0; 16],
-                    native_entry_offset: 0,
-                    relocs: vec![],
-                    traps: vec![],
+                CompiledEntry {
+                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    clean: CompiledFunction {
+                        code: vec![0; 16],
+                        native_entry_offset: 0,
+                        relocs: vec![],
+                        traps: vec![],
+                    },
+                    osr: None,
                 },
             ),
             (
                 1,
-                CraneliftFrontend::AllocatedBytecode,
-                CompiledFunction {
-                    code: vec![0; 64],
-                    native_entry_offset: 0,
-                    relocs: vec![],
-                    traps: vec![],
+                CompiledEntry {
+                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    clean: CompiledFunction {
+                        code: vec![0; 64],
+                        native_entry_offset: 0,
+                        relocs: vec![],
+                        traps: vec![],
+                    },
+                    osr: None,
                 },
             ),
             (
                 2,
-                CraneliftFrontend::AllocatedBytecode,
-                CompiledFunction {
-                    code: vec![0; 16],
-                    native_entry_offset: 0,
-                    relocs: vec![],
-                    traps: vec![],
+                CompiledEntry {
+                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    clean: CompiledFunction {
+                        code: vec![0; 16],
+                        native_entry_offset: 0,
+                        relocs: vec![],
+                        traps: vec![],
+                    },
+                    osr: None,
                 },
             ),
         ]];
 
         let (selected, code_size, reloc_size) = select_compiled_functions(compiled, 32, 64);
-        assert_eq!(
-            selected.iter().map(|(index, _, _)| *index).collect::<Vec<_>>(),
-            vec![0, 2]
-        );
+        assert_eq!(selected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![0, 2]);
         assert_eq!(code_size, 32);
         assert_eq!(reloc_size, 0);
     }

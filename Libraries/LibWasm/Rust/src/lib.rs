@@ -9,7 +9,7 @@ pub mod serialized;
 
 use compiler::CraneliftCompiler;
 
-pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 5;
+pub const CRANELIFT_COMPILER_INPUT_FORMAT_VERSION: u32 = 6;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -344,8 +344,9 @@ pub fn compile_direct_to_bytes(
 
 pub fn compile_direct_osr_to_bytes(
     input: DirectCompilerInput<'_>,
+    interpreter_instructions: &[CraneliftInsn],
     layout: &RuntimeLayout,
     options: FunctionCompilationOptions,
 ) -> Result<CompiledFunction, &'static str> {
-    compiler::direct::DirectCompiler::compile_osr_to_bytes(input, layout, options)
+    compiler::direct::DirectCompiler::compile_osr_to_bytes(input, interpreter_instructions, layout, options)
 }

@@ -116,23 +116,30 @@ struct OutputHeader {
     u64 total_size;
 };
 
-struct OutputFunctionEntry {
+struct OutputCompiledArtifact {
     u64 code_offset;
-    u32 code_size;
-    u32 compiled;
-    // Offset (relative to the start of the reloc region) and count of
-    // `CraneliftRelocation` entries describing process-specific code targets.
     u64 reloc_offset;
-    u32 reloc_count;
-    u32 frontend;
     u64 trap_offset;
+    u32 code_size;
+    u32 reloc_count;
     u32 trap_count;
     u32 native_entry_offset;
+    u32 compiled;
+    u32 _padding;
 };
+static_assert(sizeof(OutputCompiledArtifact) == 48);
+
+struct OutputFunctionEntry {
+    OutputCompiledArtifact clean;
+    OutputCompiledArtifact osr;
+    u32 frontend;
+    u32 _padding;
+};
+static_assert(sizeof(OutputFunctionEntry) == 104);
 
 static_assert(sizeof(OutputHeader) == 32);
-static_assert(sizeof(OutputFunctionEntry) == 48);
-static_assert(offsetof(OutputFunctionEntry, trap_offset) == 32);
+static_assert(offsetof(OutputCompiledArtifact, trap_offset) == 16);
+static_assert(offsetof(OutputFunctionEntry, frontend) == 96);
 
 struct CodeMapping {
     CodeMapping(void* mapping, size_t size)
@@ -164,6 +171,71 @@ struct PendingCompiledFunction {
     size_t code_size;
     size_t native_entry_offset;
     size_t next_veneer_offset;
+};
+
+struct OutputCompiledArtifactView {
+    ReadonlyBytes code;
+    ReadonlySpan<CraneliftRelocation> relocs;
+    ReadonlySpan<CraneliftTrap> traps;
+    size_t native_entry_offset;
+};
+
+struct CompilerOutputRegions {
+    Optional<OutputCompiledArtifactView> read_artifact(OutputCompiledArtifact const& output) const
+    {
+        if (!output.compiled)
+            return {};
+
+        auto const code_offset = static_cast<size_t>(output.code_offset);
+        auto const code_size = static_cast<size_t>(output.code_size);
+        if (code_offset > code_region_size || code_size > code_region_size - code_offset)
+            return {};
+        auto const code_start = code_base_offset + code_offset;
+        if (code_start > total_size || code_size > total_size - code_start)
+            return {};
+
+        auto const reloc_offset = static_cast<size_t>(output.reloc_offset);
+        auto const reloc_count = static_cast<size_t>(output.reloc_count);
+        Checked<size_t> reloc_bytes { reloc_count };
+        reloc_bytes *= sizeof(CraneliftRelocation);
+        if (reloc_bytes.has_overflow() || reloc_offset > reloc_region_size || reloc_bytes.value() > reloc_region_size - reloc_offset)
+            return {};
+        auto const reloc_start = reloc_region_start + reloc_offset;
+        if (reloc_start > total_size || reloc_bytes.value() > total_size - reloc_start)
+            return {};
+        if (reloc_count != 0 && bit_cast<FlatPtr>(base + reloc_start) % alignof(CraneliftRelocation) != 0)
+            return {};
+
+        auto const trap_offset = static_cast<size_t>(output.trap_offset);
+        auto const trap_count = static_cast<size_t>(output.trap_count);
+        Checked<size_t> trap_bytes { trap_count };
+        trap_bytes *= sizeof(CraneliftTrap);
+        if (trap_bytes.has_overflow() || trap_offset > reloc_region_size || trap_bytes.value() > reloc_region_size - trap_offset)
+            return {};
+        auto const trap_start = reloc_region_start + trap_offset;
+        if (trap_start > total_size || trap_bytes.value() > total_size - trap_start)
+            return {};
+        if (trap_count != 0 && bit_cast<FlatPtr>(base + trap_start) % alignof(CraneliftTrap) != 0)
+            return {};
+
+        return OutputCompiledArtifactView {
+            .code = { base + code_start, code_size },
+            .relocs = reloc_count == 0
+                ? ReadonlySpan<CraneliftRelocation> {}
+                : ReadonlySpan<CraneliftRelocation> { reinterpret_cast<CraneliftRelocation const*>(base + reloc_start), reloc_count },
+            .traps = trap_count == 0
+                ? ReadonlySpan<CraneliftTrap> {}
+                : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(base + trap_start), trap_count },
+            .native_entry_offset = output.native_entry_offset,
+        };
+    }
+
+    u8 const* base;
+    size_t total_size;
+    size_t code_base_offset;
+    size_t code_region_size;
+    size_t reloc_region_start;
+    size_t reloc_region_size;
 };
 
 static constexpr size_t oop_code_region_min_size = 256 * KiB;
@@ -733,18 +805,18 @@ static bool finalize_compiled_function(PendingCompiledFunction& pending)
     return true;
 }
 
-static void publish_compiled_function(PendingCompiledFunction&& pending)
+static void publish_compiled_function(PendingCompiledFunction&& pending, Module const& module)
 {
     auto* handle = pending.mapping.leak_ptr();
     auto* func_ptr = static_cast<u8 const*>(handle->mapping);
     auto* native_func_ptr = func_ptr + pending.native_entry_offset;
 
-    pending.target->cranelift_code_handle = handle;
     pending.target->cranelift_code_start = bit_cast<FlatPtr>(func_ptr);
     pending.target->cranelift_code_size = pending.code_size;
     pending.target->cranelift_traps = handle->traps.data();
     pending.target->cranelift_trap_count = handle->traps.size();
     pending.target->cranelift_compiled = true;
+    module.retain_cranelift_code_handle(handle);
     if (pending.frontend == CraneliftFrontend::Direct) {
         publish_cranelift_direct_native_entry(*pending.target, bit_cast<FlatPtr>(native_func_ptr));
         publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
@@ -753,6 +825,18 @@ static void publish_compiled_function(PendingCompiledFunction&& pending)
         publish_cranelift_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
         publish_cranelift_osr_entry(*pending.target, bit_cast<FlatPtr>(func_ptr));
     }
+}
+
+static void retain_osr_compiled_function(PendingCompiledFunction&& pending, Module const& module)
+{
+    auto* handle = pending.mapping.leak_ptr();
+    auto* function = static_cast<u8 const*>(handle->mapping);
+
+    pending.target->cranelift_osr_code_start = bit_cast<FlatPtr>(function);
+    pending.target->cranelift_osr_code_size = pending.code_size;
+    pending.target->cranelift_osr_traps = handle->traps.data();
+    pending.target->cranelift_osr_trap_count = handle->traps.size();
+    module.retain_cranelift_code_handle(handle);
 }
 
 static size_t imported_function_count(Module const& module)
@@ -771,7 +855,7 @@ static size_t imported_function_count(Module const& module)
     return count;
 }
 
-static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, RuntimeHelperAddresses const& helper_addresses, Module const& module)
+static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_functions, Vector<PendingCompiledFunction>& pending_osr_functions, RuntimeHelperAddresses const& helper_addresses, Module const& module)
 {
     HashMap<u32, FlatPtr> allocated_bytecode_targets;
     HashMap<u32, FlatPtr> direct_targets;
@@ -795,10 +879,13 @@ static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_
         if (!link_compiled_function(pending, helper_addresses, targets))
             return;
     }
-
     for (auto& pending : pending_functions) {
         if (!finalize_compiled_function(pending))
             return;
+    }
+    for (auto& pending : pending_osr_functions) {
+        if (!link_compiled_function(pending, helper_addresses, direct_targets) || !finalize_compiled_function(pending))
+            pending.mapping = nullptr;
     }
 
     Vector<FunctionIndex> published_functions;
@@ -806,8 +893,12 @@ static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_
     for (auto& pending : pending_functions) {
         if (pending.mapping) {
             published_functions.unchecked_append(FunctionIndex { pending.function_index });
-            publish_compiled_function(move(pending));
+            publish_compiled_function(move(pending), module);
         }
+    }
+    for (auto& pending : pending_osr_functions) {
+        if (pending.mapping)
+            retain_osr_compiled_function(move(pending), module);
     }
     module.record_cranelift_publications(published_functions);
 }
@@ -1571,6 +1662,7 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
 
     size_t instruction_count = 0;
     size_t direct_instruction_count = 0;
+    size_t direct_osr_instruction_count = 0;
     size_t direct_branch_target_count = 0;
     size_t direct_local_count = 0;
     size_t direct_tier_up_checkpoint_count = 0;
@@ -1609,6 +1701,14 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         if (new_direct_tier_up_checkpoint_count.has_overflow())
             return Error::from_string_literal("Cranelift direct tier-up checkpoint count overflow");
         direct_tier_up_checkpoint_count = new_direct_tier_up_checkpoint_count.value();
+
+        if (entry.direct_tier_up_checkpoint_count != 0) {
+            Checked<size_t> new_direct_osr_instruction_count = direct_osr_instruction_count;
+            new_direct_osr_instruction_count += entry.direct_insn_count;
+            if (new_direct_osr_instruction_count.has_overflow())
+                return Error::from_string_literal("Cranelift direct OSR instruction count overflow");
+            direct_osr_instruction_count = new_direct_osr_instruction_count.value();
+        }
 
         Checked<size_t> new_direct_tier_up_live_local_index_count = direct_tier_up_live_local_index_count;
         new_direct_tier_up_live_local_index_count += entry.direct_tier_up_live_local_index_count;
@@ -1819,6 +1919,7 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
 
     Checked<size_t> compiler_instruction_count = instruction_count;
     compiler_instruction_count += direct_instruction_count;
+    compiler_instruction_count += direct_osr_instruction_count;
     if (compiler_instruction_count.has_overflow())
         return Error::from_string_literal("Cranelift compiler instruction count overflow");
     auto output_size = TRY(compute_output_buffer_size(header.function_count, compiler_instruction_count.value()));
@@ -1961,6 +2062,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     size_t total_insn_count = 0;
     size_t total_direct_insn_count = 0;
+    size_t total_direct_osr_insn_count = 0;
     size_t total_direct_branch_target_count = 0;
     size_t total_direct_local_count = 0;
     size_t total_direct_tier_up_checkpoint_count = 0;
@@ -1972,6 +2074,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         total_insn_count += entry.insns.size();
         if (entry.direct_input.has_value()) {
             total_direct_insn_count += entry.direct_input->instructions.size();
+            if (!entry.direct_input->tier_up_checkpoints.is_empty())
+                total_direct_osr_insn_count += entry.direct_input->instructions.size();
             total_direct_branch_target_count += entry.direct_input->branch_targets.size();
             total_direct_local_count += entry.direct_input->local_types.size();
             total_direct_tier_up_checkpoint_count += entry.direct_input->tier_up_checkpoints.size();
@@ -2006,7 +2110,7 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     auto const global_types_bytes = global_types.size() * sizeof(DirectValueType);
     auto const layout_offset = align_up(global_types_offset + global_types_bytes, alignof(RuntimeLayout));
     auto const total_size = layout_offset + sizeof(RuntimeLayout);
-    auto const total_compiler_instruction_count = total_insn_count + total_direct_insn_count;
+    auto const total_compiler_instruction_count = total_insn_count + total_direct_insn_count + total_direct_osr_insn_count;
     auto const output_size = TRY(compute_output_buffer_size(function_count, total_compiler_instruction_count));
 
     auto buffer = TRY(Core::AnonymousBuffer::create_with_size(total_size, Core::AnonymousBuffer::Sealability::Sealable));
@@ -2190,79 +2294,62 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
 
     auto const code_region_size = reloc_region_start - code_base_offset;
     auto const reloc_region_size = compact_output_size - reloc_region_start;
+    CompilerOutputRegions output_regions {
+        .base = output_base,
+        .total_size = compact_output_size,
+        .code_base_offset = code_base_offset,
+        .code_region_size = code_region_size,
+        .reloc_region_start = reloc_region_start,
+        .reloc_region_size = reloc_region_size,
+    };
     Vector<PendingCompiledFunction> pending_functions;
+    Vector<PendingCompiledFunction> pending_osr_functions;
 
     for (size_t i = 0; i < function_count; ++i) {
         auto const& output = *reinterpret_cast<OutputFunctionEntry const*>(output_base + output_entries_offset + i * sizeof(OutputFunctionEntry));
-        if (!output.compiled)
+        if (!output.clean.compiled)
             continue;
         if (output.frontend > static_cast<u32>(CraneliftFrontend::Direct))
             continue;
         auto const frontend = static_cast<CraneliftFrontend>(output.frontend);
 
-        auto code_offset = static_cast<size_t>(output.code_offset);
-        auto code_size = static_cast<size_t>(output.code_size);
-        if (code_offset > code_region_size || code_size > code_region_size - code_offset)
+        auto clean = output_regions.read_artifact(output.clean);
+        if (!clean.has_value())
             continue;
-        auto code_start = code_base_offset + code_offset;
-        if (code_start + code_size > compact_output_size)
-            continue;
-
-        auto const reloc_offset = static_cast<size_t>(output.reloc_offset);
-        auto const reloc_count = static_cast<size_t>(output.reloc_count);
-        auto const reloc_bytes = reloc_count * sizeof(CraneliftRelocation);
-        if (reloc_count != 0 && reloc_bytes / sizeof(CraneliftRelocation) != reloc_count)
-            continue;
-        if (reloc_offset % alignof(CraneliftRelocation) != 0)
-            continue;
-        if (reloc_offset > reloc_region_size || reloc_bytes > reloc_region_size - reloc_offset)
-            continue;
-        if (reloc_region_start + reloc_offset + reloc_bytes > compact_output_size)
-            continue;
-
-        auto const trap_offset = static_cast<size_t>(output.trap_offset);
-        auto const trap_count = static_cast<size_t>(output.trap_count);
-        auto const trap_bytes = trap_count * sizeof(CraneliftTrap);
-        if (trap_count != 0 && trap_bytes / sizeof(CraneliftTrap) != trap_count)
-            continue;
-        if (trap_offset % alignof(CraneliftTrap) != 0)
-            continue;
-        if (trap_offset > reloc_region_size || trap_bytes > reloc_region_size - trap_offset)
-            continue;
-        if (reloc_region_start + trap_offset + trap_bytes > compact_output_size)
-            continue;
-
-        auto code_bytes = ReadonlyBytes { output_base + code_start, code_size };
-        auto relocs = reloc_count == 0
-            ? ReadonlySpan<CraneliftRelocation> {}
-            : ReadonlySpan<CraneliftRelocation> { reinterpret_cast<CraneliftRelocation const*>(output_base + reloc_region_start + reloc_offset), reloc_count };
-        auto traps = trap_count == 0
-            ? ReadonlySpan<CraneliftTrap> {}
-            : ReadonlySpan<CraneliftTrap> { reinterpret_cast<CraneliftTrap const*>(output_base + reloc_region_start + trap_offset), trap_count };
 
         auto& capture = cranelift_cache_state().cache_capture;
         if (capture.capturing && batch[i].function_index != NumericLimits<u32>::max()) {
-            if (auto copy = ByteBuffer::copy(code_bytes.data(), code_bytes.size()); !copy.is_error()) {
+            if (auto copy = ByteBuffer::copy(clean->code.data(), clean->code.size()); !copy.is_error()) {
                 CacheRecord rec;
                 rec.function_index = batch[i].function_index;
-                rec.native_entry_offset = output.native_entry_offset;
+                rec.native_entry_offset = clean->native_entry_offset;
                 rec.frontend = frontend;
                 rec.unpatched_code = copy.release_value();
-                rec.relocs.ensure_capacity(reloc_count);
-                for (size_t j = 0; j < reloc_count; ++j)
-                    rec.relocs.unchecked_append(relocs[j]);
-                rec.traps.ensure_capacity(trap_count);
-                for (size_t j = 0; j < trap_count; ++j)
-                    rec.traps.unchecked_append(traps[j]);
+                rec.relocs.ensure_capacity(clean->relocs.size());
+                for (auto const& reloc : clean->relocs)
+                    rec.relocs.unchecked_append(reloc);
+                rec.traps.ensure_capacity(clean->traps.size());
+                for (auto const& trap : clean->traps)
+                    rec.traps.unchecked_append(trap);
                 capture.records.append(move(rec));
             }
         }
 
-        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, frontend, code_bytes, output.native_entry_offset, relocs, traps); pending.has_value())
-            pending_functions.append(pending.release_value());
+        auto pending_clean = prepare_compiled_function(batch[i].function_index, *batch[i].target, frontend, clean->code, clean->native_entry_offset, clean->relocs, clean->traps);
+        if (!pending_clean.has_value())
+            continue;
+        pending_functions.append(pending_clean.release_value());
+
+        if (frontend != CraneliftFrontend::Direct || !output.osr.compiled)
+            continue;
+        auto osr = output_regions.read_artifact(output.osr);
+        if (!osr.has_value())
+            continue;
+        if (auto pending = prepare_compiled_function(batch[i].function_index, *batch[i].target, frontend, osr->code, osr->native_entry_offset, osr->relocs, osr->traps); pending.has_value())
+            pending_osr_functions.append(pending.release_value());
     }
 
-    install_compiled_functions(pending_functions, helper_addresses, module);
+    install_compiled_functions(pending_functions, pending_osr_functions, helper_addresses, module);
     return {};
 }
 
@@ -2828,7 +2915,8 @@ static void install_cached_functions(Vector<PendingCachedFunction>& functions, M
             pending_functions.unchecked_append(pending.release_value());
     }
 
-    install_compiled_functions(pending_functions, helper_addresses, module);
+    Vector<PendingCompiledFunction> pending_osr_functions;
+    install_compiled_functions(pending_functions, pending_osr_functions, helper_addresses, module);
 }
 
 void flush_cranelift_batch(Module const& module)
@@ -2857,6 +2945,42 @@ void discard_cranelift_batch()
 void free_cranelift_code(void* handle)
 {
     delete static_cast<CodeMapping*>(handle);
+}
+
+CraneliftCodeOwner::CraneliftCodeOwner(void* handle)
+    : m_handle(handle)
+{
+}
+
+CraneliftCodeOwner::CraneliftCodeOwner(CraneliftCodeOwner&& other)
+    : m_handle(other.m_handle)
+{
+    other.m_handle = nullptr;
+}
+
+CraneliftCodeOwner& CraneliftCodeOwner::operator=(CraneliftCodeOwner&& other)
+{
+    if (this == &other)
+        return *this;
+    if (m_handle)
+        free_cranelift_code(m_handle);
+    m_handle = other.m_handle;
+    other.m_handle = nullptr;
+    return *this;
+}
+
+CraneliftCodeOwner::~CraneliftCodeOwner()
+{
+    if (m_handle)
+        free_cranelift_code(m_handle);
+}
+
+Module::~Module() = default;
+
+void Module::retain_cranelift_code_handle(void* handle) const
+{
+    Sync::MutexLocker locker(m_cranelift_code_handles_mutex);
+    m_cranelift_code_handles.empend(handle);
 }
 
 void set_cranelift_active_function_index(u32 function_index)

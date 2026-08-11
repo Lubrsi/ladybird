@@ -1,0 +1,25 @@
+(module
+  ;; A direct-compatible function large enough to receive an empty-stack loop checkpoint. The
+  ;; transport-and-retention test uses it without publishing the direct OSR entry.
+  (func (export "run") (result i32)
+    (local $counter i32)
+    (loop $loop
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (drop (i32.const 0))
+      (local.set $counter (i32.add (local.get $counter) (i32.const 1)))
+      (br_if $loop (i32.lt_u (local.get $counter) (i32.const 2))))
+    (local.get $counter)))

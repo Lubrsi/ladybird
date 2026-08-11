@@ -175,6 +175,51 @@ static void expect_allocated_bytecode_frontend(Wasm::CompiledInstructions const&
     EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
 }
 
+TEST_CASE(direct_osr_artifact_is_retained_without_publication)
+{
+    auto parse_module = [] {
+        auto file = MUST(Core::File::open("Fixtures/direct-osr-retention.wasm"sv, Core::File::OpenMode::Read));
+        auto bytes = MUST(file->read_until_eof());
+        FixedMemoryStream stream { bytes.bytes() };
+        return MUST(Wasm::Module::parse(stream));
+    };
+    auto expect_retained_osr = [](Wasm::CompiledInstructions const& compiled) {
+        EXPECT(compiled.has_tier_up_checkpoints);
+        EXPECT_EQ(compiled.tier_up_checkpoints.size(), 1u);
+        expect_direct_frontend(compiled);
+        EXPECT_NE(compiled.cranelift_osr_code_start, 0u);
+        EXPECT_NE(compiled.cranelift_osr_code_start, compiled.cranelift_code_start);
+        EXPECT_NE(compiled.cranelift_osr_code_size, 0u);
+        EXPECT_NE(compiled.cranelift_osr_traps, nullptr);
+        EXPECT_NE(compiled.cranelift_osr_trap_count, 0u);
+    };
+
+    ByteBuffer cache_blob;
+    {
+        auto module = parse_module();
+        Wasm::CompileCacheConfig cache_config;
+        cache_config.on_compiled = [&](ByteBuffer blob) {
+            cache_blob = move(blob);
+        };
+        Wasm::AbstractMachine machine;
+        MUST(machine.validate(*module, move(cache_config)));
+        expect_retained_osr(module->code_section().functions().last().func().body().compiled_instructions);
+    }
+    EXPECT(!cache_blob.is_empty());
+
+    auto module = parse_module();
+    Wasm::CompileCacheConfig cache_config;
+    cache_config.existing_blob = move(cache_blob);
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, move(cache_config)));
+    auto const& cached = module->code_section().functions().last().func().body().compiled_instructions;
+    expect_direct_frontend(cached);
+    EXPECT_EQ(cached.cranelift_osr_code_start, 0u);
+    EXPECT_EQ(cached.cranelift_osr_code_size, 0u);
+    EXPECT_EQ(cached.cranelift_osr_traps, nullptr);
+    EXPECT_EQ(cached.cranelift_osr_trap_count, 0u);
+}
+
 TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
 {
     auto const initial_tier_up_count = Wasm::tier_up_taken_count();

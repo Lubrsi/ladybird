@@ -122,17 +122,14 @@ static bool is_wasm_memory_fault(Wasm::Configuration& configuration, void* addre
     return false;
 }
 
-static bool record_cranelift_trap_in_expression(CompiledFaultRecoveryContext& recovery, Wasm::Expression const& expression, FlatPtr pc)
+static bool record_cranelift_trap_in_code(CompiledFaultRecoveryContext& recovery, FlatPtr code_start, size_t code_size, Wasm::CraneliftTrap const* traps, size_t trap_count, FlatPtr pc)
 {
-    auto const& compiled = expression.compiled_instructions;
-    auto const code_start = compiled.cranelift_code_start;
-    auto const code_size = compiled.cranelift_code_size;
-    if (!compiled.cranelift_compiled || code_start == 0 || pc < code_start || pc >= code_start + code_size)
+    if (code_start == 0 || pc < code_start || pc - code_start >= code_size)
         return false;
 
     auto const offset = static_cast<u32>(pc - code_start);
-    for (size_t i = 0; i < compiled.cranelift_trap_count; ++i) {
-        auto const& trap = compiled.cranelift_traps[i];
+    for (size_t i = 0; i < trap_count; ++i) {
+        auto const& trap = traps[i];
         if (trap.offset != offset)
             continue;
 
@@ -143,6 +140,14 @@ static bool record_cranelift_trap_in_expression(CompiledFaultRecoveryContext& re
     }
 
     return false;
+}
+
+static bool record_cranelift_trap_in_expression(CompiledFaultRecoveryContext& recovery, Wasm::Expression const& expression, FlatPtr pc)
+{
+    auto const& compiled = expression.compiled_instructions;
+    if (compiled.cranelift_compiled && record_cranelift_trap_in_code(recovery, compiled.cranelift_code_start, compiled.cranelift_code_size, compiled.cranelift_traps, compiled.cranelift_trap_count, pc))
+        return true;
+    return record_cranelift_trap_in_code(recovery, compiled.cranelift_osr_code_start, compiled.cranelift_osr_code_size, compiled.cranelift_osr_traps, compiled.cranelift_osr_trap_count, pc);
 }
 
 static bool record_cranelift_trap(CompiledFaultRecoveryContext& recovery, FlatPtr pc)
