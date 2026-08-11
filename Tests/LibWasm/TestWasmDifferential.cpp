@@ -35,14 +35,11 @@ TEST_CASE(interpreter_and_native_execution_are_equivalent)
         EXPECT(!function.compiled);
         EXPECT(!function.has_entry);
     }
-    for (size_t function_index = 0; function_index < 2; ++function_index) {
+    for (size_t function_index = 0; function_index < 3; ++function_index) {
         EXPECT(native.functions[function_index].eligible);
         EXPECT(native.functions[function_index].compiled);
         EXPECT(native.functions[function_index].has_entry);
     }
-    EXPECT(!native.functions[2].eligible);
-    EXPECT(!native.functions[2].compiled);
-    EXPECT(!native.functions[2].has_entry);
 
     EXPECT_EQ(interpreter.invocations.size(), 4u);
     EXPECT(!interpreter.invocations[0].trap.has_value());
