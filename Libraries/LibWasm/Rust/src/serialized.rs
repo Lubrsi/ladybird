@@ -125,6 +125,15 @@ struct CompiledEntry {
     osr: Option<CompiledFunction>,
 }
 
+struct ParsedInput<'a> {
+    header: InputHeader,
+    entries: Vec<InputFunctionEntry>,
+    layout: RuntimeLayout,
+    function_types: Vec<WasmFunctionType<'a>>,
+    module_types: Vec<Option<DirectFunctionType<'a>>>,
+    global_types: &'a [DirectValueType],
+}
+
 fn align_up(value: usize, alignment: usize) -> Result<usize, &'static str> {
     value.checked_next_multiple_of(alignment).ok_or("alignment overflow")
 }
@@ -155,20 +164,7 @@ fn read_pod_slice<T>(base: &[u8], offset: u32, count: u32) -> Result<&[T], &'sta
     Ok(values)
 }
 
-fn parse_input<'a>(
-    input: &'a [u8],
-    output_size: usize,
-) -> Result<
-    (
-        InputHeader,
-        Vec<InputFunctionEntry>,
-        RuntimeLayout,
-        Vec<WasmFunctionType<'a>>,
-        Vec<Option<DirectFunctionType<'a>>>,
-        &'a [DirectValueType],
-    ),
-    &'static str,
-> {
+fn parse_input(input: &[u8], output_size: usize) -> Result<ParsedInput<'_>, &'static str> {
     let header: InputHeader = read_pod(input, 0)?;
     if header.format_version != CRANELIFT_COMPILER_INPUT_FORMAT_VERSION {
         return Err("unsupported compiler input format version");
@@ -541,7 +537,14 @@ fn parse_input<'a>(
 
     let global_types = read_pod_slice::<DirectValueType>(input, header.global_types_offset, header.global_type_count)?;
     let layout = read_pod(input, layout_offset)?;
-    Ok((header, entries, layout, function_types, module_types, global_types))
+    Ok(ParsedInput {
+        header,
+        entries,
+        layout,
+        function_types,
+        module_types,
+        global_types,
+    })
 }
 
 fn compilation_options(entry: &InputFunctionEntry, num_locals: u32) -> FunctionCompilationOptions {
@@ -850,7 +853,14 @@ fn write_compiled_artifact(
 }
 
 pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usize, &'static str> {
-    let (header, entries, layout, function_types, module_types, global_types) = parse_input(input, output.len())?;
+    let ParsedInput {
+        header,
+        entries,
+        layout,
+        function_types,
+        module_types,
+        global_types,
+    } = parse_input(input, output.len())?;
     let func_count = usize::try_from(header.function_count).map_err(|_| "function_count overflow")?;
 
     let thread_count = std::thread::available_parallelism()
