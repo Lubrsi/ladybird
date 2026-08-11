@@ -10,6 +10,7 @@ use crate::DirectIndirectCallInstructionArguments;
 use crate::DirectInstruction;
 use crate::DirectMemoryInstructionArguments;
 use crate::DirectTableBranchInstructionArguments;
+use crate::DirectTierUpCheckpoint;
 use crate::DirectValueType as SerializedValueType;
 use crate::DirectValueTypeKind;
 
@@ -141,6 +142,55 @@ pub(super) struct IndirectCallArgument {
 pub(super) struct TableBranchArgument<'a> {
     pub(super) targets: &'a [u32],
     pub(super) default_target: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TierUpCheckpoint {
+    pub(super) checkpoint_id: u32,
+    pub(super) interpreter_dispatch_index: u32,
+    pub(super) loop_instruction_index: usize,
+    pub(super) live_local_indices: Vec<usize>,
+}
+
+impl DirectTierUpCheckpoint {
+    pub(super) fn checked(
+        self,
+        live_local_indices: &[u32],
+        local_count: usize,
+    ) -> Result<TierUpCheckpoint, &'static str> {
+        let live_local_indices_offset =
+            usize::try_from(self.live_local_indices_offset).map_err(|_| "tier-up live-local offset overflow")?;
+        let live_local_index_count =
+            usize::try_from(self.live_local_index_count).map_err(|_| "tier-up live-local count overflow")?;
+        let live_local_indices_end = live_local_indices_offset
+            .checked_add(live_local_index_count)
+            .ok_or("tier-up live-local range overflow")?;
+        let serialized_live_local_indices = live_local_indices
+            .get(live_local_indices_offset..live_local_indices_end)
+            .ok_or("invalid tier-up live-local range")?;
+        let mut checked_live_local_indices = Vec::with_capacity(serialized_live_local_indices.len());
+        for &local_index in serialized_live_local_indices {
+            let local_index = usize::try_from(local_index).map_err(|_| "tier-up live-local index overflow")?;
+            if local_index >= local_count {
+                return Err("tier-up live-local index out of bounds");
+            }
+            if checked_live_local_indices
+                .last()
+                .is_some_and(|&previous| previous >= local_index)
+            {
+                return Err("tier-up live-local indices are not strictly ordered");
+            }
+            checked_live_local_indices.push(local_index);
+        }
+
+        Ok(TierUpCheckpoint {
+            checkpoint_id: self.checkpoint_id,
+            interpreter_dispatch_index: self.interpreter_dispatch_index,
+            loop_instruction_index: usize::try_from(self.loop_instruction_index)
+                .map_err(|_| "tier-up loop instruction index overflow")?,
+            live_local_indices: checked_live_local_indices,
+        })
+    }
 }
 
 impl From<DirectMemoryInstructionArguments> for MemoryArgument {

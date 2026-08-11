@@ -62,6 +62,7 @@ use super::common::user_trap_code;
 use super::common::value_to_payload;
 use super::common::wasm_abi_type;
 use super::direct_input::BlockType;
+use super::direct_input::TierUpCheckpoint;
 use super::direct_input::ValueType as CheckedValueType;
 use super::direct_input::ValueTypeKind;
 use super::op;
@@ -85,6 +86,34 @@ struct ControlFrame {
     entry_is_reachable: bool,
     else_was_seen: bool,
 }
+
+#[derive(Clone, Copy)]
+enum DirectBodyFlavor<'a> {
+    Clean,
+    Osr(&'a [TierUpCheckpoint]),
+}
+
+#[derive(Clone, Copy)]
+struct DirectRuntime<'a> {
+    configuration: Value,
+    layout: &'a RuntimeLayout,
+    memory_flags: WasmMemoryFlags,
+    pointer_type: Type,
+}
+
+#[derive(Clone, Copy)]
+struct DirectLocals<'a> {
+    types: &'a [Type],
+    variables: &'a [Variable],
+    parameter_count: usize,
+}
+
+const VALUE_PAYLOAD_OFFSET: i32 = 0;
+const VALUE_TAG_OFFSET: i32 = size_of::<u64>() as i32;
+const MINIMUM_VALUE_SIZE: i32 = VALUE_TAG_OFFSET + size_of::<u64>() as i32;
+const CONFIGURATION_ARGUMENT_INDEX: usize = 1;
+const ENTRY_TOKEN_ARGUMENT_INDEX: usize = 3;
+const DIRECT_OSR_FUNCTION_NAMESPACE: u32 = 4;
 
 struct DirectIndirectCallHelpers {
     check_type_signature: SigRef,
@@ -399,6 +428,174 @@ impl DirectCompiler {
         }
     }
 
+    fn emit_interpreter_results(
+        builder: &mut FunctionBuilder<'_>,
+        results: &[Value],
+        result_kinds: &[u8],
+        runtime: DirectRuntime<'_>,
+    ) -> Result<(), &'static str> {
+        if results.len() != result_kinds.len() {
+            return Err("direct interpreter result count mismatch");
+        }
+        if !results.is_empty() && runtime.layout.value_size < MINIMUM_VALUE_SIZE {
+            return Err("value layout is too small for direct result marshalling");
+        }
+        if results.is_empty() {
+            return Ok(());
+        }
+
+        let mut value_stack_top = builder.ins().load(
+            runtime.pointer_type,
+            runtime.memory_flags.configuration,
+            runtime.configuration,
+            runtime.layout.value_stack_top_offset,
+        );
+        let zero_tag = builder.ins().iconst(types::I64, 0);
+        for (&result, &result_kind) in results.iter().zip(result_kinds) {
+            let payload = value_to_payload(builder, result, result_kind)?;
+            builder.ins().store(
+                runtime.memory_flags.activation,
+                payload,
+                value_stack_top,
+                VALUE_PAYLOAD_OFFSET,
+            );
+            builder.ins().store(
+                runtime.memory_flags.activation,
+                zero_tag,
+                value_stack_top,
+                VALUE_TAG_OFFSET,
+            );
+            value_stack_top = builder
+                .ins()
+                .iadd_imm_s(value_stack_top, i64::from(runtime.layout.value_size));
+        }
+        builder.ins().store(
+            runtime.memory_flags.configuration,
+            value_stack_top,
+            runtime.configuration,
+            runtime.layout.value_stack_top_offset,
+        );
+        Ok(())
+    }
+
+    fn emit_body_return(
+        builder: &mut FunctionBuilder<'_>,
+        results: &[Value],
+        result_kinds: &[u8],
+        flavor: DirectBodyFlavor<'_>,
+        runtime: DirectRuntime<'_>,
+    ) -> Result<(), &'static str> {
+        match flavor {
+            DirectBodyFlavor::Clean => {
+                builder.ins().return_(results);
+            }
+            DirectBodyFlavor::Osr(_) => {
+                Self::emit_interpreter_results(builder, results, result_kinds, runtime)?;
+                builder.ins().return_(&[]);
+            }
+        };
+        Ok(())
+    }
+
+    fn emit_osr_entry(
+        builder: &mut FunctionBuilder<'_>,
+        entry_token: Value,
+        checkpoints: &[TierUpCheckpoint],
+        loop_headers: &HashMap<usize, Block>,
+        locals: DirectLocals<'_>,
+        runtime: DirectRuntime<'_>,
+    ) -> Result<(), &'static str> {
+        let value_size = usize::try_from(runtime.layout.value_size).map_err(|_| "invalid runtime value size")?;
+        let fresh_entry = builder.create_block();
+        let mut dispatch = builder.create_block();
+        builder.set_cold_block(dispatch);
+        let is_fresh_entry = builder.ins().icmp_imm_s(IntCC::Equal, entry_token, 0);
+        builder.ins().brif(is_fresh_entry, fresh_entry, &[], dispatch, &[]);
+
+        for checkpoint in checkpoints {
+            builder.switch_to_block(dispatch);
+            builder.seal_block(dispatch);
+
+            let resume = builder.create_block();
+            let next_dispatch = builder.create_block();
+            builder.set_cold_block(resume);
+            builder.set_cold_block(next_dispatch);
+            let matches_checkpoint = builder.ins().icmp_imm_s(
+                IntCC::Equal,
+                entry_token,
+                i64::from(checkpoint.interpreter_dispatch_index),
+            );
+            builder.ins().brif(matches_checkpoint, resume, &[], next_dispatch, &[]);
+
+            builder.switch_to_block(resume);
+            builder.seal_block(resume);
+            let locals_base = builder.ins().load(
+                runtime.pointer_type,
+                runtime.memory_flags.configuration,
+                runtime.configuration,
+                runtime.layout.locals_base_offset,
+            );
+            for &local_index in &checkpoint.live_local_indices {
+                let local_type = *locals
+                    .types
+                    .get(local_index)
+                    .ok_or("tier-up live-local type is missing")?;
+                let local_variable = *locals
+                    .variables
+                    .get(local_index)
+                    .ok_or("tier-up live-local variable is missing")?;
+                let local_offset = local_index
+                    .checked_mul(value_size)
+                    .and_then(|offset| i32::try_from(offset).ok())
+                    .ok_or("tier-up live-local offset overflow")?;
+                let value = builder
+                    .ins()
+                    .load(local_type, runtime.memory_flags.activation, locals_base, local_offset);
+                builder.def_var(local_variable, value);
+            }
+            let loop_header = *loop_headers
+                .get(&checkpoint.loop_instruction_index)
+                .ok_or("tier-up loop header is missing")?;
+            builder.ins().jump(loop_header, &[]);
+            dispatch = next_dispatch;
+        }
+
+        builder.switch_to_block(dispatch);
+        builder.seal_block(dispatch);
+        builder.ins().trap(user_trap_code(CraneliftUserTrapCode::Unreachable));
+
+        builder.switch_to_block(fresh_entry);
+        builder.seal_block(fresh_entry);
+        let locals_base = if locals.parameter_count == 0 {
+            None
+        } else {
+            Some(builder.ins().load(
+                runtime.pointer_type,
+                runtime.memory_flags.configuration,
+                runtime.configuration,
+                runtime.layout.locals_base_offset,
+            ))
+        };
+        for (local_index, (&local_type, &local_variable)) in locals.types.iter().zip(locals.variables).enumerate() {
+            let value = if local_index < locals.parameter_count {
+                let local_offset = local_index
+                    .checked_mul(value_size)
+                    .and_then(|offset| i32::try_from(offset).ok())
+                    .ok_or("direct OSR parameter offset overflow")?;
+                builder.ins().load(
+                    local_type,
+                    runtime.memory_flags.activation,
+                    locals_base.ok_or("direct OSR parameter base is missing")?,
+                    local_offset,
+                )
+            } else {
+                Self::zero(builder, local_type)?
+            };
+            builder.def_var(local_variable, value);
+        }
+        Ok(())
+    }
+
     fn memory_address(
         builder: &mut FunctionBuilder<'_>,
         memory_bases: &[(u32, Value)],
@@ -428,10 +625,6 @@ impl DirectCompiler {
         function_type: WasmFunctionType<'_>,
         layout: &SerializedRuntimeLayout,
     ) -> Result<CompiledCodeParts, &'static str> {
-        const VALUE_PAYLOAD_OFFSET: i32 = 0;
-        const VALUE_TAG_OFFSET: i32 = size_of::<u64>() as i32;
-        const MINIMUM_VALUE_SIZE: i32 = VALUE_TAG_OFFSET + size_of::<u64>() as i32;
-        const CONFIGURATION_ARGUMENT_INDEX: usize = 1;
         const DIRECT_ADAPTER_FUNCTION_NAMESPACE: u32 = 2;
 
         let runtime_layout = RuntimeLayout::new(layout);
@@ -498,35 +691,18 @@ impl DirectCompiler {
             patchable: false,
         });
         let call = builder.ins().call(body_function, &body_arguments);
-
-        if !function_type.results.is_empty() {
-            let mut value_stack_top = builder.ins().load(
+        let results = builder.inst_results(call).to_vec();
+        Self::emit_interpreter_results(
+            &mut builder,
+            &results,
+            function_type.results,
+            DirectRuntime {
+                configuration,
+                layout: &runtime_layout,
+                memory_flags,
                 pointer_type,
-                memory_flags.configuration,
-                configuration,
-                runtime_layout.value_stack_top_offset,
-            );
-            let zero_tag = builder.ins().iconst(types::I64, 0);
-            let results = builder.inst_results(call).to_vec();
-            for (&result, &result_kind) in results.iter().zip(function_type.results) {
-                let payload = value_to_payload(&mut builder, result, result_kind)?;
-                builder
-                    .ins()
-                    .store(memory_flags.activation, payload, value_stack_top, VALUE_PAYLOAD_OFFSET);
-                builder
-                    .ins()
-                    .store(memory_flags.activation, zero_tag, value_stack_top, VALUE_TAG_OFFSET);
-                value_stack_top = builder
-                    .ins()
-                    .iadd_imm_s(value_stack_top, i64::from(runtime_layout.value_size));
-            }
-            builder.ins().store(
-                memory_flags.configuration,
-                value_stack_top,
-                configuration,
-                runtime_layout.value_stack_top_offset,
-            );
-        }
+            },
+        )?;
 
         builder.ins().return_(&[]);
         builder.finalize(isa.frontend_config());
@@ -738,6 +914,69 @@ impl DirectCompiler {
         })
     }
 
+    fn combine_osr_body(
+        body: CompiledCodeParts,
+        fallback_functions: Vec<(u32, CompiledCodeParts)>,
+    ) -> Result<CompiledFunction, &'static str> {
+        let mut code = body.code;
+        let mut positioned_fallbacks = Vec::with_capacity(fallback_functions.len());
+        let mut fallback_offsets = HashMap::with_capacity(fallback_functions.len());
+        for (target_index, fallback) in fallback_functions {
+            let fallback_offset = code.len().div_ceil(NATIVE_CODE_ALIGNMENT) * NATIVE_CODE_ALIGNMENT;
+            code.resize(fallback_offset, 0);
+            let fallback_offset = u32::try_from(fallback_offset).map_err(|_| "fallback entry offset overflow")?;
+            fallback_offsets.insert(target_index, fallback_offset);
+            code.extend_from_slice(&fallback.code);
+            positioned_fallbacks.push((fallback_offset, fallback));
+        }
+
+        let mut relocs = body.relocs;
+        let fallback_reloc_count = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.relocs.len())
+            .sum::<usize>();
+        relocs.reserve(fallback_reloc_count);
+        for relocation in &mut relocs {
+            if relocation.target_kind == crate::CraneliftRelocationTargetKind::WasmFunction {
+                relocation.fallback_offset = *fallback_offsets
+                    .get(&relocation.target_index)
+                    .ok_or("missing direct-call fallback")?;
+            }
+        }
+        for (fallback_offset, fallback) in &positioned_fallbacks {
+            for mut relocation in fallback.relocs.iter().copied() {
+                relocation.code_offset = relocation
+                    .code_offset
+                    .checked_add(*fallback_offset)
+                    .ok_or("fallback relocation offset overflow")?;
+                relocs.push(relocation);
+            }
+        }
+
+        let mut traps = body.traps;
+        let fallback_trap_count = positioned_fallbacks
+            .iter()
+            .map(|(_, fallback)| fallback.traps.len())
+            .sum::<usize>();
+        traps.reserve(fallback_trap_count);
+        for (fallback_offset, fallback) in positioned_fallbacks {
+            for mut trap in fallback.traps {
+                trap.offset = trap
+                    .offset
+                    .checked_add(fallback_offset)
+                    .ok_or("fallback trap offset overflow")?;
+                traps.push(trap);
+            }
+        }
+
+        Ok(CompiledFunction {
+            code,
+            native_entry_offset: 0,
+            relocs,
+            traps,
+        })
+    }
+
     pub(crate) fn compile_to_bytes(
         input: DirectCompilerInput<'_>,
         layout: &SerializedRuntimeLayout,
@@ -773,11 +1012,85 @@ impl DirectCompiler {
         Self::combine_fresh_entry_adapter(adapter, body, fallback_functions)
     }
 
+    pub(crate) fn compile_osr_to_bytes(
+        input: DirectCompilerInput<'_>,
+        layout: &SerializedRuntimeLayout,
+        options: FunctionCompilationOptions,
+    ) -> Result<CompiledFunction, &'static str> {
+        if input.tier_up_checkpoints.is_empty() {
+            return Err("direct OSR compilation requires a tier-up checkpoint");
+        }
+
+        let local_count = usize::try_from(options.num_locals).map_err(|_| "direct local count overflow")?;
+        let mut checkpoints = Vec::with_capacity(input.tier_up_checkpoints.len());
+        let mut dispatch_indices = HashMap::with_capacity(input.tier_up_checkpoints.len());
+        for (checkpoint_index, &serialized_checkpoint) in input.tier_up_checkpoints.iter().enumerate() {
+            let checkpoint = serialized_checkpoint.checked(input.tier_up_live_local_indices, local_count)?;
+            let expected_checkpoint_id =
+                u32::try_from(checkpoint_index).map_err(|_| "tier-up checkpoint count overflow")?;
+            if checkpoint.checkpoint_id != expected_checkpoint_id {
+                return Err("tier-up checkpoint IDs are not contiguous");
+            }
+            if dispatch_indices
+                .insert(checkpoint.interpreter_dispatch_index, ())
+                .is_some()
+            {
+                return Err("duplicate tier-up interpreter dispatch index");
+            }
+            checkpoints.push(checkpoint);
+        }
+
+        let function_types = input.function_types;
+        let mut fallback_target_indices = input
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.opcode == op::CALL)
+            .map(|instruction| {
+                let target_index = instruction.function_index()?;
+                u32::try_from(target_index).map_err(|_| "direct-call function index overflow")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        fallback_target_indices.sort_unstable();
+        fallback_target_indices.dedup();
+
+        let isa = Self::host_isa()?;
+        let body = Self::compile_osr_body(input, layout, options, &*isa, &checkpoints)?;
+        let mut fallback_functions = Vec::with_capacity(fallback_target_indices.len());
+        for target_index in fallback_target_indices {
+            let target_type = *function_types
+                .get(target_index as usize)
+                .ok_or("missing direct-call fallback function type")?;
+            let fallback = Self::compile_interpreter_call_fallback(&*isa, target_index, target_type, layout)?;
+            fallback_functions.push((target_index, fallback));
+        }
+        Self::combine_osr_body(body, fallback_functions)
+    }
+
     fn compile_clean_body(
         input: DirectCompilerInput<'_>,
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
         isa: &dyn TargetIsa,
+    ) -> Result<CompiledCodeParts, &'static str> {
+        Self::compile_body(input, layout, options, isa, DirectBodyFlavor::Clean)
+    }
+
+    fn compile_osr_body(
+        input: DirectCompilerInput<'_>,
+        layout: &SerializedRuntimeLayout,
+        options: FunctionCompilationOptions,
+        isa: &dyn TargetIsa,
+        checkpoints: &[TierUpCheckpoint],
+    ) -> Result<CompiledCodeParts, &'static str> {
+        Self::compile_body(input, layout, options, isa, DirectBodyFlavor::Osr(checkpoints))
+    }
+
+    fn compile_body(
+        input: DirectCompilerInput<'_>,
+        layout: &SerializedRuntimeLayout,
+        options: FunctionCompilationOptions,
+        isa: &dyn TargetIsa,
+        flavor: DirectBodyFlavor<'_>,
     ) -> Result<CompiledCodeParts, &'static str> {
         let DirectCompilerInput {
             instructions,
@@ -804,9 +1117,15 @@ impl DirectCompiler {
         }
 
         let pointer_type = isa.pointer_type();
-        let signature = Self::clean_signature(isa, function_type)?;
+        let (signature, function_namespace) = match flavor {
+            DirectBodyFlavor::Clean => (
+                Self::clean_signature(isa, function_type)?,
+                WASM_FUNCTION_EXTERNAL_NAMESPACE,
+            ),
+            DirectBodyFlavor::Osr(_) => (interpreter_handler_signature(isa), DIRECT_OSR_FUNCTION_NAMESPACE),
+        };
         let mut function = Function::with_name_signature(
-            UserFuncName::user(WASM_FUNCTION_EXTERNAL_NAMESPACE, options.function_index),
+            UserFuncName::user(function_namespace, options.function_index),
             signature,
         );
         let memory_flags = WasmMemoryFlags::new(&mut function);
@@ -818,7 +1137,21 @@ impl DirectCompiler {
         builder.seal_block(entry);
 
         let entry_parameters = builder.block_params(entry).to_vec();
-        let configuration = entry_parameters[0];
+        let configuration = match flavor {
+            DirectBodyFlavor::Clean => entry_parameters[0],
+            DirectBodyFlavor::Osr(_) => entry_parameters[CONFIGURATION_ARGUMENT_INDEX],
+        };
+        let entry_token = match flavor {
+            DirectBodyFlavor::Clean => None,
+            DirectBodyFlavor::Osr(_) => Some(entry_parameters[ENTRY_TOKEN_ARGUMENT_INDEX]),
+        };
+        let runtime_layout = RuntimeLayout::new(layout);
+        let runtime = DirectRuntime {
+            configuration,
+            layout: &runtime_layout,
+            memory_flags,
+            pointer_type,
+        };
         let mut local_types = function_type
             .parameters
             .iter()
@@ -837,16 +1170,36 @@ impl DirectCompiler {
             .copied()
             .map(|ty| builder.declare_var(ty))
             .collect::<Vec<Variable>>();
-        for (parameter_index, variable) in local_variables.iter().take(function_type.parameters.len()).enumerate() {
-            builder.def_var(*variable, entry_parameters[parameter_index + 1]);
+        if matches!(flavor, DirectBodyFlavor::Clean) {
+            for (parameter_index, variable) in local_variables.iter().take(function_type.parameters.len()).enumerate() {
+                builder.def_var(*variable, entry_parameters[parameter_index + 1]);
+            }
+            for (&variable, &ty) in local_variables
+                .iter()
+                .skip(function_type.parameters.len())
+                .zip(local_types.iter().skip(function_type.parameters.len()))
+            {
+                let zero = Self::zero(&mut builder, ty)?;
+                builder.def_var(variable, zero);
+            }
         }
-        for (&variable, &ty) in local_variables
-            .iter()
-            .skip(function_type.parameters.len())
-            .zip(local_types.iter().skip(function_type.parameters.len()))
-        {
-            let zero = Self::zero(&mut builder, ty)?;
-            builder.def_var(variable, zero);
+
+        let mut osr_loop_headers = HashMap::new();
+        if let DirectBodyFlavor::Osr(checkpoints) = flavor {
+            for checkpoint in checkpoints {
+                let instruction = instructions
+                    .get(checkpoint.loop_instruction_index)
+                    .ok_or("tier-up loop instruction is out of bounds")?;
+                if instruction.opcode != op::LOOP {
+                    return Err("tier-up checkpoint does not name a loop");
+                }
+                if osr_loop_headers
+                    .insert(checkpoint.loop_instruction_index, builder.create_block())
+                    .is_some()
+                {
+                    return Err("duplicate tier-up loop checkpoint");
+                }
+            }
         }
 
         let memory_bases = Self::memory_bases(
@@ -866,6 +1219,20 @@ impl DirectCompiler {
             memory_flags,
             pointer_type,
         )?;
+        if let DirectBodyFlavor::Osr(checkpoints) = flavor {
+            Self::emit_osr_entry(
+                &mut builder,
+                entry_token.ok_or("direct OSR entry token is missing")?,
+                checkpoints,
+                &osr_loop_headers,
+                DirectLocals {
+                    types: &local_types,
+                    variables: &local_variables,
+                    parameter_count: num_params,
+                },
+                runtime,
+            )?;
+        }
         let has_indirect_calls = instructions
             .iter()
             .any(|instruction| instruction.opcode == op::CALL_INDIRECT);
@@ -991,7 +1358,7 @@ impl DirectCompiler {
         let mut function_ended = false;
         let mut is_reachable = true;
 
-        for instruction in instructions {
+        for (instruction_index, instruction) in instructions.iter().enumerate() {
             if !is_reachable && !matches!(instruction.opcode, op::BLOCK | op::LOOP | op::IF | op::ELSE | op::END) {
                 continue;
             }
@@ -1014,7 +1381,10 @@ impl DirectCompiler {
                     let branch_target = match kind {
                         ControlKind::Block => continuation,
                         ControlKind::Loop => {
-                            let header = builder.create_block();
+                            let header = osr_loop_headers
+                                .get(&instruction_index)
+                                .copied()
+                                .unwrap_or_else(|| builder.create_block());
                             if is_reachable {
                                 builder.ins().jump(header, &[]);
                                 builder.switch_to_block(header);
@@ -1111,7 +1481,7 @@ impl DirectCompiler {
                                 .map(wasm_abi_type)
                                 .collect::<Result<Vec<_>, _>>()?;
                             let results = Self::result_values(&builder, &mut operand_stack, &result_types)?;
-                            builder.ins().return_(&results);
+                            Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                         }
                         function_ended = true;
                     }
@@ -1137,7 +1507,7 @@ impl DirectCompiler {
                             .map(wasm_abi_type)
                             .collect::<Result<Vec<_>, _>>()?;
                         let results = Self::result_values(&builder, &mut operand_stack, &result_types)?;
-                        builder.ins().return_(&results);
+                        Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                     } else {
                         return Err("invalid direct branch label");
                     }
@@ -1174,7 +1544,7 @@ impl DirectCompiler {
                             .collect::<Result<Vec<_>, _>>()?;
                         let mut return_stack = operand_stack.clone();
                         let results = Self::result_values(&builder, &mut return_stack, &result_types)?;
-                        builder.ins().return_(&results);
+                        Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                     } else {
                         return Err("invalid direct branch label");
                     }
@@ -1241,9 +1611,13 @@ impl DirectCompiler {
                     if let Some(return_block) = return_block {
                         builder.switch_to_block(return_block);
                         builder.seal_block(return_block);
-                        builder
-                            .ins()
-                            .return_(&return_values.ok_or("missing direct branch-table return values")?);
+                        Self::emit_body_return(
+                            &mut builder,
+                            &return_values.ok_or("missing direct branch-table return values")?,
+                            function_type.results,
+                            flavor,
+                            runtime,
+                        )?;
                     }
                     is_reachable = false;
                 }
@@ -1258,7 +1632,7 @@ impl DirectCompiler {
                         .map(wasm_abi_type)
                         .collect::<Result<Vec<_>, _>>()?;
                     let results = Self::result_values(&builder, &mut operand_stack, &result_types)?;
-                    builder.ins().return_(&results);
+                    Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                     is_reachable = false;
                 }
                 op::UNREACHABLE => {
@@ -2287,30 +2661,53 @@ mod tests {
             parameters: &parameters,
             results: &[],
         }];
-        let compiled = DirectCompiler::compile_to_bytes(
-            DirectCompilerInput {
-                instructions: &instructions,
-                branch_targets: &[],
-                local_types: &declared_local_types,
-                tier_up_checkpoints: &[],
-                tier_up_live_local_indices: &[],
-                function_types: &function_types,
-                module_types: &[],
-                global_types: &[],
-            },
-            &runtime_layout(),
-            FunctionCompilationOptions {
-                result_arity: 0,
-                num_locals: 2,
-                num_params: 1,
-                function_index: 0,
-                max_call_rec_size: 0,
-            },
-        )
-        .expect("direct compilation should succeed");
+        let input = DirectCompilerInput {
+            instructions: &instructions,
+            branch_targets: &[],
+            local_types: &declared_local_types,
+            tier_up_checkpoints: &[],
+            tier_up_live_local_indices: &[],
+            function_types: &function_types,
+            module_types: &[],
+            global_types: &[],
+        };
+        let options = FunctionCompilationOptions {
+            result_arity: 0,
+            num_locals: 2,
+            num_params: 1,
+            function_index: 0,
+            max_call_rec_size: 0,
+        };
+        let layout = runtime_layout();
+        let compiled =
+            DirectCompiler::compile_to_bytes(input, &layout, options).expect("direct compilation should succeed");
 
         assert!(!compiled.code.is_empty());
         assert!(!compiled.relocs.is_empty());
+
+        let checkpoints = [crate::DirectTierUpCheckpoint {
+            checkpoint_id: 0,
+            interpreter_dispatch_index: 12,
+            loop_instruction_index: 4,
+            live_local_indices_offset: 0,
+            live_local_index_count: 2,
+        }];
+        let osr_input = DirectCompilerInput {
+            tier_up_checkpoints: &checkpoints,
+            tier_up_live_local_indices: &[0, 1],
+            ..input
+        };
+        let clean_with_osr_metadata = DirectCompiler::compile_to_bytes(osr_input, &layout, options)
+            .expect("clean direct compilation with OSR metadata should succeed");
+        assert_eq!(clean_with_osr_metadata.code, compiled.code);
+        assert_eq!(clean_with_osr_metadata.relocs, compiled.relocs);
+        assert_eq!(clean_with_osr_metadata.traps, compiled.traps);
+
+        let osr = DirectCompiler::compile_osr_to_bytes(osr_input, &layout, options)
+            .expect("direct OSR compilation should succeed");
+        assert_eq!(osr.native_entry_offset, 0);
+        assert!(!osr.code.is_empty());
+        assert!(!osr.traps.is_empty());
     }
 
     #[test]
