@@ -88,6 +88,7 @@ AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, ElementIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, MemoryIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, TagIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, LocalIndex);
+AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, TierUpCheckpointIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, GlobalIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, LabelIndex);
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u32, DataIndex);
@@ -1060,6 +1061,13 @@ struct CraneliftIndirectCallMetadata {
     u32 type_encoding { 0 };
 };
 
+struct TierUpCheckpointDescriptor {
+    TierUpCheckpointIndex checkpoint_id;
+    InstructionPointer interpreter_dispatch_index;
+    InstructionPointer parsed_loop_instruction_index;
+    Vector<LocalIndex> live_local_indices;
+};
+
 struct CompiledInstructions {
     Vector<Dispatch> dispatches;
     Vector<SourcesAndDestination> src_dst_mappings;
@@ -1068,6 +1076,7 @@ struct CompiledInstructions {
     Vector<u8> cranelift_local_types;
     Vector<CraneliftRawCallMetadata> cranelift_raw_calls;
     Vector<CraneliftIndirectCallMetadata> cranelift_indirect_calls;
+    Vector<TierUpCheckpointDescriptor> tier_up_checkpoints;
 
     // Pointer/size_t-sized members first, then the u32, then the bools, so the trailing scalars pack
     // into one word instead of scattering padding between them.
