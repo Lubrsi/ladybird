@@ -827,16 +827,18 @@ static void publish_compiled_function(PendingCompiledFunction&& pending, Module 
     }
 }
 
-static void retain_osr_compiled_function(PendingCompiledFunction&& pending, Module const& module)
+static void publish_osr_compiled_function(PendingCompiledFunction&& pending, Module const& module)
 {
     auto* handle = pending.mapping.leak_ptr();
-    auto* function = static_cast<u8 const*>(handle->mapping);
+    auto* function_start = static_cast<u8 const*>(handle->mapping);
+    auto* handler_entry = function_start + pending.native_entry_offset;
 
-    pending.target->cranelift_osr_code_start = bit_cast<FlatPtr>(function);
+    pending.target->cranelift_osr_code_start = bit_cast<FlatPtr>(function_start);
     pending.target->cranelift_osr_code_size = pending.code_size;
     pending.target->cranelift_osr_traps = handle->traps.data();
     pending.target->cranelift_osr_trap_count = handle->traps.size();
     module.retain_cranelift_code_handle(handle);
+    publish_cranelift_osr_entry(*pending.target, bit_cast<FlatPtr>(handler_entry));
 }
 
 static size_t imported_function_count(Module const& module)
@@ -898,7 +900,7 @@ static void install_compiled_functions(Vector<PendingCompiledFunction>& pending_
     }
     for (auto& pending : pending_osr_functions) {
         if (pending.mapping)
-            retain_osr_compiled_function(move(pending), module);
+            publish_osr_compiled_function(move(pending), module);
     }
     module.record_cranelift_publications(published_functions);
 }
