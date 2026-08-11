@@ -13,6 +13,28 @@ bool try_cranelift_compile(CodeSection::Func const&, u32) { return false; }
 void flush_cranelift_batch(Module const&) { }
 void discard_cranelift_batch() { }
 void free_cranelift_code(void*) { }
+CraneliftCodeOwner::CraneliftCodeOwner(void* handle)
+    : m_handle(handle)
+{
+}
+CraneliftCodeOwner::CraneliftCodeOwner(CraneliftCodeOwner&& other)
+    : m_handle(other.m_handle)
+{
+    other.m_handle = nullptr;
+}
+CraneliftCodeOwner& CraneliftCodeOwner::operator=(CraneliftCodeOwner&& other)
+{
+    if (this == &other)
+        return *this;
+    if (m_handle)
+        free_cranelift_code(m_handle);
+    m_handle = other.m_handle;
+    other.m_handle = nullptr;
+    return *this;
+}
+CraneliftCodeOwner::~CraneliftCodeOwner() = default;
+Module::~Module() = default;
+void Module::retain_cranelift_code_handle(void*) const { }
 void set_cranelift_active_function_index(u32) { }
 void begin_cranelift_cache_capture() { }
 void abort_cranelift_cache_capture() { }

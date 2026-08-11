@@ -1014,6 +1014,7 @@ impl DirectCompiler {
 
     pub(crate) fn compile_osr_to_bytes(
         input: DirectCompilerInput<'_>,
+        interpreter_instructions: &[crate::CraneliftInsn],
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
     ) -> Result<CompiledFunction, &'static str> {
@@ -1036,6 +1037,14 @@ impl DirectCompiler {
                 .is_some()
             {
                 return Err("duplicate tier-up interpreter dispatch index");
+            }
+            let interpreter_dispatch_index = usize::try_from(checkpoint.interpreter_dispatch_index)
+                .map_err(|_| "tier-up interpreter dispatch index overflow")?;
+            let interpreter_instruction = interpreter_instructions
+                .get(interpreter_dispatch_index)
+                .ok_or("tier-up interpreter dispatch index is out of bounds")?;
+            if interpreter_instruction.opcode != op::SYNTHETIC_TIER_UP {
+                return Err("tier-up interpreter dispatch does not name synthetic_tier_up");
             }
             checkpoints.push(checkpoint);
         }
@@ -2629,6 +2638,26 @@ mod tests {
         )
     }
 
+    fn allocated_instruction(opcode: u64) -> crate::CraneliftInsn {
+        crate::CraneliftInsn {
+            opcode,
+            sources: [0; 3],
+            destination: 0,
+            imm1: 0,
+            imm2: 0,
+            imm3: 0,
+            call_result_count: 0,
+            call_type_encoding: 0,
+        }
+    }
+
+    fn interpreter_stream_with_tier_up() -> (Vec<crate::CraneliftInsn>, u32) {
+        let mut instructions = vec![allocated_instruction(op::NOP)];
+        let tier_up_index = u32::try_from(instructions.len()).expect("test instruction index should fit in u32");
+        instructions.push(allocated_instruction(op::SYNTHETIC_TIER_UP));
+        (instructions, tier_up_index)
+    }
+
     #[test]
     fn compiles_typed_loop_locals_and_memory() {
         let instructions = [
@@ -2685,9 +2714,10 @@ mod tests {
         assert!(!compiled.code.is_empty());
         assert!(!compiled.relocs.is_empty());
 
+        let (interpreter_instructions, interpreter_dispatch_index) = interpreter_stream_with_tier_up();
         let checkpoints = [crate::DirectTierUpCheckpoint {
             checkpoint_id: 0,
-            interpreter_dispatch_index: 12,
+            interpreter_dispatch_index,
             loop_instruction_index: 4,
             live_local_indices_offset: 0,
             live_local_index_count: 2,
@@ -2703,11 +2733,20 @@ mod tests {
         assert_eq!(clean_with_osr_metadata.relocs, compiled.relocs);
         assert_eq!(clean_with_osr_metadata.traps, compiled.traps);
 
-        let osr = DirectCompiler::compile_osr_to_bytes(osr_input, &layout, options)
+        let osr = DirectCompiler::compile_osr_to_bytes(osr_input, &interpreter_instructions, &layout, options)
             .expect("direct OSR compilation should succeed");
         assert_eq!(osr.native_entry_offset, 0);
         assert!(!osr.code.is_empty());
         assert!(!osr.traps.is_empty());
+
+        let mut mismatched_interpreter_instructions = interpreter_instructions;
+        let tier_up_index = usize::try_from(interpreter_dispatch_index).expect("test instruction index should fit");
+        mismatched_interpreter_instructions[tier_up_index].opcode = op::NOP;
+        let error =
+            DirectCompiler::compile_osr_to_bytes(osr_input, &mismatched_interpreter_instructions, &layout, options)
+                .err()
+                .expect("mismatched interpreter checkpoint should be rejected");
+        assert_eq!(error, "tier-up interpreter dispatch does not name synthetic_tier_up");
     }
 
     #[test]
