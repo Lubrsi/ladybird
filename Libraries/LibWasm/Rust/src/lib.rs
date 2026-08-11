@@ -264,7 +264,7 @@ pub enum CraneliftRelocationTargetKind {
 /// current-process addresses. Wasm-function relocations are resolved by module function index
 /// after native addresses have been assigned.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CraneliftRelocation {
     pub code_offset: u32,
     pub kind: CraneliftRelocationKind,
@@ -276,7 +276,7 @@ pub struct CraneliftRelocation {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CraneliftTrap {
     pub offset: u32,
     pub code: u8,
@@ -312,6 +312,7 @@ pub struct DirectFunctionType<'a> {
     pub results: &'a [DirectValueType],
 }
 
+#[derive(Clone, Copy)]
 pub struct DirectCompilerInput<'a> {
     pub instructions: &'a [DirectInstruction],
     pub branch_targets: &'a [u32],
@@ -339,4 +340,12 @@ pub fn compile_direct_to_bytes(
     options: FunctionCompilationOptions,
 ) -> Result<CompiledFunction, &'static str> {
     compiler::direct::DirectCompiler::compile_to_bytes(input, layout, options)
+}
+
+pub fn compile_direct_osr_to_bytes(
+    input: DirectCompilerInput<'_>,
+    layout: &RuntimeLayout,
+    options: FunctionCompilationOptions,
+) -> Result<CompiledFunction, &'static str> {
+    compiler::direct::DirectCompiler::compile_osr_to_bytes(input, layout, options)
 }
