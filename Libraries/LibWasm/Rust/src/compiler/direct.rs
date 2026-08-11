@@ -136,6 +136,13 @@ struct DirectBulkMemoryHelpers {
     memory_fill: FuncRef,
 }
 
+struct DirectMemoryManagementHelpers {
+    memory_size_signature: SigRef,
+    memory_size: FuncRef,
+    memory_grow_signature: SigRef,
+    memory_grow: FuncRef,
+}
+
 pub(crate) struct DirectCompiler;
 
 impl DirectCompiler {
@@ -1248,6 +1255,9 @@ impl DirectCompiler {
         let has_bulk_memory = instructions
             .iter()
             .any(|instruction| matches!(instruction.opcode, op::MEMORY_COPY | op::MEMORY_FILL));
+        let has_memory_management = instructions
+            .iter()
+            .any(|instruction| matches!(instruction.opcode, op::MEMORY_SIZE | op::MEMORY_GROW));
         let runtime_fallback_helpers = if has_indirect_calls || has_bulk_memory {
             let mut current_interpreter_signature = Signature::new(isa.default_call_conv());
             current_interpreter_signature.returns.push(AbiParam::new(pointer_type));
@@ -1318,6 +1328,29 @@ impl DirectCompiler {
                 memory_copy: declare_helper(&mut builder, memory_copy_signature, HelperId::memory_copy),
                 memory_fill_signature,
                 memory_fill: declare_helper(&mut builder, memory_fill_signature, HelperId::memory_fill),
+            })
+        } else {
+            None
+        };
+        let memory_management_helpers = if has_memory_management {
+            let mut memory_size_signature = Signature::new(isa.default_call_conv());
+            memory_size_signature.params.push(AbiParam::new(pointer_type));
+            memory_size_signature.params.push(AbiParam::new(types::I32));
+            memory_size_signature.returns.push(AbiParam::new(types::I64));
+            let memory_size_signature = builder.import_signature(memory_size_signature);
+
+            let mut memory_grow_signature = Signature::new(isa.default_call_conv());
+            memory_grow_signature.params.push(AbiParam::new(pointer_type));
+            memory_grow_signature.params.push(AbiParam::new(types::I32));
+            memory_grow_signature.params.push(AbiParam::new(types::I32));
+            memory_grow_signature.returns.push(AbiParam::new(types::I32));
+            let memory_grow_signature = builder.import_signature(memory_grow_signature);
+
+            Some(DirectMemoryManagementHelpers {
+                memory_size_signature,
+                memory_size: declare_helper(&mut builder, memory_size_signature, HelperId::memory_size),
+                memory_grow_signature,
+                memory_grow: declare_helper(&mut builder, memory_grow_signature, HelperId::memory_grow),
             })
         } else {
             None
@@ -2440,6 +2473,35 @@ impl DirectCompiler {
                     builder.switch_to_block(continuation);
                     builder.seal_block(continuation);
                 }
+                op::MEMORY_SIZE => {
+                    let helpers = memory_management_helpers
+                        .as_ref()
+                        .ok_or("missing direct memory-management helpers")?;
+                    let memory_index = builder.ins().iconst(types::I32, i64::from(instruction.memory_index()));
+                    let helper_address = builder.ins().func_addr(pointer_type, helpers.memory_size);
+                    let call = builder.ins().call_indirect(
+                        helpers.memory_size_signature,
+                        helper_address,
+                        &[configuration, memory_index],
+                    );
+                    let page_count = builder.inst_results(call)[0];
+                    let page_count = builder.ins().ireduce(types::I32, page_count);
+                    operand_stack.push(page_count);
+                }
+                op::MEMORY_GROW => {
+                    let helpers = memory_management_helpers
+                        .as_ref()
+                        .ok_or("missing direct memory-management helpers")?;
+                    let delta = Self::pop_expected(&builder, &mut operand_stack, types::I32)?;
+                    let memory_index = builder.ins().iconst(types::I32, i64::from(instruction.memory_index()));
+                    let helper_address = builder.ins().func_addr(pointer_type, helpers.memory_grow);
+                    let call = builder.ins().call_indirect(
+                        helpers.memory_grow_signature,
+                        helper_address,
+                        &[configuration, memory_index, delta],
+                    );
+                    operand_stack.push(builder.inst_results(call)[0]);
+                }
                 op::I32_LOAD
                 | op::I64_LOAD
                 | op::F32_LOAD
@@ -2958,6 +3020,51 @@ mod tests {
                 .iter()
                 .any(|relocation| relocation.target_index == HelperId::memory_fill as u32)
         );
+    }
+
+    #[test]
+    fn compiles_memory_management_helpers() {
+        let instructions = [
+            instruction(op::MEMORY_SIZE, DirectInstructionArguments { memory_index: 1 }),
+            i32_constant(0),
+            instruction(op::MEMORY_GROW, DirectInstructionArguments { memory_index: 1 }),
+            no_arguments(op::I32_ADD),
+            no_arguments(op::END),
+        ];
+        let function_types = [WasmFunctionType {
+            parameters: &[],
+            results: &[I32_KIND],
+        }];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[],
+                tier_up_checkpoints: &[],
+                tier_up_live_local_indices: &[],
+                function_types: &function_types,
+                module_types: &[],
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 1,
+                num_locals: 0,
+                num_params: 0,
+                function_index: 0,
+                max_call_rec_size: 0,
+            },
+        )
+        .expect("direct compilation should support memory size and growth");
+
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
+                && relocation.target_index == HelperId::memory_size as u32
+        }));
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
+                && relocation.target_index == HelperId::memory_grow as u32
+        }));
     }
 
     #[test]

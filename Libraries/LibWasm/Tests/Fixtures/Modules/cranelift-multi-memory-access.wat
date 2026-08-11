@@ -30,6 +30,15 @@
     i32.load $memory0
   )
 
+  (func (export "memory_one_size") (result i32)
+    memory.size $memory1
+  )
+
+  (func (export "grow_memory_one_by") (param i32) (result i32)
+    local.get 0
+    memory.grow $memory1
+  )
+
   (func $grow_memory_one
     i32.const 1
     memory.grow $memory1

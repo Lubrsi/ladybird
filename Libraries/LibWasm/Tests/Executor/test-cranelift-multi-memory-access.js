@@ -5,9 +5,20 @@ test("compiled loads and stores directly access every memory instance", () => {
     const loadAt = module.getExport("load_at");
     const storeAt = module.getExport("store_at");
     const memoryOneIsDistinct = module.getExport("memory_one_is_distinct");
+    const memoryOneSize = module.getExport("memory_one_size");
+    const growMemoryOneBy = module.getExport("grow_memory_one_by");
     const growAndRoundtrip = module.getExport("grow_and_roundtrip");
     const callGrowAndRoundtrip = module.getExport("call_grow_and_roundtrip");
-    const functions = [roundtrip, loadAt, storeAt, memoryOneIsDistinct, growAndRoundtrip, callGrowAndRoundtrip];
+    const functions = [
+        roundtrip,
+        loadAt,
+        storeAt,
+        memoryOneIsDistinct,
+        memoryOneSize,
+        growMemoryOneBy,
+        growAndRoundtrip,
+        callGrowAndRoundtrip,
+    ];
 
     if (functions.every(fn => !isCraneliftEligible(fn))) return;
 
@@ -18,6 +29,9 @@ test("compiled loads and stores directly access every memory instance", () => {
 
     expect(module.invoke(roundtrip, 0x12345678)).toBe(0x12345678);
     expect(module.invoke(memoryOneIsDistinct)).toBe(0);
+    expect(module.invoke(memoryOneSize)).toBe(1);
+    expect(module.invoke(growMemoryOneBy, 0)).toBe(1);
+    expect(module.invoke(memoryOneSize)).toBe(1);
     expect(() => module.invoke(loadAt, 65534)).toThrowWithMessage(
         TypeError,
         "Execution trapped: Memory access out of bounds"
@@ -28,4 +42,8 @@ test("compiled loads and stores directly access every memory instance", () => {
     );
     expect(module.invoke(growAndRoundtrip, 0x24681357)).toBe(0x24681357);
     expect(module.invoke(callGrowAndRoundtrip, 0x76543210)).toBe(0x76543210);
+    expect(module.invoke(memoryOneSize)).toBe(3);
+    expect(module.invoke(growMemoryOneBy, 1)).toBe(-1);
+    expect(module.invoke(growMemoryOneBy, -1)).toBe(-1);
+    expect(module.invoke(memoryOneSize)).toBe(3);
 });

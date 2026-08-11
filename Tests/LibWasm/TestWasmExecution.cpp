@@ -61,8 +61,12 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32
     append_unsigned_leb128(code_section, function_count);
     for (u32 function_index = 0; function_index < function_count; ++function_index) {
         Vector<u8> body { 0x00 };
-        if (allocated_bytecode_function == function_index)
-            body.extend(Vector<u8> { 0x3f, 0x00, 0x1a }); // memory.size 0; drop
+        if (allocated_bytecode_function == function_index) {
+            // local.get 0; block (type 0); end; drop
+            // Type-index block signatures are deliberately left to the allocated-bytecode
+            // frontend until the direct frontend implements block parameters.
+            body.extend(Vector<u8> { 0x20, 0x00, 0x02, 0x00, 0x0b, 0x1a });
+        }
         if (function_index + 1 == function_count) {
             body.extend(Vector<u8> { 0x20, 0x00, 0x41, 0x01, 0x6a });
         } else if (function_index == 0) {

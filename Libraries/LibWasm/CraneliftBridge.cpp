@@ -1127,7 +1127,9 @@ i32 wasm_cl_memory_grow(void* config_ptr, u32 mem_idx, i32 pages)
 {
     auto* memory = wasm_cl_get_memory(config_ptr, mem_idx);
     auto old_pages = memory->size() / Constants::page_size;
-    if (!memory->grow(pages * Constants::page_size))
+    Checked<size_t> size_to_grow { static_cast<u32>(pages) };
+    size_to_grow *= Constants::page_size;
+    if (size_to_grow.has_overflow() || !memory->grow(size_to_grow.value()))
         return -1;
     return static_cast<i32>(old_pages);
 }
