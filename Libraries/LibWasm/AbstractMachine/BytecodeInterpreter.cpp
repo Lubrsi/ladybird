@@ -7164,6 +7164,16 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
     Vector<size_t> wasm_ip_to_expanded;
     wasm_ip_to_expanded.resize(expression.instructions().size());
 
+    Vector<size_t> parsed_tier_up_loop_positions;
+    for (size_t i = 0; i < expression.instructions().size(); ++i) {
+        auto const& instruction = expression.instructions()[i];
+        if (instruction.opcode() != Instructions::loop)
+            continue;
+        auto const& arguments = instruction.arguments().get<Instruction::StructuredInstructionArgs>();
+        if (arguments.meta.tier_up_eligible)
+            parsed_tier_up_loop_positions.append(i);
+    }
+
     Vector<size_t> caller_structured_positions;
     auto append_caller = [&](Instruction const& insn) {
         if (insn.arguments().has<Instruction::StructuredInstructionArgs>() || insn.arguments().has<Instruction::TryTableArgs>())
@@ -7746,6 +7756,22 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
     result.dispatches.remove_all(nops_to_remove, [](auto const& it) { return it.key(); });
     result.src_dst_mappings.remove_all(nops_to_remove, [](auto const& it) { return it.key(); });
 
+    Vector<Optional<u32>> parsed_loop_for_dispatch;
+    parsed_loop_for_dispatch.resize(result.dispatches.size());
+    auto removed_nop = nops_to_remove.begin();
+    size_t removed_nop_count = 0;
+    for (auto parsed_loop_position : parsed_tier_up_loop_positions) {
+        auto expanded_loop_position = wasm_ip_to_expanded[parsed_loop_position];
+        while (!removed_nop.is_end() && removed_nop.key() < expanded_loop_position) {
+            ++removed_nop_count;
+            ++removed_nop;
+        }
+        VERIFY(removed_nop.is_end() || removed_nop.key() != expanded_loop_position);
+        auto dispatch_index = expanded_loop_position - removed_nop_count;
+        VERIFY(dispatch_index < parsed_loop_for_dispatch.size());
+        parsed_loop_for_dispatch[dispatch_index] = static_cast<u32>(parsed_loop_position);
+    }
+
     // Every time we have a large-enough function, drop a synthetic_tier_up checkpoint right after each loop header that's eligible for tier-up (empty stack at the header, so the back-edge hits it every iteration).
     // This allows us to start running code immediately in the interpreter, and switch to native code on paths that matter (or eventually) once compiled code is ready and the tier-up check hits.
     constexpr size_t tier_up_instruction_threshold = 32;
@@ -7784,8 +7810,18 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                 new_src_dst.append(result.src_dst_mappings[i]);
                 if (next_loop < loop_positions.size() && loop_positions[next_loop] == i) {
                     auto& tier_up = append_extra_instruction(Instructions::synthetic_tier_up);
+                    auto interpreter_dispatch_index = new_dispatches.size();
                     new_dispatches.append({ { .instruction_opcode = tier_up.opcode() }, &tier_up });
                     new_src_dst.append({ .sources = { Dispatch::Stack, Dispatch::Stack, Dispatch::Stack }, .destination = Dispatch::Stack });
+                    // An inlined callee can contribute an interpreter checkpoint, but it has no
+                    // corresponding loop in the caller's parsed body for the direct frontend.
+                    if (parsed_loop_for_dispatch[i].has_value()) {
+                        result.tier_up_checkpoints.append({
+                            .checkpoint_id = TierUpCheckpointIndex { static_cast<u32>(result.tier_up_checkpoints.size()) },
+                            .interpreter_dispatch_index = InstructionPointer { static_cast<u32>(interpreter_dispatch_index) },
+                            .parsed_loop_instruction_index = InstructionPointer { parsed_loop_for_dispatch[i].value() },
+                        });
+                    }
                     ++next_loop;
                 }
             }

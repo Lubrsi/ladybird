@@ -9,6 +9,7 @@
 #include <AK/SourceLocation.h>
 #include <AK/TemporaryChange.h>
 #include <AK/Try.h>
+#include <LibWasm/AbstractMachine/TierUpCheckpointLiveness.h>
 #include <LibWasm/AbstractMachine/Validator.h>
 #include <LibWasm/Printer/Printer.h>
 
@@ -5171,6 +5172,9 @@ ErrorOr<Validator::ExpressionTypeResult, ValidationError> Validator::validate(Ex
 
     // Now that we're in happy land, try to compile the expression down to a list of labels to help dispatch.
     expression.compiled_instructions = try_compile_instructions(expression, m_context.functions.span(), m_context.types.span(), m_context.tables.span(), callee_bodies, current_function_index, m_context.locals.size(), m_context.imported_function_count, cranelift_candidate);
+
+    if (!MUST(populate_tier_up_checkpoint_live_locals(expression, m_context.locals.size())))
+        expression.compiled_instructions.tier_up_checkpoints.clear();
 
     if (expression.compiled_instructions.direct && cranelift_candidate) {
         expression.compiled_instructions.cranelift_eligible = true;

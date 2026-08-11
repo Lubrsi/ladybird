@@ -2,6 +2,7 @@ set(SOURCES
     AbstractMachine/AbstractMachine.cpp
     AbstractMachine/BytecodeInterpreter.cpp
     AbstractMachine/Configuration.cpp
+    AbstractMachine/TierUpCheckpointLiveness.cpp
     AbstractMachine/Validator.cpp
     AbstractMachine/ValueStack.cpp
     Parser/Parser.cpp

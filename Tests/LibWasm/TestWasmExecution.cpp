@@ -437,6 +437,14 @@ TEST_CASE(tier_up_does_not_resume_interpreter_frame)
     auto& compiled = module->code_section().functions()[0].func().body().compiled_instructions;
     EXPECT(compiled.has_tier_up_checkpoints);
     EXPECT(!compiled.cranelift_compiled);
+    EXPECT_EQ(compiled.tier_up_checkpoints.size(), 1u);
+    auto const& checkpoint = compiled.tier_up_checkpoints[0];
+    EXPECT_EQ(checkpoint.checkpoint_id, Wasm::TierUpCheckpointIndex { 0 });
+    EXPECT_EQ(compiled.dispatches[checkpoint.interpreter_dispatch_index.value()].instruction->opcode(), Wasm::Instructions::synthetic_tier_up);
+    EXPECT_EQ(module->code_section().functions()[0].func().body().instructions()[checkpoint.parsed_loop_instruction_index.value()].opcode(), Wasm::Instructions::loop);
+    EXPECT_EQ(checkpoint.live_local_indices.size(), 2u);
+    EXPECT_EQ(checkpoint.live_local_indices[0], Wasm::LocalIndex { 0 });
+    EXPECT_EQ(checkpoint.live_local_indices[1], Wasm::LocalIndex { 260 });
 
     size_t compilation_requests = 0;
     FlatPtr osr_entry = 0;
