@@ -7820,6 +7820,7 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                             .checkpoint_id = TierUpCheckpointIndex { static_cast<u32>(result.tier_up_checkpoints.size()) },
                             .interpreter_dispatch_index = InstructionPointer { static_cast<u32>(interpreter_dispatch_index) },
                             .parsed_loop_instruction_index = InstructionPointer { parsed_loop_for_dispatch[i].value() },
+                            .live_local_indices = {},
                         });
                     }
                     ++next_loop;

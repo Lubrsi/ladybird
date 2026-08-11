@@ -242,6 +242,22 @@ Optional<DirectCompilerInput> serialize_direct_compiler_input(CodeSection::Func 
             output.local_types.unchecked_append(type);
     }
 
+    for (auto const& checkpoint : function.body().compiled_instructions.tier_up_checkpoints) {
+        Checked<u32> live_local_index_count { output.tier_up_live_local_indices.size() };
+        live_local_index_count += checkpoint.live_local_indices.size();
+        if (live_local_index_count.has_overflow())
+            return {};
+        output.tier_up_checkpoints.append({
+            .checkpoint_id = checkpoint.checkpoint_id.value(),
+            .interpreter_dispatch_index = checkpoint.interpreter_dispatch_index.value(),
+            .loop_instruction_index = checkpoint.parsed_loop_instruction_index.value(),
+            .live_local_indices_offset = static_cast<u32>(output.tier_up_live_local_indices.size()),
+            .live_local_index_count = static_cast<u32>(checkpoint.live_local_indices.size()),
+        });
+        for (auto local_index : checkpoint.live_local_indices)
+            output.tier_up_live_local_indices.append(local_index.value());
+    }
+
     return output;
 }
 

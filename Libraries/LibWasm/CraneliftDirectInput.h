@@ -17,6 +17,8 @@ struct DirectCompilerInput {
     Vector<Cranelift::DirectInstruction> instructions;
     Vector<u32> branch_targets;
     Vector<Cranelift::DirectValueType> local_types;
+    Vector<Cranelift::DirectTierUpCheckpoint> tier_up_checkpoints;
+    Vector<u32> tier_up_live_local_indices;
 };
 
 Cranelift::DirectValueType serialize_direct_value_type(ValueType const&);

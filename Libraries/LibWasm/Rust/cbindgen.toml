@@ -28,6 +28,7 @@ include = [
     "DirectMemoryCopyInstructionArguments",
     "DirectInstructionArguments",
     "DirectInstruction",
+    "DirectTierUpCheckpoint",
     "CraneliftInsn",
     "RuntimeLayout",
     "CraneliftRelocation",

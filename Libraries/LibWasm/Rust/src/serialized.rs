@@ -13,6 +13,7 @@ use crate::CraneliftTrap;
 use crate::DirectCompilerInput;
 use crate::DirectFunctionType;
 use crate::DirectInstruction;
+use crate::DirectTierUpCheckpoint;
 use crate::DirectValueType;
 use crate::FunctionCompilationOptions;
 use crate::RuntimeLayout;
@@ -52,6 +53,10 @@ struct InputFunctionEntry {
     direct_branch_target_count: u32,
     direct_locals_offset: u32,
     direct_local_count: u32,
+    direct_tier_up_checkpoints_offset: u32,
+    direct_tier_up_checkpoint_count: u32,
+    direct_tier_up_live_local_indices_offset: u32,
+    direct_tier_up_live_local_index_count: u32,
     result_arity: u32,
     num_locals: u32,
     direct_num_locals: u32,
@@ -206,6 +211,8 @@ fn parse_input<'a>(
     let mut total_direct_insn_count = 0usize;
     let mut total_direct_branch_target_count = 0usize;
     let mut total_direct_local_count = 0usize;
+    let mut total_direct_tier_up_checkpoint_count = 0usize;
+    let mut total_direct_tier_up_live_local_index_count = 0usize;
     let mut total_locals_size = 0usize;
     for i in 0..func_count {
         let entry_offset = i
@@ -225,6 +232,12 @@ fn parse_input<'a>(
         total_direct_local_count = total_direct_local_count
             .checked_add(entry.direct_local_count as usize)
             .ok_or("direct local count overflow")?;
+        total_direct_tier_up_checkpoint_count = total_direct_tier_up_checkpoint_count
+            .checked_add(entry.direct_tier_up_checkpoint_count as usize)
+            .ok_or("direct tier-up checkpoint count overflow")?;
+        total_direct_tier_up_live_local_index_count = total_direct_tier_up_live_local_index_count
+            .checked_add(entry.direct_tier_up_live_local_index_count as usize)
+            .ok_or("direct tier-up live-local count overflow")?;
         total_locals_size = total_locals_size
             .checked_add(entry.num_locals as usize)
             .ok_or("locals size overflow")?;
@@ -306,8 +319,26 @@ fn parse_input<'a>(
     let direct_locals_size = total_direct_local_count
         .checked_mul(size_of::<DirectValueType>())
         .ok_or("direct locals region size overflow")?;
-    let locals_region_offset = direct_locals_offset
-        .checked_add(direct_locals_size)
+    let direct_tier_up_checkpoints_offset = align_up(
+        direct_locals_offset
+            .checked_add(direct_locals_size)
+            .ok_or("direct tier-up checkpoint region offset overflow")?,
+        align_of::<DirectTierUpCheckpoint>(),
+    )?;
+    let direct_tier_up_checkpoints_size = total_direct_tier_up_checkpoint_count
+        .checked_mul(size_of::<DirectTierUpCheckpoint>())
+        .ok_or("direct tier-up checkpoint region size overflow")?;
+    let direct_tier_up_live_local_indices_offset = align_up(
+        direct_tier_up_checkpoints_offset
+            .checked_add(direct_tier_up_checkpoints_size)
+            .ok_or("direct tier-up live-local region offset overflow")?,
+        align_of::<u32>(),
+    )?;
+    let direct_tier_up_live_local_indices_size = total_direct_tier_up_live_local_index_count
+        .checked_mul(size_of::<u32>())
+        .ok_or("direct tier-up live-local region size overflow")?;
+    let locals_region_offset = direct_tier_up_live_local_indices_offset
+        .checked_add(direct_tier_up_live_local_indices_size)
         .ok_or("locals region offset overflow")?;
     let function_type_values_offset = locals_region_offset
         .checked_add(total_locals_size)
@@ -353,6 +384,8 @@ fn parse_input<'a>(
     let mut direct_insn_cursor = direct_insn_region_offset;
     let mut direct_branch_targets_cursor = direct_branch_targets_offset;
     let mut direct_locals_cursor = direct_locals_offset;
+    let mut direct_tier_up_checkpoints_cursor = direct_tier_up_checkpoints_offset;
+    let mut direct_tier_up_live_local_indices_cursor = direct_tier_up_live_local_indices_offset;
     let mut locals_cursor = locals_region_offset;
     for entry in &entries {
         if entry.insn_offset as usize != insn_cursor || entry.locals_offset as usize != locals_cursor {
@@ -365,6 +398,12 @@ fn parse_input<'a>(
                 && entry.direct_branch_targets_offset as usize != direct_branch_targets_cursor)
             || (entry.direct_local_count == 0 && entry.direct_locals_offset != 0)
             || (entry.direct_local_count != 0 && entry.direct_locals_offset as usize != direct_locals_cursor)
+            || (entry.direct_tier_up_checkpoint_count == 0 && entry.direct_tier_up_checkpoints_offset != 0)
+            || (entry.direct_tier_up_checkpoint_count != 0
+                && entry.direct_tier_up_checkpoints_offset as usize != direct_tier_up_checkpoints_cursor)
+            || (entry.direct_tier_up_live_local_index_count == 0 && entry.direct_tier_up_live_local_indices_offset != 0)
+            || (entry.direct_tier_up_live_local_index_count != 0
+                && entry.direct_tier_up_live_local_indices_offset as usize != direct_tier_up_live_local_indices_cursor)
         {
             return Err("direct input regions are not canonical");
         }
@@ -396,6 +435,20 @@ fn parse_input<'a>(
                     .ok_or("direct locals region size overflow")?,
             )
             .ok_or("direct locals region offset overflow")?;
+        direct_tier_up_checkpoints_cursor = direct_tier_up_checkpoints_cursor
+            .checked_add(
+                (entry.direct_tier_up_checkpoint_count as usize)
+                    .checked_mul(size_of::<DirectTierUpCheckpoint>())
+                    .ok_or("direct tier-up checkpoint region size overflow")?,
+            )
+            .ok_or("direct tier-up checkpoint region offset overflow")?;
+        direct_tier_up_live_local_indices_cursor = direct_tier_up_live_local_indices_cursor
+            .checked_add(
+                (entry.direct_tier_up_live_local_index_count as usize)
+                    .checked_mul(size_of::<u32>())
+                    .ok_or("direct tier-up live-local region size overflow")?,
+            )
+            .ok_or("direct tier-up live-local region offset overflow")?;
         locals_cursor = locals_cursor
             .checked_add(entry.num_locals as usize)
             .ok_or("locals region offset overflow")?;
@@ -529,12 +582,24 @@ fn compile_direct_entry(
         entry.direct_branch_target_count,
     )?;
     let local_types = read_pod_slice::<DirectValueType>(input, entry.direct_locals_offset, entry.direct_local_count)?;
+    let tier_up_checkpoints = read_pod_slice::<DirectTierUpCheckpoint>(
+        input,
+        entry.direct_tier_up_checkpoints_offset,
+        entry.direct_tier_up_checkpoint_count,
+    )?;
+    let tier_up_live_local_indices = read_pod_slice::<u32>(
+        input,
+        entry.direct_tier_up_live_local_indices_offset,
+        entry.direct_tier_up_live_local_index_count,
+    )?;
 
     compile_direct_to_bytes(
         DirectCompilerInput {
             instructions,
             branch_targets,
             local_types,
+            tier_up_checkpoints,
+            tier_up_live_local_indices,
             function_types,
             module_types,
             global_types,

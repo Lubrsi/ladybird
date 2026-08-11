@@ -75,6 +75,10 @@ struct InputFunctionEntry {
     u32 direct_branch_target_count;
     u32 direct_locals_offset;
     u32 direct_local_count;
+    u32 direct_tier_up_checkpoints_offset;
+    u32 direct_tier_up_checkpoint_count;
+    u32 direct_tier_up_live_local_indices_offset;
+    u32 direct_tier_up_live_local_index_count;
     u32 result_arity;
     u32 num_locals;
     u32 direct_num_locals;
@@ -100,7 +104,7 @@ struct InputModuleTypeEntry {
 };
 
 static_assert(sizeof(InputHeader) == 56);
-static_assert(sizeof(InputFunctionEntry) == 64);
+static_assert(sizeof(InputFunctionEntry) == 80);
 static_assert(sizeof(InputFunctionTypeEntry) == 16);
 static_assert(sizeof(InputModuleTypeEntry) == 20);
 
@@ -1569,6 +1573,8 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     size_t direct_instruction_count = 0;
     size_t direct_branch_target_count = 0;
     size_t direct_local_count = 0;
+    size_t direct_tier_up_checkpoint_count = 0;
+    size_t direct_tier_up_live_local_index_count = 0;
     size_t locals_size = 0;
     size_t function_type_values_size = 0;
     size_t module_type_value_count = 0;
@@ -1597,6 +1603,18 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
         if (new_direct_local_count.has_overflow())
             return Error::from_string_literal("Cranelift direct local count overflow");
         direct_local_count = new_direct_local_count.value();
+
+        Checked<size_t> new_direct_tier_up_checkpoint_count = direct_tier_up_checkpoint_count;
+        new_direct_tier_up_checkpoint_count += entry.direct_tier_up_checkpoint_count;
+        if (new_direct_tier_up_checkpoint_count.has_overflow())
+            return Error::from_string_literal("Cranelift direct tier-up checkpoint count overflow");
+        direct_tier_up_checkpoint_count = new_direct_tier_up_checkpoint_count.value();
+
+        Checked<size_t> new_direct_tier_up_live_local_index_count = direct_tier_up_live_local_index_count;
+        new_direct_tier_up_live_local_index_count += entry.direct_tier_up_live_local_index_count;
+        if (new_direct_tier_up_live_local_index_count.has_overflow())
+            return Error::from_string_literal("Cranelift direct tier-up live-local count overflow");
+        direct_tier_up_live_local_index_count = new_direct_tier_up_live_local_index_count.value();
 
         Checked<size_t> new_locals_size = locals_size;
         new_locals_size += entry.num_locals;
@@ -1671,8 +1689,30 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     if (direct_locals_size.has_overflow())
         return Error::from_string_literal("Cranelift direct locals region is too large");
 
-    Checked<size_t> locals_region_offset = aligned_direct_locals_offset;
-    locals_region_offset += direct_locals_size.value();
+    Checked<size_t> direct_tier_up_checkpoints_offset = aligned_direct_locals_offset;
+    direct_tier_up_checkpoints_offset += direct_locals_size.value();
+    if (direct_tier_up_checkpoints_offset.has_overflow())
+        return Error::from_string_literal("Cranelift direct tier-up checkpoint region offset overflow");
+    auto aligned_direct_tier_up_checkpoints_offset = align_up(direct_tier_up_checkpoints_offset.value(), alignof(DirectTierUpCheckpoint));
+
+    Checked<size_t> direct_tier_up_checkpoints_size = direct_tier_up_checkpoint_count;
+    direct_tier_up_checkpoints_size *= sizeof(DirectTierUpCheckpoint);
+    if (direct_tier_up_checkpoints_size.has_overflow())
+        return Error::from_string_literal("Cranelift direct tier-up checkpoint region is too large");
+
+    Checked<size_t> direct_tier_up_live_local_indices_offset = aligned_direct_tier_up_checkpoints_offset;
+    direct_tier_up_live_local_indices_offset += direct_tier_up_checkpoints_size.value();
+    if (direct_tier_up_live_local_indices_offset.has_overflow())
+        return Error::from_string_literal("Cranelift direct tier-up live-local region offset overflow");
+    auto aligned_direct_tier_up_live_local_indices_offset = align_up(direct_tier_up_live_local_indices_offset.value(), alignof(u32));
+
+    Checked<size_t> direct_tier_up_live_local_indices_size = direct_tier_up_live_local_index_count;
+    direct_tier_up_live_local_indices_size *= sizeof(u32);
+    if (direct_tier_up_live_local_indices_size.has_overflow())
+        return Error::from_string_literal("Cranelift direct tier-up live-local region is too large");
+
+    Checked<size_t> locals_region_offset = aligned_direct_tier_up_live_local_indices_offset;
+    locals_region_offset += direct_tier_up_live_local_indices_size.value();
     if (locals_region_offset.has_overflow())
         return Error::from_string_literal("Cranelift locals region offset overflow");
 
@@ -1720,6 +1760,8 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
     size_t direct_insn_cursor = aligned_direct_insn_region_offset;
     size_t direct_branch_targets_cursor = aligned_direct_branch_targets_offset;
     size_t direct_locals_cursor = aligned_direct_locals_offset;
+    size_t direct_tier_up_checkpoints_cursor = aligned_direct_tier_up_checkpoints_offset;
+    size_t direct_tier_up_live_local_indices_cursor = aligned_direct_tier_up_live_local_indices_offset;
     size_t locals_cursor = locals_region_offset.value();
     for (size_t i = 0; i < header.function_count; ++i) {
         auto entry = TRY(read_cranelift_input<InputFunctionEntry>(input, sizeof(InputHeader) + i * sizeof(InputFunctionEntry)));
@@ -1731,13 +1773,19 @@ static ErrorOr<Core::AnonymousBuffer> create_cranelift_output_buffer(ReadonlyByt
             || (entry.direct_branch_target_count == 0 && entry.direct_branch_targets_offset != 0)
             || (entry.direct_branch_target_count != 0 && entry.direct_branch_targets_offset != direct_branch_targets_cursor)
             || (entry.direct_local_count == 0 && entry.direct_locals_offset != 0)
-            || (entry.direct_local_count != 0 && entry.direct_locals_offset != direct_locals_cursor))
+            || (entry.direct_local_count != 0 && entry.direct_locals_offset != direct_locals_cursor)
+            || (entry.direct_tier_up_checkpoint_count == 0 && entry.direct_tier_up_checkpoints_offset != 0)
+            || (entry.direct_tier_up_checkpoint_count != 0 && entry.direct_tier_up_checkpoints_offset != direct_tier_up_checkpoints_cursor)
+            || (entry.direct_tier_up_live_local_index_count == 0 && entry.direct_tier_up_live_local_indices_offset != 0)
+            || (entry.direct_tier_up_live_local_index_count != 0 && entry.direct_tier_up_live_local_indices_offset != direct_tier_up_live_local_indices_cursor))
             return Error::from_string_literal("Cranelift direct input regions are not canonical");
 
         insn_cursor += static_cast<size_t>(entry.insn_count) * sizeof(CraneliftInsn);
         direct_insn_cursor += static_cast<size_t>(entry.direct_insn_count) * sizeof(DirectInstruction);
         direct_branch_targets_cursor += static_cast<size_t>(entry.direct_branch_target_count) * sizeof(u32);
         direct_locals_cursor += static_cast<size_t>(entry.direct_local_count) * sizeof(DirectValueType);
+        direct_tier_up_checkpoints_cursor += static_cast<size_t>(entry.direct_tier_up_checkpoint_count) * sizeof(DirectTierUpCheckpoint);
+        direct_tier_up_live_local_indices_cursor += static_cast<size_t>(entry.direct_tier_up_live_local_index_count) * sizeof(u32);
         locals_cursor += entry.num_locals;
     }
 
@@ -1915,6 +1963,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     size_t total_direct_insn_count = 0;
     size_t total_direct_branch_target_count = 0;
     size_t total_direct_local_count = 0;
+    size_t total_direct_tier_up_checkpoint_count = 0;
+    size_t total_direct_tier_up_live_local_index_count = 0;
     size_t total_locals_bytes = 0;
     size_t total_function_type_bytes = 0;
     size_t total_module_type_value_count = 0;
@@ -1924,6 +1974,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             total_direct_insn_count += entry.direct_input->instructions.size();
             total_direct_branch_target_count += entry.direct_input->branch_targets.size();
             total_direct_local_count += entry.direct_input->local_types.size();
+            total_direct_tier_up_checkpoint_count += entry.direct_input->tier_up_checkpoints.size();
+            total_direct_tier_up_live_local_index_count += entry.direct_input->tier_up_live_local_indices.size();
         }
         total_locals_bytes += entry.num_locals;
     }
@@ -1942,8 +1994,12 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     auto const direct_branch_targets_bytes = total_direct_branch_target_count * sizeof(u32);
     auto const direct_locals_offset = align_up(direct_branch_targets_offset + direct_branch_targets_bytes, alignof(DirectValueType));
     auto const direct_locals_bytes = total_direct_local_count * sizeof(DirectValueType);
-    auto const locals_region_offset = direct_locals_offset + direct_locals_bytes;       // u8, no alignment needed
-    auto const function_type_values_offset = locals_region_offset + total_locals_bytes; // u8, no alignment needed
+    auto const direct_tier_up_checkpoints_offset = align_up(direct_locals_offset + direct_locals_bytes, alignof(DirectTierUpCheckpoint));
+    auto const direct_tier_up_checkpoints_bytes = total_direct_tier_up_checkpoint_count * sizeof(DirectTierUpCheckpoint);
+    auto const direct_tier_up_live_local_indices_offset = align_up(direct_tier_up_checkpoints_offset + direct_tier_up_checkpoints_bytes, alignof(u32));
+    auto const direct_tier_up_live_local_indices_bytes = total_direct_tier_up_live_local_index_count * sizeof(u32);
+    auto const locals_region_offset = direct_tier_up_live_local_indices_offset + direct_tier_up_live_local_indices_bytes; // u8, no alignment needed
+    auto const function_type_values_offset = locals_region_offset + total_locals_bytes;                                   // u8, no alignment needed
     auto const module_type_values_offset = align_up(function_type_values_offset + total_function_type_bytes, alignof(DirectValueType));
     auto const module_type_values_bytes = total_module_type_value_count * sizeof(DirectValueType);
     auto const global_types_offset = align_up(module_type_values_offset + module_type_values_bytes, alignof(DirectValueType));
@@ -1976,6 +2032,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
     size_t direct_insn_cursor = direct_insn_region_offset;
     size_t direct_branch_targets_cursor = direct_branch_targets_offset;
     size_t direct_locals_cursor = direct_locals_offset;
+    size_t direct_tier_up_checkpoints_cursor = direct_tier_up_checkpoints_offset;
+    size_t direct_tier_up_live_local_indices_cursor = direct_tier_up_live_local_indices_offset;
     size_t locals_cursor = locals_region_offset;
     for (size_t i = 0; i < function_count; ++i) {
         auto const& input = batch[i];
@@ -1985,6 +2043,10 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         u32 function_direct_branch_target_count = 0;
         u32 function_direct_locals_offset = 0;
         u32 function_direct_local_count = 0;
+        u32 function_direct_tier_up_checkpoints_offset = 0;
+        u32 function_direct_tier_up_checkpoint_count = 0;
+        u32 function_direct_tier_up_live_local_indices_offset = 0;
+        u32 function_direct_tier_up_live_local_index_count = 0;
         if (input.direct_input.has_value()) {
             auto const& direct_input = input.direct_input.value();
             function_direct_insn_offset = direct_input.instructions.is_empty() ? 0 : static_cast<u32>(direct_insn_cursor);
@@ -1993,6 +2055,10 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             function_direct_branch_target_count = static_cast<u32>(direct_input.branch_targets.size());
             function_direct_locals_offset = direct_input.local_types.is_empty() ? 0 : static_cast<u32>(direct_locals_cursor);
             function_direct_local_count = static_cast<u32>(direct_input.local_types.size());
+            function_direct_tier_up_checkpoints_offset = direct_input.tier_up_checkpoints.is_empty() ? 0 : static_cast<u32>(direct_tier_up_checkpoints_cursor);
+            function_direct_tier_up_checkpoint_count = static_cast<u32>(direct_input.tier_up_checkpoints.size());
+            function_direct_tier_up_live_local_indices_offset = direct_input.tier_up_live_local_indices.is_empty() ? 0 : static_cast<u32>(direct_tier_up_live_local_indices_cursor);
+            function_direct_tier_up_live_local_index_count = static_cast<u32>(direct_input.tier_up_live_local_indices.size());
 
             if (!direct_input.instructions.is_empty())
                 __builtin_memcpy(base + direct_insn_cursor, direct_input.instructions.data(), direct_input.instructions.size() * sizeof(DirectInstruction));
@@ -2003,6 +2069,12 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             if (!direct_input.local_types.is_empty())
                 __builtin_memcpy(base + direct_locals_cursor, direct_input.local_types.data(), direct_input.local_types.size() * sizeof(DirectValueType));
             direct_locals_cursor += direct_input.local_types.size() * sizeof(DirectValueType);
+            if (!direct_input.tier_up_checkpoints.is_empty())
+                __builtin_memcpy(base + direct_tier_up_checkpoints_cursor, direct_input.tier_up_checkpoints.data(), direct_input.tier_up_checkpoints.size() * sizeof(DirectTierUpCheckpoint));
+            direct_tier_up_checkpoints_cursor += direct_input.tier_up_checkpoints.size() * sizeof(DirectTierUpCheckpoint);
+            if (!direct_input.tier_up_live_local_indices.is_empty())
+                __builtin_memcpy(base + direct_tier_up_live_local_indices_cursor, direct_input.tier_up_live_local_indices.data(), direct_input.tier_up_live_local_indices.size() * sizeof(u32));
+            direct_tier_up_live_local_indices_cursor += direct_input.tier_up_live_local_indices.size() * sizeof(u32);
         }
 
         auto* entry = reinterpret_cast<InputFunctionEntry*>(base + entries_offset + i * sizeof(InputFunctionEntry));
@@ -2016,6 +2088,10 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
             .direct_branch_target_count = function_direct_branch_target_count,
             .direct_locals_offset = function_direct_locals_offset,
             .direct_local_count = function_direct_local_count,
+            .direct_tier_up_checkpoints_offset = function_direct_tier_up_checkpoints_offset,
+            .direct_tier_up_checkpoint_count = function_direct_tier_up_checkpoint_count,
+            .direct_tier_up_live_local_indices_offset = function_direct_tier_up_live_local_indices_offset,
+            .direct_tier_up_live_local_index_count = function_direct_tier_up_live_local_index_count,
             .result_arity = input.result_arity,
             .num_locals = input.num_locals,
             .direct_num_locals = input.direct_num_locals,
