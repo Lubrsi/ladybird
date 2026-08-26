@@ -20,6 +20,7 @@ fn generate_opcodes(manifest_dir: &Path, out_dir: &Path) -> Result<(), Box<dyn E
     // Grab name, value, and stack operand counts from M(name, value, pops, pushes) lines.
     let re = regex::Regex::new(r"M\(\s*(\w+)\s*,\s*(0x[0-9a-fA-F]+)(?:[uUlL]+)?\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")?;
     let mut operand_count_arms = String::new();
+    let mut opcode_name_arms = String::new();
     for cap in re.captures_iter(&contents) {
         let cpp_name = &cap[1];
         let value = &cap[2];
@@ -34,15 +35,24 @@ fn generate_opcodes(manifest_dir: &Path, out_dir: &Path) -> Result<(), Box<dyn E
         if let Some(stripped) = name.strip_suffix('_') {
             name = stripped.to_string();
         }
-        let name = name.to_uppercase();
+        let opcode_name = name;
+        let constant_name = opcode_name.to_uppercase();
 
-        writeln!(output, "pub const {name}: u64 = {value};")?;
+        writeln!(output, "pub const {constant_name}: u64 = {value};")?;
         writeln!(operand_count_arms, "        {value} => Some(({inputs}, {outputs})),")?;
+        writeln!(opcode_name_arms, "        {value} => Some(\"{opcode_name}\"),")?;
     }
 
     writeln!(output, "pub fn operand_counts(opcode: u64) -> Option<(i8, i8)> {{")?;
     writeln!(output, "    match opcode {{")?;
     output.push_str(&operand_count_arms);
+    writeln!(output, "        _ => None,")?;
+    writeln!(output, "    }}")?;
+    writeln!(output, "}}")?;
+
+    writeln!(output, "pub fn opcode_name(opcode: u64) -> Option<&'static str> {{")?;
+    writeln!(output, "    match opcode {{")?;
+    output.push_str(&opcode_name_arms);
     writeln!(output, "        _ => None,")?;
     writeln!(output, "    }}")?;
     writeln!(output, "}}")?;
