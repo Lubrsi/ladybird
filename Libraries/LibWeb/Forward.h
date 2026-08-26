@@ -660,6 +660,10 @@ class Response;
 
 namespace Web::Fetch::Fetching {
 
+class BodyStreamPullSource;
+class FetchBodyDeliveryGate;
+class FetchByteChannel;
+class NetworkBodyPump;
 class PendingResponse;
 class RefCountedFlag;
 

@@ -413,9 +413,12 @@ set(SOURCES
     EventTiming/PerformanceEventTiming.cpp
     Fetch/Body.cpp
     Fetch/BodyInit.cpp
+    Fetch/Fetching/BodyStreamPullSource.cpp
     Fetch/Fetching/Checks.cpp
+    Fetch/Fetching/FetchBodyDeliveryGate.cpp
     Fetch/Fetching/FetchByteChannel.cpp
     Fetch/Fetching/FetchedDataReceiver.cpp
+    Fetch/Fetching/NetworkBodyPump.cpp
     Fetch/Fetching/Fetching.cpp
     Fetch/Fetching/PendingResponse.cpp
     Fetch/Fetching/RefCountedFlag.cpp

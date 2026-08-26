@@ -241,6 +241,7 @@ static GC::Ptr<Fetch::Infrastructure::Body> adopt_navigation_response_body(JS::R
         .client_id = handle.request_server_client_id,
         .request_id = handle.request_server_request_id,
         .request = request,
+        .body_delivery_gate = nullptr,
     });
     return body;
 }

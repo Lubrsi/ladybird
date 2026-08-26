@@ -12,6 +12,7 @@ set(TEST_SOURCES
     TestDownloadReader.cpp
     TestDump.cpp
     TestEventLoop.cpp
+    TestFetchBodyDeliveryGate.cpp
     TestFetchByteChannel.cpp
     TestFetchResponse.cpp
     TestFetchURL.cpp

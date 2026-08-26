@@ -22,6 +22,7 @@
 #include <LibRequests/Request.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Export.h>
+#include <LibWeb/Fetch/Fetching/FetchBodyDeliveryGate.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Statuses.h>
@@ -67,6 +68,10 @@ public:
         int client_id { -1 };
         u64 request_id { 0 };
         RefPtr<Requests::Request> request;
+        // Present when body delivery is flow-controlled by a FetchByteChannel; the navigation
+        // hold releases route through it so they compose with channel credit instead of
+        // resuming the transport unboundedly past it.
+        RefPtr<Fetching::FetchBodyDeliveryGate> body_delivery_gate;
     };
 
     [[nodiscard]] static GC::Ref<Response> create();

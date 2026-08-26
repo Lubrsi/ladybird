@@ -25,9 +25,12 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Fetch/BodyInit.h>
+#include <LibWeb/Fetch/Fetching/BodyStreamPullSource.h>
 #include <LibWeb/Fetch/Fetching/Checks.h>
-#include <LibWeb/Fetch/Fetching/FetchedDataReceiver.h>
+#include <LibWeb/Fetch/Fetching/FetchBodyDeliveryGate.h>
+#include <LibWeb/Fetch/Fetching/FetchByteChannel.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
+#include <LibWeb/Fetch/Fetching/NetworkBodyPump.h>
 #include <LibWeb/Fetch/Fetching/PendingResponse.h>
 #include <LibWeb/Fetch/Fetching/RefCountedFlag.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
@@ -2219,28 +2222,35 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     auto stream = GC::Heap::the().allocate<Streams::ReadableStream>();
 
     // 9. Let buffer be an empty byte sequence.
-    auto fetched_data_receiver = GC::Heap::the().allocate<FetchedDataReceiver>(fetch_params, stream, move(http_cache));
+    // NOTE: The buffer is the FetchByteChannel; its watermarks are the user-agent-chosen lower
+    //       and upper limits of steps 16.1.1.2.8 and the pullAlgorithm. Navigation responses
+    //       start held so document loading controls when body bytes may flow at all.
+    static constexpr FetchByteChannel::Watermarks network_body_watermarks { .low = 64 * KiB, .high = 256 * KiB };
+    auto navigation_hold = fetch_params.has_response_body_transfer_lease()
+        ? FetchBodyDeliveryGate::NavigationHold::Held
+        : FetchBodyDeliveryGate::NavigationHold::None;
+    auto delivery_gate = FetchBodyDeliveryGate::create(navigation_hold);
+    auto wake_sink = BodyStreamWakeSink::create();
+    auto channel = FetchByteChannel::create(network_body_watermarks, wake_sink, delivery_gate->create_channel_sink());
+    delivery_gate->grant_credit(channel->initial_credit());
+
+    auto body_pump = GC::Heap::the().allocate<NetworkBodyPump>(fetch_params, channel, delivery_gate, move(http_cache));
+    auto pull_source = GC::Heap::the().allocate<BodyStreamPullSource>(fetch_params, stream, channel, *wake_sink);
 
     // 11. Let pullAlgorithm be the following steps:
-    auto pull_algorithm = GC::create_function(GC::Heap::the(), [&realm]() {
-        // 1. Let promise be a new promise.
-        // 2. Run the following steps in parallel:
-        // NOTE: This is handled by FetchedDataReceiver, which pushes bytes into the controller as they arrive.
-
-        // 3. Return promise.
-        return WebIDL::create_resolved_promise(realm, JS::js_undefined());
+    auto pull_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source]() {
+        return pull_source->pull(realm);
     });
 
     // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s controller with reason, given reason.
-    auto cancel_algorithm = GC::create_function(GC::Heap::the(), [&realm, &fetch_params](JS::Value reason) {
-        fetch_params.controller()->abort(realm, reason);
-        return WebIDL::create_resolved_promise(realm, JS::js_undefined());
+    auto cancel_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source](JS::Value reason) {
+        return pull_source->cancel(realm, reason);
     });
 
     // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
     stream->set_up_with_byte_reading_support(realm, pull_algorithm, cancel_algorithm);
 
-    auto on_headers_received = GC::create_function(GC::Heap::the(), [pending_response, stream, request, fetched_data_receiver](Requests::Request* request_server_request, HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::ImmutableBytes> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key, Requests::CameFromCache) {
+    auto on_headers_received = GC::create_function(GC::Heap::the(), [pending_response, stream, request, body_pump, delivery_gate](Requests::Request* request_server_request, HTTP::HeaderList const& response_headers, Optional<u32> status_code, Optional<String> const& reason_phrase, Optional<Core::ImmutableBytes> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key, Requests::CameFromCache) {
         if (pending_response->is_resolved()) {
             // RequestServer will send us the response headers twice, the second time being for HTTP trailers. This
             // fetch algorithm is not interested in trailers, so just drop them here.
@@ -2259,6 +2269,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
                 .client_id = request_server_request->request_server_client_id(),
                 .request_id = request_server_request->id(),
                 .request = RefPtr<Requests::Request> { request_server_request },
+                .body_delivery_gate = delivery_gate,
             });
         }
 
@@ -2274,12 +2285,12 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         for (auto const& [name, value] : response_headers.headers())
             response->header_list()->append({ name, value });
 
-        fetched_data_receiver->set_response(response);
+        body_pump->set_response(response);
 
         // 14. Set response’s body to a new body whose stream is stream.
         auto body = Infrastructure::Body::create(stream);
         response->set_body(body);
-        fetched_data_receiver->set_body(body);
+        body_pump->set_body(body);
 
         // 17. Return response.
         // NOTE: Typically response’s body’s stream is still being enqueued to after returning.
@@ -2288,40 +2299,50 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
 
     // 16. Run these steps in parallel:
     //     FIXME: 1. Run these steps, but abort when fetchParams is canceled:
-    auto on_data_received = GC::create_function(GC::Heap::the(), [&realm, fetched_data_receiver](Requests::ResponseData data) {
-        fetched_data_receiver->handle_network_data(realm, move(data), FetchedDataReceiver::NetworkState::Ongoing);
+    auto on_data_received = GC::create_function(GC::Heap::the(), [body_pump](Requests::ResponseData data) {
+        body_pump->handle_network_data(move(data));
     });
 
-    auto on_cached_body_available = GC::create_function(GC::Heap::the(), [fetched_data_receiver](Core::ImmutableBytes data) {
-        fetched_data_receiver->set_cached_response_body(move(data));
+    auto on_cached_body_available = GC::create_function(GC::Heap::the(), [body_pump](Core::ImmutableBytes data) {
+        body_pump->set_cached_response_body(move(data));
     });
 
-    auto on_complete = GC::create_function(GC::Heap::the(), [&realm, pending_response, stream, fetched_data_receiver](bool success, Requests::RequestTimingInfo const&, Optional<StringView> error_message) {
+    auto on_complete = GC::create_function(GC::Heap::the(), [&realm, pending_response, body_pump, pull_source, delivery_gate](bool success, Requests::RequestTimingInfo const&, Optional<StringView> error_message) {
         // FIXME: Implement on_complete timing info for unbuffered requests
         HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
+        // Breaks the transport → teardown-hook → gate reference cycle for requests that finish
+        // normally, where on_teardown never fires.
+        delivery_gate->detach_transport();
+
         if (success) {
-            fetched_data_receiver->handle_network_data(realm, Requests::ResponseData::from_bytes({}), FetchedDataReceiver::NetworkState::Complete);
+            body_pump->handle_network_complete();
         } else {
-            fetched_data_receiver->handle_network_data(realm, Requests::ResponseData::from_bytes({}), FetchedDataReceiver::NetworkState::Error);
-
             // 16.1.2.2. Otherwise, if stream is readable, error stream with a TypeError.
+            // NOTE: The channel carries the error to the stream through the pull source.
             auto error = Utf16String::formatted("Load failed: {}", error_message.value_or("Unknown error"sv));
-
-            if (stream->is_readable())
-                stream->error(JS::TypeError::create(realm, error));
+            body_pump->handle_network_error(error.to_utf8_but_should_be_ported_to_utf16());
 
             if (!pending_response->is_resolved())
                 pending_response->resolve(Infrastructure::Response::network_error(error.to_utf8_but_should_be_ported_to_utf16()));
         }
+
+        pull_source->handle_network_settled();
     });
 
     auto transfer_lease = fetch_params.has_response_body_transfer_lease()
         ? Requests::RequestClient::TransferLease::Yes
         : Requests::RequestClient::TransferLease::No;
     auto network_request = ResourceLoader::the().load(load_request, on_headers_received, on_data_received, on_cached_body_available, on_complete, transfer_lease);
-    if (network_request && fetch_params.has_response_body_transfer_lease())
-        network_request->set_body_delivery_paused(true);
+    if (network_request) {
+        delivery_gate->attach_transport(*network_request);
+        // The gate must detach before the cancel reaches it, or the cancellation would stop a
+        // transferred transport out from under its new owner.
+        network_request->on_teardown = [delivery_gate, channel](Requests::Request::TeardownReason) {
+            delivery_gate->detach_transport();
+            channel->cancel();
+        };
+    }
     fetch_params.controller()->set_pending_request(network_request);
 
     return pending_response;
