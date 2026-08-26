@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // A navigation response that dies mid-body must not satisfy the MIME-sniff wait with its
+    // partial bytes: no document may be created from the truncated body, and the navigation
+    // settles without one.
+    asyncTest(async done => {
+        const server = httpTestServer();
+        const body = "<!DOCTYPE html><span id='partial'>partial</span>" + "x".repeat(967);
+        const url = await server.createEcho("GET", "/mid-body-navigation-failure", {
+            status: 200,
+            headers: {
+                "Content-Length": "100000",
+                "Content-Type": "text/html",
+            },
+            body,
+        });
+
+        const frame = document.createElement("iframe");
+        let loaded = false;
+        frame.addEventListener("load", () => (loaded = true));
+        frame.src = `${url}?chunks=512,503&chunk_delay_ms=100`;
+        document.body.appendChild(frame);
+
+        await new Promise(resolve => setTimeout(resolve, 2500));
+        println(`iframe produced a document from the partial body: ${loaded}`);
+        const stayed = frame.contentDocument !== null && frame.contentDocument.querySelector("#partial") === null;
+        println(`iframe stayed on its initial document: ${stayed}`);
+        done();
+    });
+</script>
