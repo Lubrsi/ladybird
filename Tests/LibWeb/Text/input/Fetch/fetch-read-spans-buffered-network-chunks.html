@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // Network chunks that are buffered together must reach the consumer as one logical byte
+    // sequence: the body arrives as three transport chunks (10+27+27), the delivery pipe's
+    // eager pull consumes at most the first, and after the rest are co-buffered a single read
+    // returns them as one chunk — never one read per transport chunk.
+    // FIXME: Also cover a BYOB view spanning a chunk boundary once response bodies are
+    //        JS-visible byte streams (today the end-of-body identity pipe's readable side is
+    //        not one).
+    asyncTest(async done => {
+        const httpServer = httpTestServer();
+        const body = "abcdefghij" + "K".repeat(27) + "L".repeat(27);
+
+        const url = await httpServer.createEcho("GET", "/buffered-chunks", {
+            status: 200,
+            headers: {
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/octet-stream",
+            },
+            body,
+        });
+
+        const response = await fetch(`${url}?chunks=10,27,27&chunk_delay_ms=300`);
+        await new Promise(resolve => setTimeout(resolve, 1200));
+
+        const reader = response.body.getReader();
+        let reads = 0;
+        let received = new Uint8Array(0);
+        for (;;) {
+            const { value, done: streamDone } = await reader.read();
+            if (streamDone) break;
+            reads++;
+            const merged = new Uint8Array(received.length + value.length);
+            merged.set(received);
+            merged.set(value, received.length);
+            received = merged;
+        }
+        println(`reads coalesce co-buffered chunks: ${reads <= 2}`);
+        println(`content matches: ${new TextDecoder().decode(received) === body}`);
+
+        done();
+    });
+</script>

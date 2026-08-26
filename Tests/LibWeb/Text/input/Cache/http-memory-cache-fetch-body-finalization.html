@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // The cache entry for a fetched body is finalized by the producer when the network delivery
+    // completes — not by the consumer reading it. An unread success must still fill the cache,
+    // while a cancelled or failed delivery must leave no entry behind.
+    //
+    // The Accept marker rides each request (CORS-safelisted, and these responses have no Vary),
+    // so the server-side record of the last-seen marker distinguishes a hit from a miss.
+    asyncTest(async done => {
+        const server = httpTestServer();
+        const cacheableHeaders = {
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "max-age=500",
+            "Content-Type": "application/octet-stream",
+        };
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const lastSeenMarker = async path => {
+            const response = await fetch(`${server.baseURL}/recorded-request-headers/echo${path}`);
+            return (await response.json())["Accept"][0];
+        };
+
+        // An unread successful response still finalizes the cache entry: no fetch in this loop
+        // ever reads its body, so the first check that reports a hit proves producer-side
+        // finalization.
+        {
+            const body = "unread but cacheable";
+            const url = await server.createEcho("GET", "/cache-finalize/unread", {
+                status: 200,
+                headers: cacheableHeaders,
+                body,
+            });
+
+            await fetch(url, { mode: "cors", headers: { Accept: "initial" } });
+
+            // A check served from the cache never reaches the server, so its unique marker
+            // stays unseen; a check that missed is itself an unread delivery and finalizes too.
+            let hitBody = null;
+            for (let attempt = 1; attempt <= 20 && hitBody === null; ++attempt) {
+                await delay(250);
+                const check = await fetch(url, { mode: "cors", headers: { Accept: `check-${attempt}` } });
+                if ((await lastSeenMarker("/cache-finalize/unread")) !== `check-${attempt}`)
+                    hitBody = await check.text();
+            }
+            println(`unread success served from cache: ${hitBody !== null}`);
+            println(`unread success content matches: ${hitBody === body}`);
+        }
+
+        // A consumer-cancelled delivery leaves no entry.
+        {
+            const body = "abcdefghij" + "K".repeat(54);
+            const url = await server.createEcho("GET", "/cache-finalize/cancelled", {
+                status: 200,
+                headers: cacheableHeaders,
+                body,
+            });
+            const chunkedUrl = `${url}?chunks=10,54&chunk_delay_ms=400`;
+
+            const cancelled = await fetch(chunkedUrl, { mode: "cors", headers: { Accept: "probe-1" } });
+            await cancelled.body.cancel();
+            await delay(700);
+
+            const response = await fetch(chunkedUrl, { mode: "cors", headers: { Accept: "probe-2" } });
+            println(`post-cancel refetch content matches: ${(await response.text()) === body}`);
+            println(
+                `cancelled delivery left no entry: ${(await lastSeenMarker("/cache-finalize/cancelled")) === "probe-2"}`
+            );
+        }
+
+        // A delivery that fails mid-body leaves no entry.
+        {
+            const url = await server.createEcho("GET", "/cache-finalize/network-error", {
+                status: 200,
+                headers: { ...cacheableHeaders, "Content-Length": "100000" },
+                body: "far too short",
+            });
+
+            for (const marker of ["probe-1", "probe-2"]) {
+                try {
+                    const response = await fetch(url, { mode: "cors", headers: { Accept: marker } });
+                    await response.text();
+                    println(`${marker} unexpectedly succeeded`);
+                } catch {
+                    println(`${marker} failed mid-body`);
+                }
+            }
+            println(
+                `failed delivery left no entry: ${(await lastSeenMarker("/cache-finalize/network-error")) === "probe-2"}`
+            );
+        }
+
+        done();
+    });
+</script>
