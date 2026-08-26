@@ -66,7 +66,7 @@ TEST_CASE(commands_round_trip_their_payloads)
             },
             [&](Command::PreloadResponseResolved const& preload) {
                 auto const& completed = preload.response.outcome.get<Command::CompletedPreloadResponse::Completed>();
-                EXPECT_EQ(completed.body.handle().bytes(), "preloaded"sv.bytes());
+                EXPECT_EQ(completed.body.handle().get<Core::ImmutableBytes>().bytes(), "preloaded"sv.bytes());
                 seen_ids.append(preload.fetch_id.value());
             },
             [&](Command::TransportControl const& control) {
@@ -100,6 +100,29 @@ TEST_CASE(adopt_network_transport_owns_its_handle)
 TEST_CASE(delivered_body_requires_a_valid_handle)
 {
     EXPECT_DEATH("a delivered body is never null", (void)Delivered<NonNullLocalBodyHandle> { Core::ImmutableBytes {} });
+}
+
+namespace {
+
+class IgnoringConsumerSink final : public FetchByteChannelConsumerSink {
+    virtual void wake(WakeTicket) override { }
+};
+
+class IgnoringProducerSink final : public FetchByteChannelProducerSink {
+    virtual void grant_credit(u64) override { }
+    virtual void consumer_cancelled() override { }
+};
+
+}
+
+TEST_CASE(delivered_body_carries_a_channel_still_being_written)
+{
+    auto channel = FetchByteChannel::create({ .low = 1, .high = 2 }, adopt_ref(*new IgnoringConsumerSink), adopt_ref(*new IgnoringProducerSink));
+    LocalBodyPresentation body = Delivered<NonNullLocalBodyHandle> { channel };
+
+    auto const& delivered = body.get<Delivered<NonNullLocalBodyHandle>>();
+    EXPECT(delivered.handle().has<NonnullRefPtr<FetchByteChannel>>());
+    EXPECT_EQ(delivered.handle().get<NonnullRefPtr<FetchByteChannel>>().ptr(), channel.ptr());
 }
 
 TEST_CASE(events_round_trip_their_payloads)

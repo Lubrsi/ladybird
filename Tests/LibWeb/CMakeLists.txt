@@ -13,6 +13,7 @@ set(TEST_SOURCES
     TestDownloadReader.cpp
     TestDump.cpp
     TestEventLoop.cpp
+    TestFetchByteChannel.cpp
     TestFetchEngineMessages.cpp
     TestFetchExecutor.cpp
     TestFetchResponse.cpp
@@ -84,6 +85,7 @@ endif()
 target_link_libraries(TestSiteCompatibility PRIVATE LibURL)
 target_link_libraries(TestDisplayListCommandRuns PRIVATE LibGfx)
 target_link_libraries(TestDownloadReader PRIVATE LibGC LibJS LibURL)
+target_link_libraries(TestFetchByteChannel PRIVATE LibThreading)
 target_link_libraries(TestFetchResponse PRIVATE LibGC LibHTTP LibJS LibRequests LibURL)
 target_link_libraries(TestFetchURL PRIVATE LibURL)
 target_link_libraries(TestImageData PRIVATE LibGC LibJS)
