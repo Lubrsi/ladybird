@@ -146,6 +146,11 @@ struct DirectMemoryManagementHelpers {
 pub(crate) struct DirectCompiler;
 
 impl DirectCompiler {
+    fn instruction_error(instruction_index: usize, opcode: u64, reason: &'static str) -> String {
+        let opcode_name = op::opcode_name(opcode).unwrap_or("unknown");
+        format!("instruction {instruction_index} ({opcode_name}, opcode {opcode:#x}): {reason}")
+    }
+
     fn host_isa() -> Result<OwnedTargetIsa, &'static str> {
         let mut flag_builder = settings::builder();
         flag_builder.set("opt_level", "speed").unwrap();
@@ -988,7 +993,7 @@ impl DirectCompiler {
         input: DirectCompilerInput<'_>,
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
-    ) -> Result<CompiledFunction, &'static str> {
+    ) -> Result<CompiledFunction, String> {
         let function_index = usize::try_from(options.function_index).map_err(|_| "direct function index overflow")?;
         let function_types = input.function_types;
         let function_type = *function_types
@@ -1016,20 +1021,26 @@ impl DirectCompiler {
             let fallback = Self::compile_interpreter_call_fallback(&*isa, target_index, target_type, layout)?;
             fallback_functions.push((target_index, fallback));
         }
-        Self::combine_fresh_entry_adapter(adapter, body, fallback_functions)
+        Ok(Self::combine_fresh_entry_adapter(adapter, body, fallback_functions)?)
     }
 
     pub(crate) fn compile_osr_to_bytes(
         input: DirectCompilerInput<'_>,
-        interpreter_instructions: &[crate::CraneliftInsn],
+        allocated_instructions: &[crate::CraneliftInsn],
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
-    ) -> Result<CompiledFunction, &'static str> {
+    ) -> Result<CompiledFunction, String> {
         if input.tier_up_checkpoints.is_empty() {
-            return Err("direct OSR compilation requires a tier-up checkpoint");
+            return Err("direct OSR compilation requires a tier-up checkpoint".into());
         }
 
         let local_count = usize::try_from(options.num_locals).map_err(|_| "direct local count overflow")?;
+        // The allocated-frontend stream expands br_table with compiler-only continuation records.
+        // Tier-up descriptors use interpreter dispatch indices, where those records do not exist.
+        let interpreter_dispatches = allocated_instructions
+            .iter()
+            .filter(|instruction| instruction.opcode != op::SYNTHETIC_BR_TABLE_CONT)
+            .collect::<Vec<_>>();
         let mut checkpoints = Vec::with_capacity(input.tier_up_checkpoints.len());
         let mut dispatch_indices = HashMap::with_capacity(input.tier_up_checkpoints.len());
         for (checkpoint_index, &serialized_checkpoint) in input.tier_up_checkpoints.iter().enumerate() {
@@ -1037,21 +1048,21 @@ impl DirectCompiler {
             let expected_checkpoint_id =
                 u32::try_from(checkpoint_index).map_err(|_| "tier-up checkpoint count overflow")?;
             if checkpoint.checkpoint_id != expected_checkpoint_id {
-                return Err("tier-up checkpoint IDs are not contiguous");
+                return Err("tier-up checkpoint IDs are not contiguous".into());
             }
             if dispatch_indices
                 .insert(checkpoint.interpreter_dispatch_index, ())
                 .is_some()
             {
-                return Err("duplicate tier-up interpreter dispatch index");
+                return Err("duplicate tier-up interpreter dispatch index".into());
             }
             let interpreter_dispatch_index = usize::try_from(checkpoint.interpreter_dispatch_index)
                 .map_err(|_| "tier-up interpreter dispatch index overflow")?;
-            let interpreter_instruction = interpreter_instructions
+            let interpreter_instruction = interpreter_dispatches
                 .get(interpreter_dispatch_index)
                 .ok_or("tier-up interpreter dispatch index is out of bounds")?;
             if interpreter_instruction.opcode != op::SYNTHETIC_TIER_UP {
-                return Err("tier-up interpreter dispatch does not name synthetic_tier_up");
+                return Err("tier-up interpreter dispatch does not name synthetic_tier_up".into());
             }
             checkpoints.push(checkpoint);
         }
@@ -1079,7 +1090,7 @@ impl DirectCompiler {
             let fallback = Self::compile_interpreter_call_fallback(&*isa, target_index, target_type, layout)?;
             fallback_functions.push((target_index, fallback));
         }
-        Self::combine_osr_body(body, fallback_functions)
+        Ok(Self::combine_osr_body(body, fallback_functions)?)
     }
 
     fn compile_clean_body(
@@ -1087,7 +1098,7 @@ impl DirectCompiler {
         layout: &SerializedRuntimeLayout,
         options: FunctionCompilationOptions,
         isa: &dyn TargetIsa,
-    ) -> Result<CompiledCodeParts, &'static str> {
+    ) -> Result<CompiledCodeParts, String> {
         Self::compile_body(input, layout, options, isa, DirectBodyFlavor::Clean)
     }
 
@@ -1097,7 +1108,7 @@ impl DirectCompiler {
         options: FunctionCompilationOptions,
         isa: &dyn TargetIsa,
         checkpoints: &[TierUpCheckpoint],
-    ) -> Result<CompiledCodeParts, &'static str> {
+    ) -> Result<CompiledCodeParts, String> {
         Self::compile_body(input, layout, options, isa, DirectBodyFlavor::Osr(checkpoints))
     }
 
@@ -1107,7 +1118,7 @@ impl DirectCompiler {
         options: FunctionCompilationOptions,
         isa: &dyn TargetIsa,
         flavor: DirectBodyFlavor<'_>,
-    ) -> Result<CompiledCodeParts, &'static str> {
+    ) -> Result<CompiledCodeParts, String> {
         let DirectCompilerInput {
             instructions,
             branch_targets,
@@ -1126,10 +1137,10 @@ impl DirectCompiler {
             .get(function_index)
             .ok_or("missing direct function type")?;
         if function_type.parameters.len() != num_params || function_type.results.len() != result_arity {
-            return Err("direct function type does not match compilation options");
+            return Err("direct function type does not match compilation options".into());
         }
         if function_type.parameters.len() + declared_local_types.len() != num_locals {
-            return Err("direct local type count does not match compilation options");
+            return Err("direct local type count does not match compilation options".into());
         }
 
         let pointer_type = isa.pointer_type();
@@ -1207,13 +1218,13 @@ impl DirectCompiler {
                     .get(checkpoint.loop_instruction_index)
                     .ok_or("tier-up loop instruction is out of bounds")?;
                 if instruction.opcode != op::LOOP {
-                    return Err("tier-up checkpoint does not name a loop");
+                    return Err("tier-up checkpoint does not name a loop".into());
                 }
                 if osr_loop_headers
                     .insert(checkpoint.loop_instruction_index, builder.create_block())
                     .is_some()
                 {
-                    return Err("duplicate tier-up loop checkpoint");
+                    return Err("duplicate tier-up loop checkpoint".into());
                 }
             }
         }
@@ -1407,7 +1418,8 @@ impl DirectCompiler {
             match instruction.opcode {
                 op::BLOCK | op::LOOP | op::IF => {
                     let arguments = instruction.structured()?;
-                    let result_types = Self::block_results(arguments.block_type)?;
+                    let result_types = Self::block_results(arguments.block_type)
+                        .map_err(|reason| Self::instruction_error(instruction_index, instruction.opcode, reason))?;
                     let continuation = builder.create_block();
                     for &result_type in &result_types {
                         builder.append_block_param(continuation, result_type);
@@ -1478,7 +1490,7 @@ impl DirectCompiler {
                 op::ELSE => {
                     let frame = control_stack.last_mut().ok_or("direct else without control frame")?;
                     if frame.kind != ControlKind::If || frame.else_was_seen {
-                        return Err("invalid direct else");
+                        return Err("invalid direct else".into());
                     }
                     if is_reachable {
                         let arguments = Self::result_arguments(&builder, &mut operand_stack, &frame.result_types)?;
@@ -1497,7 +1509,7 @@ impl DirectCompiler {
                 op::END => {
                     if let Some(mut frame) = control_stack.pop() {
                         if frame.else_block.is_some() && !frame.else_was_seen {
-                            return Err("direct if is missing else");
+                            return Err("direct if is missing else".into());
                         }
                         if is_reachable {
                             let arguments = Self::result_arguments(&builder, &mut operand_stack, &frame.result_types)?;
@@ -1551,7 +1563,7 @@ impl DirectCompiler {
                         let results = Self::result_values(&builder, &mut operand_stack, &result_types)?;
                         Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                     } else {
-                        return Err("invalid direct branch label");
+                        return Err("invalid direct branch label".into());
                     }
                     is_reachable = false;
                 }
@@ -1588,7 +1600,7 @@ impl DirectCompiler {
                         let results = Self::result_values(&builder, &mut return_stack, &result_types)?;
                         Self::emit_body_return(&mut builder, &results, function_type.results, flavor, runtime)?;
                     } else {
-                        return Err("invalid direct branch label");
+                        return Err("invalid direct branch label".into());
                     }
                     builder.switch_to_block(fallthrough);
                     builder.seal_block(fallthrough);
@@ -1692,7 +1704,7 @@ impl DirectCompiler {
                     let rhs = operand_stack.pop().ok_or("direct operand stack underflow")?;
                     let lhs = operand_stack.pop().ok_or("direct operand stack underflow")?;
                     if Self::value_type(&builder, lhs) != Self::value_type(&builder, rhs) {
-                        return Err("direct select operand type mismatch");
+                        return Err("direct select operand type mismatch".into());
                     }
                     let condition = builder.ins().icmp_imm_s(IntCC::NotEqual, condition, 0);
                     operand_stack.push(builder.ins().select(condition, lhs, rhs));
@@ -1728,7 +1740,7 @@ impl DirectCompiler {
                         Self::pop_expected(&builder, &mut operand_stack, expected_type)?
                     };
                     if Self::value_type(&builder, value) != expected_type {
-                        return Err("direct local type mismatch");
+                        return Err("direct local type mismatch".into());
                     }
                     builder.def_var(variable, value);
                 }
@@ -1796,14 +1808,18 @@ impl DirectCompiler {
                         .flatten()
                         .ok_or("direct indirect-call type is not a function type")?;
                     if target_type.results.len() > 1 {
-                        return Err("multi-value direct indirect-call fallback is not yet supported");
+                        return Err(Self::instruction_error(
+                            instruction_index,
+                            instruction.opcode,
+                            "multi-value direct indirect-call fallback is not yet supported",
+                        ));
                     }
 
                     let raw_element_index = operand_stack.pop().ok_or("direct operand stack underflow")?;
                     let element_index = match Self::value_type(&builder, raw_element_index) {
                         types::I32 => builder.ins().uextend(types::I64, raw_element_index),
                         types::I64 => raw_element_index,
-                        _ => return Err("direct indirect-call table index type mismatch"),
+                        _ => return Err("direct indirect-call table index type mismatch".into()),
                     };
                     let parameter_types = target_type
                         .parameters
@@ -2611,16 +2627,20 @@ impl DirectCompiler {
                     builder.ins().store(memory_flags.linear_memory, value, address, 0);
                 }
                 _ => {
-                    return Err("unsupported direct instruction");
+                    return Err(Self::instruction_error(
+                        instruction_index,
+                        instruction.opcode,
+                        "unsupported direct instruction",
+                    ));
                 }
             }
         }
 
         if !function_ended || !control_stack.is_empty() {
-            return Err("unterminated direct function");
+            return Err("unterminated direct function".into());
         }
         builder.finalize(isa.frontend_config());
-        compile_function(isa, function)
+        Ok(compile_function(isa, function)?)
     }
 }
 
@@ -2714,8 +2734,16 @@ mod tests {
     }
 
     fn interpreter_stream_with_tier_up() -> (Vec<crate::CraneliftInsn>, u32) {
-        let mut instructions = vec![allocated_instruction(op::NOP)];
-        let tier_up_index = u32::try_from(instructions.len()).expect("test instruction index should fit in u32");
+        let mut instructions = vec![
+            allocated_instruction(op::NOP),
+            allocated_instruction(op::SYNTHETIC_BR_TABLE_CONT),
+        ];
+        let tier_up_index = instructions
+            .iter()
+            .filter(|instruction| instruction.opcode != op::SYNTHETIC_BR_TABLE_CONT)
+            .count()
+            .try_into()
+            .expect("test instruction index should fit in u32");
         instructions.push(allocated_instruction(op::SYNTHETIC_TIER_UP));
         (instructions, tier_up_index)
     }
@@ -2802,13 +2830,51 @@ mod tests {
         assert!(!osr.traps.is_empty());
 
         let mut mismatched_interpreter_instructions = interpreter_instructions;
-        let tier_up_index = usize::try_from(interpreter_dispatch_index).expect("test instruction index should fit");
+        let tier_up_index = mismatched_interpreter_instructions
+            .iter()
+            .position(|instruction| instruction.opcode == op::SYNTHETIC_TIER_UP)
+            .expect("test stream should contain a tier-up instruction");
         mismatched_interpreter_instructions[tier_up_index].opcode = op::NOP;
         let error =
             DirectCompiler::compile_osr_to_bytes(osr_input, &mismatched_interpreter_instructions, &layout, options)
                 .err()
                 .expect("mismatched interpreter checkpoint should be rejected");
         assert_eq!(error, "tier-up interpreter dispatch does not name synthetic_tier_up");
+    }
+
+    #[test]
+    fn reports_unsupported_direct_instruction_context() {
+        let instructions = [no_arguments(op::TABLE_GET), no_arguments(op::END)];
+        let function_types = [WasmFunctionType {
+            parameters: &[],
+            results: &[],
+        }];
+        let input = DirectCompilerInput {
+            instructions: &instructions,
+            branch_targets: &[],
+            local_types: &[],
+            tier_up_checkpoints: &[],
+            tier_up_live_local_indices: &[],
+            function_types: &function_types,
+            module_types: &[],
+            global_types: &[],
+        };
+        let options = FunctionCompilationOptions {
+            result_arity: 0,
+            num_locals: 0,
+            num_params: 0,
+            function_index: 0,
+            max_call_rec_size: 0,
+        };
+
+        let error = DirectCompiler::compile_to_bytes(input, &runtime_layout(), options)
+            .err()
+            .expect("unsupported direct instruction should be rejected");
+
+        assert_eq!(
+            error,
+            "instruction 0 (table_get, opcode 0x25): unsupported direct instruction"
+        );
     }
 
     #[test]
