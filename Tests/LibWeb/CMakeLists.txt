@@ -10,6 +10,7 @@ set(TEST_SOURCES
     TestDownloadReader.cpp
     TestDump.cpp
     TestEventLoop.cpp
+    TestFetchByteChannel.cpp
     TestFetchEngineMessages.cpp
     TestFetchExecutor.cpp
     TestFetchResponse.cpp
@@ -69,6 +70,7 @@ if (NOT WIN32)
     target_link_libraries(TestCSSSyntaxParser PRIVATE LibThreading)
 endif()
 target_link_libraries(TestDownloadReader PRIVATE LibGC LibJS LibURL)
+target_link_libraries(TestFetchByteChannel PRIVATE LibThreading)
 target_link_libraries(TestFetchResponse PRIVATE LibGC LibHTTP LibJS LibRequests LibURL)
 target_link_libraries(TestFetchURL PRIVATE LibURL)
 target_link_libraries(TestImageData PRIVATE LibGC LibJS)
