@@ -338,15 +338,15 @@ pub fn compile_direct_to_bytes(
     input: DirectCompilerInput<'_>,
     layout: &RuntimeLayout,
     options: FunctionCompilationOptions,
-) -> Result<CompiledFunction, &'static str> {
+) -> Result<CompiledFunction, String> {
     compiler::direct::DirectCompiler::compile_to_bytes(input, layout, options)
 }
 
 pub fn compile_direct_osr_to_bytes(
     input: DirectCompilerInput<'_>,
-    interpreter_instructions: &[CraneliftInsn],
+    allocated_instructions: &[CraneliftInsn],
     layout: &RuntimeLayout,
     options: FunctionCompilationOptions,
-) -> Result<CompiledFunction, &'static str> {
-    compiler::direct::DirectCompiler::compile_osr_to_bytes(input, interpreter_instructions, layout, options)
+) -> Result<CompiledFunction, String> {
+    compiler::direct::DirectCompiler::compile_osr_to_bytes(input, allocated_instructions, layout, options)
 }

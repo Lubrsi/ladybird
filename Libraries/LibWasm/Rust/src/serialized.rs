@@ -630,7 +630,7 @@ fn compile_direct_entry(
     function_types: &[WasmFunctionType<'_>],
     module_types: &[Option<DirectFunctionType<'_>>],
     global_types: &[DirectValueType],
-) -> Result<(CompiledFunction, Option<CompiledFunction>), &'static str> {
+) -> Result<(CompiledFunction, Option<CompiledFunction>), String> {
     let direct_input = read_direct_input(input, entry, function_types, module_types, global_types)?;
     let options = compilation_options(entry, entry.direct_num_locals);
     let clean = compile_direct_to_bytes(direct_input, layout, options)?;
@@ -638,8 +638,8 @@ fn compile_direct_entry(
         return Ok((clean, None));
     }
 
-    let interpreter_instructions = read_pod_slice::<CraneliftInsn>(input, entry.insn_offset, entry.insn_count)?;
-    let osr = match compile_direct_osr_to_bytes(direct_input, interpreter_instructions, layout, options) {
+    let allocated_instructions = read_pod_slice::<CraneliftInsn>(input, entry.insn_offset, entry.insn_count)?;
+    let osr = match compile_direct_osr_to_bytes(direct_input, allocated_instructions, layout, options) {
         Ok(compiled) => Some(compiled),
         Err(error) => {
             if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
@@ -673,15 +673,27 @@ fn compile_entry(
                 Err(error) => {
                     if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
                         eprintln!(
-                            "direct compilation of function {} failed: {error}; using allocated-bytecode frontend",
+                            "direct compilation of function {} failed: {error}; trying allocated-bytecode frontend",
                             entry.function_index
                         );
                     }
-                    compile_allocated_bytecode_entry(input, entry, layout, function_types).map(|clean| CompiledEntry {
-                        frontend: CraneliftFrontend::AllocatedBytecode,
-                        clean,
-                        osr: None,
-                    })
+                    match compile_allocated_bytecode_entry(input, entry, layout, function_types) {
+                        Ok(clean) => Ok(CompiledEntry {
+                            frontend: CraneliftFrontend::AllocatedBytecode,
+                            clean,
+                            osr: None,
+                        }),
+                        Err(allocated_error) => {
+                            if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
+                                eprintln!(
+                                    "allocated-bytecode compilation of function {} also failed: {allocated_error}; \
+                                     leaving the function interpreted",
+                                    entry.function_index
+                                );
+                            }
+                            Err(allocated_error)
+                        }
+                    }
                 }
             }
         }
@@ -908,6 +920,50 @@ pub fn compile_serialized_buffer(input: &[u8], output: &mut [u8]) -> Result<usiz
             .map(|handle| handle.join().map_err(|_| "compiler worker panicked"))
             .collect::<Result<Vec<_>, _>>()
     })?;
+
+    if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
+        let direct_attempted = entries
+            .iter()
+            .filter(|entry| entry.preferred_frontend == CraneliftFrontend::Direct as u32)
+            .count();
+        let osr_requested = entries
+            .iter()
+            .filter(|entry| {
+                entry.preferred_frontend == CraneliftFrontend::Direct as u32
+                    && entry.direct_tier_up_checkpoint_count != 0
+            })
+            .count();
+        let mut direct_succeeded = 0usize;
+        let mut allocated_fallbacks = 0usize;
+        let mut osr_succeeded = 0usize;
+        for (entry_index, compiled) in compiled_chunks.iter().flatten() {
+            if entries[*entry_index].preferred_frontend != CraneliftFrontend::Direct as u32 {
+                continue;
+            }
+            if compiled.frontend == CraneliftFrontend::Direct {
+                direct_succeeded += 1;
+                if compiled.osr.is_some() {
+                    osr_succeeded += 1;
+                }
+            } else {
+                allocated_fallbacks += 1;
+            }
+        }
+        let direct_completed = direct_succeeded
+            .checked_add(allocated_fallbacks)
+            .ok_or("direct compilation summary overflow")?;
+        let uncompiled = direct_attempted
+            .checked_sub(direct_completed)
+            .ok_or("direct compilation summary is inconsistent")?;
+        let osr_unavailable = osr_requested
+            .checked_sub(osr_succeeded)
+            .ok_or("direct OSR compilation summary is inconsistent")?;
+        eprintln!(
+            "direct compilation summary: attempted={direct_attempted} succeeded={direct_succeeded} \
+             allocated_fallbacks={allocated_fallbacks} uncompiled={uncompiled}; osr_requested={osr_requested} \
+             osr_succeeded={osr_succeeded} osr_unavailable={osr_unavailable}"
+        );
+    }
 
     // Pack the results as a header and function table followed by compact code
     // and relocation regions.

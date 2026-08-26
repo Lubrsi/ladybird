@@ -1,6 +1,6 @@
 # Direct Wasm-to-Cranelift frontend
 
-Status: design and migration plan, 2026-08-06.
+Status: design and migration record, updated 2026-08-26.
 
 ## Decision
 
@@ -272,11 +272,11 @@ Suggested implementation checkpoints:
 4. Separate clean-entry and OSR-capable runtime publication before a direct body can publish.
 5. Add `compiler/direct.rs` with typed operand and structured control stacks, and produce offline
    CLIF and native code for the first structural milestone below without publishing it at runtime.
-6. Execute that milestone through the direct path using the existing interpreter/helper boundary
-   for cross-flavor calls. Do not enable mixed direct-to-legacy native relocations yet.
-7. Define the durable typed body ABI before enabling direct calls. Update the old frontend with
-   only the temporary marshalling required to consume it, then compile clean entry-only functions
-   through the direct path with per-function fallback.
+6. Execute call-free functions from that milestone through a clean fresh-entry adapter, then link
+   closed direct-call groups through the clean typed body ABI.
+7. Keep mixed-flavor calls on the temporary interpreter boundary, report the frontend that
+   actually compiled each function, and replace function-number opt-in with compiler-driven direct
+   eligibility plus per-function allocated-bytecode fallback.
 8. Complete scalar integer and floating-point numeric operations, conversions, locals, and globals.
 9. Complete memory operations, bulk memory, and direct calls.
 10. Complete tables, indirect calls, and references.
@@ -315,7 +315,7 @@ SIMD outside the first lowering slice.
 
 #### Checkpoint 5 result
 
-Commit `40bb79a24f8` implements this first lowering slice. The direct frontend consumes the checked
+Commit `613917eb2aa` implements this first lowering slice. The direct frontend consumes the checked
 parsed-instruction serialization, rebuilds a typed operand and control stack, represents Wasm
 locals with typed Cranelift variables, and emits the pinned function as one clean native body. The
 body is deliberately not published or executable through the normal runtime yet: this checkpoint
@@ -532,6 +532,147 @@ the general storage layout correctly. Hoisting or sharing cold indirect-call pat
 memory a cleaner direct helper ABI are later code-size and call-overhead work, not prerequisites
 for typed direct lowering.
 
+### Checkpoint 6: executable clean fresh entry
+
+The next checkpoint turns the offline structural result into runtime evidence without adding OSR or
+temporarily adopting the allocated-bytecode calling convention. Its first end-to-end workload is
+the pinned call-free SHA-512 compression function. Implement the boundary generally; do not
+special-case that function or its signature.
+
+Generate a separate Cranelift adapter in front of each executable direct body:
+
+1. receive the existing interpreter-handler arguments;
+2. load each typed Wasm parameter from `Configuration::locals_base()`;
+3. call the clean body with `Configuration*` followed by its typed parameters;
+4. convert every typed result to `Value` and append it to the interpreter `ValueStack`; and
+5. return after native code has completed the current interpreter frame.
+
+Keep this adapter outside the clean body's Cranelift function. Combine their emitted code only at
+the linked-artifact layer, record the clean body's offset, and resolve the adapter-to-body call as a
+self relocation before publication. The body slice beginning at `native_entry_offset` must remain
+byte-for-byte identical to the current offline output.
+
+Carry the frontend/code flavor through pending installation. A direct artifact publishes:
+
+- its adapter through `cranelift_entry` for fresh interpreter activations; and
+- its clean body through `cranelift_direct_native_entry` for direct native callers.
+
+It must not publish `cranelift_osr_entry` or the allocated-bytecode
+`cranelift_native_entry`. Allocated-bytecode publication remains unchanged. Trap metadata and code
+ownership cover both the adapter and body in the combined mapping, and the fresh entry is published
+only after every relocation, permission transition, and instruction-cache operation has completed.
+
+For this checkpoint, select the allocated-bytecode frontend before compiler submission for any
+function whose direct lowering can make a cross-function call or enter an indirect-call fallback.
+Do not compile such a function with the direct frontend and then silently discard its result,
+because that would also discard the current native fallback. The call-free restriction is a staged
+publication capability, not an opcode-specific lowering restriction: offline direct compilation of
+the d3wasm functions remains useful for structural comparison.
+
+The existing clean direct-call relocation fallback uses the allocated-bytecode call-record ABI and
+does not match the clean typed direct-call signature. Do not make it reachable merely to execute
+SHA-512. Checkpoint 7 defines the durable typed body ABI and the compatible mixed-function fallback
+before call-heavy direct functions can publish.
+
+Add focused differential coverage for:
+
+- zero and multiple parameters across each supported scalar type;
+- declared-local zero initialization;
+- zero, one, and multiple typed results at the adapter unit level, even while runtime eligibility
+  still excludes instruction families needed by some signatures;
+- native explicit and fault-based traps reaching interpreter fault recovery;
+- equivalent direct and interpreter results and observable state; and
+- fresh direct execution leaving the successful OSR-transfer counter unchanged.
+
+After correctness tests pass, run the SHA-512 benchmark with parse, compilation, and execution
+phases reported separately. Compare workload execution, generated-body bytes, fixed frame, native
+instruction counts, total load time, compiler wall time, and peak compiler memory. This is the first
+runtime test of the new representation; the earlier structural result alone does not establish an
+execution-speed improvement.
+
+#### Checkpoint 6 result
+
+Commits `9fa971abe4e` and `5c2b28ae45d` implement the fresh-entry adapter and runtime publication.
+The adapter receives the existing interpreter-handler arguments, imports typed parameters from
+`Configuration::locals_base()`, calls a separately compiled clean body, and appends typed results
+to the interpreter `ValueStack`. Direct artifacts publish the adapter through `cranelift_entry`
+and the clean body through `cranelift_direct_native_entry`; they do not publish the allocated-
+bytecode native entry or an OSR entry. The cache records the frontend flavor and preserves this
+entry split when reinstalling code.
+
+Commit `b5d627ceb71` then enables closed groups of direct functions. Direct-call edges participate
+in the existing dependency and strongly connected component plan, so callees publish before
+callers and mutually recursive functions link as one component. Every direct relocation is
+resolved to another clean direct body before publication. If a requested callee is unavailable,
+the caller and every newly open caller above it are returned to the allocated-bytecode frontend by
+a fixed-point pass. Calls between direct functions therefore use the clean typed body ABI, while
+an allocated-bytecode caller still reaches a direct callee through the existing interpreter call
+boundary during migration.
+
+Executing SHA-512 with only function 16 direct made every compression invocation cross that
+temporary boundary and was substantially slower, so it was not a measurement of the clean body's
+steady-state performance. The minimal hot closed group is function 9, the million-iteration
+benchmark loop; function 17, the compression wrapper; and function 16, the compression body.
+Five alternating runs gave:
+
+| SHA-512 phase | Allocated-bytecode frontend | Direct functions 9, 17, and 16 |
+| --- | ---: | ---: |
+| Mean execution | 0.333831 s | 0.323832 s |
+| Execution range | 0.332535-0.335844 s | 0.322450-0.324430 s |
+| Mean native compilation | 0.023073 s | 0.019827 s |
+
+The execution samples are separated and show an approximately 3.0% improvement. Compilation was
+measured separately and its samples were noisier; the mean is recorded but is not used to claim a
+stable compilation-speed improvement. Focused tests cover fresh entry, cache reinstall, an
+allocated-bytecode caller reaching a direct callee, closed and incomplete direct groups, forward
+calls, mutual recursion, explicit and fault-based traps, and propagation when a selected callee is
+ineligible.
+
+#### Compiler-driven rollout result (2026-08-10)
+
+Commit `27c208826be` removes the explicit `CRANELIFT_DIRECT_EXECUTE_FN` and
+`CRANELIFT_DIRECT_PROBE_FN` selectors from execution policy. When the parsed instruction stream can
+be serialized, the compiler subprocess receives both the direct input and the allocated-bytecode
+input. The subprocess attempts direct lowering first and falls back to allocated-bytecode lowering
+if the direct frontend rejects the function. The output record reports the frontend that actually
+succeeded; publication, relocation linking, and cache capture consume that result rather than the
+requested preference. The compiler protocol is version 6 and the native cache format is version 32,
+so older all-allocated cache blobs cannot hide the policy change.
+
+Commits `e88cfd58484` and `ae4e82bdf99` supplied the call seams needed before making that policy
+automatic. Same-module `call_indirect` uses the direct native entry when the table element contains
+one, and otherwise follows the existing interpreter boundary. Each static direct call has a cold
+local fallback with the same clean signature. A relocation targets another clean direct body when
+one was published; otherwise it targets that local fallback, which materializes only the call
+arguments in `ValueStack`, invokes the existing interpreter call mechanism, restores the original
+stack top, and converts the result back to the clean return type. This is migration machinery, not
+a second permanent native ABI for the old frontend.
+
+Automatic selection is covered without environment-controlled function lists. Supported fixtures
+must publish direct fresh and body entries, while fixtures that exercise direct-to-interpreter,
+interpreter-to-direct, and old-frontend OSR contain a harmless operation the direct frontend does
+not yet support. The latter remains important: a clean direct result deliberately publishes no OSR
+entry, so an interpreter activation already inside that function keeps interpreting until return.
+The allocated-bytecode fallback remains the temporary OSR-capable compiler until the direct OSR
+variant exists.
+
+Validation after the 2026-08-26 rebase onto master produced:
+
+- all 18 Rust compiler tests;
+- all 27 `TestWasmExecution` cases, including cache reinstall, mixed static and indirect calls,
+  direct OSR transfer and publication races, traps, and recursive groups;
+- a clean full commit lint and Clippy run; and
+- successful parallel release builds of `TestWasmExecution` and the `wasm` CLI.
+
+The milestone workloads no longer need direct-selection variables. In d3wasm, function 1574,
+`unzReadCurrentFile()`, published a 23,216-byte combined mapping, and function 2445,
+`idInteraction::AddActiveInteraction()`, published a 115,448-byte combined mapping. Neither
+reported direct fallback. In `sha512-bench.wasm`, only function 119 of the 154 compiled functions
+fell back for an unsupported instruction; the hot functions 9, 17, and 16 all compiled directly.
+One correctness run reported 23.124 ms native compilation and 333.212 ms execution. A single run
+is not used as a performance comparison; the earlier alternating measurement remains the relevant
+execution result.
+
 ### Retirement of the allocated-bytecode frontend
 
 The three-tier arrangement is a staged rollout, not the intended final architecture. The
@@ -550,6 +691,142 @@ Retire the old frontend in explicit stages:
    design is completed and validated.
 4. Delete it once fresh entry, native calls, indirect calls, incremental publication, the native
    cache, and interpreter-to-native tier-up no longer depend on allocated-bytecode compilation.
+
+### Completed SHA-512 checkpoint: `memory.size` and `memory.grow`
+
+A cache-free SHA-512 diagnostic on 2026-08-11 used:
+
+```sh
+CRANELIFT_TRACE_DIRECT_FALLBACK=1 Build/release/bin/wasm \
+    --benchmark-timings \
+    --execute _start \
+    --wasi \
+    /Users/lukewilde/Repositories/js-benchmarks/WasmRustBench/sha512-bench.wasm
+```
+
+The compiler attempted 154 functions and reported one direct fallback:
+
+```text
+direct compilation of function 119 failed: unsupported direct instruction; using allocated-bytecode frontend
+```
+
+Function 119 is `sbrk`. Its disassembly contains `memory.size 0` and `memory.grow 0`; the other
+operations in the function are already supported by the direct frontend. The diagnostic reported
+27.396 ms native compilation and 331.870 ms execution, but one diagnostic run is not a performance
+comparison.
+
+The immediate implementation checkpoint is general direct lowering for `memory.size` and
+`memory.grow`, not a function-119 special case. The local core specification describes
+`memory.grow` as non-deterministic: it may succeed and return the old memory size, or fail and
+return `-1`; it must fail when a declared maximum would be exceeded and may fail for other embedder
+resource reasons. The multi-memory proposal requires both instructions to use their memory-index
+immediate rather than assuming memory zero.
+
+The implementation must therefore:
+
+1. Serialize and consume the selected memory index for both instructions.
+2. Lower `memory.size` through the existing runtime helper and produce an `i32` page count while
+   direct eligibility continues to exclude 64-bit-addressed memories.
+3. Treat the `memory.grow` delta as an unsigned `i32` page count, use checked multiplication when
+   converting pages to bytes, and return the old page count or `-1` according to the memory
+   instance's growth result. The existing C++ helper must be corrected before the direct frontend
+   reuses it; signed `i32` multiplication is not an adequate implementation for all bit patterns.
+4. Preserve helper relocations in uncached and cache-installed code.
+5. Test zero growth, successful growth, declared-maximum failure, large unsigned deltas, and a
+   nonzero memory index.
+6. Rerun the SHA-512 diagnostic and require all 154 functions, including `sbrk`, to compile through
+   the direct frontend before taking new performance samples.
+
+Commit `1d13566067e` completed this checkpoint on 2026-08-11. The focused multi-memory tests
+exercised zero growth, successful growth, maximum failure, a large unsigned delta, and memory index
+one; all nine fixture functions compiled without a direct fallback. The cache-free SHA-512
+diagnostic then submitted and received all 154 functions without a fallback message. It reported
+22.468 ms native compilation and 339.796 ms execution. As with the preceding diagnostic, these
+single-run timings establish the coverage gate rather than a performance comparison.
+
+### Next retirement checkpoint: direct-fallback coverage inventory
+
+Closing SHA-512 is a workload milestone, not by itself proof that direct coverage is a superset of
+the old frontend. After it passes, collect direct-fallback reasons across the Wasm benchmark suite,
+the specification tests, and representative Web workloads. Implement any remaining instruction
+families that the allocated-bytecode frontend can compile. Once that inventory is empty and the
+differential, specification, cache, call, OSR, and workload tests pass, remove allocated-bytecode
+fresh compilation: a direct-compatible function receives direct native code and any unsupported
+function remains interpreted. The old compiler can then be deleted wholesale after no runtime,
+cache, publication, or tier-up path depends on it.
+
+Start by making direct rejection diagnostics identify the instruction index, opcode, and specific
+unsupported feature without changing compilation eligibility or fallback behavior. Run each
+workload without a native-cache hit and with `CRANELIFT_TRACE_DIRECT_FALLBACK=1`, then record:
+
+- the number of functions attempted by the direct frontend;
+- the number and proportion that fall back to allocated-bytecode compilation;
+- fallback counts grouped by exact reason and opcode;
+- the workloads and function indices exercising each missing family; and
+- failures that are ABI, type-shape, or runtime-model limitations rather than missing opcodes.
+
+Use that report to order general instruction-family work by coverage rather than implementing the
+first opcode encountered in one workload. Keep compilation time and execution time separate from
+the coverage result. A family is complete only after focused semantic tests, differential
+interpreter/native coverage, cache and relocation coverage where applicable, and a repeated
+inventory run that removes its fallback reason.
+
+#### Initial WasmRustBench inventory (2026-08-26)
+
+The first inventory added generated opcode names to the direct compiler's rejection diagnostics.
+An unsupported instruction now reports its parsed instruction index, local `Opcode.h` name, numeric
+opcode, and reason. The trace also reports per-compiler-process totals for direct attempts,
+successful direct bodies, successful allocated-bytecode fallbacks, functions left uncompiled,
+requested direct OSR bodies, successful direct OSR bodies, and unavailable direct OSR bodies. If
+the direct body fails and the allocated-bytecode compiler also fails, the trace reports both
+failures rather than claiming that the second frontend was used successfully.
+
+The coverage-only command was run once for each module in `WasmRustBench`:
+
+```sh
+CRANELIFT_TRACE_DIRECT_FALLBACK=1 Build/release/bin/wasm \
+    --instantiate \
+    --wasi \
+    --benchmark-timings \
+    module.wasm
+```
+
+The CLI did not install a native cache, and `--instantiate` validated, compiled, and instantiated
+the module without executing `_start`. The phase timings from this diagnostic are therefore not
+execution-speed measurements.
+
+| Module                   | Direct attempts | Direct bodies | Allocated fallbacks | Uncompiled | Direct OSR bodies |
+| ------------------------ | --------------: | ------------: | ------------------: | ---------: | -----------------: |
+| `base64-bench.wasm`      |             188 |           188 |                   0 |          0 |            39 / 39 |
+| `blake3-bench.wasm`      |             161 |           156 |                   0 |          5 |            29 / 34 |
+| `json-bench.wasm`        |             252 |           252 |                   0 |          0 |            72 / 72 |
+| `regex-match-bench.wasm` |            1534 |          1534 |                   0 |          0 |          458 / 458 |
+| `sha512-bench.wasm`      |             154 |           154 |                   0 |          0 |            30 / 30 |
+| **Total**                |        **2289** |      **2284** |               **0** |      **5** |        **628 / 633** |
+
+All five remaining clean-body failures are Blake3 functions 6, 18, 22, 23, and 26, whose first
+unsupported instruction is `v128_load`. The allocated-bytecode frontend also rejects those
+functions, so this workload set contains no successful fresh-body coverage that currently depends
+on the old native frontend. SIMD is the next missing instruction family identified by this
+inventory, but broader specification and Web-workload inventories are still required before the
+old frontend's fresh path can be retired.
+
+The first pass also exposed 29 direct OSR failures that were independent of instruction-family
+coverage: one in Base64, two in JSON, and 26 in Regex. A tier-up descriptor stores an interpreter
+dispatch index, while the serialized allocated-frontend stream expands `br_table` with
+compiler-only `synthetic_br_table_cont` records. Direct OSR validation had indexed that expanded
+stream without removing the extra records. The fix projects the serialized stream back to
+interpreter dispatches for validation; it does not change the checkpoint token or the interpreter's
+runtime coordinate system. A focused regression places a continuation record before a valid
+checkpoint. After the fix, all non-SIMD requested OSR bodies compiled, including all 458 Regex
+bodies.
+
+Validation for this checkpoint was:
+
+- all 19 Rust compiler tests passed;
+- Clippy passed with `-D clippy::all`;
+- the release `TestWasmExecution` and `wasm` targets built with parallel compilation; and
+- all 27 `TestWasmExecution` cases passed outside the command sandbox.
 
 Deletion includes its serialized compiler input, banks and location-state reconstruction,
 synthetic-instruction lowering, legacy native ABI, cross-flavor relocation selection, adapters, and
@@ -659,11 +936,12 @@ The possible migration boundaries are:
    interpreter/helper boundary for mixed calls. This avoids ABI commitment but distorts call-heavy
    performance and cannot be the final mixed-module path.
 
-The checkpoint sequence chooses option 3 for the first executable SHA-512 milestone, with an
-explicit expiry at checkpoint 7. Checkpoint 7 then chooses option 1: define the durable typed ABI
-and make the old frontend consume it temporarily before mixed native relocations are enabled.
-Option 2 is contingency migration machinery only if implementing option 1 exposes a measured
-blocking problem; it is not the planned steady state.
+The first executable SHA-512 milestone was stricter than option 3: it published only closed direct
+groups and therefore had no cross-flavor native relocation. The current migration uses option 3:
+direct-to-direct relocations target the clean body, while mixed calls cross the existing interpreter
+mechanism through cold local fallback adapters. The old frontend has not been changed to consume a
+new durable ABI merely to extend its lifetime. Those adapters and flavor-sensitive fallback choices
+are deleted with the allocated-bytecode frontend if the direct design continues to prove fruitful.
 
 The dependency direction remains important: neither frontend should privately define the eventual
 body ABI. Once selected, a shared ABI module owns signatures, entry symbols, and relocation
@@ -747,6 +1025,23 @@ not need to reconstruct R0-R7 or `ValueStack` temporaries: they contain no live 
 the transfer point. Its input state consists of canonical Wasm locals plus normal runtime state in
 `Configuration`.
 
+This empty-stack restriction is an important correctness boundary, not merely a temporary
+implementation convenience. Resuming with a non-empty operand stack would require every
+checkpoint to describe the precise typed stack shape and map each live operand to its interpreter
+`ValueStack` location. The direct frontend would then have to reconstruct those values through
+nested control flow and merge them into native SSA alongside the locals. Empty-stack loop headers
+avoid that state class entirely while still covering natural hot points: loop-carried Wasm state is
+commonly held in locals. Broaden checkpoint eligibility only if profiles demonstrate important
+loops that this restriction excludes.
+
+Fresh interpreter-to-native entry is the smaller form of the same state import. The interpreter
+frame already contains the function arguments, while every declared local still has its
+Wasm-defined default value. The fresh adapter loads the typed arguments from the frame and the clean
+body defines declared numeric locals as typed zero constants. There is no continuation merge and
+no checkpoint liveness question because these definitions form the function's initial state and
+dominate the body. A mid-function OSR edge cannot make that assumption: its locals may contain
+arbitrary values produced by the interpreted prefix.
+
 Preserve an explicit checkpoint descriptor while the validated parsed instruction and generated
 interpreter dispatch are both available:
 
@@ -761,9 +1056,13 @@ TierUpCheckpoint {
 
 The function-wide local-type table supplies each live local's type. Compute `live_local_indices`
 with backwards dataflow over the parsed Wasm CFG; bytecode location access counts and write sets are
-not substitutes for edge liveness. A bitmap is sufficient for the indexed local set. If checkpoint
-eligibility later expands, the descriptor must also carry the typed operand/control-stack live-ins
-and, for non-defaultable references, the validator's definite-initialization state.
+not substitutes for edge liveness. A local is live into a checkpoint when some continuation path
+can read its current value before overwriting it. The resume adapter therefore loads and defines
+only that subset. This avoids activation-memory loads, resume-edge SSA definitions, merge
+parameters, and register pressure for dead locals; omitting a genuinely live local would instead
+be a miscompile. A bitmap is sufficient for the indexed local set. If checkpoint eligibility later
+expands, the descriptor must also carry the typed operand/control-stack live-ins and, for
+non-defaultable references, the validator's definite-initialization state.
 
 When a function is compiling while an interpreter activation is already running:
 
@@ -793,6 +1092,222 @@ prefix does not necessarily emit the complete reachable cyclic CFG. Paying resum
 temporary OSR flavor is acceptable because it does not affect clean cached code. A later two-pass
 CFG/control plan can produce a narrower OSR-only variant if measurements justify it.
 
+#### First direct OSR variant implementation shape
+
+Compile the first direct OSR variant as a separate Cranelift function using the interpreter-handler
+ABI already used by `synthetic_tier_up`. The handler arguments provide `Configuration` and the
+interpreter dispatch position identifying the checkpoint. Do not add an OSR token, interpreter
+pointer, or canonical-local arguments to the persistent clean body's typed ABI. The direct
+instruction lowering should be shared between the clean and OSR flavors, with the entry and
+completion strategies selected outside the per-operation lowering rather than by copying the
+instruction switch.
+
+Before emitting the function body, validate and index every serialized checkpoint:
+
+- checkpoint identifiers are unique and stable;
+- the parsed instruction index names an eligible `loop` in the direct instruction stream;
+- the interpreter dispatch index is the corresponding `synthetic_tier_up` position; and
+- every live-local range and local index is in bounds, ordered, and free of duplicates.
+
+Pre-create the native loop-header block for every checkpoint before emitting the entry dispatcher.
+This allows the cold resume blocks to target loop headers that the one-pass structured-control walk
+has not reached yet. When the walk later encounters the parsed `loop`, it must reuse the pre-created
+block rather than create a second header. Keep the header unsealed until all normal fresh-entry,
+resume, and back-edge predecessors have been emitted.
+
+The OSR function's common entry block receives `Configuration` and constructs any runtime-state
+values that generated instructions use directly, such as memory, table, and global-instance bases.
+Those values must dominate both the fresh and resume paths; a value created only on the fresh path
+cannot safely be referenced after a resume edge. The entry then dispatches as follows:
+
+1. A zero entry token selects an internal fresh path. It imports the function parameters from the
+   interpreter frame and gives declared locals their Wasm default values, making the complete
+   function CFG reachable during the first implementation even though this entry is not published
+   for fresh calls.
+2. Each known checkpoint selects a cold resume block. That block loads
+   `Configuration::locals_base()`, imports only the checkpoint's live locals using the function-wide
+   type table, defines their native SSA variables, and jumps to the pre-created loop header.
+3. An unknown non-zero checkpoint is rejected rather than silently entering the function at the
+   wrong position.
+
+The exact live-local set is therefore consumed only on the cold resume edge. Dead locals receive no
+resume definition and cannot create activation loads or resume-induced merge parameters. A local
+that is defined before every use after the checkpoint needs no imported value; a local that may be
+read first must be imported on every resume predecessor that can reach that use.
+
+Because `synthetic_tier_up` transfers ownership of the current interpreter activation, the OSR
+function completes through the interpreter boundary rather than returning typed results to a native
+caller. Every Wasm return path must marshal its typed results into `Value` entries at the current
+`ValueStack` top, advance the top exactly once, and return through the handler ABI. It does not
+write locals back: native completion completes the frame, and this design has no tier-down path.
+Traps continue through the existing compiled-fault recovery mechanism, with the temporary mapping's
+trap table retained for at least as long as any transferred activation can execute it.
+
+Compile and retain this OSR artifact independently from the normal direct result. Do not serialize
+it into the native cache, publish it as the clean fresh entry, or concatenate it with the persistent
+clean mapping merely to reuse installation code. As a regression invariant, compiling checkpoint
+metadata and an OSR variant must leave the clean body's CLIF, native bytes, relocations, and traps
+unchanged.
+
+#### Compiler-only direct OSR checkpoint (2026-08-11)
+
+Commit `5a5ee20a742` implements the first compiler-only direct OSR body. It deliberately stops
+before the compiler subprocess returns the second artifact and before the runtime maps or publishes
+it. The checkpoint therefore proves that the direct frontend can construct the required native CFG
+without changing the persistent clean body; it does not yet prove an interpreter-to-direct
+transfer.
+
+The clean and OSR flavors share one instruction-lowering walk. Flavor-specific behavior is kept at
+the function boundary:
+
+- the clean flavor retains its typed body ABI and typed returns;
+- the OSR flavor uses the existing interpreter-handler ABI, with `Configuration` and the raw
+  interpreter dispatch position taken from the established handler arguments;
+- runtime values needed by the body are constructed in the common entry so they dominate both
+  fresh and resume paths;
+- every checkpoint loop header is pre-created and reused when the structured-control walk reaches
+  the corresponding parsed `loop`;
+- a cold resume block imports only the checkpoint's exact live-local set from
+  `Configuration::locals_base()` and jumps to that header; and
+- every OSR return path appends the typed results to the interpreter `ValueStack` and returns from
+  the handler, without writing locals back.
+
+The first variant retains the complete function CFG. Entry token zero selects an internal fresh
+path that imports parameters and zero-initializes declared locals; a known non-zero token selects a
+checkpoint resume block; and an unknown token traps. The fresh path is an implementation device for
+building and testing the complete CFG and is not a second published fresh entry.
+
+The compiler validates contiguous checkpoint identifiers, unique interpreter dispatch positions,
+the parsed loop index and duplicate loop mappings, every flattened live-local range, local bounds,
+and strict live-local ordering. The durable descriptors are constructed at the point where the
+bytecode generator inserts `synthetic_tier_up`, so their dispatch positions originate from the
+actual generated stream. The standalone Rust lowering API does not receive that allocated stream,
+however, and therefore cannot independently prove that the serialized dispatch position still
+names `synthetic_tier_up`. The subprocess integration must perform that final cross-check while it
+has both representations; publication must not rely only on the descriptor's integer value.
+
+Direct calls in the OSR body retain the same typed direct-call lowering and interpreter fallbacks
+as the clean body. The fallbacks are appended to the temporary artifact and its relocations and trap
+offsets are adjusted independently; the clean and OSR mappings are not concatenated. The OSR
+artifact reports entry offset zero because its public entry is already the interpreter-handler
+entry rather than a clean typed body behind a separate adapter.
+
+The regression test compiles the same function before and after attaching checkpoint metadata and
+requires identical clean native bytes, relocations, and traps. It then compiles the OSR flavor with
+two live typed locals and verifies that it produces an independent native artifact. Validation for
+this checkpoint was:
+
+- all 12 Rust unit tests passed;
+- Clippy passed with `-D clippy::all`;
+- the release `TestWasmExecution` target built successfully; and
+- the focused `TestWasmExecution` CTest passed.
+
+#### Direct OSR transport-and-retention checkpoint (2026-08-11)
+
+Commit `1f1e1167234` extends the compiler subprocess result so one function can return a normal clean
+artifact plus an optional OSR artifact. Both artifacts receive independently checked code,
+relocation, trap, and entry-offset ranges. The clean artifact is written first, so an unavailable
+OSR output region cannot discard an otherwise valid clean compilation. An OSR compile, output,
+link, or finalization failure likewise retains the clean result.
+
+After the 2026-08-26 rebase, this result uses master's compact out-of-process transport. C++ creates
+separate compiler input and output buffers. The input serializes `RuntimeLayout` but no
+process-specific helper addresses; the small `cranelift-compiler` executable only maps the buffers
+and delegates to `serialized::compile_serialized_buffer()`. Rust packs the clean and optional OSR
+artifacts into the compact output, and the parent resolves helper relocations in unpublished
+mappings before finalizing and publishing them. The direct OSR design therefore survives the
+transport change without restoring the former in-place buffer or exposing parent-process addresses
+to the compiler process.
+
+The subprocess now performs the final cross-representation validation omitted from the standalone
+Rust lowering API: every serialized interpreter dispatch position must be in bounds in the
+allocated instruction stream and must name `synthetic_tier_up`. The Rust regression test constructs
+the smallest valid allocated stream, derives rather than hard-codes the checkpoint position, and
+also verifies that replacing the named instruction with `nop` rejects the OSR compile.
+
+The parent maps and links the OSR artifact separately from the clean body, records a separate code
+and trap range for fault recovery, and retains both mappings through a move-only module-owned
+`CraneliftCodeOwner`. This replaces the previous one-handle-per-function ownership assumption
+without exposing the mapping implementation in `Types.h`. The retained OSR handler is deliberately
+not written to `cranelift_entry`, `cranelift_direct_native_entry`, or `cranelift_osr_entry` in this
+checkpoint.
+
+Only the clean artifact participates in native-cache capture. The execution regression test first
+compiles a direct function containing one eligible loop, verifies that its clean and retained OSR
+mappings are distinct while `cranelift_osr_entry` remains zero, and captures the cache blob. It then
+installs that blob into a fresh module and verifies that the clean direct body is restored but all
+OSR code and trap fields remain empty. This proves cache exclusion independently from publication.
+
+Validation for this checkpoint was:
+
+- all 12 Rust unit tests passed;
+- Clippy passed with `-D clippy::all`;
+- the release `TestWasmExecution` target and all four focused LibWasm test executables built; and
+- `TestWasmMemory`, `TestWasmTable`, `TestWasmExecution`, and `TestWasmDifferential` passed.
+
+#### One-way direct OSR publication checkpoint (2026-08-11)
+
+Commit `4c51b1e9f7a` completes the first interpreter-to-direct transfer. Installation records the
+OSR mapping and trap table, transfers mapping ownership to the module, and only then release-publishes
+the artifact's handler entry through `cranelift_osr_entry`. The published address is derived from the
+artifact's entry offset rather than assuming that every future OSR artifact starts at offset zero.
+The existing synthetic interpreter handler remains the only transfer site and still returns
+`Outcome::Return` immediately after native completion, so the old interpreter frame cannot resume.
+
+The strengthened fixture starts compilation from an imported host call while its `run` activation
+is still interpreted. A nonzero local initialized before that call and the loop counter are both
+live at the empty-stack checkpoint. The test requires the first invocation to increment the global
+tier-up counter exactly once and return 43 after the OSR body completes. It then invokes the same
+function again, requires the unchanged clean direct body to return 46, and requires the tier-up
+counter to remain unchanged. This distinguishes an actual one-way OSR transfer from merely
+producing the same arithmetic result in the interpreter.
+
+The cache regression now verifies the final policy: a fresh compile publishes the direct OSR entry,
+while installing the captured clean-body cache record into a new module leaves the OSR entry, code
+range, and trap range empty. The focused release `TestWasmExecution` build and CTest passed.
+
+#### Direct OSR traps and multi-value results (2026-08-11)
+
+Commit `ad20bb93d82` exercises the next two interpreter-boundary requirements. The checkpointed
+function now returns an `i32` and an `f64` after a successful OSR transfer, then a forced interpreted
+entry takes the same OSR mapping and executes a native `unreachable`. The test requires the second
+transfer count, the Cranelift `unreachable executed` trap, and the two successful result payloads
+from both OSR and clean entry. This also exercises fault lookup through the separately retained OSR
+code and trap ranges.
+
+The shared validator previously rejected every multi-result function before selecting a frontend,
+even though the direct clean and OSR adapters already support multiple scalar results. That
+allocated-bytecode restriction is removed from top-level function eligibility. Calls *to* a
+multi-result function remain separately restricted because their mixed interpreter fallback does
+not yet support multiple results.
+
+The result test exposed another boundary-only mismatch: C++ `Value` sign-extends every 32-bit
+payload into its low 64-bit storage word, while the shared native helper zero-extended `i32` and
+`f32`. Both cases now sign-extend at native/interpreter boundaries. The differential fixture makes
+its multi-result function directly compilable and compares a negative `i32` plus an `i64`
+bit-for-bit against interpreter execution. `Wasm::Result` remains in its established top-of-stack
+first order; declaration-order conversion at the JS boundary is separate work.
+
+#### Concurrent direct OSR publication (2026-08-11)
+
+Commit `48b7ae25364` adds an execution race without changing production publication. The fixture's
+first loop-header checkpoint necessarily observes zero because its guarded compile import is called
+later in the first loop body. That import starts `start_cranelift_compilation()` on a real
+`Threading::Thread` and returns immediately. Subsequent interpreter back-edges therefore race their
+acquire-loads against background mapping, linking, ownership transfer, metadata installation, and
+the final release-store of `cranelift_osr_entry`.
+
+The test uses a five-million-iteration bound so the interpreted activation remains live until the
+compiler subprocess publishes, then requires exactly one OSR transfer, successful thread join, and
+the exact two-result output from the resumed activation. It passed ten consecutive focused runs.
+Because installation already retained the mapping and trap table before release-publication, no
+production change was needed.
+
+The restricted one-way mechanism is now covered for scalar locals, an empty operand stack,
+multiple scalar results, native traps, cached clean-body separation, mapping lifetime, and
+concurrent publication. Checkpoint eligibility, temporary-artifact reclamation, and compilation
+policy remain separate decisions rather than correctness prerequisites for the current path.
+
 Temporary OSR code also requires the runtime to own more than one native mapping and trap range for
 one function. The first correctness implementation may retain every published OSR artifact until
 module destruction. Safe early reclamation, request cancellation, and generation replacement are
@@ -814,6 +1329,152 @@ Suggested interpreter-compatibility sequence:
    multiple results, and concurrent publication independently.
 6. Only then consider a two-pass OSR-only CFG, earlier reclamation, or broader checkpoint
    eligibility.
+
+## Design review: incremental compilation, publication, and interpreter independence
+
+The direct frontend and OSR design were reviewed against concerns about lost compilation
+parallelism, live-code patching, interpreter viability, and how to attribute the remaining gap to
+Wasmtime. The concerns identify measurements and invariants that the migration must preserve, but
+they do not require coupling native value identity back to interpreter allocation.
+
+### Separate compilation scheduling from incremental publication
+
+The current incremental plan groups the module's call graph into strongly connected components and
+submits dependency-ordered batches of at most 512 functions or 100,000 allocated-bytecode
+instructions. Batches are submitted synchronously: the parent waits for one compiler subprocess,
+installs its results, and only then submits the next batch. Inside each subprocess, compilation is
+still parallel. The compiler uses `available_parallelism()` workers and partitions the batch into
+function-count-based chunks.
+
+Incremental tiering has therefore not removed parallel compilation, but it can reduce its
+effectiveness through small dependency-frontier batches, load imbalance between differently sized
+functions, repeated subprocess startup, and sequential batch waves. It also changes publication
+from one whole-module event to incremental batch installation. The observed interpreter-to-native
+staircase demonstrates the benefit of early publication, but does not establish that ordering
+compilation by dependency is the best way to provide it.
+
+Call-graph dependencies constrain final linking and publication, not Cranelift compilation. A
+preferred future shape is:
+
+```text
+all eligible functions compile in one parallel worker pool
+                         |
+                         v
+completed relocatable artifacts enter a result queue
+                         |
+                         v
+one serial linker/publication path installs ready components
+                         |
+                         +-- unresolved functions remain interpreted
+```
+
+Compilation may proceed across the whole module while the linker retains a caller until its direct
+callees have stable addresses, installs a recursive component together, or selects a permanent
+fallback boundary. This preserves early native availability without turning link order into compile
+order. The current separate-buffer compiler protocol returns only after every function in a submitted batch
+has finished, so streaming completion requires a transport/protocol change rather than only a new
+batch-size constant.
+
+Measure the current dependency-batched policy against a single whole-module submission before
+changing it. Record compiler wall time, compiler CPU time, CPU utilization, subprocess count, time
+to first publication, time to 25%, 50%, 90%, and 100% publication, startup behaviour, and
+steady-state execution. Keep cache-disabled compilation, cache installation, and interpreter-only
+startup as separate cases.
+
+### Never patch published instructions
+
+Published executable instructions must be immutable. The current linker already obeys this
+invariant:
+
+1. copy unpatched compiler or cache bytes into a private mapping;
+2. apply relocations and append any range-extension veneer;
+3. finalize executable permissions and invalidate the instruction cache; and
+4. publish the entry pointers with release ordering.
+
+Cached relocations do not weaken the invariant. A cache record retains unpatched code and
+relocation metadata; installation relocates a new unpublished mapping. Relocation is required when
+addresses change, but modifying code that another thread can execute is not.
+
+If a call target is unavailable when its caller is ready, the safe choices are to retain the
+caller until it can be linked, emit an immutable thunk that reads an atomically updated data slot,
+or permanently route that call through a compatible fallback. A data-slot thunk permits more
+flexible publication but permanently adds an indirect load and branch. Prefer a direct relocation
+when both mappings are known, and do not later rewrite that published callsite merely to remove a
+fallback. A single serial installation path is compatible with fully parallel compilation and
+makes this ownership rule easier to enforce.
+
+### Keep the optimized interpreter as an independent consumer
+
+The direct frontend's operand stack is compile-time Cranelift SSA bookkeeping. It is not the
+runtime `ValueStack` and does not replace interpreter execution. The intended ownership remains:
+
+```text
+validated parsed Wasm
+    +-- allocated bytecode, R0-R7, fused and synthetic operations --> interpreter
+    +-- typed operand/control stacks and semantic values            --> Cranelift
+```
+
+The interpreter remains able to run every function, start execution before native code exists, and
+serve as fallback. Its register allocation, direct-threaded dispatch, fixed-capacity `ValueStack`,
+and synthetic superinstructions need not be removed or made native-friendly.
+
+Attaching type information to bytecode virtual-register uses is feasible and would improve the old
+frontend's type selection. It does not by itself recover semantic value identity. One allocated
+location can contain distinct definitions at different instruction positions and can be reused
+across control-flow edges. Native lowering still needs the reaching definition, exact edge
+liveness, genuine merge operands, and the set of values required at a synchronization point.
+Representing each location by type and definition generation and solving those facts with dataflow
+approaches reconstruction of the typed value graph that direct parsed-Wasm lowering already builds.
+
+The general existence of interpreter state is nevertheless the fundamental OSR cost. Fresh entry
+and tier-up must import enough canonical state to continue the activation. The current empty-stack
+checkpoint restriction and a separate OSR variant contain that cost at the boundary instead of
+making clean native code follow interpreter allocation.
+
+### Attribute the remaining Wasmtime gap by call purpose
+
+The existing structural results support both interpreter-state and helper-call explanations. The
+SHA-512 direct body is within one native instruction of Wasmtime, while the allocated-bytecode body
+has 149 additional instructions and 107 additional memory operations. This strongly attributes
+that workload's old-frontend gap to allocated interpreter locations and their entry/state model.
+
+Direct lowering also substantially improves both d3wasm functions, but still emits 47 calls versus
+Wasmtime's 31 in `unzReadCurrentFile()` and 440 versus 284 in `AddActiveInteraction()`. This makes
+runtime/helper lowering a plausible part of the remaining gap, but static call count is not dynamic
+cost. Classify calls before optimizing them:
+
+- semantically required runtime operations;
+- cold trap and error paths;
+- avoidable interpreter-bridge helpers;
+- memory, table, and reference operations that can be lowered directly;
+- calls required only to recover runtime metadata; and
+- Cranelift-selected libcalls.
+
+Combine a per-target static call inventory with dynamic inclusive time and execution counts. Do not
+inline or duplicate a helper merely because it exists; first show that it executes on the measured
+hot path or prevents useful optimization around that path.
+
+### Instruction counting complements sampled profiling
+
+High-frequency Instruments CPU profiling remains statistical PC sampling. A shorter interval
+improves visibility into small hot ranges, but does not count every executed instruction. It is
+valuable because it observes real M4 execution, wall time, scheduling, frame pacing, and the
+microarchitectural effects represented in actual elapsed CPU time.
+
+Callgrind can provide deterministic dynamic instruction counts and simulated branch/cache events
+for a suitable Linux build. Time spent running under Valgrind is instrumentation time, not native
+execution time, so describe this as instruction-accurate counting rather than instruction-accurate
+timing. Its different host architecture and simulated cache model also prevent it from replacing
+the Apple Silicon measurements.
+
+Use the measurement methods together:
+
+- static disassembly for code size and instruction shape;
+- Callgrind for deterministic dynamic instruction and branch counts;
+- hardware counters, where available, for retired instructions, cycles, branches, and misses;
+- Instruments with visual-frame markers for actual M4 hot paths and frame correlation; and
+- ordinary wall time, phase timing, workload-reported scores, and peak memory for user-visible
+  results.
 
 ## Success criteria
 
@@ -845,9 +1506,13 @@ judged by an expectation of zero block parameters or exact Wasmtime parity.
   checkpoint 5.
 - Whether the direct frontend reconstructs all validation types or receives selected persisted
   validator metadata.
-- The exact durable typed native body ABI selected at checkpoint 7.
-- The typed multi-value return convention and interpreter/legacy adapter marshalling.
-- Ownership and lifetime model for temporary OSR code.
+- Whether mixed-flavor calls should continue using the temporary interpreter boundary until the
+  allocated-bytecode frontend is retired or justify a shared transitional ABI.
+- Typed multi-value marshalling for calls that cross the temporary interpreter boundary.
+- Whether temporary OSR mappings should remain module-owned until destruction or gain safe
+  generation-aware reclamation.
+- Whether whole-module parallel compilation can stream completed artifacts into a serial,
+  component-aware publication path.
 - Whether native-only inlining begins as an `Expression` transform or is deferred until the direct
   frontend has a stable typed representation.
 - The milestones at which the allocated-bytecode frontend becomes OSR-only and is then deleted.
