@@ -2484,24 +2484,27 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
 
             // Get sniff bytes for MIME type detection. For streaming responses where bytes
             // haven't arrived yet, we must wait asynchronously.
-            auto sniff_bytes = body ? body->sniff_bytes_if_available() : Optional<ReadonlyBytes> { ReadonlyBytes {} };
+            auto sniff_bytes = body ? body->sniff_bytes_if_available() : Optional<Fetch::Infrastructure::Body::SniffBytes> { Fetch::Infrastructure::Body::SniffBytes {} };
             if (!sniff_bytes.has_value()) {
                 // Async path: bytes not yet available, wait for them
                 nav_params->response->resume_body_delivery_up_to(Fetch::Infrastructure::MAX_SNIFF_BYTES);
                 body->wait_for_sniff_bytes(GC::create_function(heap(),
-                    [output, nav_params, navigation_params, completion_steps, source_allows_downloading, source_interface_origin](ReadonlyBytes sniff_bytes) {
+                    [output, nav_params, navigation_params, completion_steps, source_allows_downloading, source_interface_origin](Fetch::Infrastructure::Body::SniffBytes sniff_bytes) {
                         // AD-HOC: The document may have been destroyed between when the fetch started and when the
-                        //         bytes arrived.
-                        if (nav_params->navigable->active_browsing_context()) {
-                            output->document = load_document(nav_params, sniff_bytes);
+                        //         bytes arrived. A response that failed mid-sniff must not be loaded as a document
+                        //         off its partial bytes either.
+                        if (nav_params->navigable->active_browsing_context() && sniff_bytes.outcome == Fetch::Infrastructure::Body::SniffOutcome::Complete) {
+                            output->document = load_document(nav_params, sniff_bytes.bytes);
                             if (!output->document) {
-                                output->download_handled = handle_navigation_response_as_download(nav_params, source_allows_downloading, source_interface_origin, sniff_bytes);
+                                output->download_handled = handle_navigation_response_as_download(nav_params, source_allows_downloading, source_interface_origin, sniff_bytes.bytes);
                                 output->save_extra_document_state = false;
                             } else {
                                 nav_params->response->resume_body_delivery();
                             }
                         } else {
                             stop_or_resume_response_body_delivery(navigation_params);
+                            if (sniff_bytes.outcome == Fetch::Infrastructure::Body::SniffOutcome::Failed)
+                                output->save_extra_document_state = false;
                         }
                         output->navigation_params = navigation_params;
                         if (completion_steps)
@@ -2511,12 +2514,17 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
             }
 
             // Sync path: bytes available immediately
-            output->document = load_document(nav_params, sniff_bytes.value());
-            if (!output->document) {
-                output->download_handled = handle_navigation_response_as_download(nav_params, source_allows_downloading, source_interface_origin, sniff_bytes.value());
-                output->save_extra_document_state = false;
+            if (sniff_bytes->outcome == Fetch::Infrastructure::Body::SniffOutcome::Complete) {
+                output->document = load_document(nav_params, sniff_bytes->bytes);
+                if (!output->document) {
+                    output->download_handled = handle_navigation_response_as_download(nav_params, source_allows_downloading, source_interface_origin, sniff_bytes->bytes);
+                    output->save_extra_document_state = false;
+                } else {
+                    nav_params->response->resume_body_delivery();
+                }
             } else {
-                nav_params->response->resume_body_delivery();
+                stop_or_resume_response_body_delivery(navigation_params);
+                output->save_extra_document_state = false;
             }
         } else {
             stop_or_resume_response_body_delivery(navigation_params);

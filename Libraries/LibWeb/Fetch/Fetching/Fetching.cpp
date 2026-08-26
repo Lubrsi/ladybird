@@ -2303,6 +2303,8 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         if (success) {
             fetched_data_receiver->handle_network_data(realm, Requests::ResponseData::from_bytes({}), FetchedDataReceiver::NetworkState::Complete);
         } else {
+            fetched_data_receiver->handle_network_data(realm, Requests::ResponseData::from_bytes({}), FetchedDataReceiver::NetworkState::Error);
+
             // 16.1.2.2. Otherwise, if stream is readable, error stream with a TypeError.
             auto error = Utf16String::formatted("Load failed: {}", error_message.value_or("Unknown error"sv));
 
