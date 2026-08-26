@@ -414,6 +414,7 @@ set(SOURCES
     Fetch/Body.cpp
     Fetch/BodyInit.cpp
     Fetch/Fetching/Checks.cpp
+    Fetch/Fetching/FetchByteChannel.cpp
     Fetch/Fetching/FetchedDataReceiver.cpp
     Fetch/Fetching/Fetching.cpp
     Fetch/Fetching/PendingResponse.cpp
