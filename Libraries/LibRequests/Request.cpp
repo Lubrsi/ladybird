@@ -77,11 +77,14 @@ bool Request::stop()
     if (!had_active_request)
         release_transfer_lease();
     auto on_stop = move(m_on_stop);
+    auto teardown = move(on_teardown);
 
     defer_teardown();
 
     if (had_active_request && on_stop)
         on_stop();
+    if (teardown)
+        teardown(TeardownReason::Stopped);
 
     return had_active_request;
 }
@@ -281,11 +284,14 @@ void Request::did_transfer(Badge<RequestClient>)
 {
     m_transfer_lease.clear();
     auto on_stop = move(m_on_stop);
+    auto teardown = move(on_teardown);
 
     defer_teardown();
 
     if (on_stop)
         on_stop();
+    if (teardown)
+        teardown(TeardownReason::Transferred);
 }
 
 void Request::defer_teardown()
