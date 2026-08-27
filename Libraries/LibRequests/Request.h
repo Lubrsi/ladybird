@@ -126,6 +126,14 @@ public:
     Function<CertificateAndKey()> on_certificate_requested;
     Function<void()> on_requires_network;
 
+    enum class TeardownReason : u8 {
+        Stopped,
+        Transferred,
+    };
+
+    // Invoked at most once, when the request drops its delivery callbacks without a finish: a stop() or a transfer.
+    Function<void(TeardownReason)> on_teardown;
+
     void did_finish(Badge<RequestClient>, u64 total_size, RequestTimingInfo const& timing_info, Optional<NetworkError> const& network_error);
     void did_receive_headers(Badge<RequestClient>, NonnullRefPtr<HTTP::HeaderList> response_headers, Optional<u32> response_code, Optional<String> const& reason_phrase, Optional<Core::ImmutableBytes> javascript_bytecode, Optional<u64> javascript_bytecode_cache_vary_key, CameFromCache came_from_cache);
     void did_request_certificates(Badge<RequestClient>);
