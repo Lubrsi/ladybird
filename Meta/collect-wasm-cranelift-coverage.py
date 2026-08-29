@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 
 DIRECT_FAILURE_RE = re.compile(
-    r"^direct compilation of function (\d+) failed: (.*); trying allocated-bytecode frontend$"
+    r"^direct compilation of function (\d+) failed: (.*); "
+    r"(trying allocated-bytecode frontend|leaving the function interpreted)$"
 )
 ALLOCATED_FAILURE_RE = re.compile(
     r"^allocated-bytecode compilation of function (\d+) also failed: (.*); leaving the function interpreted$"
@@ -82,7 +83,9 @@ def parse_trace(path: Path, trace: str) -> ModuleCoverage:
     coverage = ModuleCoverage(path)
     for line in trace.splitlines():
         if match := DIRECT_FAILURE_RE.match(line):
-            coverage.failures.append(parse_failure("direct", *match.groups()))
+            function_index, reason, outcome = match.groups()
+            stage = "direct-to-allocated" if outcome == "trying allocated-bytecode frontend" else "direct"
+            coverage.failures.append(parse_failure(stage, function_index, reason))
             continue
         if match := ALLOCATED_FAILURE_RE.match(line):
             coverage.failures.append(parse_failure("allocated-bytecode", *match.groups()))
@@ -250,7 +253,7 @@ def successful_allocated_fallbacks(result: ModuleCoverage) -> list[CompilationFa
     )
     successful_fallbacks = []
     for failure in result.failures:
-        if failure.stage != "direct":
+        if failure.stage != "direct-to-allocated":
             continue
         if failed_fallbacks[failure.function_index] > 0:
             failed_fallbacks[failure.function_index] -= 1

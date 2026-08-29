@@ -21,7 +21,6 @@ use crate::SERIALIZED_CODE_ALIGNMENT;
 use crate::WasmFunctionType;
 use crate::compile_direct_osr_to_bytes;
 use crate::compile_direct_to_bytes;
-use crate::compile_to_bytes;
 use std::mem::align_of;
 use std::mem::size_of;
 use std::mem::size_of_val;
@@ -557,35 +556,6 @@ fn compilation_options(entry: &InputFunctionEntry, num_locals: u32) -> FunctionC
     }
 }
 
-fn compile_allocated_bytecode_entry(
-    input: &[u8],
-    entry: &InputFunctionEntry,
-    layout: &RuntimeLayout,
-    function_types: &[WasmFunctionType<'_>],
-) -> Result<CompiledFunction, &'static str> {
-    if entry.insn_count == 0 {
-        return Err("allocated-bytecode instruction stream is empty");
-    }
-
-    let insns = read_pod_slice::<CraneliftInsn>(input, entry.insn_offset, entry.insn_count)?;
-    let locals_offset = usize::try_from(entry.locals_offset).map_err(|_| "local-types offset overflow")?;
-    let num_locals = usize::try_from(entry.num_locals).map_err(|_| "local-types count overflow")?;
-    let locals_end = locals_offset
-        .checked_add(num_locals)
-        .ok_or("local-types end overflow")?;
-    let local_types = input
-        .get(locals_offset..locals_end)
-        .ok_or("local types out of bounds")?;
-
-    compile_to_bytes(
-        insns,
-        layout,
-        compilation_options(entry, entry.num_locals),
-        local_types,
-        function_types,
-    )
-}
-
 fn read_direct_input<'a>(
     input: &'a [u8],
     entry: &InputFunctionEntry,
@@ -662,49 +632,25 @@ fn compile_entry(
     module_types: &[Option<DirectFunctionType<'_>>],
     global_types: &[DirectValueType],
 ) -> Result<CompiledEntry, &'static str> {
-    match entry.preferred_frontend {
-        frontend if frontend == CraneliftFrontend::Direct as u32 => {
-            match compile_direct_entry(input, entry, layout, function_types, module_types, global_types) {
-                Ok((clean, osr)) => Ok(CompiledEntry {
-                    frontend: CraneliftFrontend::Direct,
-                    clean,
-                    osr,
-                }),
-                Err(error) => {
-                    if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
-                        eprintln!(
-                            "direct compilation of function {} failed: {error}; trying allocated-bytecode frontend",
-                            entry.function_index
-                        );
-                    }
-                    match compile_allocated_bytecode_entry(input, entry, layout, function_types) {
-                        Ok(clean) => Ok(CompiledEntry {
-                            frontend: CraneliftFrontend::AllocatedBytecode,
-                            clean,
-                            osr: None,
-                        }),
-                        Err(allocated_error) => {
-                            if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
-                                eprintln!(
-                                    "allocated-bytecode compilation of function {} also failed: {allocated_error}; \
-                                     leaving the function interpreted",
-                                    entry.function_index
-                                );
-                            }
-                            Err(allocated_error)
-                        }
-                    }
-                }
+    if entry.preferred_frontend != CraneliftFrontend::Direct as u32 {
+        return Err("allocated-bytecode fresh compilation is disabled");
+    }
+
+    match compile_direct_entry(input, entry, layout, function_types, module_types, global_types) {
+        Ok((clean, osr)) => Ok(CompiledEntry {
+            frontend: CraneliftFrontend::Direct,
+            clean,
+            osr,
+        }),
+        Err(error) => {
+            if std::env::var_os("CRANELIFT_TRACE_DIRECT_FALLBACK").is_some() {
+                eprintln!(
+                    "direct compilation of function {} failed: {error}; leaving the function interpreted",
+                    entry.function_index
+                );
             }
+            Err("direct compilation failed")
         }
-        frontend if frontend == CraneliftFrontend::AllocatedBytecode as u32 => {
-            compile_allocated_bytecode_entry(input, entry, layout, function_types).map(|clean| CompiledEntry {
-                frontend: CraneliftFrontend::AllocatedBytecode,
-                clean,
-                osr: None,
-            })
-        }
-        _ => Err("invalid preferred frontend"),
     }
 }
 
@@ -1134,7 +1080,7 @@ mod tests {
             (
                 0,
                 CompiledEntry {
-                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    frontend: CraneliftFrontend::Direct,
                     clean: CompiledFunction {
                         code: vec![0; 16],
                         native_entry_offset: 0,
@@ -1147,7 +1093,7 @@ mod tests {
             (
                 1,
                 CompiledEntry {
-                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    frontend: CraneliftFrontend::Direct,
                     clean: CompiledFunction {
                         code: vec![0; 64],
                         native_entry_offset: 0,
@@ -1160,7 +1106,7 @@ mod tests {
             (
                 2,
                 CompiledEntry {
-                    frontend: CraneliftFrontend::AllocatedBytecode,
+                    frontend: CraneliftFrontend::Direct,
                     clean: CompiledFunction {
                         code: vec![0; 16],
                         native_entry_offset: 0,

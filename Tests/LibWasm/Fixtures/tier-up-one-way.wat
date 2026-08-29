@@ -44,8 +44,7 @@
     (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
     (local $iteration i32)
 
-    ;; Keep this function on the OSR-capable allocated-bytecode frontend until the direct
-    ;; frontend has its own OSR variant.
+    ;; Exercise memory.size before entering the checkpointed loop.
     (drop (memory.size))
 
     (local.set $stable0 (i32.const 40))
