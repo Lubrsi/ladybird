@@ -1517,6 +1517,36 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     expect_trap("run_out_of_bounds"sv, "Table index out of bounds"sv);
 }
 
+TEST_CASE(native_direct_callee_allocates_call_record_for_indirect_fallback)
+{
+    auto file = MUST(Core::File::open("Fixtures/native-direct-call-fallback-call-record.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    auto const& functions = module->code_section().functions();
+    EXPECT_EQ(functions.size(), 3u);
+    EXPECT(!functions[0].func().body().compiled_instructions.cranelift_compiled);
+    expect_direct_frontend(functions[1].func().body().compiled_instructions);
+    expect_direct_frontend(functions[2].func().body().compiled_instructions);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(!result.is_trap());
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 42);
+}
+
 TEST_CASE(native_indirect_call_restores_context_after_cross_module_fallback)
 {
     auto parse_module = [](StringView path) {
