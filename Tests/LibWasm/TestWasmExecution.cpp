@@ -522,6 +522,30 @@ TEST_CASE(direct_frontend_links_mutually_recursive_group)
     EXPECT_EQ(result.values()[0].to<i32>(), 0);
 }
 
+TEST_CASE(direct_frontend_traps_native_stack_exhaustion)
+{
+    auto bytes = make_mutually_recursive_module();
+    FixedMemoryStream stream { bytes.span() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    for (auto const& function : module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
+
+    auto instance = MUST(machine.instantiate(*module, {}));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(1'000'000)) });
+    EXPECT(result.is_trap());
+    EXPECT_EQ(result.trap().format(), Wasm::Constants::stack_exhaustion_message);
+}
+
 TEST_CASE(direct_frontend_executes_indirect_calls)
 {
     auto bytes = make_call_indirect_callee_module();

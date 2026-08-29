@@ -520,6 +520,7 @@ static constexpr u64 trace_missing = NumericLimits<u64>::max();
 void BytecodeInterpreter::interpret(Configuration& configuration)
 {
     m_trap = Empty {};
+    configuration.set_native_stack_limit(m_stack_info.base() + minimum_native_stack_space_to_keep_free_bytes);
     auto& expression = configuration.frame().expression();
     auto const native_entry = cranelift_entry_acquire(expression.compiled_instructions);
     // We may end up running native code either at entry (native_entry != 0) or mid-loop via a tier-up checkpoint, so install fault recovery in either case.

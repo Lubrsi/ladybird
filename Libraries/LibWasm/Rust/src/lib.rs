@@ -191,6 +191,7 @@ pub struct RuntimeLayout {
     pub current_module_offset: u32,
     pub current_canonical_types_offset: u32,
     pub current_expression_offset: u32,
+    pub native_stack_limit_offset: u32,
     pub compiled_function_entry_size: u32,
     pub compiled_function_entry_expression_offset: u32,
     pub table_instance_size_offset: u32,

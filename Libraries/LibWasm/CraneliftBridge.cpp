@@ -510,6 +510,7 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
     hash = fnv1a(hash, layout.current_module_offset);
     hash = fnv1a(hash, layout.current_canonical_types_offset);
     hash = fnv1a(hash, layout.current_expression_offset);
+    hash = fnv1a(hash, layout.native_stack_limit_offset);
     hash = fnv1a(hash, layout.compiled_function_entry_size);
     hash = fnv1a(hash, layout.compiled_function_entry_expression_offset);
     hash = fnv1a(hash, layout.table_instance_size_offset);
@@ -1418,6 +1419,7 @@ static RuntimeLayout make_runtime_layout()
         .current_module_offset = static_cast<u32>(Configuration::current_module_offset()),
         .current_canonical_types_offset = static_cast<u32>(Configuration::current_canonical_types_offset()),
         .current_expression_offset = static_cast<u32>(Configuration::current_expression_offset()),
+        .native_stack_limit_offset = static_cast<u32>(Configuration::native_stack_limit_offset()),
         .compiled_function_entry_size = static_cast<u32>(sizeof(CompiledFunctionEntry)),
         .compiled_function_entry_expression_offset = static_cast<u32>(offsetof(CompiledFunctionEntry, expression)),
         .table_instance_size_offset = static_cast<u32>(TableInstance::size_offset()),

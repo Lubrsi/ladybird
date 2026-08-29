@@ -17,12 +17,14 @@ use cranelift_codegen::FinalizedRelocTarget;
 use cranelift_codegen::binemit::Reloc;
 use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::AliasRegionData;
+use cranelift_codegen::ir::ArgumentPurpose;
 use cranelift_codegen::ir::Block;
 use cranelift_codegen::ir::BlockArg;
 use cranelift_codegen::ir::ExtFuncData;
 use cranelift_codegen::ir::ExternalName;
 use cranelift_codegen::ir::FuncRef;
 use cranelift_codegen::ir::Function;
+use cranelift_codegen::ir::GlobalValueData;
 use cranelift_codegen::ir::InstBuilder;
 use cranelift_codegen::ir::MemFlagsData as MemFlags;
 use cranelift_codegen::ir::SigRef;
@@ -473,13 +475,40 @@ pub(super) fn wasm_abi_type(kind: u8) -> Result<Type, &'static str> {
     }
 }
 
+pub(super) fn configuration_abi_param(pointer_type: Type) -> AbiParam {
+    AbiParam::special(pointer_type, ArgumentPurpose::VMContext)
+}
+
+pub(super) fn configure_stack_limit(
+    function: &mut Function,
+    layout: &SerializedRuntimeLayout,
+    memory_flags: WasmMemoryFlags,
+    pointer_type: Type,
+) -> Result<(), &'static str> {
+    let offset = i32::try_from(layout.native_stack_limit_offset).map_err(|_| "native stack limit offset overflow")?;
+    let configuration = function.global_values.push(GlobalValueData::VMContext);
+    let flags = function
+        .dfg
+        .mem_flags
+        .insert(memory_flags.configuration.with_readonly())
+        .map_err(|_| "failed to create native stack limit memory flags")?;
+    let stack_limit = function.global_values.push(GlobalValueData::Load {
+        base: configuration,
+        offset: offset.into(),
+        global_type: pointer_type,
+        flags,
+    });
+    function.stack_limit = Some(stack_limit);
+    Ok(())
+}
+
 pub(super) fn interpreter_handler_signature(isa: &dyn TargetIsa) -> Signature {
     // void fn(void* interpreter, void* configuration, void* instruction,
     //     u32 short_ip, void* dispatch, void* addresses)
     let pointer_type = isa.pointer_type();
     let mut signature = Signature::new(isa.default_call_conv());
     signature.params.push(AbiParam::new(pointer_type));
-    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(configuration_abi_param(pointer_type));
     signature.params.push(AbiParam::new(pointer_type));
     signature.params.push(AbiParam::new(types::I32));
     signature.params.push(AbiParam::new(pointer_type));

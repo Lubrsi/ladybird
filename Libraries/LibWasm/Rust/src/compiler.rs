@@ -61,6 +61,8 @@ use common::RuntimeLayout;
 use common::WASM_FUNCTION_EXTERNAL_NAMESPACE;
 use common::WasmMemoryFlags;
 use common::compile_function;
+use common::configuration_abi_param;
+use common::configure_stack_limit;
 use common::interpreter_handler_signature;
 use common::payload_to_value;
 use common::user_trap_code;
@@ -183,7 +185,7 @@ impl CraneliftCompiler {
 
         let mut signature = Signature::new(isa.default_call_conv());
         signature.params.push(AbiParam::new(isa.pointer_type())); // interpreter
-        signature.params.push(AbiParam::new(isa.pointer_type())); // configuration
+        signature.params.push(configuration_abi_param(isa.pointer_type())); // configuration
         signature.params.push(AbiParam::new(types::I32)); // interpreter resume IP plus one, or zero for native calls
         if Self::uses_register_native_abi(function_type) {
             for &parameter in function_type.parameters {
@@ -554,6 +556,7 @@ impl CraneliftCompiler {
         let signature = Self::native_signature(isa, function_type)?;
         let mut function = Function::with_name_signature(UserFuncName::user(2, function_index), signature);
         let memory_flags = WasmMemoryFlags::new(&mut function);
+        configure_stack_limit(&mut function, layout, memory_flags, ptr_type)?;
         let runtime_layout = RuntimeLayout::new(layout);
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut function, &mut builder_context);
@@ -777,6 +780,7 @@ impl CraneliftCompiler {
         let native_signature = Self::native_signature(&*isa, function_type)?;
         let mut func = Function::with_name_signature(UserFuncName::user(0, function_index), native_signature.clone());
         let memory_flags = WasmMemoryFlags::new(&mut func);
+        configure_stack_limit(&mut func, layout, memory_flags, ptr_type)?;
         let mut builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
 
@@ -4115,6 +4119,7 @@ impl CraneliftCompiler {
 
         let mut adapter = Function::with_name_signature(UserFuncName::user(1, function_index), handler_signature);
         let adapter_memory_flags = WasmMemoryFlags::new(&mut adapter);
+        configure_stack_limit(&mut adapter, layout, adapter_memory_flags, ptr_type)?;
         let mut adapter_builder_context = FunctionBuilderContext::new();
         let mut adapter_builder = FunctionBuilder::new(&mut adapter, &mut adapter_builder_context);
         let adapter_entry = adapter_builder.create_block();

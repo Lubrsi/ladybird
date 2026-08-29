@@ -131,6 +131,7 @@ public:
     ALWAYS_INLINE CompiledFunctionEntry const* current_compiled_fn_table_data() const { return m_current_compiled_fn_table_data; }
     ALWAYS_INLINE CanonicalTypeTable current_canonical_types() const { return m_current_canonical_types; }
     ALWAYS_INLINE Expression const* current_expression() const { return m_current_expression; }
+    ALWAYS_INLINE void set_native_stack_limit(FlatPtr limit) { m_native_stack_limit = limit; }
 
     static constexpr size_t locals_base_offset() { return __builtin_offsetof(Configuration, m_locals_base); }
     static constexpr size_t table_instances_offset() { return __builtin_offsetof(Configuration, m_table_instances); }
@@ -146,6 +147,7 @@ public:
     static constexpr size_t current_module_offset() { return __builtin_offsetof(Configuration, m_current_module); }
     static constexpr size_t current_canonical_types_offset() { return __builtin_offsetof(Configuration, m_current_canonical_types); }
     static constexpr size_t current_expression_offset() { return __builtin_offsetof(Configuration, m_current_expression); }
+    static constexpr size_t native_stack_limit_offset() { return __builtin_offsetof(Configuration, m_native_stack_limit); }
 
     ALWAYS_INLINE Value& call_record_entry(size_t index) { return m_call_record_base[index]; }
     ALWAYS_INLINE Value const& call_record_entry(size_t index) const { return m_call_record_base[index]; }
@@ -341,6 +343,7 @@ public:
     CompiledFunctionEntry const* m_current_compiled_fn_table_data { nullptr };
     CanonicalTypeTable m_current_canonical_types { nullptr };
     Expression const* m_current_expression { nullptr };
+    FlatPtr m_native_stack_limit { 0 };
 };
 
 }
