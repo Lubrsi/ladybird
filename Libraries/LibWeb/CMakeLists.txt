@@ -417,6 +417,7 @@ set(SOURCES
     Fetch/Fetching/Checks.cpp
     Fetch/Fetching/FetchBodyDeliveryGate.cpp
     Fetch/Fetching/FetchByteChannel.cpp
+    Fetch/Fetching/FetchByteChannelTee.cpp
     Fetch/Fetching/FetchedDataReceiver.cpp
     Fetch/Fetching/NetworkBodyPump.cpp
     Fetch/Fetching/Fetching.cpp
