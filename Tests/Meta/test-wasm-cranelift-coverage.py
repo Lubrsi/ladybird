@@ -22,6 +22,7 @@ class TestWasmCraneliftCoverage(unittest.TestCase):
         trace = """direct compilation of function 6 failed: instruction 26 (v128_load, opcode 0xfd000000): unsupported direct instruction; trying allocated-bytecode frontend
 allocated-bytecode compilation of function 6 also failed: unsupported allocated instruction; leaving the function interpreted
 direct compilation of function 7 failed: instruction 4 (table_get, opcode 0x25): unsupported direct instruction; trying allocated-bytecode frontend
+direct compilation of function 8 failed: instruction 3 (table_get, opcode 0x25): unsupported direct instruction; leaving the function interpreted
 direct OSR compilation of function 9 failed: invalid checkpoint; retaining only the clean body
 direct compilation summary: attempted=10 succeeded=8 allocated_fallbacks=1 uncompiled=1; osr_requested=4 osr_succeeded=3 osr_unavailable=1
 direct compilation summary: attempted=5 succeeded=5 allocated_fallbacks=0 uncompiled=0; osr_requested=2 osr_succeeded=2 osr_unavailable=0
@@ -41,8 +42,8 @@ direct compilation summary: attempted=5 succeeded=5 allocated_fallbacks=0 uncomp
                 osr_unavailable=1,
             ),
         )
-        self.assertEqual(len(coverage.failures), 4)
-        self.assertEqual(coverage.failures[0].stage, "direct")
+        self.assertEqual(len(coverage.failures), 5)
+        self.assertEqual(coverage.failures[0].stage, "direct-to-allocated")
         self.assertEqual(coverage.failures[0].function_index, 6)
         self.assertEqual(coverage.failures[0].instruction_index, 26)
         self.assertEqual(coverage.failures[0].opcode_name, "v128_load")
@@ -52,6 +53,8 @@ direct compilation summary: attempted=5 succeeded=5 allocated_fallbacks=0 uncomp
         self.assertEqual(len(successful_fallbacks), 1)
         self.assertEqual(successful_fallbacks[0].function_index, 7)
         self.assertEqual(successful_fallbacks[0].opcode_name, "table_get")
+        self.assertEqual(coverage.failures[3].stage, "direct")
+        self.assertEqual(coverage.failures[3].function_index, 8)
 
     def test_discovers_wasm_modules_recursively(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -72,7 +75,7 @@ direct compilation summary: attempted=5 succeeded=5 allocated_fallbacks=0 uncomp
 
     def test_limits_printed_failure_locations(self):
         trace = "\n".join(
-            f"direct compilation of function {index} failed: instruction 2 (v128_load, opcode 0xfd000000): unsupported direct instruction; trying allocated-bytecode frontend"
+            f"direct compilation of function {index} failed: instruction 2 (v128_load, opcode 0xfd000000): unsupported direct instruction; leaving the function interpreted"
             for index in range(4)
         )
         coverage = MODULE["parse_trace"](Path("fixture.wasm"), trace)

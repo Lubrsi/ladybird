@@ -5,6 +5,7 @@
  */
 
 #include <AK/MemoryStream.h>
+#include <AK/NumericLimits.h>
 #include <LibCore/File.h>
 #include <LibTest/TestCase.h>
 #include <LibThreading/Thread.h>
@@ -33,10 +34,10 @@ static void append_wasm_section(Vector<u8>& module, u8 section_id, Vector<u8>&& 
     module.extend(move(contents));
 }
 
-static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32> allocated_bytecode_function = {})
+static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32> interpreted_function = {})
 {
     VERIFY(function_count > 0);
-    VERIFY(!allocated_bytecode_function.has_value() || allocated_bytecode_function.value() < function_count);
+    VERIFY(!interpreted_function.has_value() || interpreted_function.value() < function_count);
 
     Vector<u8> module { 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
 
@@ -49,7 +50,7 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32
         function_section.append(0);
     append_wasm_section(module, 3, move(function_section));
 
-    if (allocated_bytecode_function.has_value()) {
+    if (interpreted_function.has_value()) {
         Vector<u8> memory_section { 0x01, 0x00, 0x01 };
         append_wasm_section(module, 5, move(memory_section));
 
@@ -64,10 +65,10 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32
     append_unsigned_leb128(code_section, function_count);
     for (u32 function_index = 0; function_index < function_count; ++function_index) {
         Vector<u8> body { 0x00 };
-        if (allocated_bytecode_function == function_index) {
+        if (interpreted_function == function_index) {
             // global.get 0; drop
-            // Reference values deliberately select the allocated-bytecode frontend while the
-            // direct frontend implements only numeric and vector values.
+            // Reference-valued globals are not supported by the direct frontend yet, so the
+            // fresh-compilation retirement policy leaves this function interpreted.
             body.extend(Vector<u8> { 0x23, 0x00, 0x1a });
         }
         if (function_index + 1 == function_count) {
@@ -173,13 +174,13 @@ static void expect_direct_frontend(Wasm::CompiledInstructions const& compiled)
     EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
 }
 
-static void expect_allocated_bytecode_frontend(Wasm::CompiledInstructions const& compiled)
+static void expect_interpreted(Wasm::CompiledInstructions const& compiled)
 {
-    EXPECT(compiled.cranelift_compiled);
-    EXPECT_NE(Wasm::cranelift_entry_acquire(compiled), 0u);
+    EXPECT(!compiled.cranelift_compiled);
+    EXPECT_EQ(Wasm::cranelift_entry_acquire(compiled), 0u);
     EXPECT_EQ(Wasm::cranelift_direct_native_entry_acquire(compiled), 0u);
-    EXPECT_NE(Wasm::cranelift_native_entry_acquire(compiled), 0u);
-    EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+    EXPECT_EQ(Wasm::cranelift_native_entry_acquire(compiled), 0u);
+    EXPECT_EQ(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
 }
 
 TEST_CASE(direct_osr_artifact_is_excluded_from_cache)
@@ -414,7 +415,7 @@ TEST_CASE(direct_frontend_fresh_entry_survives_cache_round_trip)
     EXPECT_EQ(Wasm::tier_up_taken_count(), initial_tier_up_count);
 }
 
-TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallback)
+TEST_CASE(interpreter_caller_reaches_direct_callee)
 {
     auto bytes = make_direct_call_chain_module(2, 0);
     FixedMemoryStream stream { bytes.span() };
@@ -425,7 +426,7 @@ TEST_CASE(allocated_bytecode_caller_reaches_direct_callee_through_existing_fallb
     auto const& functions = module->code_section().functions();
     auto const& caller = functions[0].func().body().compiled_instructions;
     auto const& callee = functions[1].func().body().compiled_instructions;
-    expect_allocated_bytecode_frontend(caller);
+    expect_interpreted(caller);
     expect_direct_frontend(callee);
 
     auto instance = MUST(machine.instantiate(*module, {}));
@@ -454,7 +455,7 @@ TEST_CASE(direct_frontend_static_call_falls_back_to_interpreter)
         auto const& caller = functions[0].func().body().compiled_instructions;
         auto const& callee = functions[1].func().body().compiled_instructions;
         expect_direct_frontend(caller);
-        expect_allocated_bytecode_frontend(callee);
+        expect_interpreted(callee);
     };
     auto invoke = [](Wasm::AbstractMachine& machine, Wasm::ModuleInstance const& instance) {
         Optional<Wasm::FunctionAddress> run;
@@ -541,7 +542,7 @@ TEST_CASE(direct_frontend_traps_native_stack_exhaustion)
     }
     VERIFY(run.has_value());
 
-    auto result = machine.invoke(*run, { Wasm::Value(static_cast<i32>(1'000'000)) });
+    auto result = machine.invoke(*run, { Wasm::Value(NumericLimits<i32>::max()) });
     EXPECT(result.is_trap());
     EXPECT_EQ(result.trap().format(), Wasm::Constants::stack_exhaustion_message);
 }

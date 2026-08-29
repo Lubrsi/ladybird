@@ -409,7 +409,7 @@ static size_t compiler_instruction_count(BatchInput const& input)
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 32;
+constexpr u32 cache_blob_format_version = 33;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -2343,8 +2343,8 @@ static ErrorOr<void> try_cranelift_compile_batch(ReadonlySpan<BatchInput> batch,
         auto const& output = *reinterpret_cast<OutputFunctionEntry const*>(output_base + output_entries_offset + i * sizeof(OutputFunctionEntry));
         if (!output.clean.compiled)
             continue;
-        if (output.frontend > static_cast<u32>(CraneliftFrontend::Direct))
-            continue;
+        if (output.frontend != static_cast<u32>(CraneliftFrontend::Direct))
+            return Error::from_string_literal("Cranelift compiler returned a retired frontend");
         auto const frontend = static_cast<CraneliftFrontend>(output.frontend);
 
         auto clean = output_regions.read_artifact(output.clean);
@@ -2421,7 +2421,8 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
     }
 
     auto direct_input = serialize_direct_compiler_input(function);
-    auto preferred_frontend = direct_input.has_value() ? CraneliftFrontend::Direct : CraneliftFrontend::AllocatedBytecode;
+    if (!direct_input.has_value())
+        return false;
 
     if constexpr (WASM_CRANELIFT_DEBUG) {
         // CRANELIFT_MAX_INSNS=N       skip functions with more than N dispatches.
@@ -2571,7 +2572,7 @@ bool try_cranelift_compile(CodeSection::Func const& function, u32 result_arity)
     cranelift_cache_state().pending_batch.append({
         move(flat),
         move(direct_input),
-        preferred_frontend,
+        CraneliftFrontend::Direct,
         result_arity,
         s_active_function_index,
         &compiled,
@@ -3133,7 +3134,7 @@ bool try_install_cranelift_cache_blob(ReadonlyBytes expected_wasm_hash, Readonly
         offset += sizeof(CacheBlobFunctionEntry);
         if (entry->native_entry_offset >= entry->code_size)
             return false;
-        if (entry->frontend > static_cast<u32>(CraneliftFrontend::Direct))
+        if (entry->frontend != static_cast<u32>(CraneliftFrontend::Direct))
             return false;
 
         auto code_off = offset;
