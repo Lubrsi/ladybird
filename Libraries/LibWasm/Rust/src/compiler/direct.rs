@@ -80,11 +80,17 @@ struct ControlFrame {
     continuation: Block,
     else_block: Option<Block>,
     entry_stack: Vec<Value>,
+    parameter_values: Vec<Value>,
     branch_types: Vec<Type>,
     result_types: Vec<Type>,
     continuation_has_predecessor: bool,
     entry_is_reachable: bool,
     else_was_seen: bool,
+}
+
+struct BlockSignature {
+    parameters: Vec<Type>,
+    results: Vec<Type>,
 }
 
 #[derive(Clone, Copy)]
@@ -176,11 +182,41 @@ impl DirectCompiler {
         Self::checked_direct_type(value_type.checked()?)
     }
 
-    fn block_results(block_type: BlockType) -> Result<Vec<Type>, &'static str> {
+    fn block_signature(
+        block_type: BlockType,
+        module_types: &[Option<DirectFunctionType<'_>>],
+    ) -> Result<BlockSignature, &'static str> {
         match block_type {
-            BlockType::Empty => Ok(Vec::new()),
-            BlockType::Value(value_type) => Ok(vec![Self::checked_direct_type(value_type)?]),
-            BlockType::TypeIndex(_) => Err("type-index block types are not yet supported"),
+            BlockType::Empty => Ok(BlockSignature {
+                parameters: Vec::new(),
+                results: Vec::new(),
+            }),
+            BlockType::Value(value_type) => Ok(BlockSignature {
+                parameters: Vec::new(),
+                results: vec![Self::checked_direct_type(value_type)?],
+            }),
+            BlockType::TypeIndex(type_index) => {
+                let type_index = usize::try_from(type_index).map_err(|_| "direct block type index overflow")?;
+                let function_type = module_types
+                    .get(type_index)
+                    .copied()
+                    .flatten()
+                    .ok_or("direct block type is not a function type")?;
+                Ok(BlockSignature {
+                    parameters: function_type
+                        .parameters
+                        .iter()
+                        .copied()
+                        .map(Self::direct_type)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    results: function_type
+                        .results
+                        .iter()
+                        .copied()
+                        .map(Self::direct_type)
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            }
         }
     }
 
@@ -1418,10 +1454,10 @@ impl DirectCompiler {
             match instruction.opcode {
                 op::BLOCK | op::LOOP | op::IF => {
                     let arguments = instruction.structured()?;
-                    let result_types = Self::block_results(arguments.block_type)
+                    let signature = Self::block_signature(arguments.block_type, module_types)
                         .map_err(|reason| Self::instruction_error(instruction_index, instruction.opcode, reason))?;
                     let continuation = builder.create_block();
-                    for &result_type in &result_types {
+                    for &result_type in &signature.results {
                         builder.append_block_param(continuation, result_type);
                     }
 
@@ -1431,26 +1467,47 @@ impl DirectCompiler {
                         op::IF => ControlKind::If,
                         _ => unreachable!(),
                     };
+                    let condition = if kind == ControlKind::If && is_reachable {
+                        Some(Self::pop_expected(&builder, &mut operand_stack, types::I32)?)
+                    } else {
+                        None
+                    };
+                    let parameter_values = if is_reachable {
+                        Self::result_values(&builder, &mut operand_stack, &signature.parameters)?
+                    } else {
+                        Vec::new()
+                    };
+                    let entry_stack = operand_stack.clone();
                     let mut else_block = None;
                     let branch_target = match kind {
-                        ControlKind::Block => continuation,
+                        ControlKind::Block => {
+                            operand_stack.extend_from_slice(&parameter_values);
+                            continuation
+                        }
                         ControlKind::Loop => {
                             let header = osr_loop_headers
                                 .get(&instruction_index)
                                 .copied()
                                 .unwrap_or_else(|| builder.create_block());
+                            if osr_loop_headers.contains_key(&instruction_index) && !signature.parameters.is_empty() {
+                                return Err("tier-up loop has direct block parameters".into());
+                            }
+                            for &parameter_type in &signature.parameters {
+                                builder.append_block_param(header, parameter_type);
+                            }
                             if is_reachable {
-                                builder.ins().jump(header, &[]);
+                                let parameter_arguments = parameter_values
+                                    .iter()
+                                    .copied()
+                                    .map(BlockArg::Value)
+                                    .collect::<Vec<_>>();
+                                builder.ins().jump(header, &parameter_arguments);
                                 builder.switch_to_block(header);
+                                operand_stack.extend_from_slice(builder.block_params(header));
                             }
                             header
                         }
                         ControlKind::If => {
-                            let condition = if is_reachable {
-                                Some(Self::pop_expected(&builder, &mut operand_stack, types::I32)?)
-                            } else {
-                                None
-                            };
                             let then_block = builder.create_block();
                             let false_target = if arguments.else_ip.is_some() {
                                 let block = builder.create_block();
@@ -1461,9 +1518,17 @@ impl DirectCompiler {
                             };
                             if let Some(condition) = condition {
                                 let condition = builder.ins().icmp_imm_s(IntCC::NotEqual, condition, 0);
-                                builder.ins().brif(condition, then_block, &[], false_target, &[]);
+                                let false_arguments = if arguments.else_ip.is_none() {
+                                    Self::branch_arguments(&builder, &parameter_values, &signature.results)?
+                                } else {
+                                    Vec::new()
+                                };
+                                builder
+                                    .ins()
+                                    .brif(condition, then_block, &[], false_target, &false_arguments);
                                 builder.switch_to_block(then_block);
                                 builder.seal_block(then_block);
+                                operand_stack.extend_from_slice(&parameter_values);
                             }
                             continuation
                         }
@@ -1475,13 +1540,14 @@ impl DirectCompiler {
                         branch_target,
                         continuation,
                         else_block,
-                        entry_stack: operand_stack.clone(),
+                        entry_stack,
+                        parameter_values,
                         branch_types: if kind == ControlKind::Loop {
-                            Vec::new()
+                            signature.parameters
                         } else {
-                            result_types.clone()
+                            signature.results.clone()
                         },
-                        result_types,
+                        result_types: signature.results,
                         continuation_has_predecessor,
                         entry_is_reachable: is_reachable,
                         else_was_seen: false,
@@ -1498,6 +1564,7 @@ impl DirectCompiler {
                         frame.continuation_has_predecessor = true;
                     }
                     operand_stack = frame.entry_stack.clone();
+                    operand_stack.extend_from_slice(&frame.parameter_values);
                     is_reachable = frame.entry_is_reachable;
                     if is_reachable {
                         let else_block = frame.else_block.ok_or("missing direct else block")?;
@@ -2686,6 +2753,10 @@ mod tests {
         instruction(op::I32_CONST, DirectInstructionArguments { i32_constant: value })
     }
 
+    fn i64_constant(value: i64) -> DirectInstruction {
+        instruction(op::I64_CONST, DirectInstructionArguments { i64_constant: value })
+    }
+
     fn structured(opcode: u64) -> DirectInstruction {
         instruction(
             opcode,
@@ -2699,6 +2770,27 @@ mod tests {
                             nullable: 0,
                         },
                         type_index: 0,
+                    },
+                    end_ip: 0,
+                    else_ip: u32::MAX,
+                },
+            },
+        )
+    }
+
+    fn structured_with_type_index(opcode: u64, type_index: u32) -> DirectInstruction {
+        instruction(
+            opcode,
+            DirectInstructionArguments {
+                structured: DirectStructuredInstructionArguments {
+                    block_type: DirectBlockType {
+                        kind: DirectBlockTypeKind::TypeIndex as u32,
+                        value_type: DirectValueType {
+                            kind: DirectValueTypeKind::I32 as u32,
+                            type_index: 0,
+                            nullable: 0,
+                        },
+                        type_index,
                     },
                     end_ip: 0,
                     else_ip: u32::MAX,
@@ -2840,6 +2932,94 @@ mod tests {
                 .err()
                 .expect("mismatched interpreter checkpoint should be rejected");
         assert_eq!(error, "tier-up interpreter dispatch does not name synthetic_tier_up");
+    }
+
+    #[test]
+    fn compiles_type_index_block_signatures() {
+        let instructions = [
+            i32_constant(4),
+            i64_constant(5),
+            structured_with_type_index(op::BLOCK, 1),
+            local(op::LOCAL_SET, 1),
+            local(op::LOCAL_SET, 0),
+            local(op::LOCAL_GET, 1),
+            local(op::LOCAL_GET, 0),
+            no_arguments(op::END),
+            no_arguments(op::DROP),
+            no_arguments(op::DROP),
+            i32_constant(0),
+            structured_with_type_index(op::LOOP, 0),
+            local(op::LOCAL_SET, 0),
+            local(op::LOCAL_GET, 0),
+            i32_constant(1),
+            no_arguments(op::I32_ADD),
+            local(op::LOCAL_TEE, 0),
+            local(op::LOCAL_GET, 0),
+            i32_constant(3),
+            no_arguments(op::I32_LTS),
+            instruction(op::BR_IF, DirectInstructionArguments { label_index: 0 }),
+            no_arguments(op::END),
+            no_arguments(op::DROP),
+            i32_constant(7),
+            i32_constant(0),
+            structured_with_type_index(op::IF, 0),
+            i32_constant(1),
+            no_arguments(op::I32_ADD),
+            no_arguments(op::END),
+            no_arguments(op::DROP),
+            no_arguments(op::END),
+        ];
+        let i32_type = DirectValueType {
+            kind: DirectValueTypeKind::I32 as u32,
+            type_index: 0,
+            nullable: 0,
+        };
+        let i64_type = DirectValueType {
+            kind: DirectValueTypeKind::I64 as u32,
+            type_index: 0,
+            nullable: 0,
+        };
+        let unary_parameters = [i32_type];
+        let unary_results = [i32_type];
+        let multi_parameters = [i32_type, i64_type];
+        let multi_results = [i64_type, i32_type];
+        let module_types = [
+            Some(DirectFunctionType {
+                parameters: &unary_parameters,
+                results: &unary_results,
+            }),
+            Some(DirectFunctionType {
+                parameters: &multi_parameters,
+                results: &multi_results,
+            }),
+        ];
+        let function_types = [WasmFunctionType {
+            parameters: &[],
+            results: &[],
+        }];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[i32_type, i64_type],
+                tier_up_checkpoints: &[],
+                tier_up_live_local_indices: &[],
+                function_types: &function_types,
+                module_types: &module_types,
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 0,
+                num_locals: 2,
+                num_params: 0,
+                function_index: 0,
+                max_call_rec_size: 0,
+            },
+        )
+        .expect("direct compilation should support type-index block signatures");
+
+        assert!(!compiled.code.is_empty());
     }
 
     #[test]
