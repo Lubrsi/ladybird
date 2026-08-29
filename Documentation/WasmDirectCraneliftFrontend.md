@@ -1127,6 +1127,92 @@ old frontend as a runtime option solely for comparison. The interpreter remains 
 cold-function tier and the correctness oracle; removing the old native frontend does not remove the
 bytecode interpreter.
 
+#### Fresh-entry retirement experiment (2026-08-29)
+
+Fresh compilation is now direct-or-interpreted. A function whose parsed instruction stream cannot
+be serialized for the direct frontend is not submitted to the compiler process. If direct
+compilation rejects a submitted function, the compiler omits that function from its output instead
+of retrying the allocated-bytecode frontend. The allocated-bytecode compiler implementation remains
+in the tree while this experiment is measured, but it has no fresh-compilation caller.
+
+Both sides of the compiler-process boundary enforce the policy. The Rust worker rejects an input
+that requests allocated-bytecode fresh compilation, and the C++ consumer rejects a compiled output
+whose frontend is not direct. Native cache format version 33 invalidates earlier mixed-frontend
+blobs, and cache installation additionally rejects any same-version entry not marked direct. A
+stale cached allocated body therefore cannot make the retirement experiment appear successful.
+
+The cache-free coverage inventories preserved the direct frontend's preceding coverage exactly:
+
+| Workload                | Direct attempts | Direct bodies | Allocated fallbacks | Interpreted | Direct OSR bodies |
+| ----------------------- | --------------: | ------------: | ------------------: | ----------: | ----------------: |
+| `WasmRustBench`         |            2289 |          2284 |                   0 |           5 |         628 / 633 |
+| d3wasm                  |            6482 |          6482 |                   0 |           0 |       2149 / 2149 |
+| Ruffle                  |           12234 |         10095 |                   0 |        2139 |       2292 / 3083 |
+| generated specification |            3311 |          2843 |                   0 |         468 |             7 / 7 |
+| **Total**               |       **24316** |     **21704** |               **0** |    **2612** |   **5076 / 5872** |
+
+The coverage collector recognizes both the historical `direct -> allocated` diagnostic and the
+new `direct -> interpreted` diagnostic, so an unsupported direct function is no longer
+misclassified as a successful allocated fallback. Focused execution tests assert both mixed runtime
+directions: an interpreted caller can enter a direct callee, and a direct caller can use its cold
+interpreter fallback for an unsupported callee, including after a native-cache round trip.
+
+Validation for this checkpoint was:
+
+- all 21 Rust compiler tests and Clippy with `clippy::all` denied;
+- all five coverage-collector tests;
+- the regenerated specification suite, with all 3,311 attempted functions accounted for;
+- all 29 `TestWasmExecution` cases; and
+- `TestWasmMemory`, `TestWasmTable`, and `TestWasmDifferential`.
+
+The native stack-exhaustion regression now begins at the maximum signed `i32` recursion count
+rather than one million. One million minimal AArch64 frames did not exhaust every test runner's
+stack reservation, so the old input could return normally even with a correct prologue limit. The
+larger input remains bounded by the configured native stack limit and makes the test independent of
+the host runner's reservation.
+
+#### Direct-to-direct indirect-fallback call records (2026-08-29)
+
+The fresh-entry retirement experiment exposed a missing interpreter-boundary setup in direct
+native callees. A direct function entered from the interpreter inherits a call record allocated for
+that function, but a clean native-to-native call deliberately creates no interpreter frame. If the
+callee's `call_indirect` could not resolve a direct native target, its cold fallback nevertheless
+loaded `Configuration::call_record_base` and marshalled arguments through it. That pointer could be
+null when the caller itself needed no call record.
+
+The d3wasm failure was captured before changing the lowering. LLDB stopped on an
+`EXC_BAD_ACCESS` with `FAR = 0`, `x0 = 0`, and generated function 6123, `emloopcb`, executing:
+
+```text
+ldr x0, [configuration, call_record_base_offset]
+mov w1, argument
+str x1, [x0]
+```
+
+Disabling native-to-native calls avoided the failure, while forcing atomic rather than incremental
+compilation did not. Delaying each batch between compiler return and publication made the normal
+execution interleaving long enough for LLDB to attach; the delay was diagnostic and did not cause
+the null pointer.
+
+The direct frontend now creates call-record storage only on the cold indirect-call fallback path.
+It saves the previous base and stack top, publishes the old top as the temporary base, advances the
+top by exactly the number of marshalled `Value` entries, calls the interpreter bridge, and restores
+both fields before either returning the result or raising the reported trap. A resolved native
+indirect call does not execute this setup.
+
+A focused regression covers the relevant execution shape: a fresh direct wrapper with no call record
+directly calls another direct body, whose one-argument `call_indirect` falls back to an
+interpreter-only target. With the old lowering the invocation did not complete and had to be
+interrupted; with the fix it returns 42. All 29 `TestWasmExecution` cases pass, and a cache-free
+d3wasm run with the three-second publication delay completed its 45-second startup window past the
+original failure point without a crash.
+
+Do not delete the allocated-bytecode implementation solely from these coverage results. First run
+the browser loading, frame-rate, compilation-time, execution-time, and compiler-memory comparisons
+listed above. If those results are sound, the next checkpoint is mechanical removal of the retired
+fresh path and its cache, output, relocation, adapter, and test scaffolding; unsupported functions
+continue to use the bytecode interpreter.
+
 ## Differential verification harness
 
 Build the verification harness before the direct frontend. A wrong reaching definition, block
