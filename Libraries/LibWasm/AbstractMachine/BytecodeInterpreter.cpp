@@ -7778,13 +7778,21 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
         parsed_loop_for_dispatch[dispatch_index] = static_cast<u32>(parsed_loop_position);
     }
 
-    // Every time we have a large-enough function, drop a synthetic_tier_up checkpoint right after each loop header that's eligible for tier-up (empty stack at the header, so the back-edge hits it every iteration).
-    // This allows us to start running code immediately in the interpreter, and switch to native code on paths that matter (or eventually) once compiled code is ready and the tier-up check hits.
+    // Every time we have a large-enough function, drop a synthetic_tier_up checkpoint right after
+    // each parsed-body loop header that's eligible for tier-up (empty stack at the header, so the
+    // back-edge hits it every iteration).
+    // Inlined callee loops do not exist in the direct native body and therefore cannot be OSR
+    // targets.
+    // This allows us to start running code immediately in the interpreter, and switch to native
+    // code on paths that matter (or eventually) once compiled code is ready and the tier-up check
+    // hits.
     constexpr size_t tier_up_instruction_threshold = 32;
     if (cranelift_candidate && should_try_to_use_direct_threading && result.dispatches.size() >= tier_up_instruction_threshold) {
         Vector<size_t> loop_positions;
         for (size_t i = 0; i < result.dispatches.size(); ++i) {
             if (result.dispatches[i].instruction->opcode() != Instructions::loop)
+                continue;
+            if (!parsed_loop_for_dispatch[i].has_value())
                 continue;
             auto& sa = result.dispatches[i].instruction->arguments().get<Instruction::StructuredInstructionArgs>();
             if (sa.meta.tier_up_eligible)
@@ -7819,16 +7827,12 @@ CompiledInstructions try_compile_instructions(Expression const& expression, Span
                     auto interpreter_dispatch_index = new_dispatches.size();
                     new_dispatches.append({ { .instruction_opcode = tier_up.opcode() }, &tier_up });
                     new_src_dst.append({ .sources = { Dispatch::Stack, Dispatch::Stack, Dispatch::Stack }, .destination = Dispatch::Stack });
-                    // An inlined callee can contribute an interpreter checkpoint, but it has no
-                    // corresponding loop in the caller's parsed body for the direct frontend.
-                    if (parsed_loop_for_dispatch[i].has_value()) {
-                        result.tier_up_checkpoints.append({
-                            .checkpoint_id = TierUpCheckpointIndex { static_cast<u32>(result.tier_up_checkpoints.size()) },
-                            .interpreter_dispatch_index = InstructionPointer { static_cast<u32>(interpreter_dispatch_index) },
-                            .parsed_loop_instruction_index = InstructionPointer { parsed_loop_for_dispatch[i].value() },
-                            .live_local_indices = {},
-                        });
-                    }
+                    result.tier_up_checkpoints.append({
+                        .checkpoint_id = TierUpCheckpointIndex { static_cast<u32>(result.tier_up_checkpoints.size()) },
+                        .interpreter_dispatch_index = InstructionPointer { static_cast<u32>(interpreter_dispatch_index) },
+                        .parsed_loop_instruction_index = InstructionPointer { parsed_loop_for_dispatch[i].value() },
+                        .live_local_indices = {},
+                    });
                     ++next_loop;
                 }
             }

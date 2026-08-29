@@ -783,6 +783,53 @@ TEST_CASE(ineligible_function_has_no_tier_up_checkpoints)
         EXPECT(dispatch.instruction->opcode() != Wasm::Instructions::synthetic_tier_up);
 }
 
+TEST_CASE(direct_osr_does_not_enter_at_inlined_callee_loops)
+{
+    auto file = MUST(Core::File::open("Fixtures/direct-osr-inlined-loop.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module, {}, Wasm::CompileToNative::No));
+
+    auto& compiled = module->code_section().functions()[1].func().body().compiled_instructions;
+    EXPECT(compiled.has_tier_up_checkpoints);
+    EXPECT_EQ(compiled.tier_up_checkpoints.size(), 1u);
+    size_t tier_up_dispatch_count = 0;
+    for (auto const& dispatch : compiled.dispatches) {
+        if (dispatch.instruction->opcode() == Wasm::Instructions::synthetic_tier_up)
+            ++tier_up_dispatch_count;
+    }
+    EXPECT_EQ(tier_up_dispatch_count, compiled.tier_up_checkpoints.size());
+
+    Wasm::FunctionType compile_type { {}, {} };
+    auto compile = machine.store().allocate(Wasm::HostFunction {
+        [&](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
+            Wasm::start_cranelift_compilation(*module);
+            EXPECT_NE(Wasm::cranelift_osr_entry_acquire(compiled), 0u);
+            return Wasm::Result { Vector<Wasm::Value> {} };
+        },
+        compile_type,
+        "compile" });
+    VERIFY(compile.has_value());
+
+    auto instance = MUST(machine.instantiate(*module, { *compile }));
+    Optional<Wasm::FunctionAddress> run;
+    for (auto const& export_ : instance->exports()) {
+        if (export_.name() == "run"sv)
+            run = export_.value().get<Wasm::FunctionAddress>();
+    }
+    VERIFY(run.has_value());
+
+    auto result = machine.invoke(*run, {});
+    EXPECT(!result.is_trap());
+    if (result.is_trap())
+        return;
+    EXPECT_EQ(result.values().size(), 1u);
+    EXPECT_EQ(result.values()[0].to<i32>(), 6);
+}
+
 TEST_CASE(native_control_flow_ignores_unreachable_merge_predecessors)
 {
     auto file = MUST(Core::File::open("Fixtures/cranelift-unreachable-merge.wasm"sv, Core::File::OpenMode::Read));
