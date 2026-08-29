@@ -228,6 +228,11 @@ The direct frontend's type model should include every supported Wasm value kind,
 from the start. Individual instruction families may fall back while coverage is incomplete. Do not
 add a `V128` bank to the allocated-bytecode frontend as part of this migration.
 
+Do not use the shared 16-byte size of the interpreter's `Value` representation as a reason to give
+references and `V128` the same native representation. `V128` is a vector value. Native reference
+representations should follow their statically known Wasm reference hierarchy, as described in
+"Native reference representation" below.
+
 ## Direct compiler input
 
 Do not reuse the current post-allocation `CraneliftInsn` format as the direct frontend's input. Its
@@ -827,6 +832,289 @@ Validation for this checkpoint was:
 - Clippy passed with `-D clippy::all`;
 - the release `TestWasmExecution` and `wasm` targets built with parallel compilation; and
 - all 27 `TestWasmExecution` cases passed outside the command sandbox.
+
+#### Expanded coverage sequence
+
+Do not implement SIMD solely because it is the first remaining failure in `WasmRustBench`. The
+five `v128_load` functions are rejected by both native frontends, so they affect native coverage
+but do not demonstrate a reason to retain fresh allocated-bytecode compilation. The checked-in
+`Meta/collect-wasm-cranelift-coverage.py` collector makes the structured trace repeatable. It sets
+`CRANELIFT_TRACE_DIRECT_FALLBACK=1`, instantiates each selected module without executing its
+exports, and aggregates compiler batches without treating the command's wall time as compilation
+or execution time. For example:
+
+```sh
+Meta/collect-wasm-cranelift-coverage.py \
+    --wasm-executable Build/release/bin/wasm \
+    --wasi \
+    ../js-benchmarks/WasmRustBench
+```
+
+Directory inputs include top-level `.wasm` files by default; `--recursive` explicitly includes
+nested build artifacts. Human-readable output limits representative failure locations per group,
+while `--json` retains every failure record. `--trace-command` instead collects every compiler
+summary emitted by a phase-aware runner. Options for that runner follow `--trace-command` because
+it consumes the remainder of the command line. `--trace-input-directory` isolates a generated
+suite by running that command once per test file; `{input}` and `{name}` in runner arguments are
+replaced for each file. This prevents one crashing test from discarding coverage from later files.
+Run the collector over:
+
+1. `WasmMicroBench`, `WasmCoremark`, and `WasmRustBench`;
+2. the d3wasm and Ruffle modules used for the existing workload measurements; and
+3. the generated WebAssembly specification suite.
+
+The first two steps produced the following cache-free inventory on 2026-08-26:
+
+| Workload              | Direct attempts | Direct bodies | Allocated fallbacks | Uncompiled | Direct OSR bodies |
+| --------------------- | --------------: | ------------: | ------------------: | ---------: | -----------------: |
+| `WasmMicroBench`      |              43 |            43 |                   0 |          0 |              8 / 8 |
+| `WasmCoremark`        |              15 |            15 |                   0 |          0 |              9 / 9 |
+| `WasmRustBench`       |            2289 |          2284 |                   0 |          5 |          628 / 633 |
+| d3wasm                |            6482 |          6482 |                   0 |          0 |        2149 / 2149 |
+| Ruffle                |           12234 |         10095 |                   0 |       2139 |        2292 / 3083 |
+| **Total**             |       **21063** |     **18919** |               **0** |   **2144** |      **5086 / 5882** |
+
+d3wasm compiled completely through the direct frontend. Ruffle's 2,139 failures were also rejected
+by the allocated-bytecode frontend. Their first blockers were 1,591 `v128_load` instructions, 368
+unsupported native-ABI type shapes, 168 `v128_const` instructions, seven `v128_load8x8_u`
+instructions, two `i32x4_splat` instructions, two `v128_load64_zero` instructions, and one
+`table_get` instruction. The Blake3 failures add another five `v128_load` blockers. Because a
+function reports its first rejection, these counts order coverage entry points; they are not an
+instruction-frequency profile. There were no direct-OSR-specific failure records: Ruffle's OSR
+shortfall belongs to functions whose clean direct body already failed.
+
+The release build initially had `INCLUDE_WASM_SPEC_TESTS=OFF`, so the third step required a build
+with that option enabled. Specification cases that are intentionally malformed, invalid,
+uninstantiable, or unlinkable must not be reported as native-coverage failures. Use the generated
+specification runner to preserve each test's expected phase and outcome instead of blindly
+instantiating every emitted module with the standalone CLI.
+
+The generated suite was isolated by test file because an all-files invocation crashed before
+reaching the end:
+
+```sh
+Meta/collect-wasm-cranelift-coverage.py \
+    --timeout 300 \
+    --summary-only \
+    --trace-input-directory Build/release/Libraries/LibWasm/Tests/Spec \
+    --trace-input-suffix .js \
+    --trace-command Build/release/bin/test-wasm \
+        --show-progress=false \
+        --filter '/{name}' \
+        Build/release/Libraries/LibWasm/Tests \
+        Tests/LibJS/Runtime/test-common.js
+```
+
+The completed suite attempted 3,311 direct bodies: 2,796 compiled directly, 16 fell back
+successfully to the allocated-bytecode frontend, and 499 were rejected by both. The 16 genuine
+retirement blockers were:
+
+- four functions using type-index block types in `block`;
+- four functions using type-index block types in `if`;
+- four functions using type-index block types in `loop`; and
+- four functions rejected as having an unsupported direct value type in the type-equivalence and
+  type-subtyping tests.
+
+#### Type-index control signatures
+
+The first retirement blocker was not merely support for a different block-type encoding. A
+type-index block denotes a complete function type with parameters and results. On entry, `block`,
+`loop`, and `if` consume the parameter tuple and make it available to the body. Branches to a
+`block` or `if` label carry the result tuple, while branches to a `loop` label carry the parameter
+tuple for the next iteration. An `if` consumes its condition before its parameters and makes the
+same parameter values available to both arms; when the encoded `else` is absent, the implicit empty
+arm passes the parameter tuple to the continuation as its result tuple.
+
+The direct control frame now records those two tuples separately. Loop headers have typed
+Cranelift block parameters and fresh entry and back edges pass the same typed argument list.
+Continuations retain only the result tuple. Existing direct OSR checkpoints remain compatible:
+validation only marks a loop tier-up eligible when its block parameter list and surrounding operand
+stack are empty, and the compiler rejects inconsistent serialized checkpoint metadata rather than
+constructing an OSR edge without the required loop arguments.
+
+After this change, the same isolated generated-suite inventory produced:
+
+| Direct attempts | Direct bodies | Allocated fallbacks | Uncompiled | Direct OSR bodies |
+| --------------: | ------------: | ------------------: | ---------: | -----------------: |
+|           3,311 |         2,838 |                   4 |        469 |              7 / 7 |
+
+The direct-body increase is larger than the 12 retired fallbacks: another 30 functions that both
+native frontends had previously rejected now compile directly. Per-module CLI traces confirmed that
+the four remaining successful allocated-bytecode fallbacks are function 2 in
+`type-equivalence.8.wasm` and functions 4, 5, and 6 in `type-subtyping.17.wasm`; all four are rejected
+by the direct frontend for an unsupported reference value type.
+
+The focused Rust test covers a carried loop parameter, an `if` with an implicit empty arm, and a
+two-parameter/two-result block. All generated specification files completed successfully, and all
+28 `TestWasmExecution` integration cases passed. The mixed-frontend tests now use a reachable
+`funcref` global read to select the allocated-bytecode frontend, rather than relying on type-index
+blocks that the direct frontend supports.
+
+#### Native stack exhaustion
+
+The first run also exposed a correctness issue before producing those complete totals. The
+`call.js` and `call_indirect.js` files deliberately recurse until they exhaust the call stack. The
+local core specification's implementation appendix permits a restriction on the number of frames
+on the stack and says that exceeding an implementation runtime limit may terminate the computation
+and report an embedder-specific error. The generated tests require Ladybird's established
+`call stack exhausted` error. Direct native-to-native calls bypassed the bridge helper's stack-space
+check, reached the operating-system guard page, and terminated the test process with `SIGSEGV`.
+
+The fix stores the current thread's native stack limit in `Configuration` before entering compiled
+code and exposes that immutable field through the serialized runtime layout. Every generated
+Cranelift function marks the configuration argument as its VM context and installs Cranelift's
+native prologue stack limit. Cranelift only emits the check for functions that allocate native stack
+or make calls; its stack-overflow trap code already maps through compiled fault recovery to
+`call stack exhausted`. A focused mutually recursive test now reaches that trap, and the generated
+direct and indirect call files pass all 90 and 158 assertions respectively. Test files that
+completed successfully without emitting a compiler summary contained no attempted native
+compilation and were retained as valid zero-coverage results rather than command failures.
+
+The allocated-bytecode frontend does not generally support references. Validation excludes
+functions with reference parameters, locals, or results, its supported-opcode list contains no
+reference instructions, and its SSA banks carry only the low 64-bit payload while materialization
+writes zero to the upper word. These four callers evade those gates because an indirect runtime
+call produces a reference which is immediately discarded. Reloading only its low word is
+unobservable in those tests. Treat the four records as an eligibility loophole, not as a reference
+implementation to preserve or copy into the direct frontend.
+
+#### Native reference representation: preserve the typed hierarchy
+
+Ladybird's interpreter-facing `Value` currently stores references in a 16-byte low-word/high-word
+encoding. The low word contains a function, extern, or exception store address, an `i31` payload,
+or a `GC::Cell` pointer. The high word identifies the runtime reference variant, except that a
+function reference stores its defining `Module*` there. This is the canonical interpreter and
+runtime representation; it is not a requirement that native SSA carry every reference as one
+16-byte `I8X16` value.
+
+An initial experiment proposed one universal tagged `i64`, provisionally named
+`Wasm::TaggedReference`. Its payload retained `FunctionAddress`, `ExternAddress`, and
+`ExceptionAddress` store indices, stored `i31ref` inline, and compressed `GC::Cell` pointers as heap
+region offsets. Unit tests proved that all current 16-byte `Value` reference variants could round
+trip through that encoding. Direct lowering could also encode and decode it with integer
+operations, except that reconstructing a non-null function reference still required recovering its
+defining `Module*` from the store.
+
+That experiment answered the size question but exposed a more important representation question:
+a store index is stable and serializable, but retaining it also preserves the runtime lookup that
+native code normally wants to remove. A universal dynamic tag similarly spends work rediscovering
+which reference hierarchy the validated Wasm type already identifies. The experiment is therefore
+parked rather than adopted as the durable representation.
+
+The preferred direction is hierarchy-specific native representations carried alongside their
+validated Wasm types:
+
+- function references use a stable `CallableMetadata const*`, with null represented by a null
+  pointer;
+- structure and array references use stable `GC::Cell*` values;
+- `i31ref` remains an inline integer;
+- the `anyref` and `eqref` hierarchies use a compact tagged union only where the source type can
+  genuinely contain multiple runtime forms;
+- host `externref` retains its external-reference handle until the JS/Wasm boundary has a durable
+  resolved representation; and
+- exception references retain their store address until exception storage has stable addresses or
+  a separate stable descriptor.
+
+`Store::m_callable_metadata` already owns each descriptor through `NonnullOwnPtr`, so vector growth
+moves owners but not descriptors. `CallableMetadata` already records the `FunctionAddress`,
+defined type, module instance, compiled entry, and call arities, and table storage already caches the
+same pointer for `call_indirect`. This makes it a natural function-reference identity for native
+code rather than a new compatibility object. Interpreter materialization still needs the defining
+`Module*` currently stored in `Value`'s high word; either the stable descriptor must expose that
+boundary metadata or conversion must recover it only when leaving native code.
+
+Do not compress arbitrary C++ pointers merely to reserve universal tag bits. LibGC heap pointers
+can be compressed because the collector explicitly reserves and aligns its heap region; no
+equivalent invariant currently exists for `CallableMetadata`, host-reference storage, or exception
+storage. When the static Wasm hierarchy permits a raw pointer, retain the full pointer width.
+
+The direct frontend should therefore retain semantic reference types on its operand stack and
+control edges even though Cranelift represents each current form as an integer or pointer-sized
+value. Subtyping-compatible edges can share a representation, while a real hierarchy conversion
+performs the required boxing or tagging. Convert to the existing 16-byte `Value` only at
+interpreter, legacy-helper, and persistent-runtime storage boundaries. Every conversion must
+preserve the runtime distinctions required by null checks, equality, casts, conversions, and
+indirect or reference calls.
+
+These representations do not require Cranelift stack-map spills for Ladybird's current
+conservative, non-moving collector. LibGC uses `setjmp()` to scan saved register state and also
+scans the active native stack. At a synchronous helper call, the platform ABI requires a live
+value to reside in callee-saved state or a spill slot; both locations are covered. A compressed
+GC-object payload must use LibGC's recognized cell pattern, while an uncompressed `GC::Cell*` is
+already a conservative root. Do not force every live reference to the stack merely because it may
+otherwise occupy a CPU register.
+
+Validate each hierarchy before making it part of the durable native reference ABI:
+
+- round-trip each native representation through `Reference` and `Value` at every supported
+  boundary;
+- test reference equality, null families, casts, and `extern.convert_any`/`any.convert_extern`;
+- keep a live GC reference across an allocating helper call and force collection;
+- test function-reference lifetime and identity across modules, imports, globals, and tables;
+- verify that `CallableMetadata` addresses remain stable while the store allocates more functions;
+- inspect generated code to confirm references use GPRs and avoid 16-byte state traffic; and
+- compare reference-bearing direct calls with interpreter fallback at the same semantic boundary.
+
+The first function-reference experiment covers the interpreter-callee-to-direct-caller seam. A
+direct `call_indirect` whose result belongs to the function-reference hierarchy uses a nullable
+`CallableMetadata const*` result. When the target is still interpreted, the existing indirect-call
+fallback helper resolves the interpreter's `FunctionAddress` result to its stable descriptor before
+returning; this does not add another native-to-C++ transition. Both typed and untyped null function
+references become a null pointer. The direct native-target arm has the same pointer-sized return
+slot and joins without a representation conversion, but no reference-returning function is yet
+eligible to exercise that arm. Reference parameters, reference globals, non-function reference
+results, and reference-bearing direct function signatures remain rejected rather than inheriting
+this representation accidentally.
+
+`ref.is_null` is lowered directly as a pointer comparison. A focused mixed-execution fixture has
+interpreter targets return `(ref null $binary_i32)` and `ref.func $sub_i32`; direct callers observe
+the results through `ref.is_null`. This caught two boundary mistakes during development: typed null
+uses the generic null tag in the current 16-byte `Value`, and Cranelift's integer comparison result
+must be widened to Wasm's `i32`. A separate store test retains a `CallableMetadata const*`, allocates
+another 1,024 functions, and verifies that both the descriptor address and its function address are
+unchanged.
+
+The AArch64 native dump confirms the intended direct-body shape. The interpreted fallback arm
+calls the already-required helper and then performs one pointer-sized load from
+`compiled_call_result_scratch`. The currently unexercised native arm would receive the pointer in
+`x0`. Both arms join at a single null comparison and boolean materialization. There is no second
+conversion helper and no 16-byte reference payload/tag traffic in the direct body.
+
+After this slice, the isolated generated specification inventory produced:
+
+| Direct attempts | Direct bodies | Allocated fallbacks | Uncompiled | Direct OSR bodies |
+| --------------: | ------------: | ------------------: | ---------: | -----------------: |
+|           3,311 |         2,843 |                   0 |        468 |              7 / 7 |
+
+The four successful allocated-bytecode fallbacks identified above now compile directly. One
+additional body that uses `ref.is_null` moved from interpreted to direct. All 28
+`TestWasmExecution` cases, all 21 Rust compiler tests, the typed-reference specification tests, and
+the five `TestWasmTable` cases pass. This result removes the last observed reason to retain fresh
+allocated-bytecode compilation in the generated specification corpus; it does not claim general
+reference support.
+
+Until the remaining hierarchy invariants are established, reference-bearing functions outside a
+proven slice may remain interpreted. Do not add an `I8X16` reference bank or stack-map policy to the
+allocated-bytecode frontend merely to increase its coverage.
+
+Classify the resulting records by what they imply:
+
+- A successful allocated-bytecode fallback is a blocker for retiring the old fresh frontend. Add
+  the corresponding general instruction, type shape, ABI, or runtime support to the direct
+  frontend and rerun the inventory.
+- A function rejected by both native frontends is missing native coverage but is not evidence that
+  the allocated-bytecode compiler must remain. It may stay interpreted while an independently
+  prioritized instruction family, such as SIMD, is implemented.
+- An unavailable direct OSR artifact for a function with a successful clean direct body is a
+  direct-OSR correctness or transport issue. Keep it separate from fresh-body opcode coverage.
+
+If the expanded corpus has no successful allocated-bytecode fallbacks, perform the fresh-frontend
+retirement experiment: compile direct-compatible functions with the direct frontend and leave all
+other functions interpreted instead of invoking the allocated-bytecode compiler. Native cache
+entries record the frontend flavor, so that experiment must reject allocated-bytecode entries or
+bump the cache format before measuring browser workloads; an old cached body must not silently
+preserve the frontend being tested for removal. Keep direct OSR publication enabled and measure
+native compilation separately from execution, workload scores, loading time, and frame rate.
 
 Deletion includes its serialized compiler input, banks and location-state reconstruction,
 synthetic-instruction lowering, legacy native ABI, cross-flavor relocation selection, adapters, and
