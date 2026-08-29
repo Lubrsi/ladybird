@@ -52,6 +52,9 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32
     if (allocated_bytecode_function.has_value()) {
         Vector<u8> memory_section { 0x01, 0x00, 0x01 };
         append_wasm_section(module, 5, move(memory_section));
+
+        Vector<u8> global_section { 0x01, 0x70, 0x00, 0xd0, 0x70, 0x0b };
+        append_wasm_section(module, 6, move(global_section));
     }
 
     Vector<u8> export_section { 0x01, 0x03, 'r', 'u', 'n', 0x00, 0x00 };
@@ -62,10 +65,10 @@ static Vector<u8> make_direct_call_chain_module(u32 function_count, Optional<u32
     for (u32 function_index = 0; function_index < function_count; ++function_index) {
         Vector<u8> body { 0x00 };
         if (allocated_bytecode_function == function_index) {
-            // local.get 0; block (type 0); end; drop
-            // Type-index block signatures are deliberately left to the allocated-bytecode
-            // frontend until the direct frontend implements block parameters.
-            body.extend(Vector<u8> { 0x20, 0x00, 0x02, 0x00, 0x0b, 0x1a });
+            // global.get 0; drop
+            // Reference values deliberately select the allocated-bytecode frontend while the
+            // direct frontend implements only numeric and vector values.
+            body.extend(Vector<u8> { 0x23, 0x00, 0x1a });
         }
         if (function_index + 1 == function_count) {
             body.extend(Vector<u8> { 0x20, 0x00, 0x41, 0x01, 0x6a });
