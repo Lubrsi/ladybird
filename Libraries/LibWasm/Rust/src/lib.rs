@@ -227,9 +227,10 @@ pub enum HelperId {
     raise_trap = 14,
     check_indirect_type = 15,
     current_interpreter = 16,
+    call_indirect_with_function_reference_result = 17,
 }
 
-pub const HELPER_COUNT: u32 = 17;
+pub const HELPER_COUNT: u32 = 18;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Ladybird-specific Cranelift trap codes. The numeric values are embedded in generated code and
