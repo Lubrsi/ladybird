@@ -524,7 +524,7 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 17);
+static_assert(HELPER_COUNT == 18);
 static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
@@ -1263,8 +1263,7 @@ u64 wasm_cl_direct_call_with_record_fallback(void* interp_ptr, void* config_ptr,
     return static_cast<u64>(status);
 }
 
-i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index);
-i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
+static ALWAYS_INLINE i32 wasm_cl_call_indirect_with_record_impl(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
@@ -1291,6 +1290,34 @@ i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 ta
         return interpreter.set_trap(Trap::from_string("Indirect call type mismatch"));
 
     return wasm_cl_finish_call(interpreter, config, callable->address, config.call_record_base(), callable->parameter_count);
+}
+
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index);
+i32 wasm_cl_call_indirect_with_record(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
+{
+    return wasm_cl_call_indirect_with_record_impl(interp_ptr, config_ptr, table_idx, type_idx, element_index);
+}
+
+i32 wasm_cl_call_indirect_with_function_reference_result(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index);
+i32 wasm_cl_call_indirect_with_function_reference_result(void* interp_ptr, void* config_ptr, i32 table_idx, i32 type_idx, u64 element_index)
+{
+    auto status = wasm_cl_call_indirect_with_record_impl(interp_ptr, config_ptr, table_idx, type_idx, element_index);
+    if (status != 0)
+        return status;
+
+    auto& config = *static_cast<Configuration*>(config_ptr);
+    auto& result = config.compiled_call_result_scratch();
+    auto reference = result.to<Reference>();
+    if (reference.ref().has<Reference::Null>()) {
+        result = Value { u64 { 0 } };
+        return 0;
+    }
+
+    auto const& function = reference.ref().get<Reference::Func>();
+    auto const* callable = config.store().get_callable(function.address);
+    VERIFY(callable);
+    result = Value { bit_cast<u64>(callable) };
+    return 0;
 }
 
 i32 wasm_cl_check_indirect_type(void const* actual_type_ptr, void const* expected_type_ptr);
@@ -1394,6 +1421,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::raise_trap)] = bit_cast<uintptr_t>(&wasm_cl_raise_trap);
     addresses[to_underlying(HelperId::check_indirect_type)] = bit_cast<uintptr_t>(&wasm_cl_check_indirect_type);
     addresses[to_underlying(HelperId::current_interpreter)] = bit_cast<uintptr_t>(&wasm_cl_current_interpreter);
+    addresses[to_underlying(HelperId::call_indirect_with_function_reference_result)] = bit_cast<uintptr_t>(&wasm_cl_call_indirect_with_function_reference_result);
     return addresses;
 }
 

@@ -1362,7 +1362,7 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     MUST(machine.validate(*module));
 
     auto const& functions = module->code_section().functions();
-    EXPECT_EQ(functions.size(), 38u);
+    EXPECT_EQ(functions.size(), 42u);
     Optional<Wasm::FunctionIndex> fallback_target_index;
     Vector<Wasm::FunctionIndex> raw_indirect_caller_indices;
     for (auto const& export_ : module->export_section().entries()) {
@@ -1429,6 +1429,8 @@ TEST_CASE(native_indirect_call_uses_typed_abi)
     EXPECT_EQ(invoke_value("run_nested_raw_i64"sv).to<i64>(), 9999999983);
     EXPECT_EQ(invoke_value("run_nested_raw_f32"sv).to<float>(), 94.75f);
     EXPECT_EQ(invoke_value("run_nested_raw_f64"sv).to<double>(), 91.75);
+    EXPECT_EQ(invoke_value("run_null_typed_funcref"sv).to<i32>(), 1);
+    EXPECT_EQ(invoke_value("run_non_null_typed_funcref"sv).to<i32>(), 0);
 
     auto raw_void_result = invoke("run_nested_raw_void"sv);
     EXPECT(!raw_void_result.is_trap());

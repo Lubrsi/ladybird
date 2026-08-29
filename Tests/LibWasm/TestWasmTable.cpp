@@ -131,3 +131,28 @@ TEST_CASE(table_tracks_callable_metadata)
     table->set_element(store, 0, Wasm::Reference { Wasm::Reference::Null { table_type.element_type() } });
     EXPECT_EQ(table->callable_at(0), nullptr);
 }
+
+TEST_CASE(callable_metadata_address_remains_stable)
+{
+    Wasm::Store store;
+    Wasm::FunctionType function_type { {}, {} };
+    auto allocate_function = [&] {
+        return store.allocate(Wasm::HostFunction {
+            [](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
+                return Wasm::Result { Vector<Wasm::Value> {} };
+            },
+            function_type,
+            "stable-metadata" });
+    };
+
+    auto first_address = allocate_function();
+    VERIFY(first_address.has_value());
+    auto const* first_metadata = store.get_callable(*first_address);
+    VERIFY(first_metadata);
+
+    for (size_t i = 0; i < 1024; ++i)
+        VERIFY(allocate_function().has_value());
+
+    EXPECT_EQ(store.get_callable(*first_address), first_metadata);
+    EXPECT_EQ(first_metadata->address, *first_address);
+}

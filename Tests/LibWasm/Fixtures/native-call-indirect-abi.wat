@@ -11,6 +11,7 @@
   (type $mixed_six (func (param i32 i32 i32 f32 i32 i32) (result i32)))
   (type $mixed_f32_result (func (param i32 i32 i32 f32 f32) (result f32)))
   (type $mixed_f64 (func (param i32 f64 i32 i32 i32 i32 i32) (result i32)))
+  (type $return_typed_funcref (func (result (ref null $binary_i32))))
 
   (func $sub_i32 (type $binary_i32)
     local.get 0
@@ -115,9 +116,17 @@
     local.get 6
     i32.add)
 
-  (table 15 funcref)
+  ;; Keep these targets in the interpreter so their typed reference results
+  ;; exercise the interpreter-to-direct representation conversion.
+  (func $return_null_typed_funcref (type $return_typed_funcref)
+    ref.null $binary_i32)
+
+  (func $return_non_null_typed_funcref (type $return_typed_funcref)
+    ref.func $sub_i32)
+
+  (table 17 funcref)
   (memory 1)
-  (elem (i32.const 0) $sub_i32 $sub_i64 $sub_f32 $sub_f64 $sum9_i32 $fallback_i32 $trap $nop $mixed_i32_f32 $mixed_i32_i64_i32 $mixed_six $mixed_f32_result $mixed_f64 $fallback_binary_i32)
+  (elem (i32.const 0) $sub_i32 $sub_i64 $sub_f32 $sub_f64 $sum9_i32 $fallback_i32 $trap $nop $mixed_i32_f32 $mixed_i32_i64_i32 $mixed_six $mixed_f32_result $mixed_f64 $fallback_binary_i32 $return_null_typed_funcref $return_non_null_typed_funcref)
   (export "table" (table 0))
   (export "target_add_i32" (func $add_i32))
   (export "target_fallback_i32" (func $fallback_i32))
@@ -298,9 +307,19 @@
     call_indirect (type $binary_i64))
 
   (func (export "run_null")
-    i32.const 14
+    i32.const 16
     call_indirect (type $void))
 
   (func (export "run_out_of_bounds")
+    i32.const 17
+    call_indirect (type $void))
+
+  (func (export "run_null_typed_funcref") (result i32)
+    i32.const 14
+    call_indirect (type $return_typed_funcref)
+    ref.is_null)
+
+  (func (export "run_non_null_typed_funcref") (result i32)
     i32.const 15
-    call_indirect (type $void)))
+    call_indirect (type $return_typed_funcref)
+    ref.is_null))

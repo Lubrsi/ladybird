@@ -128,6 +128,7 @@ struct DirectIndirectCallHelpers {
     check_type: FuncRef,
     fallback_signature: SigRef,
     fallback: FuncRef,
+    function_reference_result_fallback: FuncRef,
 }
 
 struct DirectRuntimeFallbackHelpers {
@@ -176,7 +177,44 @@ impl DirectCompiler {
             ValueTypeKind::F32 => Ok(types::F32),
             ValueTypeKind::F64 => Ok(types::F64),
             ValueTypeKind::V128 => Ok(types::I8X16),
+            ValueTypeKind::FunctionReference | ValueTypeKind::NoFunctionReference | ValueTypeKind::TypeUseReference => {
+                Ok(types::I64)
+            }
             _ => Err("unsupported direct value type"),
+        }
+    }
+
+    fn is_reference_type(value_type: CheckedValueType) -> bool {
+        matches!(
+            value_type.kind,
+            ValueTypeKind::FunctionReference
+                | ValueTypeKind::NoFunctionReference
+                | ValueTypeKind::ExternReference
+                | ValueTypeKind::NoExternReference
+                | ValueTypeKind::AnyReference
+                | ValueTypeKind::EqReference
+                | ValueTypeKind::I31Reference
+                | ValueTypeKind::StructReference
+                | ValueTypeKind::ArrayReference
+                | ValueTypeKind::NoneReference
+                | ValueTypeKind::ExceptionReference
+                | ValueTypeKind::NoExceptionReference
+                | ValueTypeKind::TypeUseReference
+        )
+    }
+
+    fn is_function_reference_type(
+        value_type: CheckedValueType,
+        module_types: &[Option<DirectFunctionType<'_>>],
+    ) -> Result<bool, &'static str> {
+        match value_type.kind {
+            ValueTypeKind::FunctionReference | ValueTypeKind::NoFunctionReference => Ok(true),
+            ValueTypeKind::TypeUseReference => {
+                let type_index =
+                    usize::try_from(value_type.type_index).map_err(|_| "direct reference type index overflow")?;
+                Ok(module_types.get(type_index).is_some_and(Option::is_some))
+            }
+            _ => Ok(false),
         }
     }
 
@@ -441,8 +479,15 @@ impl DirectCompiler {
         );
         let mut instances = Vec::with_capacity(indices.len());
         for index in indices {
-            let global_type = global_types.get(index).ok_or("missing direct global type")?;
-            let global_type = Self::direct_type(*global_type)?;
+            let global_type = global_types
+                .get(index)
+                .copied()
+                .ok_or("missing direct global type")?
+                .checked()?;
+            if Self::is_reference_type(global_type) {
+                return Err("reference globals are not yet supported by the direct frontend");
+            }
+            let global_type = Self::checked_direct_type(global_type)?;
             let pointer_offset = builder
                 .ins()
                 .iconst(pointer_type, index as i64 * i64::from(pointer_type.bytes()));
@@ -1349,6 +1394,11 @@ impl DirectCompiler {
                 check_type: declare_helper(&mut builder, check_type_signature, HelperId::check_indirect_type),
                 fallback_signature,
                 fallback: declare_helper(&mut builder, fallback_signature, HelperId::call_indirect_with_record),
+                function_reference_result_fallback: declare_helper(
+                    &mut builder,
+                    fallback_signature,
+                    HelperId::call_indirect_with_function_reference_result,
+                ),
             })
         } else {
             None
@@ -1899,6 +1949,11 @@ impl DirectCompiler {
                         .copied()
                         .map(Self::direct_type)
                         .collect::<Result<Vec<_>, _>>()?;
+                    for &parameter_type in target_type.parameters {
+                        if Self::is_reference_type(parameter_type.checked()?) {
+                            return Err("reference parameters are not yet supported by direct indirect calls".into());
+                        }
+                    }
                     let arguments = Self::result_values(&builder, &mut operand_stack, &parameter_types)?;
                     let result_types = target_type
                         .results
@@ -1906,6 +1961,19 @@ impl DirectCompiler {
                         .copied()
                         .map(Self::direct_type)
                         .collect::<Result<Vec<_>, _>>()?;
+                    let result_is_function_reference = if let Some(result_type) = target_type.results.first().copied() {
+                        let result_type = result_type.checked()?;
+                        if Self::is_reference_type(result_type)
+                            && !Self::is_function_reference_type(result_type, module_types)?
+                        {
+                            return Err(
+                                "non-function reference results are not yet supported by direct indirect calls".into(),
+                            );
+                        }
+                        Self::is_function_reference_type(result_type, module_types)?
+                    } else {
+                        false
+                    };
                     let continuation = builder.create_block();
                     for &result_type in &result_types {
                         builder.append_block_param(continuation, result_type);
@@ -1992,7 +2060,12 @@ impl DirectCompiler {
                         &[],
                     );
                     let interpreter = builder.inst_results(current_interpreter_call)[0];
-                    let fallback_address = builder.ins().func_addr(pointer_type, indirect_helpers.fallback);
+                    let fallback = if result_is_function_reference {
+                        indirect_helpers.function_reference_result_fallback
+                    } else {
+                        indirect_helpers.fallback
+                    };
+                    let fallback_address = builder.ins().func_addr(pointer_type, fallback);
                     let table_index = builder.ins().iconst(types::I32, i64::from(call_argument.table_index));
                     let type_index = builder.ins().iconst(
                         types::I32,
@@ -2042,6 +2115,11 @@ impl DirectCompiler {
                     builder.switch_to_block(continuation);
                     builder.seal_block(continuation);
                     operand_stack.extend_from_slice(builder.block_params(continuation));
+                }
+                op::REF_IS_NULL => {
+                    let reference = Self::pop_expected(&builder, &mut operand_stack, pointer_type)?;
+                    let is_null = builder.ins().icmp_imm_s(IntCC::Equal, reference, 0);
+                    operand_stack.push(builder.ins().uextend(types::I32, is_null));
                 }
                 op::I32_ADD
                 | op::I32_SUB
@@ -2722,6 +2800,7 @@ mod tests {
     use super::*;
     use crate::DirectBlockType;
     use crate::DirectBlockTypeKind;
+    use crate::DirectIndirectCallInstructionArguments;
     use crate::DirectInstructionArguments;
     use crate::DirectMemoryCopyInstructionArguments;
     use crate::DirectMemoryInstructionArguments;
@@ -3060,6 +3139,71 @@ mod tests {
             error,
             "instruction 0 (table_get, opcode 0x25): unsupported direct instruction"
         );
+    }
+
+    #[test]
+    fn compiles_function_reference_indirect_call_results_as_pointers() {
+        let instructions = [
+            i32_constant(0),
+            instruction(
+                op::CALL_INDIRECT,
+                DirectInstructionArguments {
+                    indirect_call: DirectIndirectCallInstructionArguments {
+                        type_index: 0,
+                        table_index: 0,
+                    },
+                },
+            ),
+            no_arguments(op::REF_IS_NULL),
+            no_arguments(op::DROP),
+            no_arguments(op::END),
+        ];
+        let function_reference = DirectValueType {
+            kind: DirectValueTypeKind::TypeUseReference as u32,
+            type_index: 1,
+            nullable: 1,
+        };
+        let reference_results = [function_reference];
+        let module_types = [
+            Some(DirectFunctionType {
+                parameters: &[],
+                results: &reference_results,
+            }),
+            Some(DirectFunctionType {
+                parameters: &[],
+                results: &reference_results,
+            }),
+        ];
+        let function_types = [WasmFunctionType {
+            parameters: &[],
+            results: &[],
+        }];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[],
+                tier_up_checkpoints: &[],
+                tier_up_live_local_indices: &[],
+                function_types: &function_types,
+                module_types: &module_types,
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 0,
+                num_locals: 0,
+                num_params: 0,
+                function_index: 0,
+                max_call_rec_size: 0,
+            },
+        )
+        .expect("direct compilation should support function-reference indirect-call results");
+
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
+                && relocation.target_index == HelperId::call_indirect_with_function_reference_result as u32
+        }));
     }
 
     #[test]
