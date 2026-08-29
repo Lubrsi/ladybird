@@ -116,6 +116,13 @@ struct DirectLocals<'a> {
     parameter_count: usize,
 }
 
+#[derive(Clone, Copy)]
+struct TemporaryCallRecord {
+    base: Value,
+    previous_base: Value,
+    previous_top: Value,
+}
+
 const VALUE_PAYLOAD_OFFSET: i32 = 0;
 const VALUE_TAG_OFFSET: i32 = size_of::<u64>() as i32;
 const MINIMUM_VALUE_SIZE: i32 = VALUE_TAG_OFFSET + size_of::<u64>() as i32;
@@ -521,6 +528,70 @@ impl DirectCompiler {
             types::F64 => Ok(builder.ins().bitcast(types::I64, MemFlags::new(), value)),
             _ => Err("unsupported direct global type"),
         }
+    }
+
+    fn push_temporary_call_record(
+        builder: &mut FunctionBuilder<'_>,
+        runtime: DirectRuntime<'_>,
+        entry_count: usize,
+    ) -> Result<TemporaryCallRecord, &'static str> {
+        let previous_base = builder.ins().load(
+            runtime.pointer_type,
+            runtime.memory_flags.configuration,
+            runtime.configuration,
+            runtime.layout.call_record_base_offset,
+        );
+        let previous_top = builder.ins().load(
+            runtime.pointer_type,
+            runtime.memory_flags.configuration,
+            runtime.configuration,
+            runtime.layout.call_record_stack_top_offset,
+        );
+        builder.ins().store(
+            runtime.memory_flags.configuration,
+            previous_top,
+            runtime.configuration,
+            runtime.layout.call_record_base_offset,
+        );
+
+        if entry_count > 0 {
+            let byte_count = entry_count
+                .checked_mul(runtime.layout.value_size as usize)
+                .ok_or("temporary call-record size overflow")?;
+            let byte_count = i64::try_from(byte_count).map_err(|_| "temporary call-record size overflow")?;
+            let next_top = builder.ins().iadd_imm_s(previous_top, byte_count);
+            builder.ins().store(
+                runtime.memory_flags.configuration,
+                next_top,
+                runtime.configuration,
+                runtime.layout.call_record_stack_top_offset,
+            );
+        }
+
+        Ok(TemporaryCallRecord {
+            base: previous_top,
+            previous_base,
+            previous_top,
+        })
+    }
+
+    fn pop_temporary_call_record(
+        builder: &mut FunctionBuilder<'_>,
+        runtime: DirectRuntime<'_>,
+        call_record: TemporaryCallRecord,
+    ) {
+        builder.ins().store(
+            runtime.memory_flags.configuration,
+            call_record.previous_base,
+            runtime.configuration,
+            runtime.layout.call_record_base_offset,
+        );
+        builder.ins().store(
+            runtime.memory_flags.configuration,
+            call_record.previous_top,
+            runtime.configuration,
+            runtime.layout.call_record_stack_top_offset,
+        );
     }
 
     fn emit_interpreter_results(
@@ -2027,28 +2098,23 @@ impl DirectCompiler {
                     );
 
                     builder.switch_to_block(target.fallback_call);
-                    let call_record = builder.ins().load(
-                        pointer_type,
-                        memory_flags.configuration,
-                        configuration,
-                        runtime_layout.call_record_base_offset,
-                    );
+                    let call_record = Self::push_temporary_call_record(&mut builder, runtime, arguments.len())?;
                     for (index, (&argument, &argument_type)) in arguments.iter().zip(&parameter_types).enumerate() {
                         let offset = i32::try_from(index * runtime_layout.value_size as usize)
                             .map_err(|_| "direct indirect-call argument offset overflow")?;
                         if argument_type == types::I8X16 {
                             builder
                                 .ins()
-                                .store(memory_flags.activation, argument, call_record, offset);
+                                .store(memory_flags.activation, argument, call_record.base, offset);
                         } else {
                             let payload = Self::value_payload(&mut builder, argument, argument_type)?;
                             builder
                                 .ins()
-                                .store(memory_flags.activation, payload, call_record, offset);
+                                .store(memory_flags.activation, payload, call_record.base, offset);
                             let zero = builder.ins().iconst(types::I64, 0);
                             builder
                                 .ins()
-                                .store(memory_flags.activation, zero, call_record, offset + 8);
+                                .store(memory_flags.activation, zero, call_record.base, offset + 8);
                         }
                     }
                     let current_interpreter_address = builder
@@ -2077,6 +2143,7 @@ impl DirectCompiler {
                         &[interpreter, configuration, table_index, type_index, element_index],
                     );
                     let status = builder.inst_results(fallback_call)[0];
+                    Self::pop_temporary_call_record(&mut builder, runtime, call_record);
                     let trapped = builder.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
                     let trap_block = builder.create_block();
                     let fallback_return = builder.create_block();
