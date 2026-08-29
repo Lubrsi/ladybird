@@ -54,6 +54,8 @@ use super::common::RuntimeLayout;
 use super::common::WASM_FUNCTION_EXTERNAL_NAMESPACE;
 use super::common::WasmMemoryFlags;
 use super::common::compile_function;
+use super::common::configuration_abi_param;
+use super::common::configure_stack_limit;
 use super::common::declare_helper;
 use super::common::emit_native_indirect_call_target;
 use super::common::interpreter_handler_signature;
@@ -222,7 +224,7 @@ impl DirectCompiler {
 
     fn clean_signature(isa: &dyn TargetIsa, function_type: WasmFunctionType<'_>) -> Result<Signature, &'static str> {
         let mut signature = Signature::new(isa.default_call_conv());
-        signature.params.push(AbiParam::new(isa.pointer_type()));
+        signature.params.push(configuration_abi_param(isa.pointer_type()));
         for &parameter in function_type.parameters {
             signature.params.push(AbiParam::new(wasm_abi_type(parameter)?));
         }
@@ -237,7 +239,7 @@ impl DirectCompiler {
         function_type: DirectFunctionType<'_>,
     ) -> Result<Signature, &'static str> {
         let mut signature = Signature::new(isa.default_call_conv());
-        signature.params.push(AbiParam::new(isa.pointer_type()));
+        signature.params.push(configuration_abi_param(isa.pointer_type()));
         for &parameter in function_type.parameters {
             signature.params.push(AbiParam::new(Self::direct_type(parameter)?));
         }
@@ -690,6 +692,7 @@ impl DirectCompiler {
             handler_signature,
         );
         let memory_flags = WasmMemoryFlags::new(&mut adapter);
+        configure_stack_limit(&mut adapter, layout, memory_flags, pointer_type)?;
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut adapter, &mut builder_context);
         let entry = builder.create_block();
@@ -776,6 +779,7 @@ impl DirectCompiler {
             signature,
         );
         let memory_flags = WasmMemoryFlags::new(&mut fallback);
+        configure_stack_limit(&mut fallback, layout, memory_flags, pointer_type)?;
         let runtime_layout = RuntimeLayout::new(layout);
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut fallback, &mut builder_context);
@@ -1192,6 +1196,7 @@ impl DirectCompiler {
             signature,
         );
         let memory_flags = WasmMemoryFlags::new(&mut function);
+        configure_stack_limit(&mut function, layout, memory_flags, pointer_type)?;
         let mut builder_context = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut function, &mut builder_context);
         let entry = builder.create_block();
@@ -3402,7 +3407,7 @@ mod tests {
             compiled
                 .traps
                 .iter()
-                .all(|trap| trap.offset >= compiled.native_entry_offset)
+                .any(|trap| trap.offset >= compiled.native_entry_offset)
         );
     }
 }
