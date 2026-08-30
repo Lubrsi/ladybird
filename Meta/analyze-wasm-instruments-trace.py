@@ -385,7 +385,7 @@ def parse_cpu_profile(path: Path, mappings: MappingLookup | None, visual_frames:
     for _event, element in ET.iterparse(path, events=("end",)):
         tag = element.tag
         identifier = element.get("id")
-        if tag in ("sample-time", "cycle-weight") and identifier:
+        if tag in ("sample-time", "cycle-weight", "weight") and identifier:
             values[int(identifier)] = int(element.text or 0)
         elif tag == "thread" and identifier:
             values[int(identifier)] = element.get("fmt", "")
@@ -661,9 +661,13 @@ def main() -> int:
             export_trace_table(trace, run.number, "os-signpost", signpost_path, arguments.refresh)
             visual_frames = parse_visual_frames(signpost_path)
             print_visual_frames(visual_frames)
-        if "cpu-profile" in run.schemas:
-            cpu_path = work_directory / f"run-{run.number}-cpu-profile.xml"
-            export_trace_table(trace, run.number, "cpu-profile", cpu_path, arguments.refresh)
+        profile_schema = next(
+            (schema for schema in ("cpu-profile", "time-profile") if schema in run.schemas),
+            None,
+        )
+        if profile_schema is not None:
+            cpu_path = work_directory / f"run-{run.number}-{profile_schema}.xml"
+            export_trace_table(trace, run.number, profile_schema, cpu_path, arguments.refresh)
             analysis = parse_cpu_profile(cpu_path, mappings, visual_frames)
             print_cpu_analysis(
                 analysis,
