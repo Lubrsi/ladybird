@@ -5,7 +5,6 @@
  */
 
 #include <AK/Array.h>
-#include <AK/ByteBuffer.h>
 #include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibJS/Runtime/TypedArray.h>
@@ -19,24 +18,9 @@ class WebGLRenderingContextBaseAccessor : public Web::WebGL::WebGLRenderingConte
     WEB_NON_IDL_WRAPPABLE(WebGLRenderingContextBaseAccessor, Web::WebGL::WebGLRenderingContextBase);
 
 public:
-    template<typename T>
-    using SpanWithStorage = Web::WebGL::WebGLRenderingContextBase::SpanWithStorage<T>;
-
-    using Web::WebGL::WebGLRenderingContextBase::span_from_float32_list;
-    using Web::WebGL::WebGLRenderingContextBase::span_from_int32_list;
-    using Web::WebGL::WebGLRenderingContextBase::span_from_uint32_list;
-
-    template<typename T>
-    static SpanWithStorage<T> make_span_with_storage(ByteBuffer storage)
-    {
-        return SpanWithStorage<T> { move(storage) };
-    }
-
-    template<typename T>
-    static SpanWithStorage<T> make_span_with_storage(Span<T> span)
-    {
-        return SpanWithStorage<T> { span };
-    }
+    using Web::WebGL::WebGLRenderingContextBase::with_float32_list;
+    using Web::WebGL::WebGLRenderingContextBase::with_int32_list;
+    using Web::WebGL::WebGLRenderingContextBase::with_uint32_list;
 };
 
 struct TestVM {
@@ -54,14 +38,6 @@ struct TestVM {
     NonnullRefPtr<JS::VM> vm;
     NonnullOwnPtr<JS::ExecutionContext> execution_context;
 };
-
-static ByteBuffer make_inline_u32_buffer(ReadonlySpan<u32> values)
-{
-    auto buffer = MUST(ByteBuffer::create_uninitialized(values.size() * sizeof(u32)));
-    EXPECT(buffer.is_inline());
-    buffer.overwrite(0, values.data(), values.size() * sizeof(u32));
-    return buffer;
-}
 
 template<typename ArrayType>
 static GC::Ref<ArrayType> create_out_of_bounds_array(JS::Realm& realm)
@@ -81,47 +57,39 @@ static GC::Ref<ArrayType> create_out_of_bounds_array(JS::Realm& realm)
 
 }
 
-TEST_CASE(owning_span_rebuilds_storage_after_move_construction)
+TEST_CASE(float32_typed_list_borrows_array_buffer_storage)
 {
-    Array values { 0x10203040u, 0x50607080u, 0x90a0b0c0u, 0xd0e0f000u };
-    auto original = WebGLRenderingContextBaseAccessor::make_span_with_storage<u32>(make_inline_u32_buffer(values.span()));
-    auto* original_data = original.data();
+    TestVM test_vm;
+    auto& realm = *test_vm.vm->current_realm();
+    Array values { 1.0f, 2.0f, 3.0f, 4.0f };
+    auto array_buffer = MUST(JS::ArrayBuffer::create(realm, values.size() * sizeof(float)));
+    array_buffer->overwrite(0, values.data(), values.size() * sizeof(float));
+    Web::WebGL::WebGLRenderingContextBase::Float32List list {
+        JS::Float32Array::create(realm, values.size(), array_buffer)
+    };
 
-    auto moved = move(original);
-
-    EXPECT_NE(moved.data(), original_data);
-    EXPECT_EQ(moved.size(), values.size());
-    for (size_t i = 0; i < values.size(); ++i)
-        EXPECT_EQ(moved.data()[i], values[i]);
+    bool callback_was_invoked = false;
+    MUST(WebGLRenderingContextBaseAccessor::with_float32_list(list, 1, 2, [&](ReadonlySpan<float> span) {
+        callback_was_invoked = true;
+        EXPECT_EQ(span.data(), reinterpret_cast<float const*>(array_buffer->data_at(sizeof(float))));
+        EXPECT_EQ(span.size(), 2u);
+        EXPECT_EQ(span[0], 2.0f);
+        EXPECT_EQ(span[1], 3.0f);
+    }));
+    EXPECT(callback_was_invoked);
 }
 
-TEST_CASE(owning_span_rebuilds_storage_after_move_assignment)
+TEST_CASE(float32_vector_list_borrows_vector_storage)
 {
-    Array values { 0x12345678u, 0x9abcdef0u, 0x0fedcba9u, 0x87654321u };
-    auto original = WebGLRenderingContextBaseAccessor::make_span_with_storage<u32>(make_inline_u32_buffer(values.span()));
-    auto* original_data = original.data();
+    Web::WebGL::WebGLRenderingContextBase::Float32List list { Vector<float> { 1.0f, 2.0f, 3.0f, 4.0f } };
+    auto* expected_data = list.get<Vector<float>>().data() + 1;
 
-    Array other_values { 1u, 2u, 3u, 4u };
-    auto moved = WebGLRenderingContextBaseAccessor::make_span_with_storage<u32>(make_inline_u32_buffer(other_values.span()));
-    moved = move(original);
-
-    EXPECT_NE(moved.data(), original_data);
-    EXPECT_EQ(moved.size(), values.size());
-    for (size_t i = 0; i < values.size(); ++i)
-        EXPECT_EQ(moved.data()[i], values[i]);
-}
-
-TEST_CASE(non_owning_span_preserves_external_span_after_move)
-{
-    Array values { 10u, 20u, 30u, 40u };
-    auto original = WebGLRenderingContextBaseAccessor::make_span_with_storage<u32>(values.span());
-
-    auto moved = move(original);
-
-    EXPECT_EQ(moved.data(), values.data());
-    EXPECT_EQ(moved.size(), values.size());
-    for (size_t i = 0; i < values.size(); ++i)
-        EXPECT_EQ(moved.data()[i], values[i]);
+    MUST(WebGLRenderingContextBaseAccessor::with_float32_list(list, 1, 2, [&](ReadonlySpan<float> span) {
+        EXPECT_EQ(span.data(), expected_data);
+        EXPECT_EQ(span.size(), 2u);
+        EXPECT_EQ(span[0], 2.0f);
+        EXPECT_EQ(span[1], 3.0f);
+    }));
 }
 
 TEST_CASE(out_of_bounds_float32_list_without_offset_is_empty)
@@ -130,11 +98,11 @@ TEST_CASE(out_of_bounds_float32_list_without_offset_is_empty)
     auto& realm = *test_vm.vm->current_realm();
     Web::WebGL::WebGLRenderingContextBase::Float32List list { create_out_of_bounds_array<JS::Float32Array>(realm) };
 
-    auto span = MUST(WebGLRenderingContextBaseAccessor::span_from_float32_list(list, 0));
-
-    EXPECT_EQ(span.size(), 0u);
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_float32_list(list, 1).is_error());
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_float32_list(list, 0, 1).is_error());
+    MUST(WebGLRenderingContextBaseAccessor::with_float32_list(list, 0, 0, [](ReadonlySpan<float> span) {
+        EXPECT_EQ(span.size(), 0u);
+    }));
+    EXPECT(WebGLRenderingContextBaseAccessor::with_float32_list(list, 1, 0, [](ReadonlySpan<float>) { }).is_error());
+    EXPECT(WebGLRenderingContextBaseAccessor::with_float32_list(list, 0, 1, [](ReadonlySpan<float>) { }).is_error());
 }
 
 TEST_CASE(out_of_bounds_int32_list_without_offset_is_empty)
@@ -143,11 +111,11 @@ TEST_CASE(out_of_bounds_int32_list_without_offset_is_empty)
     auto& realm = *test_vm.vm->current_realm();
     Web::WebGL::WebGLRenderingContextBase::Int32List list { create_out_of_bounds_array<JS::Int32Array>(realm) };
 
-    auto span = MUST(WebGLRenderingContextBaseAccessor::span_from_int32_list(list, 0));
-
-    EXPECT_EQ(span.size(), 0u);
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_int32_list(list, 1).is_error());
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_int32_list(list, 0, 1).is_error());
+    MUST(WebGLRenderingContextBaseAccessor::with_int32_list(list, 0, 0, [](ReadonlySpan<int> span) {
+        EXPECT_EQ(span.size(), 0u);
+    }));
+    EXPECT(WebGLRenderingContextBaseAccessor::with_int32_list(list, 1, 0, [](ReadonlySpan<int>) { }).is_error());
+    EXPECT(WebGLRenderingContextBaseAccessor::with_int32_list(list, 0, 1, [](ReadonlySpan<int>) { }).is_error());
 }
 
 TEST_CASE(out_of_bounds_uint32_list_without_offset_is_empty)
@@ -156,9 +124,63 @@ TEST_CASE(out_of_bounds_uint32_list_without_offset_is_empty)
     auto& realm = *test_vm.vm->current_realm();
     Web::WebGL::WebGLRenderingContextBase::Uint32List list { create_out_of_bounds_array<JS::Uint32Array>(realm) };
 
-    auto span = MUST(WebGLRenderingContextBaseAccessor::span_from_uint32_list(list, 0));
+    MUST(WebGLRenderingContextBaseAccessor::with_uint32_list(list, 0, 0, [](ReadonlySpan<u32> span) {
+        EXPECT_EQ(span.size(), 0u);
+    }));
+    EXPECT(WebGLRenderingContextBaseAccessor::with_uint32_list(list, 1, 0, [](ReadonlySpan<u32>) { }).is_error());
+    EXPECT(WebGLRenderingContextBaseAccessor::with_uint32_list(list, 0, 1, [](ReadonlySpan<u32>) { }).is_error());
+}
 
-    EXPECT_EQ(span.size(), 0u);
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_uint32_list(list, 1).is_error());
-    EXPECT(WebGLRenderingContextBaseAccessor::span_from_uint32_list(list, 0, 1).is_error());
+TEST_CASE(detached_float32_list_without_offset_is_empty)
+{
+    TestVM test_vm;
+    auto& realm = *test_vm.vm->current_realm();
+    auto array_buffer = MUST(JS::ArrayBuffer::create(realm, 4 * sizeof(float)));
+    Web::WebGL::WebGLRenderingContextBase::Float32List list {
+        JS::Float32Array::create(realm, 4, array_buffer)
+    };
+    MUST(JS::detach_array_buffer(realm.vm(), *array_buffer));
+
+    MUST(WebGLRenderingContextBaseAccessor::with_float32_list(list, 0, 0, [](ReadonlySpan<float> span) {
+        EXPECT_EQ(span.size(), 0u);
+    }));
+    EXPECT(WebGLRenderingContextBaseAccessor::with_float32_list(list, 1, 0, [](ReadonlySpan<float>) { }).is_error());
+    EXPECT(WebGLRenderingContextBaseAccessor::with_float32_list(list, 0, 1, [](ReadonlySpan<float>) { }).is_error());
+}
+
+BENCHMARK_CASE(float32_typed_list_conversion)
+{
+    TestVM test_vm;
+    auto& realm = *test_vm.vm->current_realm();
+    Array values {
+        1.0f,
+        2.0f,
+        3.0f,
+        4.0f,
+        5.0f,
+        6.0f,
+        7.0f,
+        8.0f,
+        9.0f,
+        10.0f,
+        11.0f,
+        12.0f,
+        13.0f,
+        14.0f,
+        15.0f,
+        16.0f,
+    };
+    auto array_buffer = MUST(JS::ArrayBuffer::create(realm, values.size() * sizeof(float)));
+    array_buffer->overwrite(0, values.data(), values.size() * sizeof(float));
+    Web::WebGL::WebGLRenderingContextBase::Float32List list {
+        JS::Float32Array::create(realm, values.size(), array_buffer)
+    };
+
+    float sum = 0;
+    for (size_t iteration = 0; iteration < 1'000'000; ++iteration) {
+        MUST(WebGLRenderingContextBaseAccessor::with_float32_list(list, 0, 0, [&](ReadonlySpan<float> span) {
+            sum += span[iteration % values.size()];
+        }));
+    }
+    EXPECT(sum > 0);
 }

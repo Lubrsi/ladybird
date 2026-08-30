@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <AK/ByteBuffer.h>
 #include <AK/Checked.h>
 #include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
@@ -168,58 +167,30 @@ protected:
         return array_buffer->with_readonly_bytes(byte_offset_in_buffer.value(), byte_length, invoke_callback);
     }
 
-    template<typename T>
-    class SpanWithStorage {
-    public:
-        explicit SpanWithStorage(Span<T> span)
-            : m_span(span)
-        {
-        }
-
-        explicit SpanWithStorage(ByteBuffer storage)
-            : m_storage(move(storage))
-            , m_has_storage(true)
-            , m_span(m_storage.bytes().template reinterpret<T>())
-        {
-        }
-
-        SpanWithStorage(SpanWithStorage const&) = delete;
-        SpanWithStorage& operator=(SpanWithStorage const&) = delete;
-
-        SpanWithStorage(SpanWithStorage&& other)
-            : m_storage(move(other.m_storage))
-            , m_has_storage(exchange(other.m_has_storage, false))
-            , m_span(m_has_storage ? m_storage.bytes().template reinterpret<T>() : other.m_span)
-        {
-        }
-
-        SpanWithStorage& operator=(SpanWithStorage&& other)
-        {
-            if (this != &other) {
-                m_storage = move(other.m_storage);
-                m_has_storage = exchange(other.m_has_storage, false);
-                m_span = m_has_storage ? m_storage.bytes().template reinterpret<T>() : other.m_span;
-            }
-            return *this;
-        }
-
-        size_t size() const { return m_span.size(); }
-        T* data() { return m_span.data(); }
-        T const* data() const { return m_span.data(); }
-
-    private:
-        ByteBuffer m_storage;
-        bool m_has_storage { false };
-        Span<T> m_span;
-    };
-
-    template<typename T>
-    static ErrorOr<SpanWithStorage<T>> span_from_typed_array(JS::TypedArrayBase& typed_array, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override = 0)
+    // The callback's view may point straight into the JS heap: it must not escape the
+    // callback, run script, or allocate on the JS heap while held.
+    template<typename T, typename TypedArray, typename Callback>
+    static ErrorOr<void> with_typed_list(Variant<GC::Ref<TypedArray>, Vector<T>>& list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override, Callback&& callback)
     {
+        auto invoke_callback = [&](ReadonlySpan<T> span) -> ErrorOr<void> {
+            if constexpr (IsSame<decltype(callback(span)), void>) {
+                callback(span);
+                return {};
+            } else {
+                return callback(span);
+            }
+        };
+
+        if (list.template has<Vector<T>>()) {
+            auto& vector = list.template get<Vector<T>>();
+            return invoke_callback(TRY(get_offset_span(vector.span(), src_offset, src_length_override)));
+        }
+
+        auto& typed_array = *list.template get<GC::Ref<TypedArray>>();
         auto record = JS::make_typed_array_with_buffer_witness_record(typed_array, JS::ArrayBuffer::Order::SeqCst);
         if (JS::is_typed_array_out_of_bounds(record)) [[unlikely]] {
             if (src_offset == 0 && src_length_override == 0)
-                return SpanWithStorage<T> { Span<T> {} };
+                return invoke_callback({});
             return Error::from_errno(EINVAL);
         }
 
@@ -239,38 +210,27 @@ protected:
         if (byte_offset.has_overflow() || byte_length.has_overflow()) [[unlikely]]
             return Error::from_errno(EINVAL);
 
-        auto bytes = TRY(typed_array.viewed_array_buffer()->copy_to_byte_buffer(byte_offset.value(), byte_length.value()));
-        return SpanWithStorage<T> { move(bytes) };
+        return typed_array.viewed_array_buffer()->with_readonly_bytes(byte_offset.value(), byte_length.value(), [&](ReadonlyBytes bytes) {
+            return invoke_callback(bytes.template reinterpret<T const>());
+        });
     }
 
-    static ErrorOr<SpanWithStorage<float>> span_from_float32_list(Float32List& float32_list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override = 0)
+    template<typename Callback>
+    static ErrorOr<void> with_float32_list(Float32List& list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override, Callback&& callback)
     {
-        if (float32_list.has<Vector<float>>()) {
-            auto& vector = float32_list.get<Vector<float>>();
-            return SpanWithStorage<float> { TRY(get_offset_span(vector.span(), src_offset, src_length_override)) };
-        }
-        auto& buffer = float32_list.get<GC::Ref<JS::Float32Array>>();
-        return span_from_typed_array<float>(*buffer, src_offset, src_length_override);
+        return with_typed_list<float, JS::Float32Array>(list, src_offset, src_length_override, callback);
     }
 
-    static ErrorOr<SpanWithStorage<int>> span_from_int32_list(Int32List& int32_list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override = 0)
+    template<typename Callback>
+    static ErrorOr<void> with_int32_list(Int32List& list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override, Callback&& callback)
     {
-        if (int32_list.has<Vector<int>>()) {
-            auto& vector = int32_list.get<Vector<int>>();
-            return SpanWithStorage<int> { TRY(get_offset_span(vector.span(), src_offset, src_length_override)) };
-        }
-        auto& buffer = int32_list.get<GC::Ref<JS::Int32Array>>();
-        return span_from_typed_array<int>(*buffer, src_offset, src_length_override);
+        return with_typed_list<int, JS::Int32Array>(list, src_offset, src_length_override, callback);
     }
 
-    static ErrorOr<SpanWithStorage<u32>> span_from_uint32_list(Uint32List& uint32_list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override = 0)
+    template<typename Callback>
+    static ErrorOr<void> with_uint32_list(Uint32List& list, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length_override, Callback&& callback)
     {
-        if (uint32_list.has<Vector<u32>>()) {
-            auto& vector = uint32_list.get<Vector<u32>>();
-            return SpanWithStorage<u32> { TRY(get_offset_span(vector.span(), src_offset, src_length_override)) };
-        }
-        auto& buffer = uint32_list.get<GC::Ref<JS::Uint32Array>>();
-        return span_from_typed_array<u32>(*buffer, src_offset, src_length_override);
+        return with_typed_list<u32, JS::Uint32Array>(list, src_offset, src_length_override, callback);
     }
 
     struct TexImageSourceFrame {

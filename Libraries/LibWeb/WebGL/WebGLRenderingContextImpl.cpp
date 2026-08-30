@@ -2524,48 +2524,52 @@ void WebGLRenderingContextImpl::vertex_attrib1fv(WebIDL::UnsignedLong index, Flo
 {
     m_context->make_current();
 
-    auto span = MUST(span_from_float32_list(values, /* src_offset= */ 0));
-    if (span.size() < 1) {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->vertex_attrib1fv(index, span.data());
+    MUST(with_float32_list(values, /* src_offset= */ 0, /* src_length_override= */ 0, [&](ReadonlySpan<float> span) {
+        if (span.size() < 1) {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->vertex_attrib1fv(index, span.data());
+    }));
 }
 
 void WebGLRenderingContextImpl::vertex_attrib2fv(WebIDL::UnsignedLong index, Float32List values)
 {
     m_context->make_current();
 
-    auto span = MUST(span_from_float32_list(values, /* src_offset= */ 0));
-    if (span.size() < 2) {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->vertex_attrib2fv(index, span.data());
+    MUST(with_float32_list(values, /* src_offset= */ 0, /* src_length_override= */ 0, [&](ReadonlySpan<float> span) {
+        if (span.size() < 2) {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->vertex_attrib2fv(index, span.data());
+    }));
 }
 
 void WebGLRenderingContextImpl::vertex_attrib3fv(WebIDL::UnsignedLong index, Float32List values)
 {
     m_context->make_current();
 
-    auto span = MUST(span_from_float32_list(values, /* src_offset= */ 0));
-    if (span.size() < 3) {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->vertex_attrib3fv(index, span.data());
+    MUST(with_float32_list(values, /* src_offset= */ 0, /* src_length_override= */ 0, [&](ReadonlySpan<float> span) {
+        if (span.size() < 3) {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->vertex_attrib3fv(index, span.data());
+    }));
 }
 
 void WebGLRenderingContextImpl::vertex_attrib4fv(WebIDL::UnsignedLong index, Float32List values)
 {
     m_context->make_current();
 
-    auto span = MUST(span_from_float32_list(values, /* src_offset= */ 0));
-    if (span.size() < 4) {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->vertex_attrib4fv(index, span.data());
+    MUST(with_float32_list(values, /* src_offset= */ 0, /* src_length_override= */ 0, [&](ReadonlySpan<float> span) {
+        if (span.size() < 4) {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->vertex_attrib4fv(index, span.data());
+    }));
 }
 
 void WebGLRenderingContextImpl::vertex_attrib_pointer(WebIDL::UnsignedLong index, WebIDL::Long size, WebIDL::UnsignedLong type, bool normalized, WebIDL::Long stride, WebIDL::LongLong offset)
