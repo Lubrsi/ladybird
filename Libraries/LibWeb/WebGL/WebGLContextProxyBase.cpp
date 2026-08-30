@@ -4,32 +4,200 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
+#include <AK/QuickSort.h>
 #include <AK/StringBuilder.h>
+#include <AK/StringView.h>
 #include <GLES2/gl2.h>
 #include <LibCore/AnonymousBuffer.h>
+#include <LibCore/ElapsedTimer.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/PaintingSurface.h>
 #include <LibIPC/Limits.h>
 #include <LibWeb/WebGL/WebGLContextProxy.h>
 #include <LibWeb/WebGL/WebGLContextProxyBase.h>
+#include <stdlib.h>
+#include <string.h>
 
 namespace Web::WebGL {
+
+static Optional<u64> command_stream_statistics_report_interval()
+{
+    static auto const report_interval = []() -> Optional<u64> {
+        auto const* value = getenv("LADYBIRD_WEBGL_COMMAND_PROFILE");
+        if (!value)
+            return {};
+        if (*value == '\0')
+            return 600;
+        return StringView { value, strlen(value) }.to_number<u64>().value_or(600);
+    }();
+    return report_interval;
+}
+
+class WebGLCommandStreamStatistics {
+public:
+    explicit WebGLCommandStreamStatistics(u64 report_interval)
+        : m_report_interval(report_interval)
+    {
+    }
+
+    void record_command(WebGLCommandType type, WebGLCommandLayout const& layout)
+    {
+        auto& command = m_commands[to_underlying(type)];
+        ++command.count;
+        command.payload_bytes += layout.payload_size;
+        command.inline_data_bytes += layout.inline_data_size;
+        command.internal_padding_bytes += layout.internal_padding_size;
+        command.trailing_padding_bytes += layout.trailing_padding_size;
+        command.record_bytes += layout.record_size;
+    }
+
+    void record_out_of_line_command() { ++m_out_of_line_command_count; }
+    void record_oversized_record() { ++m_oversized_record_count; }
+    void record_opportunistic_rewind() { ++m_opportunistic_rewind_count; }
+    void record_capacity_wrap() { ++m_capacity_wrap_count; }
+
+    void record_wait(bool succeeded, u64 duration_nanoseconds)
+    {
+        ++m_wait_count;
+        if (!succeeded)
+            ++m_failed_wait_count;
+        m_wait_duration_nanoseconds += duration_nanoseconds;
+    }
+
+    void record_shared_flush(size_t bytes)
+    {
+        ++m_shared_flush_count;
+        m_shared_flush_bytes += bytes;
+    }
+
+    void record_out_of_line_flush(size_t bytes)
+    {
+        ++m_out_of_line_flush_count;
+        m_out_of_line_flush_bytes += bytes;
+    }
+
+    void did_present()
+    {
+        ++m_presentation_count;
+        if (m_report_interval != 0 && m_presentation_count >= m_report_interval)
+            report_and_reset();
+    }
+
+    void report_remaining()
+    {
+        if (m_presentation_count != 0 || total_command_count() != 0)
+            report_and_reset();
+    }
+
+private:
+    struct CommandStatistics {
+        u64 count { 0 };
+        u64 payload_bytes { 0 };
+        u64 inline_data_bytes { 0 };
+        u64 internal_padding_bytes { 0 };
+        u64 trailing_padding_bytes { 0 };
+        u64 record_bytes { 0 };
+    };
+
+    u64 total_command_count() const
+    {
+        u64 count = 0;
+        for (auto const& command : m_commands)
+            count += command.count;
+        return count;
+    }
+
+    void report_and_reset()
+    {
+        CommandStatistics total;
+        Array<u16, webgl_command_type_count> command_indices;
+        for (u16 index = 0; index < webgl_command_type_count; ++index) {
+            auto const& command = m_commands[index];
+            total.count += command.count;
+            total.payload_bytes += command.payload_bytes;
+            total.inline_data_bytes += command.inline_data_bytes;
+            total.internal_padding_bytes += command.internal_padding_bytes;
+            total.trailing_padding_bytes += command.trailing_padding_bytes;
+            total.record_bytes += command.record_bytes;
+            command_indices[index] = index;
+        }
+
+        quick_sort(command_indices, [&](u16 left, u16 right) {
+            return m_commands[left].count > m_commands[right].count;
+        });
+
+        auto commands_per_presentation = m_presentation_count == 0 ? 0.0 : static_cast<double>(total.count) / m_presentation_count;
+        dbgln("WebGL command profile: presentations={} commands={} commands/presentation={:.2f}", m_presentation_count, total.count, commands_per_presentation);
+        dbgln("  bytes: records={} headers={} payload={} inline={} internal-padding={} trailing-padding={}", total.record_bytes, total.count * sizeof(WebGLCommandHeader), total.payload_bytes, total.inline_data_bytes, total.internal_padding_bytes, total.trailing_padding_bytes);
+        dbgln("  transport: shared-flushes={} shared-bytes={} out-of-line-commands={} out-of-line-flushes={} out-of-line-bytes={} oversized={} opportunistic-rewinds={} capacity-wraps={} waits={} failed-waits={} wait-time-ns={}", m_shared_flush_count, m_shared_flush_bytes, m_out_of_line_command_count, m_out_of_line_flush_count, m_out_of_line_flush_bytes, m_oversized_record_count, m_opportunistic_rewind_count, m_capacity_wrap_count, m_wait_count, m_failed_wait_count, m_wait_duration_nanoseconds);
+
+        for (auto index : command_indices) {
+            auto const& command = m_commands[index];
+            if (command.count == 0)
+                break;
+            auto type = static_cast<WebGLCommandType>(index);
+            dbgln("  {}: count={} records={} payload={} inline={} internal-padding={} trailing-padding={}", to_string(type), command.count, command.record_bytes, command.payload_bytes, command.inline_data_bytes, command.internal_padding_bytes, command.trailing_padding_bytes);
+        }
+
+        m_commands = {};
+        m_presentation_count = 0;
+        m_shared_flush_count = 0;
+        m_shared_flush_bytes = 0;
+        m_out_of_line_command_count = 0;
+        m_out_of_line_flush_count = 0;
+        m_out_of_line_flush_bytes = 0;
+        m_oversized_record_count = 0;
+        m_opportunistic_rewind_count = 0;
+        m_capacity_wrap_count = 0;
+        m_wait_count = 0;
+        m_failed_wait_count = 0;
+        m_wait_duration_nanoseconds = 0;
+    }
+
+    Array<CommandStatistics, webgl_command_type_count> m_commands {};
+    u64 m_report_interval { 0 };
+    u64 m_presentation_count { 0 };
+    u64 m_shared_flush_count { 0 };
+    u64 m_shared_flush_bytes { 0 };
+    u64 m_out_of_line_command_count { 0 };
+    u64 m_out_of_line_flush_count { 0 };
+    u64 m_out_of_line_flush_bytes { 0 };
+    u64 m_oversized_record_count { 0 };
+    u64 m_opportunistic_rewind_count { 0 };
+    u64 m_capacity_wrap_count { 0 };
+    u64 m_wait_count { 0 };
+    u64 m_failed_wait_count { 0 };
+    u64 m_wait_duration_nanoseconds { 0 };
+};
+
+void WebGLContextProxyBase::record_command_stream_statistics(WebGLCommandType type, ReadonlyBytes payload, ReadonlyBytes inline_data)
+{
+    m_command_stream_statistics->record_command(type, WebGLCommandList::record_layout(payload, inline_data));
+}
 
 WebGLContextProxyBase::WebGLContextProxyBase(NonnullRefPtr<RemoteWebGLTransport> transport, WebGLVersion webgl_version, Vector<String> supported_extensions)
     : m_transport(move(transport))
     , m_webgl_version(webgl_version)
     , m_supported_extensions(move(supported_extensions))
 {
+    if (auto report_interval = command_stream_statistics_report_interval(); report_interval.has_value())
+        m_command_stream_statistics = make<WebGLCommandStreamStatistics>(report_interval.value());
     initialize_shared_command_buffer();
 }
 
 WebGLContextProxyBase::~WebGLContextProxyBase()
 {
+    if (m_command_stream_statistics)
+        m_command_stream_statistics->report_remaining();
     m_transport->destroy_context();
 }
 
 void WebGLContextProxyBase::restore(NonnullRefPtr<RemoteWebGLTransport> transport, Vector<String> supported_extensions)
 {
+    if (m_command_stream_statistics)
+        m_command_stream_statistics->report_remaining();
+
     m_transport = move(transport);
     m_supported_extensions = move(supported_extensions);
     m_lost = false;
@@ -54,38 +222,43 @@ void WebGLContextProxyBase::initialize_shared_command_buffer()
     m_transport->set_shared_command_buffer(m_shared_command_buffer.buffer());
 }
 
-void WebGLContextProxyBase::record_bytes(WebGLCommandType type, ReadonlyBytes payload, ReadonlyBytes inline_data)
+Bytes WebGLContextProxyBase::prepare_record_destination_slow(WebGLCommandType type, ReadonlyBytes payload, ReadonlyBytes inline_data, size_t record_size)
 {
     if (m_lost)
-        return;
+        return {};
 
     if (!m_shared_command_buffer.is_valid()) {
+        if (m_command_stream_statistics) {
+            record_command_stream_statistics(type, payload, inline_data);
+            m_command_stream_statistics->record_out_of_line_command();
+        }
         m_out_of_line_commands.append_bytes(type, payload, inline_data);
         if (m_out_of_line_commands.size_in_bytes() >= max_pending_command_bytes)
             flush_commands();
-        return;
+        return {};
     }
 
     auto data_region = m_shared_command_buffer.data_region();
-    auto record_size = WebGLCommandList::padded_record_size(payload, inline_data);
-
     if (record_size > data_region.size()) {
+        if (m_command_stream_statistics) {
+            record_command_stream_statistics(type, payload, inline_data);
+            m_command_stream_statistics->record_oversized_record();
+        }
         flush_commands();
         WebGLCommandList oversized_command_list;
         oversized_command_list.append_bytes(type, payload, inline_data);
         m_transport->send_commands(oversized_command_list.buffer(), {});
-        return;
+        return {};
     }
 
     rewind_shared_data_cursor_if_all_published_commands_executed();
     ensure_shared_data_capacity(record_size);
     if (m_lost)
-        return;
+        return {};
 
-    WebGLCommandList::write_record(data_region.slice(m_shared_data_cursor, record_size), type, payload, inline_data);
-    m_shared_data_cursor += record_size;
-    if (m_shared_data_cursor - m_shared_data_flush_base >= max_pending_command_bytes)
-        flush_commands();
+    if (m_command_stream_statistics)
+        record_command_stream_statistics(type, payload, inline_data);
+    return data_region.slice(m_shared_data_cursor, record_size);
 }
 
 void WebGLContextProxyBase::rewind_shared_data_cursor_if_all_published_commands_executed()
@@ -93,6 +266,8 @@ void WebGLContextProxyBase::rewind_shared_data_cursor_if_all_published_commands_
     if (m_shared_data_cursor == 0 || m_shared_data_cursor != m_shared_data_flush_base)
         return;
     if (m_shared_command_buffer.executed_flush_sequence_number() >= m_last_published_flush_sequence_number) {
+        if (m_command_stream_statistics)
+            m_command_stream_statistics->record_opportunistic_rewind();
         m_shared_data_cursor = 0;
         m_shared_data_flush_base = 0;
     }
@@ -105,10 +280,18 @@ void WebGLContextProxyBase::ensure_shared_data_capacity(size_t record_size)
     if (record_size <= data_region_capacity - m_shared_data_cursor)
         return;
 
+    if (m_command_stream_statistics)
+        m_command_stream_statistics->record_capacity_wrap();
     flush_commands();
     VERIFY(m_shared_data_cursor == m_shared_data_flush_base);
     if (m_shared_command_buffer.executed_flush_sequence_number() < m_last_published_flush_sequence_number) {
-        if (!m_transport->wait_until_published_commands_executed()) {
+        Optional<Core::ElapsedTimer> wait_timer;
+        if (m_command_stream_statistics)
+            wait_timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
+        auto wait_succeeded = m_transport->wait_until_published_commands_executed();
+        if (m_command_stream_statistics)
+            m_command_stream_statistics->record_wait(wait_succeeded, wait_timer->elapsed_time().to_nanoseconds());
+        if (!wait_succeeded) {
             set_lost();
             return;
         }
@@ -123,10 +306,13 @@ void WebGLContextProxyBase::flush_commands()
     if (m_shared_command_buffer.is_valid()) {
         if (m_shared_data_cursor == m_shared_data_flush_base)
             return;
+        auto flushed_bytes = m_shared_data_cursor - m_shared_data_flush_base;
+        if (m_command_stream_statistics)
+            m_command_stream_statistics->record_shared_flush(flushed_bytes);
         m_last_published_flush_sequence_number++;
         m_transport->send_commands_from_shared_buffer(
             m_shared_data_flush_base,
-            m_shared_data_cursor - m_shared_data_flush_base,
+            flushed_bytes,
             m_last_published_flush_sequence_number,
             m_pending_bitmaps);
         m_shared_data_flush_base = m_shared_data_cursor;
@@ -136,6 +322,8 @@ void WebGLContextProxyBase::flush_commands()
 
     if (m_out_of_line_commands.is_empty())
         return;
+    if (m_command_stream_statistics)
+        m_command_stream_statistics->record_out_of_line_flush(m_out_of_line_commands.size_in_bytes());
     m_transport->send_commands(m_out_of_line_commands.buffer(), m_pending_bitmaps);
     m_out_of_line_commands.clear_with_capacity();
     m_pending_bitmaps.clear_with_capacity();
@@ -191,6 +379,8 @@ void WebGLContextProxyBase::present_canvas_for_compositing(bool preserve_drawing
 {
     flush_commands();
     m_transport->present_canvas(preserve_drawing_buffer);
+    if (m_command_stream_statistics)
+        m_command_stream_statistics->did_present();
 }
 
 RefPtr<Gfx::Bitmap> WebGLContextProxyBase::read_back_drawing_buffer(Gfx::IntRect const& rect)

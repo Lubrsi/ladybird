@@ -12,6 +12,7 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Optional.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
 #include <LibCore/AnonymousBuffer.h>
@@ -26,6 +27,8 @@
 #include <LibWeb/WebGL/WebGLSharedCommandBuffer.h>
 
 namespace Web::WebGL {
+
+class WebGLCommandStreamStatistics;
 
 class WEB_API WebGLContextProxyBase {
     AK_MAKE_NONCOPYABLE(WebGLContextProxyBase);
@@ -81,12 +84,29 @@ protected:
     ReadPixelsResult read_pixels_robust_angle_into_shared_buffer(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei buf_size, Core::AnonymousBuffer const& pixels);
 
     template<typename Command>
-    void record(Command const& command, ReadonlyBytes inline_data = {})
+    void record(Command const& command)
     {
-        record_bytes(Command::command_type, { &command, sizeof(command) }, inline_data);
+        constexpr auto record_size = WebGLCommandList::fixed_record_size<Command>();
+        auto destination = prepare_record_destination(Command::command_type, { &command, sizeof(command) }, {}, record_size);
+        if (destination.is_empty())
+            return;
+
+        WebGLCommandList::write_record(destination, command);
+        complete_record(destination.size());
     }
 
-    void record_bytes(WebGLCommandType, ReadonlyBytes payload, ReadonlyBytes inline_data);
+    template<typename Command>
+    void record(Command const& command, ReadonlyBytes inline_data)
+    {
+        auto payload = ReadonlyBytes { &command, sizeof(command) };
+        auto record_size = WebGLCommandList::padded_record_size(payload, inline_data);
+        auto destination = prepare_record_destination(Command::command_type, payload, inline_data, record_size);
+        if (destination.is_empty())
+            return;
+
+        WebGLCommandList::write_record(destination, command, inline_data);
+        complete_record(destination.size());
+    }
 
     ByteBuffer send_sync_call(ByteBuffer request);
     bool is_lost() const { return m_lost; }
@@ -96,6 +116,31 @@ protected:
 private:
     u32 append_pending_bitmap(Gfx::DecodedImageFrame);
     void initialize_shared_command_buffer();
+    void record_command_stream_statistics(WebGLCommandType, ReadonlyBytes payload, ReadonlyBytes inline_data);
+    ALWAYS_INLINE Bytes prepare_record_destination(WebGLCommandType type, ReadonlyBytes payload, ReadonlyBytes inline_data, size_t record_size)
+    {
+        if (m_lost || m_command_stream_statistics || !m_shared_command_buffer.is_valid())
+            return prepare_record_destination_slow(type, payload, inline_data, record_size);
+
+        auto data_region = m_shared_command_buffer.data_region();
+        if (record_size > data_region.size())
+            return prepare_record_destination_slow(type, payload, inline_data, record_size);
+
+        if (m_shared_data_cursor != 0 && m_shared_data_cursor == m_shared_data_flush_base)
+            return prepare_record_destination_slow(type, payload, inline_data, record_size);
+
+        if (record_size > data_region.size() - m_shared_data_cursor)
+            return prepare_record_destination_slow(type, payload, inline_data, record_size);
+
+        return data_region.slice(m_shared_data_cursor, record_size);
+    }
+    Bytes prepare_record_destination_slow(WebGLCommandType, ReadonlyBytes payload, ReadonlyBytes inline_data, size_t record_size);
+    void complete_record(size_t record_size)
+    {
+        m_shared_data_cursor += record_size;
+        if (m_shared_data_cursor - m_shared_data_flush_base >= max_pending_command_bytes)
+            flush_commands();
+    }
     void rewind_shared_data_cursor_if_all_published_commands_executed();
     void ensure_shared_data_capacity(size_t record_size);
 
@@ -109,6 +154,7 @@ private:
     WebGLCommandList m_out_of_line_commands;
     Vector<Gfx::DecodedImageFrame> m_pending_bitmaps;
     u32 m_next_object_id { 1 };
+    OwnPtr<WebGLCommandStreamStatistics> m_command_stream_statistics;
     bool m_lost { false };
     GLenum m_pending_local_error { 0 };
 };

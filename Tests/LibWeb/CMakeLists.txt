@@ -35,6 +35,7 @@ set(TEST_SOURCES
     TestStyleStructRef.cpp
     TestTextureUpload.cpp
     TestTrackBufferDemuxer.cpp
+    TestWebGLCommandList.cpp
     TestWebGLSpanWithStorage.cpp
     TestWebIDLBuffers.cpp
     TestWindowProxyWorld.cpp
@@ -71,6 +72,12 @@ target_link_libraries(TestAccumulatedVisualContext PRIVATE LibGfx)
 target_link_libraries(TestImageData PRIVATE LibGC LibJS)
 target_link_libraries(TestWebIDLBuffers PRIVATE LibGC LibJS)
 target_link_libraries(TestWebGLSpanWithStorage PRIVATE LibGC LibJS)
+foreach(angle_target IN LISTS ANGLE_TARGETS)
+    target_include_directories(TestWebGLCommandList PRIVATE $<TARGET_PROPERTY:${angle_target},INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(TestWebGLCommandList SYSTEM PRIVATE $<TARGET_PROPERTY:${angle_target},INTERFACE_SYSTEM_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(TestWebGLCommandList PRIVATE $<TARGET_PROPERTY:${angle_target},INTERFACE_COMPILE_DEFINITIONS>)
+    target_compile_options(TestWebGLCommandList PRIVATE $<TARGET_PROPERTY:${angle_target},INTERFACE_COMPILE_OPTIONS>)
+endforeach()
 target_link_libraries(TestStructuredSerializeCorpus PRIVATE LibGC LibJS LibCrypto LibGfx LibIPC)
 target_link_libraries(TestStructuredSerializeDurability PRIVATE LibGC LibJS LibCrypto LibGfx LibIPC)
 target_link_libraries(TestStructuredSerializeFormat PRIVATE LibGC LibJS LibCrypto LibGfx LibIPC)

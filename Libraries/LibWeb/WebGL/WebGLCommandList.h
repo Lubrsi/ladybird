@@ -9,6 +9,7 @@
 #include <AK/Assertions.h>
 #include <AK/ByteBuffer.h>
 #include <AK/Error.h>
+#include <AK/NumericLimits.h>
 #include <AK/Span.h>
 #include <AK/StdLibExtras.h>
 #include <LibWeb/Export.h>
@@ -21,6 +22,14 @@ struct WebGLCommandHeader {
     u32 payload_size { 0 }; // command struct + inline data + trailing padding
 };
 static_assert(IsTriviallyCopyable<WebGLCommandHeader>);
+
+struct WebGLCommandLayout {
+    size_t payload_size { 0 };
+    size_t inline_data_size { 0 };
+    size_t internal_padding_size { 0 };
+    size_t trailing_padding_size { 0 };
+    size_t record_size { 0 };
+};
 
 class WEB_API WebGLCommandList {
 public:
@@ -44,8 +53,74 @@ public:
 
     void append_bytes(WebGLCommandType, ReadonlyBytes payload, ReadonlyBytes inline_data);
 
-    static size_t padded_record_size(ReadonlyBytes payload, ReadonlyBytes inline_data);
+    static WebGLCommandLayout record_layout(ReadonlyBytes payload, ReadonlyBytes inline_data);
+    static size_t padded_record_size(ReadonlyBytes payload, ReadonlyBytes inline_data)
+    {
+        auto payload_layout_size = payload.size();
+        if (!inline_data.is_empty())
+            payload_layout_size = align_up_to(payload_layout_size, command_alignment) + inline_data.size();
+        return align_up_to(sizeof(WebGLCommandHeader) + payload_layout_size, command_alignment);
+    }
     static void write_record(Bytes destination, WebGLCommandType, ReadonlyBytes payload, ReadonlyBytes inline_data);
+
+    template<typename Command>
+    static constexpr size_t fixed_record_size()
+    {
+        return align_up_to(sizeof(WebGLCommandHeader) + sizeof(Command), command_alignment);
+    }
+
+    template<typename Command>
+    static void write_record(Bytes destination, Command const& command)
+    {
+        static_assert(IsTriviallyCopyable<Command>);
+
+        constexpr auto record_size = fixed_record_size<Command>();
+        VERIFY(destination.size() == record_size);
+
+        constexpr auto padded_payload_size = record_size - sizeof(WebGLCommandHeader);
+        static_assert(padded_payload_size <= NumericLimits<u32>::max());
+
+        WebGLCommandHeader header {
+            .type = Command::command_type,
+            .payload_size = static_cast<u32>(padded_payload_size),
+        };
+        __builtin_memcpy(destination.data(), &header, sizeof(header));
+
+        auto payload = destination.slice(sizeof(header));
+        __builtin_memcpy(payload.data(), &command, sizeof(command));
+        __builtin_memset(payload.offset_pointer(sizeof(command)), 0, padded_payload_size - sizeof(command));
+    }
+
+    template<typename Command>
+    static void write_record(Bytes destination, Command const& command, ReadonlyBytes inline_data)
+    {
+        if (inline_data.is_empty()) {
+            write_record(destination, command);
+            return;
+        }
+
+        static_assert(IsTriviallyCopyable<Command>);
+
+        constexpr auto inline_data_offset = align_up_to(sizeof(Command), command_alignment);
+        auto unpadded_payload_size = inline_data_offset + inline_data.size();
+        auto record_size = align_up_to(sizeof(WebGLCommandHeader) + unpadded_payload_size, command_alignment);
+        VERIFY(destination.size() == record_size);
+
+        auto padded_payload_size = record_size - sizeof(WebGLCommandHeader);
+        VERIFY(padded_payload_size <= NumericLimits<u32>::max());
+
+        WebGLCommandHeader header {
+            .type = Command::command_type,
+            .payload_size = static_cast<u32>(padded_payload_size),
+        };
+        __builtin_memcpy(destination.data(), &header, sizeof(header));
+
+        auto payload = destination.slice(sizeof(header));
+        __builtin_memcpy(payload.data(), &command, sizeof(command));
+        __builtin_memset(payload.offset_pointer(sizeof(command)), 0, inline_data_offset - sizeof(command));
+        __builtin_memcpy(payload.offset_pointer(inline_data_offset), inline_data.data(), inline_data.size());
+        __builtin_memset(payload.offset_pointer(unpadded_payload_size), 0, padded_payload_size - unpadded_payload_size);
+    }
 
     template<typename Callback>
     static ErrorOr<void> for_each_command(ReadonlyBytes bytes, Callback&& callback)
