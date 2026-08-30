@@ -901,7 +901,7 @@ TEST_CASE(compiled_to_interpreter_call_restores_label_stack)
     auto instance = MUST(machine.instantiate(*module, move(imports)));
 
     EXPECT(!module->code_section().functions()[0].func().body().compiled_instructions.cranelift_compiled);
-    EXPECT(module->code_section().functions()[1].func().body().compiled_instructions.cranelift_compiled);
+    expect_direct_frontend(module->code_section().functions()[1].func().body().compiled_instructions);
 
     Optional<Wasm::FunctionAddress> run;
     for (auto const& export_ : instance->exports()) {
@@ -955,6 +955,7 @@ TEST_CASE(reentrant_invoke_uses_independent_execution_state)
     Vector<Wasm::ExternValue> imports;
     imports.append(*label_stack_size);
     auto instance = MUST(machine.instantiate(*module, move(imports)));
+    expect_direct_frontend(module->code_section().functions()[1].func().body().compiled_instructions);
 
     for (auto const& export_ : instance->exports()) {
         if (export_.name() == "run"sv)
