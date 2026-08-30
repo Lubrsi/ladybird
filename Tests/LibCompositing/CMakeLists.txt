@@ -10,6 +10,7 @@ set(TEST_SOURCES
     TestScrollState.cpp
     TestSmoothScrollAnimation.cpp
     TestTextureUpload.cpp
+    TestWebGLCommandList.cpp
 )
 
 foreach(source IN LISTS TEST_SOURCES)
