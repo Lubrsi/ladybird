@@ -236,8 +236,10 @@ void WebGL2RenderingContextOverloads::uniform1fv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    m_context->uniform1fv(location_handle, span.size(), span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(values, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        m_context->uniform1fv(location_handle, span.size(), span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform2fv(GC::Ptr<WebGLUniformLocation> location, Float32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -249,12 +251,14 @@ void WebGL2RenderingContextOverloads::uniform2fv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 2 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform2fv(location_handle, span.size() / 2, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(values, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % 2 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform2fv(location_handle, span.size() / 2, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform3fv(GC::Ptr<WebGLUniformLocation> location, Float32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -266,12 +270,14 @@ void WebGL2RenderingContextOverloads::uniform3fv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 3 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform3fv(location_handle, span.size() / 3, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(values, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % 3 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform3fv(location_handle, span.size() / 3, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform4fv(GC::Ptr<WebGLUniformLocation> location, Float32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -283,12 +289,14 @@ void WebGL2RenderingContextOverloads::uniform4fv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 4 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform4fv(location_handle, span.size() / 4, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(values, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % 4 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform4fv(location_handle, span.size() / 4, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform1iv(GC::Ptr<WebGLUniformLocation> location, Int32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -300,8 +308,10 @@ void WebGL2RenderingContextOverloads::uniform1iv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_int32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    m_context->uniform1iv(location_handle, span.size(), span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_int32_list(values, src_offset, src_length, [&](ReadonlySpan<int> span) {
+        m_context->uniform1iv(location_handle, span.size(), span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform2iv(GC::Ptr<WebGLUniformLocation> location, Int32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -313,12 +323,14 @@ void WebGL2RenderingContextOverloads::uniform2iv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_int32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 2 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform2iv(location_handle, span.size() / 2, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_int32_list(values, src_offset, src_length, [&](ReadonlySpan<int> span) {
+        if (span.size() % 2 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform2iv(location_handle, span.size() / 2, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform3iv(GC::Ptr<WebGLUniformLocation> location, Int32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -330,12 +342,14 @@ void WebGL2RenderingContextOverloads::uniform3iv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_int32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 3 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform3iv(location_handle, span.size() / 3, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_int32_list(values, src_offset, src_length, [&](ReadonlySpan<int> span) {
+        if (span.size() % 3 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform3iv(location_handle, span.size() / 3, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform4iv(GC::Ptr<WebGLUniformLocation> location, Int32List values, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -347,12 +361,14 @@ void WebGL2RenderingContextOverloads::uniform4iv(GC::Ptr<WebGLUniformLocation> l
 
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_int32_list(values, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % 4 != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform4iv(location_handle, span.size() / 4, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_int32_list(values, src_offset, src_length, [&](ReadonlySpan<int> span) {
+        if (span.size() % 4 != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform4iv(location_handle, span.size() / 4, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform_matrix2fv(GC::Ptr<WebGLUniformLocation> location, bool transpose, Float32List data, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -365,12 +381,14 @@ void WebGL2RenderingContextOverloads::uniform_matrix2fv(GC::Ptr<WebGLUniformLoca
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
     constexpr auto matrix_size = 2 * 2;
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(data, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % matrix_size != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform_matrix2fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(data, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % matrix_size != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform_matrix2fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform_matrix3fv(GC::Ptr<WebGLUniformLocation> location, bool transpose, Float32List data, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -383,12 +401,14 @@ void WebGL2RenderingContextOverloads::uniform_matrix3fv(GC::Ptr<WebGLUniformLoca
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
     constexpr auto matrix_size = 3 * 3;
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(data, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % matrix_size != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform_matrix3fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(data, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % matrix_size != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform_matrix3fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 void WebGL2RenderingContextOverloads::uniform_matrix4fv(GC::Ptr<WebGLUniformLocation> location, bool transpose, Float32List data, WebIDL::UnsignedLongLong src_offset, WebIDL::UnsignedLong src_length)
@@ -401,12 +421,14 @@ void WebGL2RenderingContextOverloads::uniform_matrix4fv(GC::Ptr<WebGLUniformLoca
     GLuint location_handle = SET_ERROR_VALUE_IF_ERROR(location->handle(m_current_program), GL_INVALID_OPERATION);
 
     constexpr auto matrix_size = 4 * 4;
-    auto span = SET_ERROR_VALUE_IF_ERROR(span_from_float32_list(data, src_offset, src_length), GL_INVALID_VALUE);
-    if (span.size() % matrix_size != 0) [[unlikely]] {
-        set_error(GL_INVALID_VALUE);
-        return;
-    }
-    m_context->uniform_matrix4fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    SET_ERROR_VALUE_IF_ERROR(with_float32_list(data, src_offset, src_length, [&](ReadonlySpan<float> span) {
+        if (span.size() % matrix_size != 0) [[unlikely]] {
+            set_error(GL_INVALID_VALUE);
+            return;
+        }
+        m_context->uniform_matrix4fv(location_handle, span.size() / matrix_size, transpose, span.data());
+    }),
+        GL_INVALID_VALUE);
 }
 
 // https://registry.khronos.org/webgl/specs/latest/1.0/index.html#5.14.12

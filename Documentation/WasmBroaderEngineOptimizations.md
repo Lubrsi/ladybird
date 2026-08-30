@@ -128,12 +128,13 @@ the rare longest updates.
 
 ### First experiment: remove typed-list staging copies
 
-`WebGLRenderingContextBase::span_from_typed_array()` currently calls
-`ArrayBuffer::copy_to_byte_buffer()`. Uniform and matrix entry points therefore copy a typed array
-into temporary owned storage, then the proxy copies that storage into the shared command buffer.
+Before this experiment, `WebGLRenderingContextBase::span_from_typed_array()` called
+`ArrayBuffer::copy_to_byte_buffer()`. Uniform and matrix entry points therefore copied a typed
+array into temporary owned storage, then the proxy copied that storage into the shared command
+buffer.
 
-The first experiment should add a callback-scoped typed-list borrowing helper, following the
-existing `with_buffer_source_bytes()` design:
+The replacement is a callback-scoped typed-list borrowing helper, following the existing
+`with_buffer_source_bytes()` design:
 
 ```text
 current:
@@ -148,9 +149,23 @@ The proxy records the inline data synchronously, so the required WebGL snapshot 
 copy into shared command memory. Sequence-valued inputs can continue to borrow their converted
 `Vector` for the same bounded call.
 
-Apply this generally to the float, signed-integer, and unsigned-integer list helpers rather than
-special-casing `uniform4fv` for d3wasm. Add focused tests for typed arrays, sequences, offsets,
-length overrides, detached buffers, and out-of-bounds views.
+This is applied generally to the float, signed-integer, and unsigned-integer list helpers rather
+than special-casing `uniform4fv` for d3wasm. Focused tests cover direct ArrayBuffer borrowing,
+sequence storage, offsets, length overrides, detached buffers, and out-of-bounds views.
+
+On 2026-08-30, a release-build microbenchmark performed one million conversions of a 16-element
+`Float32Array`, with ten repetitions:
+
+| Typed-list conversion | Mean and deviation | Range | Approximate time per conversion |
+| --- | ---: | ---: | ---: |
+| Temporary `ByteBuffer` copy | 42.4 +/- 9.1 ms | 41--60 ms | 42.4 ns |
+| Callback-scoped borrow | 21.6 +/- 9.3 ms | 19--43 ms | 21.6 ns |
+
+The callback-scoped path reduced this focused cost by approximately 49%. A pointer-identity test
+also verifies that the common contiguous-ArrayBuffer path views the original backing storage. The
+underlying `ArrayBuffer::with_readonly_bytes()` abstraction retains its temporary-copy fallback
+for a non-contiguous `MemoryBuffer`; the WebGL helper no longer imposes that copy unconditionally.
+The final synchronous copy into shared WebGL command memory remains unchanged.
 
 ### Required copy versus removable work
 
