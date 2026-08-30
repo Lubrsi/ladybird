@@ -34,9 +34,23 @@ static void write_payload(Bytes destination, ReadonlyBytes payload, ReadonlyByte
     __builtin_memset(destination.offset_pointer(cursor), 0, destination.size() - cursor);
 }
 
-size_t WebGLCommandList::padded_record_size(ReadonlyBytes payload, ReadonlyBytes inline_data)
+WebGLCommandLayout WebGLCommandList::record_layout(ReadonlyBytes payload, ReadonlyBytes inline_data)
 {
-    return align_up_to(sizeof(WebGLCommandHeader) + payload_layout_size(payload, inline_data), command_alignment);
+    auto inline_data_offset = payload.size();
+    if (!inline_data.is_empty())
+        inline_data_offset = align_up_to(inline_data_offset, command_alignment);
+
+    auto internal_padding_size = inline_data_offset - payload.size();
+    auto unpadded_payload_size = inline_data_offset + inline_data.size();
+    auto record_size = padded_record_size(payload, inline_data);
+
+    return {
+        .payload_size = payload.size(),
+        .inline_data_size = inline_data.size(),
+        .internal_padding_size = internal_padding_size,
+        .trailing_padding_size = record_size - sizeof(WebGLCommandHeader) - unpadded_payload_size,
+        .record_size = record_size,
+    };
 }
 
 void WebGLCommandList::write_record(Bytes destination, WebGLCommandType type, ReadonlyBytes payload, ReadonlyBytes inline_data)
