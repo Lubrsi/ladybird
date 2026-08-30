@@ -340,13 +340,36 @@ to move total frame time reliably by itself. The largest remaining named WebGL l
 `WebGLRenderingContextImpl::bind_buffer()` at 0.63% of total sampled cycles; there is no replacement
 command-serialization hotspot of comparable size to run 5's reservation regression.
 
+The remaining leaf profile is broad rather than dominated by another WebGL command-writer
+operation. The highest raw JIT leaf in the exported run-6 profile is `0x1765300d1`. Matching its
+live instructions against the version-33 native cache identifies direct-frontend Wasm function
+3009. Its hot loop performs floating-point plane/vector dot-product work matching the
+`idSIMD_Generic::Dot` family. Useful guest computation appearing above individual serialization
+helpers is the intended profile shape, not a new Wasm regression.
+
+This distribution makes the Wasm-to-JavaScript boundary the next cross-cutting target. Much of its
+cost is expected to be spread across Wasm call fallback, argument containers, value conversion,
+JavaScript call setup, WebIDL conversion, and the eventual WebGL method rather than concentrated in
+one leaf. A faster boundary can reduce the common prefix paid by many different WebGL calls, while
+another command-specific optimization can affect only its own smaller leaf.
+
+The command rate makes apparently small boundary costs material. The representative heavy-scene
+window contains approximately 23,452 commands per presentation. If each command corresponded to
+one Wasm-to-JavaScript crossing, saving 250 ns per crossing would save approximately 5.86 ms per
+presentation, or 70% of the complete 8.33 ms budget at 120 Hz. At the measured approximately 86
+presentations/s, the same cost consumes about half a CPU-second per second. Commands and boundary
+crossings are not guaranteed to be one-to-one, so this is a scale illustration rather than an
+attribution result. Even half as many crossings would retain a 2.93 ms-per-presentation ceiling.
+
 ## Wasm-to-JavaScript calls
 
 ### Current generic path
 
 An imported JavaScript function is currently stored as a `Wasm::HostFunction`. A direct native
-Wasm call that cannot resolve to another compiled Wasm body falls back through
-`wasm_cl_finish_call()`. That path rebuilds an owned `Vector<Wasm::Value>`, calls through
+Wasm call that cannot resolve to another compiled Wasm body enters its generated fallback. The
+fallback writes full-width `Wasm::Value` arguments to the `Configuration` value stack, calls
+`wasm_cl_current_interpreter()`, and enters `wasm_cl_call_function()`. That helper routes through
+`BytecodeInterpreter::call_address()`, which rebuilds an owned `Vector<Wasm::Value>`, calls through
 `Configuration::call()`, and eventually invokes the host-function closure created by
 `create_host_function()`.
 
@@ -358,6 +381,8 @@ required by the JS API. In simplified form:
 ```text
 typed values in a direct Wasm body
     -> interpreter-compatible Wasm argument storage
+    -> wasm_cl_call_function()
+    -> BytecodeInterpreter::call_address()
     -> owned Vector<Wasm::Value>
     -> Wasm::HostFunction
     -> rooted vector of JS::Value arguments
@@ -497,19 +522,173 @@ profile as the application check. Attribute separately:
 - WebIDL conversion; and
 - WebGL command construction.
 
+### Initial numeric-import baseline
+
+The restored `WasmMicroBench` import matrix establishes the first direct-frontend baseline. Each
+Wasm function calls a trivial ordinary JavaScript function 50 million times. Three executions per
+case were run through the release `wasm` CLI with `--benchmark-timings`; every recorded execution
+had a nonzero native-compilation phase and reported the single loop function being submitted to and
+received from Cranelift. A sandboxed trial that could not launch Cranelift was discarded.
+
+| Imported function signature | Mean execution | Time per call |
+| --- | ---: | ---: |
+| `() -> ()` | 2.312 s | 46.24 ns |
+| `(i32) -> ()` | 2.741 s | 54.83 ns |
+| `(i32, i32) -> ()` | 2.882 s | 57.65 ns |
+| `(i32, i32, i32) -> ()` | 3.053 s | 61.06 ns |
+| `(i32, i32, i32, i32) -> ()` | 3.327 s | 66.54 ns |
+| `(8 * i32) -> ()` | 3.787 s | 75.73 ns |
+| `(16 * i32) -> ()` | 4.972 s | 99.44 ns |
+| `(32 * i32) -> ()` | 6.679 s | 133.57 ns |
+| `(4 * f32) -> ()` | 3.323 s | 66.47 ns |
+| `(4 * f64) -> ()` | 3.393 s | 67.86 ns |
+| `(i32, f32, i32, f32) -> ()` | 3.282 s | 65.63 ns |
+| `() -> i32` | 3.040 s | 60.79 ns |
+| `() -> f64` | 2.979 s | 59.57 ns |
+| `(4 * i32) -> i32` | 3.970 s | 79.39 ns |
+
+Two controls make the fixed cost visible. The existing native Wasm-to-Wasm call benchmarks take
+approximately 1.00 ns with no arguments and 1.25 ns with four `i32` arguments. The corresponding
+JavaScript-to-JavaScript empty-call loops take approximately 8 ns per call including CLI wall-time
+overhead. The zero-argument Wasm-to-JavaScript path therefore spends roughly 38 ns beyond an
+ordinary JavaScript call and roughly 45 ns beyond a native Wasm call.
+
+Argument cost grows with arity, but the four-argument results do not show a meaningful penalty for
+`f32`, `f64`, or mixed numeric types relative to `i32`. A scalar result adds approximately 13 ns.
+This first decomposition points at the fixed Wasm host-call path and result container/conversion
+work before any type-specific numeric optimization. At the representative 23,452-crossing scale,
+the measured 46.24 ns zero-argument intercept alone corresponds to approximately 1.08 ms per
+presentation; the earlier 250 ns example is therefore a ceiling illustration, not the measured
+current boundary cost.
+
+### Zero-argument boundary profile
+
+A command-line Time Profiler capture of the zero-argument case sampled the 2.31-second execution at
+1 ms intervals. The persistent Instruments analyzer now accepts both the GUI CPU Profiler's
+`cpu-profile`/`cycle-weight` schema and the command-line Time Profiler's equivalent
+`time-profile`/`weight` schema, so the same attribution workflow applies to both captures.
+
+The profile directly confirms that the fixed cost is primarily the generic interpreter-compatible
+call boundary. `wasm_cl_call_function()` covers 90.6% of main-thread samples inclusively, and
+`BytecodeInterpreter::call_address()` covers 70.4%, despite the call having no arguments and no
+result. The leaf distribution includes:
+
+- `BytecodeInterpreter::call_address()` at 5.18%;
+- `Configuration::get_arguments_allocation_if_possible()` at 4.35%;
+- `_platform_memset_pattern16` at 4.26%;
+- `JS::VM::run_executable()` at 4.05%;
+- `JS::call_impl()` and `ExecutionContext` construction at 2.80% each; and
+- JS argument-vector capacity handling at 2.76%.
+
+The exact leaf percentages are sampling estimates and the CLI's host closure is not identical to
+LibWeb's rooted WebAssembly host closure. The two large inclusive frames are shared runtime code,
+however, and make the first experiment unambiguous: bypass `call_address()` and the configuration
+value stack for direct low-arity host-call fallbacks, while retaining the generic path for
+unsupported signatures and semantics. Existing `wasm_cl_direct_call_0` through
+`wasm_cl_direct_call_3` helpers already pass scalar payloads directly to `wasm_cl_finish_call()` on
+an uncompiled or host target. Reusing them from the direct frontend is a bounded way to test the
+attribution before designing the durable per-import JavaScript adapter.
+
 The first success criterion is not a direct branch instruction by itself. It is removal of generic
 Wasm call machinery and intermediate containers while producing the same results, exceptions,
 side effects, GC roots, and frame behavior through the normal JavaScript ABI.
 
+### Low-arity direct-host fallback experiment
+
+The first implementation deliberately reused the existing `wasm_cl_direct_call_0` through
+`wasm_cl_direct_call_3` helpers. Direct-frontend static-call fallbacks with zero through three
+numeric arguments now pass their typed values as 64-bit payloads instead of materializing complete
+16-byte `Wasm::Value` entries on `Configuration::value_stack()`. The existing value-stack path
+remains the fallback for four or more arguments. Scalar results return through
+`compiled_call_result_scratch`, which the direct-call helpers already maintain.
+
+Reusing the helpers alone was a measured negative result. An alternating five-pair run of the
+zero-argument benchmark produced 2.320 s for the old path and 2.374 s for the helper path: a 2.35%
+regression. Matched Time Profiler captures explained why. The new route replaced
+`BytecodeInterpreter::call_address()` with the Wasm-to-Wasm-oriented
+`wasm_cl_direct_call_impl()`/`wasm_cl_finish_call()` chain. It still copied arguments into a
+temporary `Vector<Wasm::Value>` and resolved the host target again through `Configuration::call()`;
+`Configuration::get_arguments_allocation_if_possible()` consequently grew from 4.25% to 10.15% of
+leaf samples. Removing one generic layer while retaining another was not sufficient.
+
+The refined path recognizes an already-resolved `HostFunction` in the direct-call fallback and
+invokes it over the direct helper's private argument array. This is safe specifically because those
+arguments are copies owned by the helper. The general call-record and value-stack paths retain
+their defensive copy: the internal `HostFunction` ABI takes a mutable `Span<Value>`, so exposing
+interpreter-owned argument storage would be an observable semantic change. The fast path retains
+the native-stack check, `CompiledCallerContext`, host trap propagation, and result scratch.
+
+Alternating old/new runs of 50 million calls show the refined result:
+
+| Imported function signature | Old path | Direct-host path | Change |
+| --- | ---: | ---: | ---: |
+| `() -> ()` | 2.319 s (46.37 ns/call) | 1.684 s (33.68 ns/call) | -27.4% |
+| `(i32) -> ()` | 2.751 s (55.03 ns/call) | 1.898 s (37.95 ns/call) | -31.0% |
+| `(i32, i32, i32) -> ()` | 2.995 s (59.91 ns/call) | 2.040 s (40.79 ns/call) | -31.9% |
+| `() -> i32` | 3.070 s (61.39 ns/call) | 2.276 s (45.52 ns/call) | -25.9% |
+| `(i32, i32, i32, i32) -> ()` | 3.275 s | 3.255 s | -0.6% (control noise) |
+
+The compiler-only A/B switch used for these measurements was removed. Three final runs of the
+retained zero-argument path averaged 1.674 s (33.47 ns/call), and three `f64`-result runs averaged
+2.291 s. The four-argument control confirms that the result comes from the intended zero-to-three
+argument path rather than a global runtime shift.
+
+In the optimized zero-argument profile, `BytecodeInterpreter::call_address()` and
+`Configuration::get_arguments_allocation_if_possible()` disappear from the leading leaf symbols.
+Wasm-runtime leaf samples fall from 38.05% of a 2.37-second sample window to 23.72% of a 1.79-second
+window, while JavaScript itself becomes the largest category at 46.28%. Inclusive direct-call
+frames still enclose the host invocation, so their high inclusive percentages must not be read as
+self cost.
+
+This is still an intermediate boundary, not the proposed direct JavaScript adapter. Every call
+loads the current interpreter, enters a generic direct-call helper, checks the compiled-function
+table, resolves the module function, and invokes the generic `HostFunction` closure. The experiment
+nevertheless proves that removing representation conversion and redundant host dispatch is worth
+roughly 13--19 ns per low-arity call. At 23,452 calls per presentation, the zero-argument saving
+alone would be approximately 0.30 ms if command count and boundary-crossing count were one-to-one.
+The next boundary experiment should target those remaining helper and callable-dispatch layers,
+while preserving the generic fallback for unsupported callable kinds and signatures.
+
+Because this changes emitted fallback code while the cache key otherwise accepts the old native
+bytes, the native-code cache format advances from version 33 to 34.
+
+### Measurement strategy: microbenchmarks first
+
+Further boundary work should use the import microbenchmarks as its primary iteration loop before
+returning to d3wasm. They isolate one call shape, verify that the caller was compiled by the direct
+frontend, and report execution separately from parsing and native compilation. Most importantly,
+they distinguish removing a named frame from reducing the total cost: the helper-only experiment
+removed `BytecodeInterpreter::call_address()` but regressed, whereas removing the argument
+container and redundant host resolution improved the same benchmark by 26--32%.
+
+The matrix should separate these increasingly complete boundaries:
+
+1. a raw native `HostFunction` with no JavaScript execution;
+2. a trivial ordinary JavaScript function;
+3. a JavaScript wrapper which reaches a native or WebGL binding; and
+4. the representative WebGL wrapper shapes used by d3wasm.
+
+Each layer should cover zero through several numeric arguments, scalar results, mixed numeric
+types, traps or JavaScript exceptions, and re-entrant JavaScript-to-Wasm calls. Native
+Wasm-to-Wasm and JavaScript-to-JavaScript calls remain controls for the fixed costs on either side
+of the boundary. Every Wasm run must continue to report nonzero native compilation and direct
+frontend selection so an interpreter fallback cannot masquerade as a boundary result.
+
+d3wasm remains the application-level correctness and relevance check, rather than the primary
+signal for each small change. Re-profile it after a microbenchmark change removes a complete layer,
+saves several nanoseconds across common signatures, or changes the expected hot-path shape. Its
+visual-frame profile then answers whether the isolated saving occurs frequently enough in a real
+Wasm-to-JavaScript-to-WebIDL-to-WebGL chain to move frame time. This separation also avoids treating
+the measured WebGL command count as an exact Wasm-to-JavaScript crossing count; the two may be
+correlated without being one-to-one.
+
 ## Suggested order
 
-1. Add the callback-scoped typed-list borrowing path and benchmark uniform/matrix-heavy calls.
-2. Measure WebGL command counts, logical bytes, padding, copies, and flush behavior per visual
-   frame.
-3. Evaluate a safe command-stream padding or fixed-record fast path from those measurements.
-4. Document the exact external JS interpreter entry, inline-frame, raw-native return, exception,
+1. Separate raw native host functions, ordinary JavaScript functions, and WebGL-reaching wrappers
+   in the microbenchmark matrix.
+2. Document the exact external JS interpreter entry, inline-frame, raw-native return, exception,
    GC, and stack-walking contracts.
-5. Prototype one typed Wasm-to-ordinary-JavaScript import adapter behind an opt-in selector, with
-   the generic host-function boundary as fallback.
-6. Re-run the Wasm import microbenchmarks and the d3wasm visual-frame capture before expanding
+3. Prototype one cached typed Wasm-to-ordinary-JavaScript import adapter behind an opt-in selector,
+   with the generic `HostFunction` boundary as fallback.
+4. Re-run the Wasm import microbenchmarks and the d3wasm visual-frame capture before expanding
    signatures or callable kinds.

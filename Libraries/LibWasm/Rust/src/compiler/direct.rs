@@ -906,33 +906,49 @@ impl DirectCompiler {
 
         let entry_parameters = builder.block_params(entry).to_vec();
         let configuration = entry_parameters[0];
-        let original_top = builder.ins().load(
-            pointer_type,
-            memory_flags.configuration,
-            configuration,
-            runtime_layout.value_stack_top_offset,
-        );
-        let zero_tag = builder.ins().iconst(types::I64, 0);
-        for (index, (&argument, &kind)) in entry_parameters[1..].iter().zip(function_type.parameters).enumerate() {
-            let offset = i32::try_from(index * runtime_layout.value_size as usize)
-                .map_err(|_| "direct call fallback argument offset overflow")?;
-            let payload = value_to_payload(&mut builder, argument, kind)?;
-            builder
-                .ins()
-                .store(memory_flags.activation, payload, original_top, offset);
-            builder
-                .ins()
-                .store(memory_flags.activation, zero_tag, original_top, offset + 8);
-        }
-        let arguments_size = i64::try_from(function_type.parameters.len() * runtime_layout.value_size as usize)
-            .map_err(|_| "direct call fallback argument size overflow")?;
-        let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
-        builder.ins().store(
-            memory_flags.configuration,
-            arguments_top,
-            configuration,
-            runtime_layout.value_stack_top_offset,
-        );
+        let direct_call_helper = match function_type.parameters.len() {
+            0 => Some(HelperId::direct_call_0),
+            1 => Some(HelperId::direct_call_1),
+            2 => Some(HelperId::direct_call_2),
+            3 => Some(HelperId::direct_call_3),
+            _ => None,
+        };
+        let mut argument_payloads = Vec::with_capacity(function_type.parameters.len());
+        let original_top = if direct_call_helper.is_some() {
+            for (&argument, &kind) in entry_parameters[1..].iter().zip(function_type.parameters) {
+                argument_payloads.push(value_to_payload(&mut builder, argument, kind)?);
+            }
+            None
+        } else {
+            let original_top = builder.ins().load(
+                pointer_type,
+                memory_flags.configuration,
+                configuration,
+                runtime_layout.value_stack_top_offset,
+            );
+            let zero_tag = builder.ins().iconst(types::I64, 0);
+            for (index, (&argument, &kind)) in entry_parameters[1..].iter().zip(function_type.parameters).enumerate() {
+                let offset = i32::try_from(index * runtime_layout.value_size as usize)
+                    .map_err(|_| "direct call fallback argument offset overflow")?;
+                let payload = value_to_payload(&mut builder, argument, kind)?;
+                builder
+                    .ins()
+                    .store(memory_flags.activation, payload, original_top, offset);
+                builder
+                    .ins()
+                    .store(memory_flags.activation, zero_tag, original_top, offset + 8);
+            }
+            let arguments_size = i64::try_from(function_type.parameters.len() * runtime_layout.value_size as usize)
+                .map_err(|_| "direct call fallback argument size overflow")?;
+            let arguments_top = builder.ins().iadd_imm_s(original_top, arguments_size);
+            builder.ins().store(
+                memory_flags.configuration,
+                arguments_top,
+                configuration,
+                runtime_layout.value_stack_top_offset,
+            );
+            Some(original_top)
+        };
 
         let mut current_interpreter_signature = Signature::new(isa.default_call_conv());
         current_interpreter_signature.returns.push(AbiParam::new(pointer_type));
@@ -953,16 +969,24 @@ impl DirectCompiler {
         call_signature.params.push(AbiParam::new(pointer_type));
         call_signature.params.push(AbiParam::new(pointer_type));
         call_signature.params.push(AbiParam::new(types::I32));
+        for _ in &argument_payloads {
+            call_signature.params.push(AbiParam::new(types::I64));
+        }
         call_signature.returns.push(AbiParam::new(types::I32));
         let call_signature = builder.import_signature(call_signature);
-        let call_function = declare_helper(&mut builder, call_signature, HelperId::call_function);
-        let call_address = builder.ins().func_addr(pointer_type, call_function);
-        let target_index = builder.ins().iconst(types::I32, i64::from(function_index));
-        let call = builder.ins().call_indirect(
+        let call_helper = declare_helper(
+            &mut builder,
             call_signature,
-            call_address,
-            &[interpreter, configuration, target_index],
+            direct_call_helper.unwrap_or(HelperId::call_function),
         );
+        let call_address = builder.ins().func_addr(pointer_type, call_helper);
+        let target_index = builder.ins().iconst(types::I32, i64::from(function_index));
+        let mut call_arguments = Vec::with_capacity(3 + argument_payloads.len());
+        call_arguments.extend_from_slice(&[interpreter, configuration, target_index]);
+        call_arguments.extend_from_slice(&argument_payloads);
+        let call = builder
+            .ins()
+            .call_indirect(call_signature, call_address, &call_arguments);
         let status = builder.inst_results(call)[0];
         let trapped = builder.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
         let trap_block = builder.create_block();
@@ -982,14 +1006,25 @@ impl DirectCompiler {
 
         builder.switch_to_block(return_block);
         builder.seal_block(return_block);
-        builder.ins().store(
-            memory_flags.configuration,
-            original_top,
-            configuration,
-            runtime_layout.value_stack_top_offset,
-        );
+        if let Some(original_top) = original_top {
+            builder.ins().store(
+                memory_flags.configuration,
+                original_top,
+                configuration,
+                runtime_layout.value_stack_top_offset,
+            );
+        }
         if let Some(&result_kind) = function_type.results.first() {
-            let payload = builder.ins().load(types::I64, memory_flags.activation, original_top, 0);
+            let (flags, base, offset) = if let Some(original_top) = original_top {
+                (memory_flags.activation, original_top, 0)
+            } else {
+                (
+                    memory_flags.configuration,
+                    configuration,
+                    runtime_layout.compiled_call_result_scratch_offset,
+                )
+            };
+            let payload = builder.ins().load(types::I64, flags, base, offset);
             let result = payload_to_value(&mut builder, payload, result_kind)?;
             builder.ins().return_(&[result]);
         } else {
@@ -3416,6 +3451,55 @@ mod tests {
             .expect("direct call relocation should be present");
         assert_ne!(direct_call.fallback_offset, u32::MAX);
         assert!((direct_call.fallback_offset as usize) < compiled.code.len());
+        assert!(compiled.relocs.iter().any(|relocation| {
+            relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
+                && relocation.target_index == HelperId::direct_call_1 as u32
+        }));
+    }
+
+    #[test]
+    fn direct_calls_with_more_than_three_arguments_use_the_value_stack_fallback() {
+        let instructions = [
+            local(op::LOCAL_GET, 0),
+            local(op::LOCAL_GET, 1),
+            local(op::LOCAL_GET, 2),
+            local(op::LOCAL_GET, 3),
+            instruction(op::CALL, DirectInstructionArguments { function_index: 1 }),
+            no_arguments(op::END),
+        ];
+        let parameters = [I32_KIND; 4];
+        let function_types = [
+            WasmFunctionType {
+                parameters: &parameters,
+                results: &[],
+            },
+            WasmFunctionType {
+                parameters: &parameters,
+                results: &[],
+            },
+        ];
+        let compiled = DirectCompiler::compile_to_bytes(
+            DirectCompilerInput {
+                instructions: &instructions,
+                branch_targets: &[],
+                local_types: &[],
+                tier_up_checkpoints: &[],
+                tier_up_live_local_indices: &[],
+                function_types: &function_types,
+                module_types: &[],
+                global_types: &[],
+            },
+            &runtime_layout(),
+            FunctionCompilationOptions {
+                result_arity: 0,
+                num_locals: 4,
+                num_params: 4,
+                function_index: 0,
+                max_call_rec_size: 4,
+            },
+        )
+        .expect("direct compilation should include a static-call fallback");
+
         assert!(compiled.relocs.iter().any(|relocation| {
             relocation.target_kind == crate::CraneliftRelocationTargetKind::Helper
                 && relocation.target_index == HelperId::call_function as u32

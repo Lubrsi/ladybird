@@ -412,7 +412,7 @@ static size_t compiler_instruction_count(BatchInput const& input)
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 33;
+constexpr u32 cache_blob_format_version = 34;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -1333,9 +1333,26 @@ i32 wasm_cl_check_indirect_type(void const* actual_type_ptr, void const* expecte
     return matches_defined_type(actual_type, expected_type) ? 0 : 1;
 }
 
-static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value const* args, size_t arg_count)
+static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value* args, size_t arg_count)
 {
-    return wasm_cl_finish_call(interpreter, config, config.current_module()->functions()[func_index], args, arg_count);
+    auto address = config.current_module()->functions()[func_index];
+    auto* instance = config.store().unsafe_get(address);
+    if (auto* host_function = instance->get_pointer<HostFunction>()) {
+        if (interpreter.trap_if_insufficient_native_stack_space())
+            return 1;
+
+        auto result = host_function->function()(config, { args, arg_count });
+        if (result.is_trap()) {
+            interpreter.set_trap(move(result.trap()));
+            return 1;
+        }
+
+        if (!result.values().is_empty())
+            config.compiled_call_result_scratch() = result.values().first();
+        return 0;
+    }
+
+    return wasm_cl_finish_call(interpreter, config, address, args, arg_count);
 }
 
 // Direct compiled-to-compiled call. Falls back to wasm_cl_finish_call for non-compiled targets.
