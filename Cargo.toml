@@ -12,6 +12,7 @@ members = [
     "Libraries/LibWeb/ContentBlocker/Rust",
     "Libraries/LibWeb/Rust",
     "Libraries/LibWeb/HTML/Parser/Rust",
+    "Libraries/LibWebSocket/Rust",
 ]
 exclude = [
     "Libraries/LibJS/Flap",

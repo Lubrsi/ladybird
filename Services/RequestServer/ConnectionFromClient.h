@@ -131,7 +131,7 @@ private:
     // request asking for the same URL from starting a duplicate lookup before m_aia_fetches has an entry.
     HashMap<ByteString, Vector<u64>> m_pending_aia_lookups;
     HashTable<u64> m_pending_websockets;
-    HashMap<u64, RefPtr<WebSocket::WebSocket>> m_websockets;
+    HashMap<u64, NonnullOwnPtr<WebSocket::WebSocket>> m_websockets;
 
     RefPtr<Core::Timer> m_timer;
     Optional<MonotonicTime> m_curl_timer_due_at;

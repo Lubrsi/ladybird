@@ -7,14 +7,23 @@
 
 #pragma once
 
-#include <AK/Span.h>
-#include <LibCore/EventReceiver.h>
+#include <AK/ByteString.h>
+#include <AK/Function.h>
+#include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
 #include <LibCore/Forward.h>
 #include <LibWebSocket/ConnectionInfo.h>
 #include <LibWebSocket/Impl/WebSocketImpl.h>
 #include <LibWebSocket/Message.h>
 
 namespace WebSocket {
+
+namespace FFI {
+
+struct WebSocketRustCodec;
+struct WebSocketRustFrame;
+
+}
 
 enum class ReadyState {
     Connecting = 0,
@@ -38,17 +47,15 @@ enum class CloseStatusCode : u16 {
     UnexpectedCondition = 1011,
 };
 
-class WebSocket final : public Core::EventReceiver {
-    C_OBJECT(WebSocket)
-public:
-    static NonnullRefPtr<WebSocket> create(ConnectionInfo, RefPtr<WebSocketImpl> = nullptr);
-    virtual ~WebSocket() override = default;
+class WebSocket final {
+    AK_MAKE_NONCOPYABLE(WebSocket);
+    AK_MAKE_NONMOVABLE(WebSocket);
 
-    URL::URL const& url() const { return m_connection.url(); }
+public:
+    static NonnullOwnPtr<WebSocket> create(ConnectionInfo, NonnullRefPtr<WebSocketImpl>);
+    ~WebSocket();
 
     ReadyState ready_state();
-
-    ByteString subprotocol_in_use();
 
     // Call this to start the WebSocket connection.
     void start();
@@ -63,7 +70,6 @@ public:
     Function<void(u16 code, ByteString reason, bool was_clean)> on_close;
     Function<void(Message message)> on_message;
     Function<void(ReadyState)> on_ready_state_change;
-    Function<void(ByteString)> on_subprotocol;
 
     enum class Error {
         CouldNotEstablishConnection,
@@ -74,25 +80,10 @@ public:
     Function<void(Error)> on_error;
 
 private:
-    WebSocket(ConnectionInfo, RefPtr<WebSocketImpl>);
-
-    // As defined in section 5.2
-    enum class OpCode : u8 {
-        Continuation = 0x0,
-        Text = 0x1,
-        Binary = 0x2,
-        ConnectionClose = 0x8,
-        Ping = 0x9,
-        Pong = 0xA,
-    };
+    WebSocket(ConnectionInfo, NonnullRefPtr<WebSocketImpl>);
 
     void drain_read();
-
-    void send_client_handshake();
-    void read_server_handshake();
-
-    ErrorOr<void> read_frame();
-    void send_frame(OpCode, ReadonlyBytes, bool is_final);
+    void handle_frame(FFI::WebSocketRustFrame const&);
 
     void notify_open();
     void notify_close(u16 code, ByteString reason, bool was_clean);
@@ -104,8 +95,6 @@ private:
     enum class InternalState {
         NotStarted,
         EstablishingProtocolConnection,
-        SendingClientHandshake,
-        WaitingForServerHandshake,
         Open,
         Closing,
         Closed,
@@ -116,28 +105,15 @@ private:
 
     void set_state(InternalState);
 
-    void fail_connection(u16 close_status_code, WebSocket::Error, ByteString const& reason);
-
-    ByteString m_subprotocol_in_use { ByteString::empty() };
-
-    ByteString m_websocket_key;
-    bool m_has_read_server_handshake_first_line { false };
-    bool m_has_read_server_handshake_upgrade { false };
-    bool m_has_read_server_handshake_connection { false };
-    bool m_has_read_server_handshake_accept { false };
-
-    bool m_discard_connection_requested { false };
+    void fail_connection(u16 close_status_code, Error, ByteString const& reason);
 
     u16 m_last_close_code { to_underlying(CloseStatusCode::NoStatusReceived) };
     ByteString m_last_close_message;
 
     ConnectionInfo m_connection;
-    RefPtr<WebSocketImpl> m_impl;
+    NonnullRefPtr<WebSocketImpl> m_impl;
     RefPtr<Core::Timer> m_closing_handshake_timer;
-
-    Vector<u8> m_buffered_data;
-    ByteBuffer m_fragmented_data_buffer;
-    WebSocket::OpCode m_initial_fragment_opcode;
+    FFI::WebSocketRustCodec* m_codec { nullptr };
 };
 
 }

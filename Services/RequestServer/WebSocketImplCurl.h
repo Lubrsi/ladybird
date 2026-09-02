@@ -23,14 +23,10 @@ public:
     static NonnullRefPtr<WebSocketImplCurl> create(CURLM*);
 
     virtual void connect(WebSocket::ConnectionInfo const&) override;
-    virtual bool can_read_line() override;
-    virtual ErrorOr<ByteString> read_line(size_t) override;
     virtual ErrorOr<ByteBuffer> read(int max_size) override;
     virtual bool send(ReadonlyBytes) override;
     virtual bool eof() override;
     virtual void discard_connection() override;
-
-    virtual bool handshake_complete_when_connected() const override { return true; }
 
     bool did_connect();
 

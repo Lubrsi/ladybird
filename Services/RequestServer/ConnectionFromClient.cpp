@@ -891,21 +891,22 @@ void ConnectionFromClient::websocket_connect(u64 websocket_id, URL::URL url, Byt
 
 void ConnectionFromClient::websocket_send(u64 websocket_id, bool is_text, ByteBuffer data)
 {
-    if (auto* connection = m_websockets.get(websocket_id).value_or({}); connection && connection->ready_state() == WebSocket::ReadyState::Open)
-        connection->send(WebSocket::Message { move(data), is_text });
+    auto connection = m_websockets.get(websocket_id);
+    if (connection.has_value() && (*connection)->ready_state() == WebSocket::ReadyState::Open)
+        (*connection)->send(WebSocket::Message { move(data), is_text });
 }
 
 void ConnectionFromClient::websocket_send_shared(u64 websocket_id, bool is_text, Core::AnonymousBuffer data)
 {
-    auto* connection = m_websockets.get(websocket_id).value_or({});
-    if (!connection || connection->ready_state() != WebSocket::ReadyState::Open)
+    auto connection = m_websockets.get(websocket_id);
+    if (!connection.has_value() || (*connection)->ready_state() != WebSocket::ReadyState::Open)
         return;
     auto byte_buffer_or_error = ByteBuffer::copy(data.bytes());
     if (byte_buffer_or_error.is_error()) {
         dbgln("websocket_send_shared: failed to copy {} bytes from shared buffer: {}", data.size(), byte_buffer_or_error.error());
         return;
     }
-    connection->send(WebSocket::Message { byte_buffer_or_error.release_value(), is_text });
+    (*connection)->send(WebSocket::Message { byte_buffer_or_error.release_value(), is_text });
 }
 
 void ConnectionFromClient::websocket_close(u64 websocket_id, u16 code, ByteString reason)
@@ -915,14 +916,15 @@ void ConnectionFromClient::websocket_close(u64 websocket_id, u16 code, ByteStrin
         return;
     }
 
-    if (auto* connection = m_websockets.get(websocket_id).value_or({}); connection && connection->ready_state() != WebSocket::ReadyState::Closed)
-        connection->close(code, reason);
+    auto connection = m_websockets.get(websocket_id);
+    if (connection.has_value() && (*connection)->ready_state() != WebSocket::ReadyState::Closed)
+        (*connection)->close(code, reason);
 }
 
 Messages::RequestServer::WebsocketSetCertificateResponse ConnectionFromClient::websocket_set_certificate(u64 websocket_id, ByteString, ByteString)
 {
     auto success = false;
-    if (auto* connection = m_websockets.get(websocket_id).value_or({}); connection) {
+    if (m_websockets.contains(websocket_id)) {
         // NO OP here
         // connection->set_certificate(certificate, key);
         success = true;
