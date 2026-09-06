@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    promiseTest(async () => {
+        const context = new OfflineAudioContext(1, 128, 48000);
+        const periodicWave = context.createPeriodicWave(new Float32Array([0, 1]), new Float32Array([0, 0]), { disableNormalization: true });
+
+        // The wave is a cosine, so at 0 Hz it holds a constant 1 while a sine at 0 Hz stays silent.
+        const oscillator = new OscillatorNode(context, { frequency: 0, periodicWave });
+        println(`type: ${oscillator.type}`);
+        oscillator.connect(context.destination);
+        oscillator.start();
+
+        const output = await context.startRendering();
+        const hasAudibleSamples = output.getChannelData(0).some(sample => Math.abs(sample) > 0.000001);
+        println(`periodicWave option is used without type "custom": ${hasAudibleSamples}`);
+    });
+</script>

@@ -1,0 +1,2 @@
+type: custom
+periodicWave option is used without type "custom": true

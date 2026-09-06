@@ -36,7 +36,9 @@ WebIDL::ExceptionOr<GC::Ref<OscillatorNode>> OscillatorNode::create(GC::Ref<Base
 {
     auto node = GC::Heap::the().allocate<OscillatorNode>(context, options);
 
-    if (options.type == OscillatorType::Custom)
+    // https://webaudio.github.io/web-audio-api/#dom-oscillatoroptions-periodicwave
+    // If this is specified, then any valid value for type is ignored; it is treated as if "custom" were specified.
+    if (options.periodic_wave)
         node->set_periodic_wave(options.periodic_wave);
 
     // Default options for channel count and interpretation
