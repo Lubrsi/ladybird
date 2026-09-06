@@ -805,6 +805,67 @@ void PannerRenderNode::process(RenderGraph& graph, RenderContext const& context)
     }
 }
 
+WaveShaperRenderNode::WaveShaperRenderNode(NodeID node_id, size_t quantum_size)
+    : RenderNode(node_id, 1, 1, quantum_size)
+{
+}
+
+void WaveShaperRenderNode::handle_message(NodeMessage const& message)
+{
+    message.visit(
+        [&](SetWaveShaperParameters const& parameters) {
+            m_curve = parameters.curve;
+            m_oversample = parameters.oversample;
+        },
+        [](auto const&) {});
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-waveshapernode-curve
+float WaveShaperRenderNode::apply_curve(float sample) const
+{
+    // 1. Let x be the input sample, y be the corresponding output of the node, c_k be the k'th element of the curve,
+    //    and N be the length of the curve.
+    auto const& curve = m_curve->values;
+    double x = sample;
+    auto n = static_cast<double>(curve.size());
+
+    // 2. Let v = (N - 1) / 2 * (x + 1), k = floor(v), f = v - k.
+    auto v = (n - 1) / 2 * (x + 1);
+
+    // 3. Then y = c_0 if v < 0, c_(N-1) if v >= N - 1, and (1 - f) * c_k + f * c_(k+1) otherwise.
+    // AD-HOC: A NaN sample has no position on the curve, so it is treated like a sample below -1.
+    if (v < 0 || isnan(v))
+        return curve.first();
+    if (v >= n - 1)
+        return curve.last();
+    auto k = AK::floor(v);
+    auto f = v - k;
+    auto index = static_cast<size_t>(k);
+    return static_cast<float>(((1 - f) * curve[index]) + (f * curve[index + 1]));
+}
+
+void WaveShaperRenderNode::process(RenderGraph& graph, RenderContext const& context)
+{
+    auto const& input = pull_input(graph, context, 0);
+    auto& shaper_output = output(0);
+
+    // Initially the curve attribute is null, which means that the WaveShaperNode will pass its input to its output
+    // without modification.
+    if (!m_curve) {
+        shaper_output.copy_from(input);
+        return;
+    }
+
+    // FIXME: Up-sample the input before applying the curve when oversample is "2x" or "4x".
+    shaper_output.set_channel_count(input.channel_count());
+    for (size_t channel_index = 0; channel_index < input.channel_count(); ++channel_index) {
+        auto input_samples = input.channel(channel_index);
+        auto output_samples = shaper_output.channel(channel_index);
+        for (size_t frame = 0; frame < context.quantum_size; ++frame)
+            output_samples[frame] = apply_curve(input_samples[frame]);
+    }
+}
+
 PassthroughRenderNode::PassthroughRenderNode(NodeID node_id, size_t quantum_size)
     : RenderNode(node_id, 1, 1, quantum_size)
 {

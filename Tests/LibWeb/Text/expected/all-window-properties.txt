@@ -549,6 +549,7 @@ VideoTrack
 VideoTrackList
 ViewTransition
 VisualViewport
+WaveShaperNode
 WeakMap
 WeakRef
 WeakSet

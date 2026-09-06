@@ -25,6 +25,7 @@
 #include <LibWeb/WebAudio/ScriptProcessorNode.h>
 #include <LibWeb/WebAudio/StereoPannerNode.h>
 #include <LibWeb/WebAudio/Types.h>
+#include <LibWeb/WebAudio/WaveShaperNode.h>
 #include <LibWeb/WebIDL/Types.h>
 
 namespace Web::WebIDL {
@@ -105,6 +106,7 @@ public:
         WebIDL::UnsignedLong number_of_input_channels,
         WebIDL::UnsignedLong number_of_output_channels);
     WebIDL::ExceptionOr<GC::Ref<StereoPannerNode>> create_stereo_panner();
+    WebIDL::ExceptionOr<GC::Ref<WaveShaperNode>> create_wave_shaper();
 
     WebIDL::ExceptionOr<void> decode_audio_data(GC::Ref<WebIDL::Promise>, ByteBuffer, GC::Ptr<WebIDL::CallbackType>, GC::Ptr<WebIDL::CallbackType>);
     WebIDL::ExceptionOr<GC::Ref<WebIDL::Promise>> decode_audio_data(JS::Realm&, GC::Ref<JS::ArrayBuffer>, GC::Ptr<WebIDL::CallbackType>, GC::Ptr<WebIDL::CallbackType>);

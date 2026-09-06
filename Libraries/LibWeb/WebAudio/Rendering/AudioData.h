@@ -43,4 +43,15 @@ struct PeriodicWaveData : public AtomicRefCounted<PeriodicWaveData> {
     bool normalize { true };
 };
 
+// An immutable copy of a WaveShaperNode's shaping curve.
+// https://webaudio.github.io/web-audio-api/#dom-waveshapernode-curve
+struct WaveShaperCurve : public AtomicRefCounted<WaveShaperCurve> {
+    explicit WaveShaperCurve(Vector<float> values)
+        : values(move(values))
+    {
+    }
+
+    Vector<float> values;
+};
+
 }

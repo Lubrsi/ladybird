@@ -1098,6 +1098,7 @@ set(SOURCES
     WebAudio/Rendering/RenderNodes.cpp
     WebAudio/ScriptProcessorNode.cpp
     WebAudio/StereoPannerNode.cpp
+    WebAudio/WaveShaperNode.cpp
     WebDriver/Actions.cpp
     WebDriver/Capabilities.cpp
     WebDriver/Client.cpp

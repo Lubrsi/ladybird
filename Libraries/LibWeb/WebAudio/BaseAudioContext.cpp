@@ -37,6 +37,7 @@
 #include <LibWeb/WebAudio/GainNode.h>
 #include <LibWeb/WebAudio/OscillatorNode.h>
 #include <LibWeb/WebAudio/PannerNode.h>
+#include <LibWeb/WebAudio/WaveShaperNode.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOrUtils.h>
@@ -382,6 +383,13 @@ WebIDL::ExceptionOr<GC::Ref<StereoPannerNode>> BaseAudioContext::create_stereo_p
 {
     // Factory method for a StereoPannerNode.
     return StereoPannerNode::create(*this);
+}
+
+// https://webaudio.github.io/web-audio-api/#dom-baseaudiocontext-createwaveshaper
+WebIDL::ExceptionOr<GC::Ref<WaveShaperNode>> BaseAudioContext::create_wave_shaper()
+{
+    // Factory method for a WaveShaperNode representing a non-linear distortion.
+    return WaveShaperNode::create(*this);
 }
 
 WebIDL::ExceptionOr<void> BaseAudioContext::verify_audio_options_inside_nominal_range(float sample_rate)

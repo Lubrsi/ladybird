@@ -270,6 +270,21 @@ private:
     Vector<Vector<float>> m_param_values;
 };
 
+// https://webaudio.github.io/web-audio-api/#WaveShaperNode
+class WaveShaperRenderNode final : public RenderNode {
+public:
+    WaveShaperRenderNode(NodeID, size_t quantum_size);
+
+    virtual void process(RenderGraph&, RenderContext const&) override;
+    virtual void handle_message(NodeMessage const&) override;
+
+private:
+    float apply_curve(float sample) const;
+
+    RefPtr<WaveShaperCurve> m_curve;
+    Bindings::OverSampleType m_oversample { Bindings::OverSampleType::None };
+};
+
 // Passes the input through unchanged; used for nodes whose processing is not implemented yet but which should not
 // silence the signal path, like AnalyserNode.
 class PassthroughRenderNode final : public RenderNode {

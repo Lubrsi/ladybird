@@ -13,6 +13,7 @@
 #include <LibWeb/Bindings/BiquadFilterNode.h>
 #include <LibWeb/Bindings/OscillatorNode.h>
 #include <LibWeb/Bindings/PannerNode.h>
+#include <LibWeb/Bindings/WaveShaperNode.h>
 #include <LibWeb/WebAudio/Rendering/AudioData.h>
 #include <LibWeb/WebAudio/Types.h>
 
@@ -70,8 +71,14 @@ struct SetPannerParameters {
     double cone_outer_gain { 0 };
 };
 
+struct SetWaveShaperParameters {
+    NodeID node_id { 0 };
+    RefPtr<Rendering::WaveShaperCurve> curve;
+    Bindings::OverSampleType oversample { Bindings::OverSampleType::None };
+};
+
 // A control message that updates the state of a single render node.
-using NodeMessage = Variant<StartSource, StopSource, StartBufferSource, SetBufferSourceParameters, SetOscillatorWaveform, SetBiquadFilterType, SetPannerParameters>;
+using NodeMessage = Variant<StartSource, StopSource, StartBufferSource, SetBufferSourceParameters, SetOscillatorWaveform, SetBiquadFilterType, SetPannerParameters, SetWaveShaperParameters>;
 
 inline NodeID node_message_target(NodeMessage const& message)
 {
