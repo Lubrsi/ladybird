@@ -5,6 +5,7 @@
  */
 
 #include <AK/Math.h>
+#include <LibMedia/Audio/ResamplingTimeStretcher.h>
 #include <LibMedia/Audio/WSOLATimeStretcher.h>
 #include <LibMedia/Processors/AudioTimeStretchProcessor.h>
 
@@ -139,6 +140,21 @@ void AudioTimeStretchProcessor::set_playback_rate(float rate)
         dispatch_wake();
 }
 
+void AudioTimeStretchProcessor::set_preserves_pitch(bool preserves_pitch)
+{
+    bool should_wake_downstream = false;
+    {
+        Sync::MutexLocker locker { m_mutex };
+        if (m_preserves_pitch == preserves_pitch)
+            return;
+        m_preserves_pitch = preserves_pitch;
+        should_wake_downstream = m_downstream_needs_wake;
+    }
+
+    if (should_wake_downstream)
+        dispatch_wake();
+}
+
 void AudioTimeStretchProcessor::prime_stretcher_for_input_seek_while_locked(i64 target_frame, i64 output_frame) const
 {
     ensure_stretcher_while_locked();
@@ -149,14 +165,27 @@ void AudioTimeStretchProcessor::prime_stretcher_for_input_seek_while_locked(i64 
     m_stretcher->flush(m_next_emit_media_time, m_next_output_frame);
 }
 
+void AudioTimeStretchProcessor::resume_input_from_emit_position_while_locked() const
+{
+    auto emit_target_frame = m_next_emit_media_time.to_time_units(1, m_sample_specification.sample_rate());
+    prime_stretcher_for_input_seek_while_locked(emit_target_frame, m_next_output_frame);
+    m_input->seek(m_next_emit_media_time);
+}
+
 void AudioTimeStretchProcessor::ensure_stretcher_while_locked() const
 {
+    if (m_stretcher && m_stretcher_preserves_pitch != m_preserves_pitch)
+        m_stretcher = nullptr;
     if (m_stretcher) {
         m_stretcher->set_rate(m_playback_rate);
         return;
     }
     VERIFY(m_sample_specification.is_valid());
-    m_stretcher = MUST(Audio::WSOLATimeStretcher::create(m_sample_specification));
+    if (m_preserves_pitch)
+        m_stretcher = MUST(Audio::WSOLATimeStretcher::create(m_sample_specification));
+    else
+        m_stretcher = MUST(Audio::ResamplingTimeStretcher::create(m_sample_specification));
+    m_stretcher_preserves_pitch = m_preserves_pitch;
     m_stretcher->set_rate(m_playback_rate);
     m_stretcher->flush(m_next_emit_media_time, m_next_output_frame);
 }
@@ -179,6 +208,12 @@ PipelineStatus AudioTimeStretchProcessor::produce_block_while_locked(AudioBlock&
         return PipelineStatus::Pending;
 
     VERIFY(m_playback_rate != 0.0f);
+
+    // A stretcher of the wrong kind has consumed input beyond what it emitted, so its replacement re-reads from there.
+    if (m_stretcher && m_stretcher_preserves_pitch != m_preserves_pitch) {
+        m_stretcher_reached_eos = false;
+        resume_input_from_emit_position_while_locked();
+    }
 
     ensure_stretcher_while_locked();
     maybe_recover_from_stale_upstream_eos_while_locked();
@@ -205,9 +240,7 @@ PipelineStatus AudioTimeStretchProcessor::produce_block_while_locked(AudioBlock&
             continue;
         }
         if (output.status == PipelineStatus::Suspended) {
-            auto emit_target_frame = m_next_emit_media_time.to_time_units(1, m_sample_specification.sample_rate());
-            prime_stretcher_for_input_seek_while_locked(emit_target_frame, m_next_output_frame);
-            m_input->seek(m_next_emit_media_time);
+            resume_input_from_emit_position_while_locked();
             return PipelineStatus::Pending;
         }
         if (output.status != PipelineStatus::HaveData)

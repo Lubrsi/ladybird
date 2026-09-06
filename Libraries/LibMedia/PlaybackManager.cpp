@@ -134,6 +134,7 @@ DecoderErrorOr<void> PlaybackManager::prepare_playback_from_demuxer(WeakPlayback
         if (!self->m_audio_output_disabled && !self->m_audio_sink && !self->m_audio_tracks.is_empty()) {
             self->m_audio_mixer = MUST(AudioMixer::try_create());
             self->m_audio_time_stretch_processor = MUST(AudioTimeStretchProcessor::try_create());
+            self->m_audio_time_stretch_processor->set_preserves_pitch(self->m_preserves_pitch);
             self->m_audio_sink = MUST(AudioPlaybackSink::try_create(
                 [self](PipelineStatus status) {
                     if (!self)
@@ -694,6 +695,13 @@ void PlaybackManager::set_playback_rate(float rate)
     m_playback_rate = rate;
     m_clock->set_playback_rate(rate);
     update_pipeline_state();
+}
+
+void PlaybackManager::set_preserves_pitch(bool preserves_pitch)
+{
+    m_preserves_pitch = preserves_pitch;
+    if (m_audio_time_stretch_processor)
+        m_audio_time_stretch_processor->set_preserves_pitch(preserves_pitch);
 }
 
 }

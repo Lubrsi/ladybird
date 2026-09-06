@@ -91,6 +91,7 @@ public:
 
     void set_volume(double);
     void set_playback_rate(float);
+    void set_preserves_pitch(bool);
 
     Function<void()> on_metadata_parsed;
     Function<void(DecoderError&&)> on_unsupported_format_error;
@@ -209,6 +210,7 @@ private:
     NonnullRefPtr<MediaClock> m_clock;
     MediaTimeReader m_time_reader;
     float m_playback_rate { 1.0f };
+    bool m_preserves_pitch { true };
 
     bool m_audio_output_disabled { false };
 

@@ -37,10 +37,12 @@ public:
     virtual void consume() override;
     virtual void set_wake_handler(PipelineWakeHandler) override;
     virtual void set_playback_rate(float) override;
+    void set_preserves_pitch(bool);
 
 private:
     void ensure_stretcher_while_locked() const;
     void prime_stretcher_for_input_seek_while_locked(i64 target_frame, i64 output_frame) const;
+    void resume_input_from_emit_position_while_locked() const;
     void maybe_recover_from_stale_upstream_eos_while_locked() const;
     PipelineStatus produce_block_while_locked(AudioBlock&) const;
     void dispatch_wake();
@@ -50,7 +52,9 @@ private:
     RefPtr<AudioProducer> m_input;
 
     float m_playback_rate { 1.0f };
+    bool m_preserves_pitch { true };
     mutable OwnPtr<Audio::TimeStretcher> m_stretcher;
+    mutable bool m_stretcher_preserves_pitch { true };
     bool m_started { false };
 
     mutable i64 m_next_output_frame { 0 };

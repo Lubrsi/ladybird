@@ -24,6 +24,7 @@ set(TEST_SOURCES
     TestPipelineNodes.cpp
     TestPlaybackStream.cpp
     TestRemoteVideoNode.cpp
+    TestResamplingTimeStretcher.cpp
     TestSpscAudioFrameRing.cpp
     TestTimeRanges.cpp
     TestVideoEdgeQueue.cpp

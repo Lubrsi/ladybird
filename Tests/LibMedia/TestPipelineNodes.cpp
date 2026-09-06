@@ -371,6 +371,90 @@ TEST_CASE(audio_time_stretch_processor_resumes_a_suspended_input)
     EXPECT(pump_until(loop, [&] { return stretcher->peek().status == Media::PipelineStatus::HaveData; }));
 }
 
+static float zero_crossing_frequency(ReadonlySpan<float> samples, u32 sample_rate)
+{
+    size_t crossings = 0;
+    float previous_sign = 0.0f;
+    for (auto sample : samples) {
+        if (sample == 0.0f)
+            continue;
+        auto sign = sample > 0.0f ? 1.0f : -1.0f;
+        if (previous_sign != 0.0f && sign != previous_sign)
+            crossings++;
+        previous_sign = sign;
+    }
+    return static_cast<float>(crossings) / 2.0f / (static_cast<float>(samples.size()) / static_cast<float>(sample_rate));
+}
+
+static size_t longest_silent_run(ReadonlySpan<float> samples)
+{
+    size_t longest = 0;
+    size_t current = 0;
+    for (auto sample : samples) {
+        current = sample == 0.0f ? current + 1 : 0;
+        longest = max(longest, current);
+    }
+    return longest;
+}
+
+TEST_CASE(audio_time_stretch_processor_switches_pitch_preservation_mid_stream)
+{
+    auto& loop = never_destroyed_event_loop();
+
+    auto stream = load_test_file("WAV/tone_44100_stereo.wav"sv);
+    auto demuxer = create_demuxer(stream);
+    auto tracks = TRY_OR_FAIL(demuxer->get_tracks_for_type(Media::TrackType::Audio));
+    VERIFY(!tracks.is_empty());
+    auto sample_specification = tracks[0].audio_data().sample_specification;
+
+    auto producer = TRY_OR_FAIL(Media::DecodedAudioProducer::try_create(loop, demuxer, tracks[0]));
+
+    auto stretcher = TRY_OR_FAIL(Media::AudioTimeStretchProcessor::try_create());
+    TRY_OR_FAIL(stretcher->set_output_sample_specification(sample_specification));
+    TRY_OR_FAIL(stretcher->connect_input(producer));
+    stretcher->set_playback_rate(2.0f);
+    stretcher->start();
+
+    Optional<Media::AudioBlockTiming> previous_timing;
+    auto pull_blocks = [&](size_t block_count) {
+        Vector<float> samples;
+        for (size_t i = 0; i < block_count; i++) {
+            EXPECT(pump_until(loop, [&] { return stretcher->peek().status == Media::PipelineStatus::HaveData; }));
+            auto const& block = *stretcher->peek().block;
+            samples.append(block.channel_data(0).data(), block.frame_count());
+            previous_timing = block.timing();
+            stretcher->consume();
+        }
+        return samples;
+    };
+    // A replacement stretcher is prerolled, so its output starts at or before the point already emitted and the frames
+    // it overlaps get discarded downstream.
+    auto expect_next_block_resumes_from = [&](Media::AudioBlockTiming const& timing) {
+        EXPECT(pump_until(loop, [&] { return stretcher->peek().status == Media::PipelineStatus::HaveData; }));
+        auto const& block = *stretcher->peek().block;
+        EXPECT(block.first_frame_index() <= timing.end_frame_index());
+        EXPECT(block.end_frame_index() > timing.end_frame_index());
+        EXPECT(block.media_time_start() <= timing.media_time_end());
+    };
+
+    auto preserved_frequency = zero_crossing_frequency(pull_blocks(20), sample_specification.sample_rate());
+
+    // The input is re-read from where output resumes, so the tone continues without a stretch of silence in between.
+    stretcher->set_preserves_pitch(false);
+    expect_next_block_resumes_from(*previous_timing);
+    auto resampled_samples = pull_blocks(20);
+    EXPECT(longest_silent_run(resampled_samples) < 8);
+    auto resampled_frequency = zero_crossing_frequency(resampled_samples, sample_specification.sample_rate());
+    EXPECT_APPROXIMATE_WITH_ERROR(resampled_frequency / preserved_frequency, 2.0f, 0.1f);
+
+    stretcher->set_preserves_pitch(true);
+    expect_next_block_resumes_from(*previous_timing);
+    auto restored_samples = pull_blocks(20);
+    EXPECT(longest_silent_run(restored_samples) < 8);
+    auto restored_frequency = zero_crossing_frequency(restored_samples, sample_specification.sample_rate());
+    EXPECT_APPROXIMATE_WITH_ERROR(restored_frequency / preserved_frequency, 1.0f, 0.05f);
+}
+
 TEST_CASE(displaying_video_sink_reports_a_suspended_input_while_unticked)
 {
     auto& loop = never_destroyed_event_loop();
