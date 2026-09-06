@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    test(() => {
+        println(`preservesPitch is in HTMLMediaElement.prototype: ${"preservesPitch" in HTMLMediaElement.prototype}`);
+        println(`webkitPreservesPitch is in HTMLMediaElement.prototype: ${"webkitPreservesPitch" in HTMLMediaElement.prototype}`);
+        println(`mozPreservesPitch is in HTMLMediaElement.prototype: ${"mozPreservesPitch" in HTMLMediaElement.prototype}`);
+
+        for (const tagName of ["audio", "video"]) {
+            const element = document.createElement(tagName);
+            println(`${tagName}.preservesPitch by default: ${element.preservesPitch}`);
+            element.preservesPitch = false;
+            println(`${tagName}.preservesPitch after setting false: ${element.preservesPitch}`);
+            element.preservesPitch = "truthy";
+            println(`${tagName}.preservesPitch after setting a truthy value: ${element.preservesPitch}`);
+            element.playbackRate = 2;
+            println(`${tagName}.preservesPitch after changing playbackRate: ${element.preservesPitch}`);
+        }
+    });
+</script>

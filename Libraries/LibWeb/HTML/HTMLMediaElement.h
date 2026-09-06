@@ -144,6 +144,9 @@ public:
     double playback_rate() const { return m_playback_rate; }
     WebIDL::ExceptionOr<void> set_playback_rate(double);
 
+    bool preserves_pitch() const { return m_preserves_pitch; }
+    void set_preserves_pitch(bool);
+
     bool muted() const { return m_muted; }
     void set_muted(bool);
 
@@ -379,6 +382,9 @@ private:
 
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-playbackrate
     double m_playback_rate { 1.0 };
+
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-preservespitch
+    bool m_preserves_pitch { true };
 
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-volume
     double m_volume { 1.0 };

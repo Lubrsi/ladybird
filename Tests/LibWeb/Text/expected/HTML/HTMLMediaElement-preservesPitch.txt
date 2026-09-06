@@ -1,0 +1,11 @@
+preservesPitch is in HTMLMediaElement.prototype: true
+webkitPreservesPitch is in HTMLMediaElement.prototype: false
+mozPreservesPitch is in HTMLMediaElement.prototype: false
+audio.preservesPitch by default: true
+audio.preservesPitch after setting false: false
+audio.preservesPitch after setting a truthy value: true
+audio.preservesPitch after changing playbackRate: true
+video.preservesPitch by default: true
+video.preservesPitch after setting false: false
+video.preservesPitch after setting a truthy value: true
+video.preservesPitch after changing playbackRate: true

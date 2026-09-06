@@ -2100,6 +2100,7 @@ void HTMLMediaElement::set_up_playback_manager_for_remote()
     m_playback_manager->set_audio_output_disabled(document().page().client().is_headless());
 
     m_playback_manager->set_playback_rate(static_cast<float>(m_playback_rate));
+    m_playback_manager->set_preserves_pitch(m_preserves_pitch);
 
     m_has_enabled_preferred_audio_track = false;
     m_has_selected_preferred_video_track = false;
@@ -2179,6 +2180,7 @@ void HTMLMediaElement::set_up_playback_manager_for_local()
     m_playback_manager->set_audio_output_disabled(document().page().client().is_headless());
 
     m_playback_manager->set_playback_rate(static_cast<float>(m_playback_rate));
+    m_playback_manager->set_preserves_pitch(m_preserves_pitch);
 
     m_has_enabled_preferred_audio_track = false;
     m_has_selected_preferred_video_track = false;
@@ -3013,6 +3015,16 @@ WebIDL::ExceptionOr<void> HTMLMediaElement::set_playback_rate(double new_value)
         m_playback_manager->set_playback_rate(static_cast<float>(new_value));
 
     return {};
+}
+
+// https://html.spec.whatwg.org/multipage/media.html#dom-media-preservespitch
+void HTMLMediaElement::set_preserves_pitch(bool preserves_pitch)
+{
+    // The setter steps are to correspondingly switch the pitch-preserving algorithm on or off, without any perceivable
+    // gaps or muting of playback.
+    m_preserves_pitch = preserves_pitch;
+    if (m_playback_manager)
+        m_playback_manager->set_preserves_pitch(preserves_pitch);
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#blocked-media-element
