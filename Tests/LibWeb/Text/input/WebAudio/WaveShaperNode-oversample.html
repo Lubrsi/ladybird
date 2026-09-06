@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    const sampleRate = 48000;
+    const renderFrames = 8192;
+
+    // The analysis window starts after the oversampling latency has passed and spans whole periods of every
+    // frequency measured below.
+    const analysisStart = 1024;
+    const analysisFrames = 4800;
+
+    async function render(oversample, curve, frequency) {
+        const context = new OfflineAudioContext(1, renderFrames, sampleRate);
+        const buffer = context.createBuffer(1, renderFrames, sampleRate);
+        const samples = buffer.getChannelData(0);
+        for (let i = 0; i < renderFrames; ++i)
+            samples[i] = Math.sin((2 * Math.PI * frequency * i) / sampleRate);
+
+        const source = new AudioBufferSourceNode(context, { buffer });
+        const shaper = new WaveShaperNode(context, { curve, oversample });
+        source.connect(shaper).connect(context.destination);
+        source.start();
+        return (await context.startRendering()).getChannelData(0);
+    }
+
+    function magnitudeAt(samples, frequency) {
+        let re = 0;
+        let im = 0;
+        for (let i = 0; i < analysisFrames; ++i) {
+            const phase = (2 * Math.PI * frequency * i) / sampleRate;
+            re += samples[analysisStart + i] * Math.cos(phase);
+            im -= samples[analysisStart + i] * Math.sin(phase);
+        }
+        return Math.hypot(re, im) / analysisFrames;
+    }
+
+    promiseTest(async () => {
+        // A soft clipper: its harmonics roll off quickly, so the ones that alias back into the audible band without
+        // oversampling are far larger than the ones that still alias at the oversampled rate.
+        const clipper = new Float32Array(4097);
+        for (let i = 0; i < clipper.length; ++i)
+            clipper[i] = Math.tanh(3 * ((2 * i) / (clipper.length - 1) - 1));
+
+        // A 7 kHz fundamental puts the clipper's 7th harmonic at 49 kHz, which aliases to 1 kHz at 48 kHz.
+        const fundamental = 7000;
+        const aliasFrequency = 1000;
+
+        const outputs = {};
+        for (const oversample of ["none", "2x", "4x"])
+            outputs[oversample] = await render(oversample, clipper, fundamental);
+
+        const referenceFundamental = magnitudeAt(outputs.none, fundamental);
+        const referenceAlias = magnitudeAt(outputs.none, aliasFrequency);
+        println(`Aliasing without oversampling is measurable: ${referenceAlias > 0.01 * referenceFundamental}`);
+
+        for (const oversample of ["2x", "4x"]) {
+            const fundamentalRatio = magnitudeAt(outputs[oversample], fundamental) / referenceFundamental;
+            const aliasRatio = magnitudeAt(outputs[oversample], aliasFrequency) / referenceAlias;
+            println(
+                `${oversample}: fundamental preserved: ${Math.abs(fundamentalRatio - 1) < 0.05}, aliasing reduced: ${aliasRatio < 0.05}`
+            );
+        }
+
+        // With an identity curve, oversampling must reproduce the input apart from the filter latency.
+        const identity = new Float32Array([-1, 0, 1]);
+        const input = await render("none", identity, 440);
+        for (const oversample of ["2x", "4x"]) {
+            const output = await render(oversample, identity, 440);
+            let bestDelay = -1;
+            let bestError = Infinity;
+            for (let delay = 0; delay < 256; ++delay) {
+                let error = 0;
+                for (let i = analysisStart; i < analysisStart + analysisFrames; ++i)
+                    error = Math.max(error, Math.abs(output[i] - input[i - delay]));
+                if (error < bestError) {
+                    bestError = error;
+                    bestDelay = delay;
+                }
+            }
+            println(`${oversample}: output is the input delayed by ${bestDelay} frames: ${bestError < 1e-3}`);
+        }
+    });
+</script>

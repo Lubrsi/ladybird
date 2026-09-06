@@ -1092,6 +1092,7 @@ set(SOURCES
     WebAudio/Rendering/AudioBus.cpp
     WebAudio/Rendering/BiquadCoefficients.cpp
     WebAudio/Rendering/OfflineAudioRenderer.cpp
+    WebAudio/Rendering/Oversampler.cpp
     WebAudio/Rendering/RealtimeAudioRenderer.cpp
     WebAudio/Rendering/RenderGraph.cpp
     WebAudio/Rendering/RenderNode.cpp

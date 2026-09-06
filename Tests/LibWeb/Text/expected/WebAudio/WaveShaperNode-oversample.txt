@@ -1,0 +1,5 @@
+Aliasing without oversampling is measurable: true
+2x: fundamental preserved: true, aliasing reduced: true
+4x: fundamental preserved: true, aliasing reduced: true
+2x: output is the input delayed by 64 frames: true
+4x: output is the input delayed by 64 frames: true

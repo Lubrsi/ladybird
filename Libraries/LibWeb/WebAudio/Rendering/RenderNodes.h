@@ -9,10 +9,12 @@
 #include <AK/Math.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Optional.h>
+#include <AK/OwnPtr.h>
 #include <AK/RefPtr.h>
 #include <AK/Vector.h>
 #include <LibWeb/WebAudio/Rendering/AudioData.h>
 #include <LibWeb/WebAudio/Rendering/BiquadCoefficients.h>
+#include <LibWeb/WebAudio/Rendering/Oversampler.h>
 #include <LibWeb/WebAudio/Rendering/RenderNode.h>
 
 namespace Web::WebAudio::Rendering {
@@ -282,7 +284,7 @@ private:
     float apply_curve(float sample) const;
 
     RefPtr<WaveShaperCurve> m_curve;
-    Bindings::OverSampleType m_oversample { Bindings::OverSampleType::None };
+    OwnPtr<Oversampler> m_oversampler;
 };
 
 // Passes the input through unchanged; used for nodes whose processing is not implemented yet but which should not

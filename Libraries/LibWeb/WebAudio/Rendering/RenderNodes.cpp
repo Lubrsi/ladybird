@@ -810,12 +810,31 @@ WaveShaperRenderNode::WaveShaperRenderNode(NodeID node_id, size_t quantum_size)
 {
 }
 
+static size_t oversample_factor(Bindings::OverSampleType oversample)
+{
+    switch (oversample) {
+    case Bindings::OverSampleType::None:
+        return 1;
+    case Bindings::OverSampleType::_2x:
+        return 2;
+    case Bindings::OverSampleType::_4x:
+        return 4;
+    }
+    VERIFY_NOT_REACHED();
+}
+
 void WaveShaperRenderNode::handle_message(NodeMessage const& message)
 {
     message.visit(
         [&](SetWaveShaperParameters const& parameters) {
             m_curve = parameters.curve;
-            m_oversample = parameters.oversample;
+
+            // Replacing the oversampler discards its filter histories, so it is kept whenever only the curve changes.
+            auto factor = oversample_factor(parameters.oversample);
+            if (factor == 1)
+                m_oversampler = nullptr;
+            else if (!m_oversampler || m_oversampler->factor() != factor)
+                m_oversampler = make<Oversampler>(factor);
         },
         [](auto const&) {});
 }
@@ -856,13 +875,34 @@ void WaveShaperRenderNode::process(RenderGraph& graph, RenderContext const& cont
         return;
     }
 
-    // FIXME: Up-sample the input before applying the curve when oversample is "2x" or "4x".
     shaper_output.set_channel_count(input.channel_count());
+    if (m_oversampler)
+        m_oversampler->set_channel_count(input.channel_count());
+
     for (size_t channel_index = 0; channel_index < input.channel_count(); ++channel_index) {
         auto input_samples = input.channel(channel_index);
         auto output_samples = shaper_output.channel(channel_index);
-        for (size_t frame = 0; frame < context.quantum_size; ++frame)
-            output_samples[frame] = apply_curve(input_samples[frame]);
+
+        if (!m_oversampler) {
+            for (size_t frame = 0; frame < context.quantum_size; ++frame)
+                output_samples[frame] = apply_curve(input_samples[frame]);
+            continue;
+        }
+
+        // https://webaudio.github.io/web-audio-api/#dom-waveshapernode-oversample
+        Array<float, 4> oversampled_storage;
+        auto oversampled = oversampled_storage.span().trim(m_oversampler->factor());
+        for (size_t frame = 0; frame < context.quantum_size; ++frame) {
+            // 1. Up-sample the input samples to 2x or 4x the sample-rate of the AudioContext.
+            m_oversampler->upsample(channel_index, input_samples[frame], oversampled);
+
+            // 2. Apply the shaping curve.
+            for (auto& sample : oversampled)
+                sample = apply_curve(sample);
+
+            // 3. Down-sample the result back to the sample-rate of the AudioContext.
+            output_samples[frame] = m_oversampler->downsample(channel_index, oversampled);
+        }
     }
 }
 
