@@ -698,6 +698,7 @@ public:
 
     void completely_finish_loading();
     bool completely_loaded_deferred() const { return m_completely_loaded_deferred; }
+    void queue_navigation_timing_entry();
 
     DOMImplementation* implementation();
 
