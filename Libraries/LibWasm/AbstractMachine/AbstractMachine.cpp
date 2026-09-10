@@ -132,7 +132,7 @@ void AbstractMachine::adopt_heap(GC::Heap& heap)
 
 void AbstractMachine::create_own_heap()
 {
-    m_owned_heap = make<GC::Heap>([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
+    m_owned_heap = make<GC::Heap>([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
     adopt_heap(*m_owned_heap);
 }
 

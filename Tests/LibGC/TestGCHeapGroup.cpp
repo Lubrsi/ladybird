@@ -86,7 +86,7 @@ NEVER_INLINE void allocate_garbage(GC::Heap& heap)
 
 TEST_CASE(sanity_single_heap_frees_garbage)
 {
-    GC::Heap heap([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
+    GC::Heap heap([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
     heap.set_incremental_sweep_enabled(false);
 
     allocate_garbage(heap);
@@ -98,8 +98,8 @@ TEST_CASE(sanity_single_heap_frees_garbage)
 
 TEST_CASE(incoming_cross_heap_member_roots_local_collection)
 {
-    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
-    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
+    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
+    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
     // No event loop runs during this test; sweep synchronously so frees are observable.
     heap_a.set_incremental_sweep_enabled(false);
     heap_b.set_incremental_sweep_enabled(false);
@@ -132,8 +132,8 @@ TEST_CASE(incoming_cross_heap_member_roots_local_collection)
 
 TEST_CASE(group_collection_breaks_cross_heap_cycles)
 {
-    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
-    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
+    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
+    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
 
     heap_a.set_incremental_sweep_enabled(false);
     heap_b.set_incremental_sweep_enabled(false);
@@ -161,8 +161,8 @@ TEST_CASE(group_collection_breaks_cross_heap_cycles)
 
 TEST_CASE(group_collection_traces_live_cross_heap_chains)
 {
-    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
-    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeProcessDefault::No);
+    GC::Heap heap_a([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
+    GC::Heap heap_b([](auto&) { }, GC::Heap::BecomeThreadDefault::No);
 
     heap_a.set_incremental_sweep_enabled(false);
     heap_b.set_incremental_sweep_enabled(false);

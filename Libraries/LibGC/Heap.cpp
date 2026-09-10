@@ -56,7 +56,7 @@ static constexpr int GC_INCREMENTAL_SWEEP_SLICE_MS = 5;
 // whether to proactively collect. See idle_gc_on_timer().
 static constexpr int GC_IDLE_GC_INTERVAL_MS = 4000;
 
-static Heap* s_the;
+static thread_local Heap* s_the;
 
 namespace {
 
@@ -290,10 +290,10 @@ CellAllocator& Heap::cell_allocator_for(Badge<CellAllocatorDescriptorBase>, Cell
     });
 }
 
-Heap::Heap(AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots, BecomeProcessDefault become_process_default)
+Heap::Heap(AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots, BecomeThreadDefault become_thread_default)
     : m_gather_embedder_roots(move(gather_embedder_roots))
 {
-    if (become_process_default == BecomeProcessDefault::Yes)
+    if (become_thread_default == BecomeThreadDefault::Yes)
         s_the = this;
     m_gc_bytes_threshold = GC_MIN_BYTES_THRESHOLD;
     static_assert(HeapBlock::min_possible_cell_size <= 32, "Heap Cell tracking uses too much data!");

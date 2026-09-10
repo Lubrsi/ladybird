@@ -48,14 +48,15 @@ class GC_API Heap {
     friend class HeapGroup;
 
 public:
-    enum class BecomeProcessDefault {
+    enum class BecomeThreadDefault {
         No,
         Yes,
     };
 
-    explicit Heap(AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots, BecomeProcessDefault = BecomeProcessDefault::Yes);
+    explicit Heap(AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots, BecomeThreadDefault = BecomeThreadDefault::Yes);
     ~Heap();
 
+    // The calling thread's default heap.
     static Heap& the();
     static void set_default_heap_for_testing(Heap&);
 
