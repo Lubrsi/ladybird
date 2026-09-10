@@ -21,6 +21,7 @@ HeapGroup::~HeapGroup()
 void HeapGroup::add(Heap& heap)
 {
     VERIFY(!heap.m_group);
+    VERIFY(heap.owning_thread().is_current_thread());
     heap.m_group = this;
     m_heaps.append(&heap);
 }

@@ -14,6 +14,7 @@
 #include <AK/RefPtr.h>
 #include <AK/StackInfo.h>
 #include <AK/String.h>
+#include <AK/ThreadID.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
 #include <LibCore/Forward.h>
@@ -59,6 +60,8 @@ public:
     // The calling thread's default heap.
     static Heap& the();
     static void set_default_heap_for_testing(Heap&);
+
+    AK::ThreadID owning_thread() const { return m_owning_thread; }
 
     template<typename T, typename... Args>
     Ref<T> allocate(Args&&... args)
@@ -151,6 +154,8 @@ private:
 
     void defer_gc();
     void undefer_gc();
+
+    void verify_owning_thread() const { VERIFY(m_owning_thread.is_current_thread()); }
 
     void dump_allocators();
 
@@ -246,6 +251,7 @@ private:
     bool m_collecting_garbage { false };
     CollectionType m_current_collection_type { CollectionType::CollectGarbage };
     StackInfo m_stack_info;
+    AK::ThreadID m_owning_thread { AK::ThreadID::current() };
     AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> m_gather_embedder_roots;
 
     Vector<AK::Function<void()>> m_post_gc_tasks;
@@ -270,120 +276,140 @@ private:
 
 inline void Heap::did_create_root(Badge<RootImpl>, RootImpl& impl)
 {
+    verify_owning_thread();
     VERIFY(!m_roots.contains(impl));
     m_roots.append(impl);
 }
 
 inline void Heap::did_destroy_root(Badge<RootImpl>, RootImpl& impl)
 {
+    verify_owning_thread();
     VERIFY(m_roots.contains(impl));
     m_roots.remove(impl);
 }
 
 inline void Heap::did_create_root_vector(Badge<RootVectorBase>, RootVectorBase& vector)
 {
+    verify_owning_thread();
     VERIFY(!m_root_vectors.contains(vector));
     m_root_vectors.append(vector);
 }
 
 inline void Heap::did_destroy_root_vector(Badge<RootVectorBase>, RootVectorBase& vector)
 {
+    verify_owning_thread();
     VERIFY(m_root_vectors.contains(vector));
     m_root_vectors.remove(vector);
 }
 
 inline void Heap::did_create_root_hash_map(Badge<RootHashMapBase>, RootHashMapBase& hash_map)
 {
+    verify_owning_thread();
     VERIFY(!m_root_hash_maps.contains(hash_map));
     m_root_hash_maps.append(hash_map);
 }
 
 inline void Heap::did_destroy_root_hash_map(Badge<RootHashMapBase>, RootHashMapBase& hash_map)
 {
+    verify_owning_thread();
     VERIFY(m_root_hash_maps.contains(hash_map));
     m_root_hash_maps.remove(hash_map);
 }
 
 inline void Heap::did_create_root_hash_table(Badge<RootHashTableBase>, RootHashTableBase& hash_table)
 {
+    verify_owning_thread();
     VERIFY(!m_root_hash_tables.contains(hash_table));
     m_root_hash_tables.append(hash_table);
 }
 
 inline void Heap::did_destroy_root_hash_table(Badge<RootHashTableBase>, RootHashTableBase& hash_table)
 {
+    verify_owning_thread();
     VERIFY(m_root_hash_tables.contains(hash_table));
     m_root_hash_tables.remove(hash_table);
 }
 
 inline void Heap::did_create_conservative_hash_map(Badge<ConservativeHashMapBase>, ConservativeHashMapBase& hash_map)
 {
+    verify_owning_thread();
     VERIFY(!m_conservative_hash_maps.contains(hash_map));
     m_conservative_hash_maps.append(hash_map);
 }
 
 inline void Heap::did_destroy_conservative_hash_map(Badge<ConservativeHashMapBase>, ConservativeHashMapBase& hash_map)
 {
+    verify_owning_thread();
     VERIFY(m_conservative_hash_maps.contains(hash_map));
     m_conservative_hash_maps.remove(hash_map);
 }
 
 inline void Heap::did_create_conservative_hash_table(Badge<ConservativeHashTableBase>, ConservativeHashTableBase& hash_table)
 {
+    verify_owning_thread();
     VERIFY(!m_conservative_hash_tables.contains(hash_table));
     m_conservative_hash_tables.append(hash_table);
 }
 
 inline void Heap::did_destroy_conservative_hash_table(Badge<ConservativeHashTableBase>, ConservativeHashTableBase& hash_table)
 {
+    verify_owning_thread();
     VERIFY(m_conservative_hash_tables.contains(hash_table));
     m_conservative_hash_tables.remove(hash_table);
 }
 
 inline void Heap::did_create_conservative_vector(Badge<ConservativeVectorBase>, ConservativeVectorBase& vector)
 {
+    verify_owning_thread();
     VERIFY(!m_conservative_vectors.contains(vector));
     m_conservative_vectors.append(vector);
 }
 
 inline void Heap::did_destroy_conservative_vector(Badge<ConservativeVectorBase>, ConservativeVectorBase& vector)
 {
+    verify_owning_thread();
     VERIFY(m_conservative_vectors.contains(vector));
     m_conservative_vectors.remove(vector);
 }
 
 inline void Heap::did_create_conservative_range_provider(Badge<ConservativeRangeProvider>, ConservativeRangeProvider& provider)
 {
+    verify_owning_thread();
     VERIFY(!m_conservative_range_providers.contains(provider));
     m_conservative_range_providers.append(provider);
 }
 
 inline void Heap::did_destroy_conservative_range_provider(Badge<ConservativeRangeProvider>, ConservativeRangeProvider& provider)
 {
+    verify_owning_thread();
     VERIFY(m_conservative_range_providers.contains(provider));
     m_conservative_range_providers.remove(provider);
 }
 
 inline void Heap::did_create_cross_heap_member(Badge<CrossHeapMemberBase>, CrossHeapMemberBase& member)
 {
+    verify_owning_thread();
     VERIFY(!m_incoming_cross_heap_members.contains(&member));
     m_incoming_cross_heap_members.set(&member);
 }
 
 inline void Heap::did_destroy_cross_heap_member(Badge<CrossHeapMemberBase>, CrossHeapMemberBase& member)
 {
+    verify_owning_thread();
     VERIFY(m_incoming_cross_heap_members.contains(&member));
     m_incoming_cross_heap_members.remove(&member);
 }
 
 inline void Heap::did_create_weak_container(Badge<WeakContainer>, WeakContainer& set)
 {
+    verify_owning_thread();
     VERIFY(!m_weak_containers.contains(set));
     m_weak_containers.append(set);
 }
 
 inline void Heap::did_destroy_weak_container(Badge<WeakContainer>, WeakContainer& set)
 {
+    verify_owning_thread();
     VERIFY(m_weak_containers.contains(set));
     m_weak_containers.remove(set);
 }

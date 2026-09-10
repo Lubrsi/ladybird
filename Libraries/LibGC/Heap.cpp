@@ -320,6 +320,7 @@ Heap::~Heap()
 
 void Heap::will_allocate(size_t size)
 {
+    verify_owning_thread();
     if (should_collect_on_every_allocation()) {
         m_allocated_bytes_since_last_gc = 0;
         collect_garbage();
@@ -643,6 +644,7 @@ void Heap::run_collection(ReadonlySpan<FlatPtr> callee_saved_registers, Collecti
         .callee_saved_registers = callee_saved_registers,
     };
 
+    verify_owning_thread();
     VERIFY(!m_collecting_garbage);
 
     finish_pending_incremental_sweep();
