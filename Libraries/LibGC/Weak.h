@@ -20,9 +20,19 @@ public:
     // NOTE: Null GC::Weaks point at this WeakImpl. This allows Weak to always chase the impl pointer without null-checking it.
     static GC_API WeakImpl the_null_weak_impl;
 
+    enum class State {
+        Allocated,
+        Freelist,
+        NullSentinel,
+    };
+
     WeakImpl() = default;
     WeakImpl(void* ptr)
         : m_ptr(ptr)
+    {
+    }
+    explicit WeakImpl(State state)
+        : m_state(state)
     {
     }
 
@@ -32,20 +42,22 @@ public:
     bool operator==(WeakImpl const& other) const { return m_ptr == other.m_ptr; }
     bool operator!=(WeakImpl const& other) const { return m_ptr != other.m_ptr; }
 
-    void ref() const { ++m_ref_count; }
+    void ref() const
+    {
+        if (m_state == State::NullSentinel)
+            return;
+        ++m_ref_count;
+    }
     void unref() const
     {
+        if (m_state == State::NullSentinel)
+            return;
         VERIFY(m_ref_count);
         --m_ref_count;
     }
 
     size_t ref_count() const { return m_ref_count; }
     static constexpr size_t value_offset() { return offsetof(WeakImpl, m_ptr); }
-
-    enum class State {
-        Allocated,
-        Freelist,
-    };
 
     void set_state(State state) { m_state = state; }
     State state() const { return m_state; }
