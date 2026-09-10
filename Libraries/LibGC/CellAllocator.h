@@ -31,31 +31,26 @@ public:
     size_t cell_size() const { return m_cell_size; }
     bool overrides_finalize() const { return m_overrides_finalize; }
 
-    CellAllocator& for_heap(Heap&);
-
-    void forget_heap(Badge<Heap>, Heap& heap)
-    {
-        if (m_last_heap == &heap) {
-            m_last_heap = nullptr;
-            m_last_allocator = nullptr;
-        }
-    }
+    void forget_heap(Badge<Heap>, Heap& heap) { m_forget_heap(heap); }
 
 protected:
-    CellAllocatorDescriptorBase(size_t cell_size, StringView class_name, bool overrides_finalize)
+    using ForgetHeapFunction = void (*)(Heap&);
+
+    CellAllocatorDescriptorBase(size_t cell_size, StringView class_name, bool overrides_finalize, ForgetHeapFunction forget_heap)
         : m_class_name(class_name)
         , m_cell_size(cell_size)
         , m_overrides_finalize(overrides_finalize)
+        , m_forget_heap(forget_heap)
     {
     }
+
+    CellAllocator& allocator_for_heap(Heap&);
 
 private:
     Optional<StringView> m_class_name;
     size_t m_cell_size { 0 };
     bool m_overrides_finalize { false };
-
-    Heap* m_last_heap { nullptr };
-    CellAllocator* m_last_allocator { nullptr };
+    ForgetHeapFunction m_forget_heap { nullptr };
 };
 
 class GC_API CellAllocator {
@@ -119,8 +114,37 @@ public:
     using CellType = T;
 
     TypeIsolatingCellAllocator(StringView class_name, bool overrides_finalize)
-        : CellAllocatorDescriptorBase(sizeof(T), class_name, overrides_finalize)
+        : CellAllocatorDescriptorBase(sizeof(T), class_name, overrides_finalize, &forget_heap_on_this_thread)
     {
+    }
+
+    CellAllocator& for_heap(Heap& heap)
+    {
+        auto& cache = thread_cache();
+        if (cache.heap == &heap) [[likely]]
+            return *cache.allocator;
+        auto& allocator = allocator_for_heap(heap);
+        cache = { &heap, &allocator };
+        return allocator;
+    }
+
+private:
+    struct ThreadCache {
+        Heap* heap { nullptr };
+        CellAllocator* allocator { nullptr };
+    };
+
+    static ThreadCache& thread_cache()
+    {
+        static thread_local ThreadCache cache;
+        return cache;
+    }
+
+    static void forget_heap_on_this_thread(Heap& heap)
+    {
+        auto& cache = thread_cache();
+        if (cache.heap == &heap)
+            cache = {};
     }
 };
 
