@@ -86,13 +86,10 @@ public:
 
     void* allocate_chunk()
     {
-        // This process-global region is shared by every Heap. GC block allocation is single-threaded
-        // per process, so m_next_chunk_offset intentionally needs no lock. Supporting another allocating
-        // thread would require synchronization here or per-thread regions.
-        VERIFY(m_next_chunk_offset <= size - CHUNK_SIZE);
-        auto* chunk = m_base + m_next_chunk_offset;
+        auto chunk_offset = m_next_chunk_offset.fetch_add(CHUNK_SIZE);
+        VERIFY(chunk_offset <= size - CHUNK_SIZE);
+        auto* chunk = m_base + chunk_offset;
         MUST(Core::System::commit_memory(chunk, CHUNK_SIZE, Core::System::MemoryTag::GarbageCollector));
-        m_next_chunk_offset += CHUNK_SIZE;
         return chunk;
     }
 
@@ -101,7 +98,7 @@ public:
 
 private:
     u8* m_base { nullptr };
-    size_t m_next_chunk_offset { 0 };
+    Atomic<size_t> m_next_chunk_offset { 0 };
 };
 
 static HeapRegion& heap_region()
