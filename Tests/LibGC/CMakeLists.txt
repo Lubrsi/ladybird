@@ -4,6 +4,7 @@ set(TEST_SOURCES
     TestGCContainers.cpp
     TestGCHeapGroup.cpp
     TestGCIdleCollection.cpp
+    TestGCThreads.cpp
     TestPrimitiveStorage.cpp
     TestGCVisitor.cpp
     TestNanBoxedValue.cpp
