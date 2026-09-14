@@ -47,18 +47,23 @@ void EventLoopImplementation::deferred_invoke(Function<void()>&& invokee)
         wake();
 }
 
-static EventLoopManager* s_event_loop_manager = nullptr;
+static Atomic<EventLoopManager*> s_event_loop_manager { nullptr };
 EventLoopManager& EventLoopManager::the()
 {
-    if (!s_event_loop_manager)
-        s_event_loop_manager = new EventLoopManagerPlatform;
-    return *s_event_loop_manager;
+    if (auto* manager = s_event_loop_manager.load(AK::MemoryOrder::memory_order_acquire))
+        return *manager;
+    static EventLoopManager* const default_manager = [] {
+        auto* manager = new EventLoopManagerPlatform;
+        s_event_loop_manager.store(manager, AK::MemoryOrder::memory_order_release);
+        return manager;
+    }();
+    return *default_manager;
 }
 
 void EventLoopManager::install(Core::EventLoopManager& manager)
 {
-    VERIFY(!s_event_loop_manager);
-    s_event_loop_manager = &manager;
+    EventLoopManager* expected = nullptr;
+    VERIFY(s_event_loop_manager.compare_exchange_strong(expected, &manager, AK::MemoryOrder::memory_order_acq_rel));
 }
 
 EventLoopManager::EventLoopManager() = default;
