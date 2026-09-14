@@ -1,0 +1,5 @@
+rejected-promise: abort at microtask 1
+fulfilled-promise: navigatesuccess at microtask 1
+thrown: abort at microtask 1
+rejecting-thenable: abort at microtask 2
+rejected-promise-subclass: abort at microtask 3

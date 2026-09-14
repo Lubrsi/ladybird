@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // intercept() hands a handler's own promise back to the navigation API, which reacts to it on the first
+    // microtask after it settles. A counter chain started inside the handler is queued ahead of that reaction and
+    // interleaves with it, so the count shows how many microtasks the reaction took.
+    promiseTest(async () => {
+        await new Promise(resolve => window.addEventListener("load", () => setTimeout(resolve, 0)));
+
+        function measure(name, handler, observe) {
+            return new Promise(resolve => {
+                let tick = 0;
+                let finished = false;
+                const bump = () => { tick++; if (tick < 10) Promise.resolve().then(bump); };
+                const done = what => {
+                    if (finished)
+                        return;
+                    finished = true;
+                    clearTimeout(timeout);
+                    navigation.removeEventListener("navigatesuccess", onSuccess);
+                    println(`${name}: ${what} at microtask ${tick}`);
+                    resolve();
+                };
+                const onSuccess = () => { if (observe === "success") done("navigatesuccess"); };
+                navigation.addEventListener("navigate", event => {
+                    event.signal.addEventListener("abort", () => { if (observe === "abort") done("abort"); });
+                    event.intercept({ handler() { Promise.resolve().then(bump); return handler(); } });
+                }, { once: true });
+                navigation.addEventListener("navigatesuccess", onSuccess);
+                const timeout = setTimeout(() => done("nothing observed"), 1000);
+                navigation.navigate("#" + name).finished.catch(() => {});
+            });
+        }
+
+        class SubclassedPromise extends Promise {}
+        const error = new Error("boo");
+        await measure("rejected-promise", () => Promise.reject(error), "abort");
+        await measure("fulfilled-promise", () => Promise.resolve(), "success");
+        await measure("thrown", () => { throw error; }, "abort");
+        await measure("rejecting-thenable", () => ({ then(_, reject) { reject(error); } }), "abort");
+        await measure("rejected-promise-subclass", () => SubclassedPromise.reject(error), "abort");
+    });
+</script>

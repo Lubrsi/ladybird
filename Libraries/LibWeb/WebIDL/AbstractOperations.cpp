@@ -15,6 +15,8 @@
 #include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/DataView.h>
 #include <LibJS/Runtime/FunctionObject.h>
+#include <LibJS/Runtime/Promise.h>
+#include <LibJS/Runtime/PromiseConstructor.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibJS/Runtime/ValueInlines.h>
 #include <LibWeb/Export.h>
@@ -383,8 +385,21 @@ GC::Ref<Promise> invoke_promise_callback(CallbackType& callback, Optional<JS::Va
 
     return invoke_callback_impl(callback, move(this_argument), args, [&](JS::Realm& relevant_realm, JS::Completion completion) {
         // 3. If completion is an IDL value, return completion.
-        if (!completion.is_abrupt())
-            return create_resolved_promise(relevant_realm, completion.release_value());
+        if (!completion.is_abrupt()) {
+            auto& vm = relevant_realm.vm();
+
+            // AD-HOC: Web IDL converts the return value with NewPromiseCapability and Call(Resolve), which wraps a returned
+            //         promise and delays every reaction on it by two microtasks. Blink, WebKit and Gecko convert with
+            //         PromiseResolve instead, so a callback's own promise comes back as-is, and the Navigation API's
+            //         event ordering depends on that.
+            auto promise_or_error = JS::promise_resolve(vm, *relevant_realm.intrinsics().promise_constructor(), completion.release_value());
+            if (promise_or_error.is_error())
+                return create_rejected_promise(relevant_realm, promise_or_error.release_error().value());
+
+            auto& promise = as<JS::Promise>(*promise_or_error.release_value());
+            auto resolving_functions = promise.create_resolving_functions();
+            return JS::PromiseCapability::create(vm, promise, resolving_functions.resolve, resolving_functions.reject);
+        }
 
         // 4. Assert: completion is an abrupt completion.
         VERIFY(completion.is_abrupt());
