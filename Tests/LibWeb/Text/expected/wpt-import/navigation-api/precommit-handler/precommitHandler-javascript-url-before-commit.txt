@@ -1,0 +1,6 @@
+Harness status: OK
+
+Found 1 tests
+
+1 Pass
+Pass	A javascript: URL navigation aborts a navigate event whose precommitHandler is still pending

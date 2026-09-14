@@ -46,6 +46,9 @@ class Window;
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#navigationintercepthandler
 using NavigationInterceptHandler = GC::Ref<WebIDL::CallbackType>;
 
+// https://html.spec.whatwg.org/multipage/nav-history-apis.html#navigationprecommithandler
+using NavigationPrecommitHandler = GC::Ref<WebIDL::CallbackType>;
+
 using NavigationFocusReset = Bindings::NavigationFocusReset;
 using NavigationScrollBehavior = Bindings::NavigationScrollBehavior;
 
@@ -111,6 +114,7 @@ public:
 
     GC::Ref<DOM::AbortController> abort_controller() const { return *m_abort_controller; }
     InterceptionState interception_state() const { return m_interception_state; }
+    Vector<NavigationPrecommitHandler> const& navigation_precommit_handler_list() const { return m_navigation_precommit_handler_list; }
     Vector<NavigationInterceptHandler> const& navigation_handler_list() const { return m_navigation_handler_list; }
     Optional<StorageSerializationRecord> classic_history_api_state() const { return m_classic_history_api_state; }
     bool has_started_navigate_event_intercept_commit_handler_steps() const { return m_has_started_navigate_event_intercept_commit_handler_steps; }
@@ -119,7 +123,11 @@ public:
     void set_interception_state(InterceptionState s) { m_interception_state = s; }
     void set_classic_history_api_state(Optional<StorageSerializationRecord> r) { m_classic_history_api_state = move(r); }
     void set_has_started_navigate_event_intercept_commit_handler_steps() { m_has_started_navigate_event_intercept_commit_handler_steps = true; }
+    void set_navigation_type(NavigationType navigation_type) { m_navigation_type = navigation_type; }
+    void set_info(JS::Value info) { m_info = info; }
+    void append_navigation_handler(NavigationInterceptHandler handler) { m_navigation_handler_list.append(handler); }
 
+    WebIDL::ExceptionOr<void> perform_shared_checks();
     void finish(bool did_fulfill);
 
 private:
@@ -128,7 +136,6 @@ private:
 
     virtual void visit_edges(GC::Cell::Visitor&) override;
 
-    WebIDL::ExceptionOr<void> perform_shared_checks();
     void process_scroll_behavior();
     void potentially_process_scroll_behavior();
     void potentially_reset_the_focus();
@@ -140,6 +147,9 @@ private:
     InterceptionState m_interception_state = InterceptionState::None;
 
     bool m_has_started_navigate_event_intercept_commit_handler_steps { false };
+
+    // https://html.spec.whatwg.org/multipage/nav-history-apis.html#concept-navigateevent-navigation-precommit-handler-list
+    Vector<NavigationPrecommitHandler> m_navigation_precommit_handler_list;
 
     // https://html.spec.whatwg.org/multipage/nav-history-apis.html#concept-navigateevent-navigation-handler-list
     Vector<NavigationInterceptHandler> m_navigation_handler_list;

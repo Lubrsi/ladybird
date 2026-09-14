@@ -1,0 +1,13 @@
+Harness status: OK
+
+Found 8 tests
+
+8 Pass
+Pass	precommitHandler + precommitHandler
+Pass	precommitHandler + (not provided)
+Pass	precommitHandler + handler
+Pass	handler + precommitHandler
+Pass	handler + (not provided)
+Pass	handler + handler
+Pass	(not provided) + precommitHandler
+Pass	(not provided) + handler

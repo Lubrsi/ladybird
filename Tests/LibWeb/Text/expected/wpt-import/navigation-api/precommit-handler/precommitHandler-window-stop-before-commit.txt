@@ -1,0 +1,8 @@
+Harness status: OK
+
+Found 3 tests
+
+3 Pass
+Pass	Setup
+Pass	 precommitHandler with window.stop() before navigation commit
+Pass	 precommitHandler with window.stop() before fragment navigation commit

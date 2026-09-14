@@ -847,6 +847,7 @@ class NavigationCurrentEntryChangeEvent;
 class NavigationDestination;
 class NavigationHistoryEntry;
 class NavigationObserver;
+class NavigationPrecommitController;
 class NavigationTransition;
 class Navigator;
 class OffscreenCanvas;

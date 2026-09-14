@@ -23,6 +23,7 @@
 #include <LibWeb/HTML/NavigationCurrentEntryChangeEvent.h>
 #include <LibWeb/HTML/NavigationDestination.h>
 #include <LibWeb/HTML/NavigationHistoryEntry.h>
+#include <LibWeb/HTML/NavigationPrecommitController.h>
 #include <LibWeb/HTML/NavigationTransition.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
@@ -1275,8 +1276,46 @@ bool Navigation::inner_navigate_event_firing_algorithm(
     }
 
     // 30. If event's navigation precommit handler list is empty then commit event given apiMethodTracker.
-    // FIXME: 31. Otherwise, invoke the precommit handlers and commit event once they have all fulfilled.
-    commit_a_navigate_event(event, api_method_tracker);
+    if (event->navigation_precommit_handler_list().is_empty()) {
+        commit_a_navigate_event(event, api_method_tracker);
+    }
+    // 31. Otherwise:
+    else {
+        // AD-HOC: A traverse navigate event fires from a session history traversal task with no JavaScript on the
+        //         stack, and invoking the precommit handlers needs a running execution context.
+        TemporaryExecutionContext execution_context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
+
+        // 1. Let precommitController be a new NavigationPrecommitController created in navigation's relevant realm,
+        //    whose event is event.
+        auto precommit_controller = NavigationPrecommitController::create(event);
+        auto wrapped_precommit_controller = Bindings::wrap(Bindings::host_defined_wrapper_world(realm), realm, precommit_controller);
+
+        // 2. Let precommitPromisesList be an empty list.
+        GC::RootVector<GC::Ref<WebIDL::Promise>> precommit_promises_list;
+
+        // 3. For each handler of event's navigation precommit handler list:
+        for (auto const& handler : event->navigation_precommit_handler_list()) {
+            // 1. Append the result of invoking handler with « precommitController » to precommitPromisesList.
+            precommit_promises_list.append(WebIDL::invoke_promise_callback(handler, {}, { { wrapped_precommit_controller } }));
+        }
+
+        // 4. Wait for all precommitPromisesList with the following success steps: commit event given apiMethodTracker,
+        //    and the following failure step given reason: process navigate event handler failure given event and reason.
+        WebIDL::wait_for_all(
+            realm, precommit_promises_list,
+            [this, event, api_method_tracker](auto const&) {
+                commit_a_navigate_event(event, api_method_tracker);
+            },
+            [this, event, navigable](JS::Value reason) {
+                bool const was_already_aborted = event->abort_controller()->signal()->aborted();
+                process_navigate_event_handler_failure(event, reason);
+
+                // AD-HOC: The navigation kept its ID stamped on the navigable while its precommit handlers ran, see
+                //         "commit a navigate event".
+                if (!was_already_aborted && navigable->ongoing_navigation().has<Utf16String>())
+                    navigable->set_ongoing_navigation_without_informing_navigation_api(Empty {});
+            });
+    }
 
     // 32. If event's interception state is "none", then return true.
     // 33. Return false.
@@ -1375,6 +1414,12 @@ void Navigation::commit_a_navigate_event(GC::Ref<NavigateEvent> event, GC::Ptr<N
         if (navigation_type == NavigationType::Push || navigation_type == NavigationType::Replace) {
             auto history_handling = navigation_type == NavigationType::Push ? HistoryHandlingBehavior::Push : HistoryHandlingBehavior::Replace;
             perform_url_and_history_update_steps(document, event->destination()->raw_url(), event->classic_history_api_state(), history_handling);
+
+            // AD-HOC: A navigation kept its navigation ID stamped on the navigable while its precommit handlers ran,
+            //         so that window.stop() could abort it. Its synchronous same-document commit is now done, and a
+            //         stale ID would make later same-document traversals treat themselves as superseded.
+            if (navigable->ongoing_navigation().has<Utf16String>())
+                navigable->set_ongoing_navigation_without_informing_navigation_api(Empty {});
         }
 
         // - "reload":

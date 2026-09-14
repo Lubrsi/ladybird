@@ -59,6 +59,7 @@
 #include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/LocalTraversableNavigable.h>
 #include <LibWeb/HTML/NavigableContainer.h>
+#include <LibWeb/HTML/NavigateEvent.h>
 #include <LibWeb/HTML/Navigation.h>
 #include <LibWeb/HTML/NavigationHistoryEntry.h>
 #include <LibWeb/HTML/NavigationObserver.h>
@@ -3397,8 +3398,11 @@ void LocalNavigable::begin_navigation(PreparedNavigation navigation)
             //         navigation IDs, so clear our own ID here. Leaving it stamped makes later same-document
             //         traversals treat themselves as superseded and lets WebDriver wait forever for this navigation
             //         to finish. Preserve the Navigation API state: an intercepted navigate event stays ongoing
-            //         until its handlers settle.
-            if (ongoing_navigation() == navigation_id)
+            //         until its handlers settle. A navigate event still waiting on its precommit handlers keeps the
+            //         ID, so that window.stop() can abort it; committing or failing clears it instead.
+            auto ongoing_navigate_event = navigation->ongoing_navigate_event();
+            bool const waiting_for_precommit_handlers = ongoing_navigate_event && ongoing_navigate_event->interception_state() == NavigateEvent::InterceptionState::Intercepted;
+            if (ongoing_navigation() == navigation_id && !waiting_for_precommit_handlers)
                 set_ongoing_navigation_without_informing_navigation_api(Empty {});
             return;
         }
@@ -3540,9 +3544,20 @@ void LocalNavigable::navigate_to_a_fragment(URL::URL const& url, HistoryHandling
     auto navigation_type = history_handling == HistoryHandlingBehavior::Push ? Bindings::NavigationType::Push : Bindings::NavigationType::Replace;
     bool const continue_ = navigation->fire_a_push_replace_reload_navigate_event(navigation_type, url, true, user_involvement, source_element, {}, destination_navigation_api_state, {}, api_method_tracker);
 
-    // 5. If continue is false, then return.
-    if (!continue_)
+    // 5. If continue is false:
+    if (!continue_) {
+        // 1. If navigation's ongoing navigate event is not null, then set the ongoing navigation of navigable to
+        //    navigationId.
+        // NOTE: This makes intercepted hash navigations cancelable by browser UI or window.stop().
+        // AD-HOC: "Set the ongoing navigation" informs the navigation API about aborting navigation, which would
+        //         abort the very navigate event this step exists to keep cancelable, so set it without informing.
+        //         The step comes from https://github.com/whatwg/html/pull/12519.
+        if (navigation->ongoing_navigate_event())
+            set_ongoing_navigation_without_informing_navigation_api(navigation_id);
+
+        // 2. Return.
         return;
+    }
 
     save_persisted_state_to_active_session_history_entry();
     auto active_entry = active_session_history_entry();
