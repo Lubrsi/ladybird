@@ -10,16 +10,20 @@
 #include <AK/Error.h>
 #include <AK/Noncopyable.h>
 #include <AK/Optional.h>
+#include <AK/SegmentedArray.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
 #include <LibGC/Export.h>
 #include <LibGC/ExternalEntityTable.h>
+#include <LibSync/Mutex.h>
 
 namespace GC {
 
 using PrimitiveStorageHandle = ExternalEntityTableHandle;
 
+// Shared by every thread. Allocating, resizing and freeing take m_mutex; resolving a handle does not,
+// on the same terms as ExternalEntityTable.
 class GC_API PrimitiveStorage : private ExternalEntityTable {
     AK_MAKE_NONCOPYABLE(PrimitiveStorage);
     AK_MAKE_NONMOVABLE(PrimitiveStorage);
@@ -142,8 +146,9 @@ private:
     u8* data_unchecked(Entry const&) const;
     ErrorOr<void> reallocate_entry(Entry&, size_t new_size, size_t new_capacity, ZeroFillNewBytes, bool force_large);
 
+    Sync::Mutex m_mutex;
     Allocator m_allocator;
-    Vector<Entry> m_entries;
+    SegmentedArray<Entry> m_entries;
 };
 
 }

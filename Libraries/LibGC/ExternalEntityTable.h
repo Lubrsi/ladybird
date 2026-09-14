@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <AK/Atomic.h>
 #include <AK/BuiltinWrappers.h>
 #include <AK/Noncopyable.h>
+#include <AK/SegmentedArray.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
@@ -63,16 +65,27 @@ protected:
     void free_entry(ExternalEntityTableHandle, ExternalEntityTableTag);
 
 private:
+    // Generation, tag and the allocated flag packed into one word, so that a thread checking a handle
+    // it no longer owns reads a consistent state while another thread reuses the slot.
     struct Entry {
-        u32 generation { 1 };
-        ExternalEntityTableTag tag;
-        bool allocated { false };
+        static constexpr u64 initial_state = 1; // generation 1, no tag, not allocated
+
+        static constexpr u32 generation_of(u64 state) { return static_cast<u32>(state); }
+        static constexpr ExternalEntityTableTag tag_of(u64 state) { return { static_cast<u16>(state >> 32) }; }
+        static constexpr bool is_allocated(u64 state) { return (state >> 48) & 1; }
+        static constexpr u64 make_state(u32 generation, ExternalEntityTableTag tag, bool allocated)
+        {
+            return static_cast<u64>(generation) | (static_cast<u64>(tag.value) << 32) | (static_cast<u64>(allocated) << 48);
+        }
+
+        Atomic<u64> state { initial_state };
     };
 
     Entry* entry_for(ExternalEntityTableHandle, ExternalEntityTableTag);
     Entry const* entry_for(ExternalEntityTableHandle, ExternalEntityTableTag) const;
 
-    Vector<Entry> m_entries;
+    // Callers serialize allocate_entry() and free_entry(); is_valid() needs no lock.
+    SegmentedArray<Entry> m_entries;
     Vector<u32> m_free_entry_indices;
 };
 

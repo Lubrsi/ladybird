@@ -16,16 +16,17 @@ ExternalEntityTableHandle ExternalEntityTable::allocate_entry(ExternalEntityTabl
     if (m_free_entry_indices.is_empty()) {
         VERIFY(m_entries.size() < ExternalEntityTableHandle::invalid_index);
         index = static_cast<u32>(m_entries.size());
-        m_entries.append({});
+        m_entries.empend();
     } else {
         index = m_free_entry_indices.take_last();
     }
 
     auto& entry = m_entries[index];
-    VERIFY(!entry.allocated);
-    entry.allocated = true;
-    entry.tag = tag;
-    return { index, entry.generation };
+    auto state = entry.state.load(AK::MemoryOrder::memory_order_relaxed);
+    VERIFY(!Entry::is_allocated(state));
+    auto generation = Entry::generation_of(state);
+    entry.state.store(Entry::make_state(generation, tag, true), AK::MemoryOrder::memory_order_relaxed);
+    return { index, generation };
 }
 
 bool ExternalEntityTable::is_valid(ExternalEntityTableHandle handle, ExternalEntityTableTag expected_tag) const
@@ -39,10 +40,10 @@ void ExternalEntityTable::free_entry(ExternalEntityTableHandle handle, ExternalE
     if (!entry)
         return;
 
-    entry->allocated = false;
-    ++entry->generation;
-    if (entry->generation == 0)
-        ++entry->generation;
+    auto generation = handle.generation + 1;
+    if (generation == 0)
+        ++generation;
+    entry->state.store(Entry::make_state(generation, {}, false), AK::MemoryOrder::memory_order_relaxed);
     m_free_entry_indices.append(handle.index);
 }
 
@@ -51,7 +52,7 @@ ExternalEntityTable::Entry* ExternalEntityTable::entry_for(ExternalEntityTableHa
     if (!handle.is_valid() || handle.index >= m_entries.size())
         return nullptr;
     auto& entry = m_entries[handle.index];
-    if (!entry.allocated || entry.generation != handle.generation || entry.tag != expected_tag)
+    if (entry.state.load(AK::MemoryOrder::memory_order_relaxed) != Entry::make_state(handle.generation, expected_tag, true))
         return nullptr;
     return &entry;
 }
