@@ -52,6 +52,18 @@
     },
     {
       "hidden": true,
+      "name": "ThreadSanitizer_base",
+      "displayName": "Thread Sanitizer Config",
+      "description": "Thread Sanitizer build",
+      "binaryDir": "$env{LADYBIRD_SOURCE_DIR}/Build/threadsanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "LADYBIRD_VCPKG_TYPE": "sanitizer",
+        "ENABLE_THREAD_SANITIZER": "ON"
+      }
+    },
+    {
+      "hidden": true,
       "name": "All_Debug_base",
       "displayName": "All Debug Config",
       "description": "All Debug build",

@@ -36,6 +36,13 @@
       ]
     },
     {
+      "name": "ThreadSanitizer",
+      "inherits": [
+        "unix_base",
+        "ThreadSanitizer_base"
+      ]
+    },
+    {
       "name": "Distribution",
       "inherits": [
         "unix_base",
@@ -64,6 +71,13 @@
       "configurePreset": "Distribution",
       "displayName": "Distribution Build",
       "description": "Build the project for distribution"
+    },
+    {
+      "name": "ThreadSanitizer",
+      "inherits": "base",
+      "configurePreset": "ThreadSanitizer",
+      "displayName": "Thread Sanitizer Build",
+      "description": "Build the project with Thread Sanitizer"
     }
   ],
   "testPresets": [
@@ -71,6 +85,14 @@
       "name": "Distribution",
       "inherits": "base",
       "configurePreset": "Distribution"
+    },
+    {
+      "name": "ThreadSanitizer",
+      "inherits": "base",
+      "configurePreset": "ThreadSanitizer",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1:$penv{TSAN_OPTIONS}"
+      }
     }
   ]
 }

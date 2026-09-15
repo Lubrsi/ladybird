@@ -142,6 +142,15 @@ ninja
 CTEST_OUTPUT_ON_FAILURE=1 LADYBIRD_SOURCE_DIR=${PWD}/../.. ninja test
 ```
 
+Data races can be caught with the [Thread Sanitizer](https://clang.llvm.org/docs/ThreadSanitizer.html), which CI does
+not run. It cannot be combined with Address Sanitizer, so it has its own `ThreadSanitizer` preset.
+
+```sh
+cmake --preset ThreadSanitizer
+cmake --build --preset ThreadSanitizer
+ctest --preset ThreadSanitizer
+```
+
 ### Running the Web Platform Tests
 
 The Web Platform Tests can be run with the `WPT.sh` script. This script can also be used to compare the results of two

@@ -179,6 +179,8 @@ def main():
             os.environ["UBSAN_OPTIONS"] = os.environ.get(
                 "UBSAN_OPTIONS", "print_stacktrace=1:print_summary=1:halt_on_error=1"
             )
+        elif args.preset == "ThreadSanitizer":
+            os.environ["TSAN_OPTIONS"] = os.environ.get("TSAN_OPTIONS", "halt_on_error=1:second_deadlock_stack=1")
         if args.no_build:
             build_dir, _ = configure_build_env(platform, args.preset, args.jobs)
         else:
@@ -315,6 +317,7 @@ def configure_build_env(platform: Platform, preset: str, jobs: Optional[str] = N
         "Fuzzers": build_root_dir / "fuzzers",
         "Release": build_root_dir / "release",
         "Sanitizer": build_root_dir / "sanitizer",
+        "ThreadSanitizer": build_root_dir / "threadsanitizer",
     }
 
     VCPKG_PRESETS = {
@@ -324,6 +327,7 @@ def configure_build_env(platform: Platform, preset: str, jobs: Optional[str] = N
         "Fuzzers": main_build_root_dir / "vcpkg-distribution",
         "Release": main_build_root_dir / "vcpkg-release",
         "Sanitizer": main_build_root_dir / "vcpkg-sanitizer",
+        "ThreadSanitizer": main_build_root_dir / "vcpkg-sanitizer",
     }
 
     build_preset_dir = BUILD_PRESETS.get(preset, None)
