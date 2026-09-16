@@ -215,6 +215,10 @@ public:
 #if defined(HAS_ADDRESS_SANITIZER)
         // We hit stack limits sooner with ASAN enabled.
         return m_stack_info.size_free() < 96 * KiB;
+#elif defined(HAS_THREAD_SANITIZER)
+        // ThreadSanitizer records each call in a shadow stack of about 65536 frames, which recursion on a stack much
+        // larger than the default 8 MiB can overflow before the stack itself runs out.
+        return m_stack_info.size_free() < 32 * KiB || m_stack_info.size() - m_stack_info.size_free() > 8 * MiB;
 #else
         return m_stack_info.size_free() < 32 * KiB;
 #endif
