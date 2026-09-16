@@ -596,11 +596,7 @@ ErrorOr<void> Session::create_server()
     dbgln("Listening for WebDriver connection on {}", m_browser_endpoint);
 
 #if defined(AK_OS_MACOS)
-    m_browser_mach_port_server = make<IPC::MachBootstrapListener>(m_browser_endpoint);
-    if (!m_browser_mach_port_server->is_initialized())
-        return Error::from_string_literal("Failed to initialize Mach port server for WebDriver");
-
-    m_browser_mach_port_server->on_bootstrap_request = [this](auto request) {
+    m_browser_mach_port_server = make<IPC::MachBootstrapListener>(m_browser_endpoint, [this](auto request) {
         auto result = m_transport_bootstrap_server.handle_bootstrap_request(request.pid, move(request.reply_port));
         if (result.is_error()) {
             m_event_loop.deferred_invoke([this, error = result.release_error()]() mutable {
@@ -619,7 +615,9 @@ ErrorOr<void> Session::create_server()
                         reject_start_promise(result.release_error());
                 });
             });
-    };
+    });
+    if (!m_browser_mach_port_server->is_initialized())
+        return Error::from_string_literal("Failed to initialize Mach port server for WebDriver");
 
     return {};
 #else

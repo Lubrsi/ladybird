@@ -11,10 +11,12 @@
 
 namespace IPC {
 
-MachBootstrapListener::MachBootstrapListener(ByteString server_port_name)
+MachBootstrapListener::MachBootstrapListener(ByteString server_port_name, BootstrapRequestHandler on_bootstrap_request)
     : m_thread(Threading::Thread::construct("MachBootstrapListener"sv, [this]() -> intptr_t { thread_loop(); return 0; }))
     , m_server_port_name(move(server_port_name))
+    , m_on_bootstrap_request(move(on_bootstrap_request))
 {
+    VERIFY(m_on_bootstrap_request);
     if (auto err = allocate_server_port(); err.is_error())
         dbgln("Failed to allocate server port: {}", err.error());
     else
@@ -80,8 +82,7 @@ void MachBootstrapListener::thread_loop()
             auto reply_port = Core::MachPort::adopt_right(message.header.msgh_remote_port, Core::MachPort::PortRight::SendOnce);
 
             dbgln_if(MACH_PORT_DEBUG, "Received bootstrap request from pid {} (task port {:x}, reply port {:x})", pid, task_port.port(), reply_port.port());
-            VERIFY(on_bootstrap_request);
-            on_bootstrap_request({ pid, move(task_port), move(reply_port) });
+            m_on_bootstrap_request({ pid, move(task_port), move(reply_port) });
             continue;
         }
 

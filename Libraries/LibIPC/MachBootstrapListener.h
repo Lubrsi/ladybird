@@ -26,29 +26,29 @@ class MachBootstrapListener {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    explicit MachBootstrapListener(ByteString server_port_name);
-    ~MachBootstrapListener();
-
-    void start();
-    void stop();
-
-    bool is_initialized();
-
     struct BootstrapRequest {
         pid_t pid { -1 };
         Core::MachPort task_port;
         Core::MachPort reply_port;
     };
-    Function<void(BootstrapRequest)> on_bootstrap_request;
+    using BootstrapRequestHandler = Function<void(BootstrapRequest)>;
+
+    MachBootstrapListener(ByteString server_port_name, BootstrapRequestHandler);
+    ~MachBootstrapListener();
+
+    bool is_initialized();
 
     ByteString const& server_port_name() const { return m_server_port_name; }
 
 private:
+    void start();
+    void stop();
     void thread_loop();
     ErrorOr<void> allocate_server_port();
 
     NonnullRefPtr<Threading::Thread> m_thread;
     ByteString const m_server_port_name;
+    BootstrapRequestHandler const m_on_bootstrap_request;
     Core::MachPort m_server_port_recv_right;
     Core::MachPort m_server_port_send_right;
 

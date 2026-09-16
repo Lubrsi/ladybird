@@ -530,10 +530,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     auto profile_identity = Profile::routing_identifier(profile().paths().identity);
 #if defined(AK_OS_MACOS)
     auto mach_process_name = ByteString::formatted("Ladybird-{}", profile_identity);
-    m_mach_port_server = make<IPC::MachBootstrapListener>(mach_server_name_for_process(mach_process_name, Core::System::getpid()));
-    set_mach_server_name(m_mach_port_server->server_port_name());
-
-    m_mach_port_server->on_bootstrap_request = [this](IPC::MachBootstrapListener::BootstrapRequest request) {
+    m_mach_port_server = make<IPC::MachBootstrapListener>(mach_server_name_for_process(mach_process_name, Core::System::getpid()), [this](IPC::MachBootstrapListener::BootstrapRequest request) {
         auto result = MUST(m_transport_bootstrap_server.handle_bootstrap_request(request.pid, move(request.reply_port)));
         result.visit(
             [this, pid = request.pid, task_port = move(request.task_port)](IPC::TransportBootstrapMachServer::ChildTransportHandled) mutable {
@@ -555,7 +552,8 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
                     m_on_browser_process_transport(make<IPC::Transport>(move(transport.receive_right), move(transport.send_right)));
                 });
             });
-    };
+    });
+    set_mach_server_name(m_mach_port_server->server_port_name());
 #endif
 
     m_browser_process = make<BrowserProcess>();
