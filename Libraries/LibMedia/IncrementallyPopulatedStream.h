@@ -67,8 +67,8 @@ public:
         virtual size_t size() const override { return m_stream->size(); }
 
         virtual void abort() override;
-        virtual void reset_abort() override { m_aborted = false; }
-        virtual bool is_aborted() const override { return m_aborted; }
+        virtual void reset_abort() override { m_aborted.store(false, AK::MemoryOrder::memory_order_release); }
+        virtual bool is_aborted() const override { return m_aborted.load(AK::MemoryOrder::memory_order_acquire); }
 
         virtual void set_blocked_change_handler(ReadBlockedChangeHandler) override;
 
@@ -80,7 +80,7 @@ public:
         NonnullRefPtr<IncrementallyPopulatedStream> m_stream;
         bool m_is_blocking { true };
         size_t m_position { 0 };
-        bool m_aborted { false };
+        Atomic<bool> m_aborted { false };
         bool m_blocked { false };
         ReadBlockedChangeHandler m_read_blocked_change_handler;
         MonotonicTime m_active_timeout { MonotonicTime::now_coarse() };

@@ -286,7 +286,7 @@ DecoderErrorOr<size_t> IncrementallyPopulatedStream::read_at(Cursor& cursor, siz
     MutexLocker locker { m_mutex };
 
     bool notified_blocked = false;
-    while (!cursor.m_aborted && cursor.m_is_blocking) {
+    while (!cursor.m_aborted.load(AK::MemoryOrder::memory_order_acquire) && cursor.m_is_blocking) {
         if (check_if_data_is_available_or_begin_request_while_locked(cursor, position, bytes.size()))
             break;
 
@@ -303,7 +303,7 @@ DecoderErrorOr<size_t> IncrementallyPopulatedStream::read_at(Cursor& cursor, siz
     if (notified_blocked && cursor.m_read_blocked_change_handler)
         cursor.m_read_blocked_change_handler(ReadBlocked::No);
 
-    if (cursor.m_aborted)
+    if (cursor.m_aborted.load(AK::MemoryOrder::memory_order_acquire))
         return DecoderError::with_description(DecoderErrorCategory::Aborted, "Blocking read was aborted"sv);
 
     if (m_closed && position >= m_expected_size.value())
@@ -400,7 +400,7 @@ DecoderErrorOr<FixedArray<u8>> IncrementallyPopulatedStream::Cursor::read_bytes(
 void IncrementallyPopulatedStream::Cursor::abort()
 {
     MutexLocker locker { m_stream->m_mutex };
-    m_aborted = true;
+    m_aborted.store(true, AK::MemoryOrder::memory_order_release);
     m_stream->m_state_changed.broadcast();
 }
 
