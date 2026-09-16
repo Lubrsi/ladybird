@@ -1093,9 +1093,9 @@ TEST_CASE(fresh_instruction_stream_is_readonly_mapped)
     EXPECT_EQ(waitpid(child, &status, 0), child);
 
     auto died_from_inaccessible_memory = WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS);
-#    if defined(HAS_ADDRESS_SANITIZER)
-    auto died_from_asan = (WIFEXITED(status) && WEXITSTATUS(status) != 0) || (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
-    EXPECT(died_from_inaccessible_memory || died_from_asan);
+#    if defined(HAS_ADDRESS_SANITIZER) || defined(HAS_THREAD_SANITIZER)
+    auto died_from_sanitizer = (WIFEXITED(status) && WEXITSTATUS(status) != 0) || (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    EXPECT(died_from_inaccessible_memory || died_from_sanitizer);
 #    else
     EXPECT(died_from_inaccessible_memory);
 #    endif
