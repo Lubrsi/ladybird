@@ -504,6 +504,31 @@ TEST_CASE(directory_resolves_announced_slots)
     EXPECT(directory->resolve_frame(handle, [] { }) == nullptr);
 }
 
+struct FrameEdgeBytes {
+    u8 first { 0 };
+    u8 last { 0 };
+};
+
+// Like a seqlock reader, the consumer reads a frame before revalidating its backing, so the only bytes it checks are
+// accessed atomically on both sides.
+static FrameEdgeBytes read_frame_edge_bytes_before_revalidation(Media::VideoFrame const& frame)
+{
+    auto* first = const_cast<u8*>(frame.yuv_data()->y_data().data());
+    auto v_data = frame.yuv_data()->v_data();
+    auto* last = const_cast<u8*>(v_data.data() + v_data.size() - 1);
+    return {
+        AK::atomic_load(reinterpret_cast<u8 volatile*>(first), AK::MemoryOrder::memory_order_relaxed),
+        AK::atomic_load(reinterpret_cast<u8 volatile*>(last), AK::MemoryOrder::memory_order_relaxed),
+    };
+}
+
+static void write_frame_bytes_for_stress_consumer(Bytes bytes, u8 value)
+{
+    bytes.slice(1, bytes.size() - 2).fill(value);
+    AK::atomic_store(reinterpret_cast<u8 volatile*>(&bytes.first()), value, AK::MemoryOrder::memory_order_relaxed);
+    AK::atomic_store(reinterpret_cast<u8 volatile*>(&bytes.last()), value, AK::MemoryOrder::memory_order_relaxed);
+}
+
 TEST_CASE(recycle_versus_hold_stress)
 {
     IGNORE_USE_IN_ESCAPING_LAMBDA auto pool = make_pool();
@@ -541,13 +566,12 @@ TEST_CASE(recycle_versus_hold_stress)
             auto frame = directory->resolve_frame(handle, [] { });
             if (frame == nullptr)
                 continue;
-            auto first = frame->yuv_data()->y_data()[0];
-            auto last = frame->yuv_data()->v_data()[frame->yuv_data()->v_data().size() - 1];
+            auto edge_bytes = read_frame_edge_bytes_before_revalidation(*frame);
             if (!frame->revalidate_backing())
                 continue;
             // Revalidation passed, so the bytes we read must match this slot_acquisition_id's pattern.
-            EXPECT_EQ(first, static_cast<u8>(slot_acquisition_id));
-            EXPECT_EQ(last, static_cast<u8>(slot_acquisition_id));
+            EXPECT_EQ(edge_bytes.first, static_cast<u8>(slot_acquisition_id));
+            EXPECT_EQ(edge_bytes.last, static_cast<u8>(slot_acquisition_id));
             verified_count++;
         }
         EXPECT(verified_count > 0);
@@ -560,7 +584,7 @@ TEST_CASE(recycle_versus_hold_stress)
         if (!slot.has_value())
             continue;
         VERIFY(slot->slot_acquisition_id <= 0xffffffffu);
-        slot->bytes.fill(static_cast<u8>(slot->slot_acquisition_id));
+        write_frame_bytes_for_stress_consumer(slot->bytes, static_cast<u8>(slot->slot_acquisition_id));
         published_packed.store((static_cast<u64>(slot->index) << 32) | slot->slot_acquisition_id);
         pool->release_hold(slot->index);
     }
