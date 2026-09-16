@@ -11,6 +11,8 @@
 
 namespace IPC {
 
+static constexpr mach_msg_id_t STOP_LISTENER_MESSAGE_ID = 0x4C53544F;
+
 MachBootstrapListener::MachBootstrapListener(ByteString server_port_name, BootstrapRequestHandler on_bootstrap_request)
     : m_thread(Threading::Thread::construct("MachBootstrapListener"sv, [this]() -> intptr_t { thread_loop(); return 0; }))
     , m_server_port_name(move(server_port_name))
@@ -35,9 +37,24 @@ void MachBootstrapListener::start()
 
 void MachBootstrapListener::stop()
 {
-    // FIXME: We should join instead (after storing should_stop = false) when we have a way to interrupt the thread's mach_msg call
-    m_thread->detach();
-    m_should_stop.store(true, MemoryOrder::memory_order_release);
+    if (!m_thread->needs_to_be_joined())
+        return;
+
+    // The listener thread only wakes up for a message, so send it one that asks it to exit.
+    mach_msg_header_t stop_message {};
+    stop_message.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+    stop_message.msgh_size = sizeof(stop_message);
+    stop_message.msgh_remote_port = m_server_port_send_right.port();
+    stop_message.msgh_local_port = MACH_PORT_NULL;
+    stop_message.msgh_id = STOP_LISTENER_MESSAGE_ID;
+
+    auto const ret = mach_msg(&stop_message, MACH_SEND_MSG, sizeof(stop_message), 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+    if (ret != KERN_SUCCESS) {
+        dbgln("Failed to stop MachBootstrapListener: {}", mach_error_string(ret));
+        VERIFY_NOT_REACHED();
+    }
+
+    (void)m_thread->join();
 }
 
 bool MachBootstrapListener::is_initialized()
@@ -57,18 +74,20 @@ ErrorOr<void> MachBootstrapListener::allocate_server_port()
 
 void MachBootstrapListener::thread_loop()
 {
-    while (!m_should_stop.load(MemoryOrder::memory_order_acquire)) {
+    while (true) {
         ReceivedMachMessage message {};
 
         // Get the pid of the child from the audit trailer so we can associate the port w/it
         mach_msg_options_t const options = MACH_RCV_MSG | MACH_RCV_TRAILER_TYPE(MACH_RCV_TRAILER_AUDIT) | MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AUDIT);
 
-        // FIXME: How can we interrupt this call during application shutdown?
         auto const ret = mach_msg(&message.header, options, 0, sizeof(message), m_server_port_recv_right.port(), MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
         if (ret != KERN_SUCCESS) {
             dbgln("mach_msg failed: {}", mach_error_string(ret));
             break;
         }
+
+        if (message.header.msgh_id == STOP_LISTENER_MESSAGE_ID)
+            break;
 
         if (message.header.msgh_id == SELF_TASK_PORT_MESSAGE_ID) {
             auto const& task_port_message = message.body;

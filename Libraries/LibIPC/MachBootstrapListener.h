@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <AK/Atomic.h>
 #include <AK/Function.h>
 #include <AK/Platform.h>
 #include <AK/String.h>
@@ -51,8 +50,6 @@ private:
     BootstrapRequestHandler const m_on_bootstrap_request;
     Core::MachPort m_server_port_recv_right;
     Core::MachPort m_server_port_send_right;
-
-    Atomic<bool> m_should_stop { false };
 };
 
 }

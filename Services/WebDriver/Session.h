@@ -151,8 +151,9 @@ private:
     Core::EventLoop& m_event_loop;
 
 #if defined(AK_OS_MACOS)
-    OwnPtr<IPC::MachBootstrapListener> m_browser_mach_port_server;
     IPC::TransportBootstrapMachServer m_transport_bootstrap_server;
+    // Destroyed first, so its thread stops before the state its request handler uses goes away.
+    OwnPtr<IPC::MachBootstrapListener> m_browser_mach_port_server;
 #else
     RefPtr<Core::LocalServer> m_browser_server;
 #endif

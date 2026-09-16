@@ -639,9 +639,10 @@ private:
     FileDownloader m_file_downloader;
 
 #if defined(AK_OS_MACOS)
-    OwnPtr<IPC::MachBootstrapListener> m_mach_port_server;
     IPC::TransportBootstrapMachServer m_transport_bootstrap_server;
     Function<void(NonnullOwnPtr<IPC::Transport>)> m_on_browser_process_transport;
+    // Destroyed first, so its thread stops before the state its request handler uses goes away.
+    OwnPtr<IPC::MachBootstrapListener> m_mach_port_server;
 #endif
 
     OwnPtr<DevTools::DevToolsServer> m_devtools;
