@@ -362,6 +362,7 @@ AK::Duration DecodedVideoProducer::ThreadData::select_fast_seek_target(AK::Durat
 
 void DecodedVideoProducer::ThreadData::register_decode_thread()
 {
+    auto locker = take_lock();
     VERIFY(!m_decode_thread_id.is_valid());
     m_decode_thread_id = AK::ThreadID::current();
 }
