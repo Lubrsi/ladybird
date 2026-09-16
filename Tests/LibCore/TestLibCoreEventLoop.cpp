@@ -261,4 +261,30 @@ TEST_CASE(repeated_signal_deliveries_are_preserved)
     EXPECT_EQ(handled_count, signal_count);
     Core::EventLoop::unregister_signal(handler_id);
 }
+
+static void previous_signal_handler(int) { }
+
+TEST_CASE(unregistering_the_last_signal_handler_restores_the_previous_action)
+{
+    Core::EventLoop event_loop;
+
+    struct sigaction previous_action {};
+    previous_action.sa_handler = previous_signal_handler;
+    sigemptyset(&previous_action.sa_mask);
+    struct sigaction saved_action {};
+    VERIFY(sigaction(SIGWINCH, &previous_action, &saved_action) == 0);
+
+    auto handler_id = Core::EventLoop::register_signal(SIGWINCH, [](int) { });
+    struct sigaction installed_action {};
+    VERIFY(sigaction(SIGWINCH, nullptr, &installed_action) == 0);
+    EXPECT(installed_action.sa_handler != previous_signal_handler);
+    EXPECT(installed_action.sa_flags & SA_RESTART);
+
+    Core::EventLoop::unregister_signal(handler_id);
+    struct sigaction restored_action {};
+    VERIFY(sigaction(SIGWINCH, nullptr, &restored_action) == 0);
+    EXPECT(restored_action.sa_handler == previous_signal_handler);
+
+    VERIFY(sigaction(SIGWINCH, &saved_action, nullptr) == 0);
+}
 #endif

@@ -378,7 +378,7 @@ public:
     }
 
     int m_signal_number;
-    void (*m_original_handler)(int); // TODO: can't use sighandler_t?
+    struct sigaction m_original_action {};
     HashMap<int, Function<void(int)>> m_handlers;
     HashMap<int, Function<void(int)>> m_handlers_pending;
     bool m_calling_handlers { false };
@@ -422,13 +422,19 @@ void EventLoopManagerUnix::dispatch_pending_signals()
 
 SignalHandlers::SignalHandlers(int signal_number, void (*handle_signal)(int))
     : m_signal_number(signal_number)
-    , m_original_handler(signal(signal_number, handle_signal))
 {
+    // ThreadSanitizer on macOS only defers handlers installed with sigaction(), so the handler never runs while its
+    // runtime holds a lock on the interrupted thread.
+    struct sigaction action {};
+    action.sa_handler = handle_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    MUST(System::sigaction(signal_number, &action, &m_original_action));
 }
 
 SignalHandlers::~SignalHandlers()
 {
-    signal(m_signal_number, m_original_handler);
+    MUST(System::sigaction(m_signal_number, &m_original_action, nullptr));
 }
 
 void SignalHandlers::dispatch()
