@@ -14,6 +14,7 @@ set(TEST_SOURCES
     TestDump.cpp
     TestEventLoop.cpp
     TestFetchEngineMessages.cpp
+    TestFetchExecutor.cpp
     TestFetchResponse.cpp
     TestFetchURL.cpp
     TestForceDarkImageFilter.cpp
@@ -76,6 +77,7 @@ target_link_libraries(BenchmarkDisplayListRecording PRIVATE LibGC LibGfx LibIPC 
 target_link_libraries(TestAudioWorkletPipe PRIVATE LibCore LibThreading)
 target_link_libraries(TestContentBlocker PRIVATE LibURL)
 target_link_libraries(TestFetchEngineMessages PRIVATE LibCore LibIPC LibRequests)
+target_link_libraries(TestFetchExecutor PRIVATE LibCore LibIPC LibThreading)
 if (NOT WIN32)
     target_link_libraries(TestCSSSyntaxParser PRIVATE LibThreading)
 endif()
