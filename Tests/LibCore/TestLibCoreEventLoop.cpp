@@ -14,7 +14,9 @@
 #include <LibThreading/Thread.h>
 
 #if !defined(AK_OS_WINDOWS)
+#    include <LibCore/Notifier.h>
 #    include <LibCore/System.h>
+#    include <fcntl.h>
 #    include <pthread.h>
 #    include <signal.h>
 #endif
@@ -286,5 +288,42 @@ TEST_CASE(unregistering_the_last_signal_handler_restores_the_previous_action)
     EXPECT(restored_action.sa_handler == previous_signal_handler);
 
     VERIFY(sigaction(SIGWINCH, &saved_action, nullptr) == 0);
+}
+
+// Unregistering a notifier from another thread and from a signal handler must take the event loop's locks in the
+// same order.
+TEST_CASE(signal_handler_unregisters_a_notifier)
+{
+    Core::EventLoop event_loop;
+
+    auto pipe_fds = MUST(Core::System::pipe2(O_CLOEXEC));
+    auto notifier_disabled_by_handler = Core::Notifier::construct(pipe_fds[0], Core::Notifier::Type::Read);
+    auto notifier_disabled_by_thread = Core::Notifier::construct(pipe_fds[1], Core::Notifier::Type::Write);
+
+    IGNORE_USE_IN_ESCAPING_LAMBDA bool handled = false;
+    auto handler_id = Core::EventLoop::register_signal(SIGUSR1, [&](int) {
+        notifier_disabled_by_handler->set_enabled(false);
+        handled = true;
+    });
+
+    auto thread = Threading::Thread::construct("Unregister"sv, [&]() -> intptr_t {
+        notifier_disabled_by_thread->set_enabled(false);
+        VERIFY(pthread_kill(pthread_self(), SIGUSR1) == 0);
+        return 0;
+    });
+    thread->start();
+    MUST(thread->join());
+
+    for (int i = 0; i < 400 && !handled; ++i) {
+        (void)event_loop.pump(Core::EventLoop::WaitMode::PollForEvents);
+        MUST(Core::System::sleep_ms(5));
+    }
+
+    EXPECT(handled);
+    Core::EventLoop::unregister_signal(handler_id);
+    notifier_disabled_by_handler->close();
+    notifier_disabled_by_thread->close();
+    MUST(Core::System::close(pipe_fds[0]));
+    MUST(Core::System::close(pipe_fds[1]));
 }
 #endif

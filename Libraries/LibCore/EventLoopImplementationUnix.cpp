@@ -305,8 +305,12 @@ try_select_again:
             VERIFY_NOT_REACHED();
         }
         VERIFY(nread > 0);
-        if (thread_data.wake_pipe_fds[1] == s_signal_wake_pipe_write_fd.load(AK::MemoryOrder::memory_order_acquire))
+        if (thread_data.wake_pipe_fds[1] == s_signal_wake_pipe_write_fd.load(AK::MemoryOrder::memory_order_acquire)) {
+            // A handler may take the thread-data lock, which is never taken under this mutex.
+            locker.unlock();
             dispatch_pending_signals();
+            locker.lock();
+        }
     }
 
     if (error_or_marked_fd_count.value() != 0) {
