@@ -28,7 +28,10 @@ class RequestClient;
 class ResponseData {
 public:
     static ResponseData from_bytes(ReadonlyBytes bytes) { return ResponseData { bytes }; }
-    static ResponseData from_immutable_bytes(Core::ImmutableBytes bytes) { return ResponseData { move(bytes) }; }
+    static ResponseData from_file_backed_payload(Core::ImmutableBytes const& payload, size_t offset, size_t length)
+    {
+        return ResponseData { payload.slice(offset, length), payload };
+    }
 
     [[nodiscard]] ReadonlyBytes bytes() const
     {
@@ -38,19 +41,24 @@ public:
     }
     [[nodiscard]] Optional<Core::ImmutableBytes> const& immutable_bytes() const { return m_immutable_bytes; }
 
+    // The whole mapped body these bytes are part of.
+    [[nodiscard]] Optional<Core::ImmutableBytes> const& file_backed_payload() const { return m_file_backed_payload; }
+
 private:
     explicit ResponseData(ReadonlyBytes bytes)
         : m_bytes(bytes)
     {
     }
 
-    explicit ResponseData(Core::ImmutableBytes bytes)
+    ResponseData(Core::ImmutableBytes bytes, Core::ImmutableBytes file_backed_payload)
         : m_immutable_bytes(move(bytes))
+        , m_file_backed_payload(move(file_backed_payload))
     {
     }
 
     ReadonlyBytes m_bytes;
     Optional<Core::ImmutableBytes> m_immutable_bytes;
+    Optional<Core::ImmutableBytes> m_file_backed_payload;
 };
 
 class ReadStream {
@@ -150,6 +158,10 @@ private:
     void attach_read_stream();
     void set_up_internal_stream_data(DataReceived on_data_available);
     void defer_teardown();
+    void account_body_delivery(size_t byte_count);
+    [[nodiscard]] bool has_undelivered_file_backed_bytes() const;
+    void deliver_file_backed_payload();
+    void schedule_file_backed_delivery();
 
     WeakPtr<RequestClient> m_client;
     u64 m_request_id { 0 };
@@ -201,6 +213,8 @@ private:
         Function<void()> on_finish {};
         bool user_finish_called { false };
         Optional<Core::ImmutableBytes> file_backed_payload;
+        size_t file_backed_delivery_offset { 0 };
+        bool file_backed_delivery_scheduled { false };
         Optional<Core::ImmutableBytes> cached_payload;
         Optional<size_t> body_delivery_remaining_byte_count;
     };
