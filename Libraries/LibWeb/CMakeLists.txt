@@ -400,11 +400,14 @@ set(SOURCES
     EventTiming/PerformanceEventTiming.cpp
     Fetch/Body.cpp
     Fetch/BodyInit.cpp
+    Fetch/Engine/FetchBodyDeliveryGate.cpp
     Fetch/Engine/FetchByteChannel.cpp
     Fetch/Engine/FetchExecutor.cpp
     Fetch/Engine/InlineFetchExecutor.cpp
+    Fetch/Fetching/BodyStreamPullSource.cpp
     Fetch/Fetching/Checks.cpp
     Fetch/Fetching/FetchedDataReceiver.cpp
+    Fetch/Fetching/NetworkBodyPump.cpp
     Fetch/Fetching/Fetching.cpp
     Fetch/Fetching/PendingResponse.cpp
     Fetch/Fetching/RefCountedFlag.cpp
