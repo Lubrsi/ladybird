@@ -73,6 +73,14 @@ ErrorOr<ByteBuffer> ImmutableBytes::copy_to_byte_buffer() const
     return ByteBuffer::copy(bytes());
 }
 
+ImmutableBytes ImmutableBytes::slice(size_t offset, size_t length) const
+{
+    VERIFY(offset <= size() && length <= size() - offset);
+    if (offset == 0 && length == size())
+        return *this;
+    return ImmutableBytes { adopt_ref(*new Impl(m_impl->slice(offset, length))) };
+}
+
 ImmutableBytes::ImmutableBytes(NonnullRefPtr<Impl> impl)
     : m_impl(move(impl))
 {
@@ -98,6 +106,11 @@ ImmutableBytes::Impl::Impl(AnonymousBuffer buffer)
 {
 }
 
+ImmutableBytes::Impl::Impl(Slice slice)
+    : m_storage(move(slice))
+{
+}
+
 ImmutableBytes::Impl::ReadonlyMapping::~ReadonlyMapping()
 {
     if (data)
@@ -106,11 +119,15 @@ ImmutableBytes::Impl::ReadonlyMapping::~ReadonlyMapping()
 
 bool ImmutableBytes::Impl::is_file_backed() const
 {
+    if (auto const* slice = m_storage.get_pointer<Slice>())
+        return slice->storage->is_file_backed();
     return m_storage.has<NonnullOwnPtr<MappedFile>>();
 }
 
 bool ImmutableBytes::Impl::is_readonly_mapped() const
 {
+    if (auto const* slice = m_storage.get_pointer<Slice>())
+        return slice->storage->is_readonly_mapped();
     return m_storage.has<ReadonlyMapping>();
 }
 
@@ -128,7 +145,17 @@ ReadonlyBytes ImmutableBytes::Impl::bytes() const
         },
         [](AnonymousBuffer const& buffer) -> ReadonlyBytes {
             return buffer.bytes();
+        },
+        [](Slice const& slice) -> ReadonlyBytes {
+            return slice.storage->bytes().slice(slice.offset, slice.length);
         });
+}
+
+ImmutableBytes::Impl::Slice ImmutableBytes::Impl::slice(size_t offset, size_t length)
+{
+    if (auto const* inner = m_storage.get_pointer<Slice>())
+        return { inner->storage, inner->offset + offset, length };
+    return { *this, offset, length };
 }
 
 }
