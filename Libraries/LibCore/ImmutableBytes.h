@@ -41,9 +41,18 @@ public:
     [[nodiscard]] ReadonlyBytes bytes() const LIFETIME_BOUND;
     [[nodiscard]] ErrorOr<ByteBuffer> copy_to_byte_buffer() const;
 
+    // A view of part of the same storage, which it keeps alive.
+    [[nodiscard]] ImmutableBytes slice(size_t offset, size_t length) const;
+
 private:
     class Impl final : public AtomicRefCounted<Impl> {
     public:
+        struct Slice {
+            NonnullRefPtr<Impl> storage;
+            size_t offset { 0 };
+            size_t length { 0 };
+        };
+
         struct ReadonlyMapping {
             AK_MAKE_NONCOPYABLE(ReadonlyMapping);
 
@@ -68,13 +77,15 @@ private:
         explicit Impl(NonnullOwnPtr<MappedFile>);
         explicit Impl(ReadonlyMapping);
         explicit Impl(AnonymousBuffer);
+        explicit Impl(Slice);
 
         [[nodiscard]] bool is_file_backed() const;
         [[nodiscard]] bool is_readonly_mapped() const;
         [[nodiscard]] ReadonlyBytes bytes() const LIFETIME_BOUND;
+        [[nodiscard]] Slice slice(size_t offset, size_t length);
 
     private:
-        Variant<ByteBuffer, NonnullOwnPtr<MappedFile>, ReadonlyMapping, AnonymousBuffer> m_storage;
+        Variant<ByteBuffer, NonnullOwnPtr<MappedFile>, ReadonlyMapping, AnonymousBuffer, Slice> m_storage;
     };
 
     explicit ImmutableBytes(NonnullRefPtr<Impl>);
