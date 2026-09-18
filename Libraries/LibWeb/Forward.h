@@ -590,6 +590,14 @@ class Response;
 
 }
 
+namespace Web::Fetch::Engine {
+
+class FetchBodyDeliveryGate;
+class FetchByteChannel;
+class WholeBodyTransport;
+
+}
+
 namespace Web::Fetch::Fetching {
 
 class PendingResponse;

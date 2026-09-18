@@ -4,28 +4,105 @@
     // A navigation response that dies mid-body must not satisfy the MIME-sniff wait with its
     // partial bytes: no document may be created from the truncated body, and the navigation
     // settles without one.
-    asyncTest(async done => {
-        const server = httpTestServer();
-        const body = "<!DOCTYPE html><span id='partial'>partial</span>" + "x".repeat(967);
-        const url = await server.createEcho("GET", "/mid-body-navigation-failure", {
-            status: 200,
-            headers: {
-                "Content-Length": "100000",
-                "Content-Type": "text/html",
-            },
-            body,
-        });
+
+    // Runs on a hostname of its own, in a process apart from the test page.
+    async function checkFailedNavigationSettles(urls) {
+        const output = [];
+        const println = line => output.push(line);
+
+        const countBodyCells = () => {
+            const counts = { pumps: 0, pullSources: 0 };
+            for (const cell of Object.values(JSON.parse(internals.dumpGCGraph()))) {
+                if (cell.class_name === "NetworkBodyPump")
+                    ++counts.pumps;
+                else if (cell.class_name === "BodyStreamPullSource")
+                    ++counts.pullSources;
+            }
+            return counts;
+        };
+
+        // A stale pointer on the stack can keep a cell alive through one conservative collection.
+        const waitForRelease = async initial => {
+            let counts;
+            for (let attempt = 0; attempt < 20; ++attempt) {
+                await internals.gcAsync();
+                counts = countBodyCells();
+                if (counts.pumps === initial.pumps && counts.pullSources === initial.pullSources)
+                    return "released";
+            }
+            return `left ${counts.pumps - initial.pumps} pumps and ${counts.pullSources - initial.pullSources} pull sources`;
+        };
+
+        await internals.gcAsync();
+        const initial = countBodyCells();
 
         const frame = document.createElement("iframe");
         let loaded = false;
         frame.addEventListener("load", () => (loaded = true));
-        frame.src = `${url}?chunks=512,503&chunk_delay_ms=100`;
-        document.body.appendChild(frame);
+        frame.src = urls.failing;
+        document.body.append(frame);
 
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        // The body is held after its first chunk, and ends short once it is let go.
+        while (countBodyCells().pumps === initial.pumps)
+            await new Promise(resolve => setTimeout(resolve, 0));
+        await fetch(urls.unblock);
+
+        println(`body of the failed navigation: ${await waitForRelease(initial)}`);
         println(`iframe produced a document from the partial body: ${loaded}`);
         const stayed = frame.contentDocument !== null && frame.contentDocument.querySelector("#partial") === null;
         println(`iframe stayed on its initial document: ${stayed}`);
-        done();
+        return output;
+    }
+
+    promiseTest(async () => {
+        const hostname = uniqueLocalhostHostname("mid-body-navigation-failure");
+        const server = httpTestServer();
+
+        const token = `mid-body-failure-${crypto.randomUUID()}`;
+        const failing = new URL(await server.createEcho("GET", `/mid-body-navigation-failure-${crypto.randomUUID()}`, {
+            status: 200,
+            headers: {
+                "Cache-Control": "no-store",
+                "Content-Length": "100000",
+                "Content-Type": "text/html",
+            },
+            body: "<!DOCTYPE html><span id='partial'>partial</span>" + "x".repeat(967),
+        }));
+        failing.hostname = hostname;
+        failing.search = `?chunks=512,503&chunk_unblock_tokens=${token}`;
+        const unblock = new URL(`/unblock/${token}`, failing);
+
+        const urls = { failing: failing.href, unblock: unblock.href };
+        const checker = new URL(await server.createEcho("GET", `/mid-body-failure-checker-${crypto.randomUUID()}`, {
+            status: 200,
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/html" },
+            body: `<!DOCTYPE html><body><script>
+                (${checkFailedNavigationSettles.toString()})(${JSON.stringify(urls)}).then(
+                    output => parent.postMessage({ output }, "*"),
+                    error => parent.postMessage({ error: String(error) }, "*"));
+            <\/script>`,
+        }));
+        checker.hostname = hostname;
+
+        const frame = document.createElement("iframe");
+        const result = new Promise(resolve => {
+            window.addEventListener("message", function receive(event) {
+                if (event.source !== frame.contentWindow)
+                    return;
+                window.removeEventListener("message", receive);
+                resolve(event.data);
+            });
+        });
+        frame.src = checker;
+        document.body.append(frame);
+        try {
+            const { output, error } = await result;
+            if (error)
+                throw new Error(error);
+            for (const line of output)
+                println(line);
+        } finally {
+            frame.remove();
+        }
     });
 </script>
