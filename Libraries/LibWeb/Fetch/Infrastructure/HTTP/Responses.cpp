@@ -124,7 +124,9 @@ void Response::resume_body_delivery() const
 {
     release_request_transfer_lease();
     if (m_request_server_request.has_value()) {
-        if (m_request_server_request->request)
+        if (m_request_server_request->body_delivery_gate)
+            m_request_server_request->body_delivery_gate->release_hold();
+        else if (m_request_server_request->request)
             m_request_server_request->request->resume_body_delivery();
     }
 }
@@ -132,7 +134,9 @@ void Response::resume_body_delivery() const
 void Response::resume_body_delivery_up_to(size_t byte_count) const
 {
     if (m_request_server_request.has_value()) {
-        if (m_request_server_request->request)
+        if (m_request_server_request->body_delivery_gate)
+            m_request_server_request->body_delivery_gate->release_hold_up_to(byte_count);
+        else if (m_request_server_request->request)
             m_request_server_request->request->resume_body_delivery_up_to(byte_count);
     }
 }

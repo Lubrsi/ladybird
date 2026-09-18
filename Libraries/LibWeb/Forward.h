@@ -615,8 +615,17 @@ class Response;
 
 }
 
+namespace Web::Fetch::Engine {
+
+class FetchBodyDeliveryGate;
+class FetchByteChannel;
+
+}
+
 namespace Web::Fetch::Fetching {
 
+class BodyStreamPullSource;
+class NetworkBodyPump;
 class PendingResponse;
 class RefCountedFlag;
 
