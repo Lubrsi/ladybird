@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // Body bytes and the close reach the stream from queued tasks, one per delivery, so a read's
+    // reaction and anything it queues run before the next chunk's delivery task, and the close
+    // follows the last bytes through the same queue. The chunks arrive 300 ms apart, so a timer a
+    // reaction queues fires before the next delivery.
+    asyncTest(async done => {
+        const httpServer = httpTestServer();
+        const body = "A".repeat(16) + "B".repeat(16) + "C".repeat(16);
+
+        const url = await httpServer.createEcho("GET", "/delivery-order", {
+            status: 200,
+            headers: {
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/octet-stream",
+            },
+            body,
+        });
+
+        const response = await fetch(`${url}?chunks=16,16,16&chunk_delay_ms=300`);
+        const reader = response.body.getReader();
+        const events = [];
+        const chunks = [];
+        for (;;) {
+            const { value, done: streamDone } = await reader.read();
+            if (streamDone) {
+                events.push("close");
+                break;
+            }
+            const index = chunks.push(new TextDecoder().decode(value));
+            events.push(`read ${index}`);
+            queueMicrotask(() => events.push(`microtask after read ${index}`));
+            setTimeout(() => events.push(`timer after read ${index}`), 0);
+        }
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        const position = event => events.indexOf(event);
+        const beforeNextRead = kind => chunks.every((_, i) => i + 1 === chunks.length || position(`${kind} after read ${i + 1}`) < position(`read ${i + 2}`));
+
+        println(`reads resolve in chunk order: ${chunks.join("") === body && chunks.every((chunk, i) => chunk[0] === "ABC"[i])}`);
+        println(`a read's microtask ran before the next read resolved: ${beforeNextRead("microtask")}`);
+        println(`a read's timer fired before the next read resolved: ${beforeNextRead("timer")}`);
+        println(`close followed the last bytes: ${position("close") > position(`microtask after read ${chunks.length}`)}`);
+
+        done();
+    });
+</script>
