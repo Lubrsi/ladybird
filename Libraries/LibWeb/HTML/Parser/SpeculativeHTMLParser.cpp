@@ -133,7 +133,7 @@ void issue_speculative_fetch(JS::Realm& realm, DOM::Document& document, URL::URL
     auto request = create_potential_CORS_request(url, destination, cors_setting);
     request->set_client(&document.relevant_settings_object());
 
-    Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input {};
+    Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input { Fetch::Engine::BodyIntent::DrainAndDiscard };
     auto algorithms = Fetch::Infrastructure::FetchAlgorithms::create(move(fetch_algorithms_input));
 
     // The fetch stays alive via ResourceLoader's GC::Root callbacks for the duration of the
@@ -192,7 +192,7 @@ void issue_speculative_module_fetch(DOM::Document& document, URL::URL const& url
     request->set_initiator_type(Fetch::Infrastructure::Request::InitiatorType::Script);
     set_up_module_script_request(request, options);
 
-    Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input {};
+    Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input { Fetch::Engine::BodyIntent::DrainAndDiscard };
     auto algorithms = Fetch::Infrastructure::FetchAlgorithms::create(move(fetch_algorithms_input));
     (void)Fetch::Fetching::fetch(settings_object.realm(), request, algorithms);
 }
