@@ -147,7 +147,7 @@ void FetchController::stop_fetch()
     });
 
     if (m_fetch_params) {
-        auto fetch_algorithms = FetchAlgorithms::create({});
+        auto fetch_algorithms = FetchAlgorithms::create(FetchAlgorithms::Input { m_fetch_params->algorithms()->body_intent() });
         m_fetch_params->set_algorithms(fetch_algorithms);
     }
 
