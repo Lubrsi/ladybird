@@ -50,7 +50,7 @@
                 type: "modulepreload-csp-results",
                 importRejected,
                 linkEvent: await linkEvent,
-                speculativeRequestCount: performance.getEntriesByName(${JSON.stringify(moduleURL.href)}).length,
+                speculativeRequestCount: performance.getEntriesByName(${JSON.stringify(moduleURL.href)}).filter(entry => entry.responseStatus === 200).length,
             }, "*");
         `;
         const pageBody = `<!DOCTYPE html>

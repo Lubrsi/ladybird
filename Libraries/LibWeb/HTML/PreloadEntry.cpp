@@ -111,14 +111,16 @@ bool consume_a_preloaded_resource(
 
         // AD-HOC: A consumer on a parallel queue has its event loop paused while it waits (sync XHR send()) — so the
         //         preload's fetch, whose response is otherwise handed over thru event-loop tasks, could never deliver.
-        //         Move it onto a parallel queue of its own: fetch response handover then reads its body and runs its
-        //         algorithms without the event loop, as it does for the consumer. Gecko too lets a sync XHR consume an
-        //         in-flight preload (XMLHttpRequestMainThread::FindPreload, FetchPreloader::AsyncConsume); Blink never
-        //         reuses a resource for a sync request (Resource::CanReuse), and WebKit's sync load bypasses its cache
-        //         and preloads (DocumentThreadableLoader::loadRequest).
+        //         Move it onto a parallel queue of its own, with the consumer's body intent: fetch response handover
+        //         then reads its body and runs its algorithms without the event loop, as it does for the consumer.
+        //         Gecko too lets a sync XHR consume an in-flight preload (XMLHttpRequestMainThread::FindPreload,
+        //         FetchPreloader::AsyncConsume); Blink never reuses a resource for a sync request (Resource::CanReuse),
+        //         and WebKit's sync load bypasses its cache and preloads (DocumentThreadableLoader::loadRequest).
         if (consumer_task_destination.has<NonnullRefPtr<ParallelQueue>>() && entry->controller) {
-            if (auto fetch_params = entry->controller->fetch_params())
+            if (auto fetch_params = entry->controller->fetch_params()) {
                 fetch_params->set_task_destination(ParallelQueue::create());
+                fetch_params->set_algorithms(fetch_params->algorithms()->with_body_intent(Fetch::Engine::BodyIntent::SyncAccumulate));
+            }
         }
     }
     // 10. Otherwise, call onResponseAvailable with entry's response.
