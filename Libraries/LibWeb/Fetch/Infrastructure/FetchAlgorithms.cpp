@@ -35,6 +35,18 @@ GC::Ref<FetchAlgorithms> FetchAlgorithms::create(JS::VM&, Input input)
     return create(move(input));
 }
 
+GC::Ref<FetchAlgorithms> FetchAlgorithms::with_body_intent(Engine::BodyIntent body_intent) const
+{
+    return GC::Heap::the().allocate<FetchAlgorithms>(
+        body_intent,
+        m_process_request_body_chunk_length,
+        m_process_request_end_of_body,
+        m_process_early_hints_response,
+        m_process_response,
+        m_process_response_end_of_body,
+        m_process_response_consume_body);
+}
+
 FetchAlgorithms::FetchAlgorithms(
     Engine::BodyIntent body_intent,
     ProcessRequestBodyChunkLengthHeapFunction process_request_body_chunk_length,
