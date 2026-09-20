@@ -95,7 +95,7 @@ void FetchedDataReceiver::handle_network_data(JS::Realm& realm, Requests::Respon
 
     // Capture bytes for MIME sniffing
     if (m_body) {
-        if (auto const& payload = data.file_backed_payload(); payload.has_value() && m_body->source().has<Empty>())
+        if (auto const& payload = data.file_backed_payload(); payload.has_value() && !m_body->source().has_value())
             m_body->set_source(*payload, static_cast<u64>(payload->size()));
         m_body->append_sniff_bytes(bytes);
     } else if (m_pre_body_sniff_buffer.size() < Infrastructure::MAX_SNIFF_BYTES) {
