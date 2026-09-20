@@ -992,8 +992,8 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
         //    response and nullOrBytes.
         auto process_body = GC::create_function(GC::Heap::the(), [algorithms, &response](ByteBuffer bytes) {
             if (response.body()) {
-                if (auto const* source_bytes = response.body()->source().get_pointer<Core::ImmutableBytes>()) {
-                    (algorithms->process_response_consume_body())(response, *source_bytes);
+                if (auto const& source = response.body()->source(); source.has_value()) {
+                    (algorithms->process_response_consume_body())(response, *source);
                     return;
                 }
             }
@@ -1040,18 +1040,9 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
             // NB: A body that carries its full contents as an in-memory source (data: URLs, cached responses, and such)
             //     is read from that directly: Its stream may be populated thru the event loop (Blob::get_stream()
             //     enqueues from a queued global task, e.g.) — which can't happen while the loop is paused.
-            if (auto const& source = internal_response->body()->source(); !source.has<Empty>()) {
-                // NB: process_body() re-reads response.body()->source() and, when it is Core::ImmutableBytes, uses
-                //     that directly and ignores the bytes passed here — so copying it would be pure waste.
-                if (source.has<Core::ImmutableBytes>()) {
-                    success_steps->function()({});
-                } else {
-                    auto bytes = source.visit(
-                        [](ByteBuffer const& byte_buffer) { return MUST(ByteBuffer::copy(byte_buffer)); },
-                        [](GC::Ref<FileAPI::Blob> const& blob) { return MUST(ByteBuffer::copy(blob->raw_bytes())); },
-                        [](auto const&) -> ByteBuffer { VERIFY_NOT_REACHED(); });
-                    success_steps->function()(move(bytes));
-                }
+            if (internal_response->body()->source().has_value()) {
+                // NB: process_body() reads the body's source itself and ignores the bytes passed here.
+                success_steps->function()({});
             } else {
                 auto reader = internal_response->body()->stream()->get_a_reader();
                 if (reader.is_exception()) {
@@ -1630,7 +1621,7 @@ GC::Ptr<PendingResponse> http_redirect_fetch(JS::Realm& realm, Infrastructure::F
     //     return a network error.
     if (internal_response->status() != 303
         && !request->body().has<Empty>()
-        && request->body().get<GC::Ref<Infrastructure::Body>>()->source().has<Empty>()) {
+        && !request->body().get<GC::Ref<Infrastructure::Body>>()->source().has_value()) {
         return PendingResponse::create(request, Infrastructure::Response::network_error("Request has body but no body source"_string));
     }
 
@@ -1672,14 +1663,7 @@ GC::Ptr<PendingResponse> http_redirect_fetch(JS::Realm& realm, Infrastructure::F
     //     request’s body’s source.
     // NOTE: request’s body’s source’s nullity has already been checked.
     if (!request->body().has<Empty>()) {
-        auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
-        // NOTE: BodyInitOrReadableBytes is a superset of Body::SourceType
-        auto converted_source = source.visit(
-            [](ByteBuffer const& byte_buffer) -> BodyInitOrReadableBytes { return byte_buffer.bytes(); },
-            [](Core::ImmutableBytes const& bytes) -> BodyInitOrReadableBytes { return bytes; },
-            [](GC::Ref<FileAPI::Blob> blob) -> BodyInitOrReadableBytes { return blob; },
-            [](Empty) -> BodyInitOrReadableBytes { VERIFY_NOT_REACHED(); });
-        auto [body, _] = safely_extract_body(realm, converted_source);
+        auto [body, _] = safely_extract_body(realm, *request->body().get<GC::Ref<Infrastructure::Body>>()->source());
         request->set_body(body);
     }
 
@@ -2124,20 +2108,14 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
             // 2. If request’s body is non-null, then:
             if (!request->body().has<Empty>()) {
                 // 1. If request’s body’s source is null, then return a network error.
-                if (request->body().get<GC::Ref<Infrastructure::Body>>()->source().has<Empty>()) {
+                auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
+                if (!source.has_value()) {
                     returned_pending_response->resolve(Infrastructure::Response::network_error("Request has body but no body source"_string));
                     return;
                 }
 
                 // 2. Set request’s body to the body of the result of safely extracting request’s body’s source.
-                auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
-                // NOTE: BodyInitOrReadableBytes is a superset of Body::SourceType
-                auto converted_source = source.visit(
-                    [](ByteBuffer const& byte_buffer) -> BodyInitOrReadableBytes { return byte_buffer.bytes(); },
-                    [](Core::ImmutableBytes const& bytes) -> BodyInitOrReadableBytes { return bytes; },
-                    [](GC::Ref<FileAPI::Blob> blob) -> BodyInitOrReadableBytes { return blob; },
-                    [](Empty) -> BodyInitOrReadableBytes { VERIFY_NOT_REACHED(); });
-                auto [body, _] = safely_extract_body(realm, converted_source);
+                auto [body, _] = safely_extract_body(realm, *source);
                 request->set_body(body);
             }
 
@@ -2199,7 +2177,7 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
                 // - isNewConnectionFetch is false
                 && is_new_connection_fetch == IsNewConnectionFetch::No
                 // - request’s body is null, or request’s body is non-null and request’s body’s source is non-null
-                && (request->body().has<Empty>() || !request->body().get<GC::Ref<Infrastructure::Body>>()->source().has<Empty>())
+                && (request->body().has<Empty>() || request->body().get<GC::Ref<Infrastructure::Body>>()->source().has_value())
                 // then:
             ) {
                 // 1. If fetchParams is canceled, then return the appropriate network error for fetchParams.
@@ -2298,18 +2276,8 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     load_request.set_source_url(content_blocker_source_url_for_request(*request));
 
     if (auto const* body = request->body().get_pointer<GC::Ref<Infrastructure::Body>>()) {
-        (*body)->source().visit(
-            [&](ByteBuffer const& byte_buffer) {
-                load_request.set_body(MUST(ByteBuffer::copy(byte_buffer)));
-            },
-            [&](Core::ImmutableBytes const& bytes) {
-                load_request.set_body(MUST(bytes.copy_to_byte_buffer()));
-            },
-            [&](GC::Ref<FileAPI::Blob> const& blob) {
-                load_request.set_body(MUST(ByteBuffer::copy(blob->raw_bytes())));
-            },
-            [](Empty) {
-            });
+        if (auto const& source = (*body)->source(); source.has_value())
+            load_request.set_body(MUST(source->copy_to_byte_buffer()));
     }
 
     auto pending_response = PendingResponse::create(request);

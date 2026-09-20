@@ -141,11 +141,11 @@ static WebIDL::ExceptionOr<GC::Ref<DOM::Document>> load_html_document(HTML::Navi
     //        reaches readyState="interactive". A spec-aligned fix would split "what the parent sees via
     //        contentDocument" from the navigable's active document, swapping the parent-visible pointer only at
     //        parser readiness.
-    else if (auto const* data = navigation_params.response->body()->source().get_pointer<ByteBuffer>();
-        data && document->url() == URL::about_srcdoc()) {
+    else if (auto const& source = navigation_params.response->body()->source();
+        source.has_value() && document->url() == URL::about_srcdoc()) {
         auto mime_type = Fetch::Infrastructure::extract_mime_type(navigation_params.response->header_list());
         auto url = navigation_params.response->url().value();
-        auto parser = HTML::HTMLParser::create_with_uncertain_encoding(document, *data, mime_type);
+        auto parser = HTML::HTMLParser::create_with_uncertain_encoding(document, source->bytes(), mime_type);
         document->set_deferred_parser_start(GC::create_function(GC::Heap::the(), [parser, url] {
             parser->run(url);
         }));
