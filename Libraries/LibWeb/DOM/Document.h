@@ -913,8 +913,8 @@ public:
     void set_active_sandboxing_flag_set(HTML::SandboxingFlagSet);
 
     // https://html.spec.whatwg.org/multipage/dom.html#concept-document-policy-container
-    GC::Ref<HTML::PolicyContainer> policy_container() const;
-    void set_policy_container(GC::Ref<HTML::PolicyContainer>);
+    NonnullRefPtr<HTML::PolicyContainer> policy_container() const;
+    void set_policy_container(NonnullRefPtr<HTML::PolicyContainer>);
 
     Vector<GC::Root<HTML::Navigable>> descendant_navigables();
     Vector<GC::Root<HTML::Navigable>> const descendant_navigables() const;
@@ -1824,7 +1824,7 @@ private:
     HTML::SandboxingFlagSet m_active_sandboxing_flag_set;
 
     // https://html.spec.whatwg.org/multipage/dom.html#concept-document-policy-container
-    mutable GC::Ptr<HTML::PolicyContainer> m_policy_container;
+    mutable RefPtr<HTML::PolicyContainer> m_policy_container;
 
     // https://html.spec.whatwg.org/multipage/interaction.html#visibility-state
     HTML::VisibilityState m_visibility_state { HTML::VisibilityState::Hidden };

@@ -108,7 +108,7 @@ ErrorOr<GC::Ref<SVGDecodedImageData>> SVGDecodedImageData::create(GC::Ref<Page> 
         HTML::OpenerPolicyEnforcementResult { .url = url, .origin = origin, .opener_policy = HTML::OpenerPolicy {} },
         nullptr,
         origin,
-        heap.allocate<HTML::PolicyContainer>(heap),
+        HTML::PolicyContainer::create(),
         HTML::SandboxingFlagSet {},
         ReferrerPolicy::ReferrerPolicy::EmptyString,
         HTML::OpenerPolicy {},
