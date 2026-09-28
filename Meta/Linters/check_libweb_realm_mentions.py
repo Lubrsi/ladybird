@@ -39,7 +39,7 @@ ALLOWED_REALM_MENTIONS = {
     "CSS": (7, 19, "CSS Typed OM, parser-facing reification, and style-value JS materialization"),
     "Clipboard": (4, 16, "clipboard item/data callbacks still materialize JS values in caller-selected realms"),
     "Compression": (4, 8, "compression streams still use realms for stream/chunk conversion plumbing"),
-    "ContentSecurityPolicy": (4, 14, "CSP violation/report objects and callbacks still materialize JS-facing values"),
+    "ContentSecurityPolicy": (4, 10, "CSP violation/report objects and callbacks still materialize JS-facing values"),
     "CookieStore": (2, 19, "cookie-store async callbacks and promise/value materialization still thread realms"),
     "Crypto": (8, 385, "WebCrypto algorithms still use realms for buffer/key/promise materialization"),
     "DOM": (10, 33, "DOM abort plumbing and node helpers still have callback/materialization realm use"),
