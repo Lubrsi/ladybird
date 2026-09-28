@@ -38,6 +38,7 @@ set(SOURCES
     Compression/CompressionStream.cpp
     Compression/DecompressionStream.cpp
     ContentSecurityPolicy/BlockingAlgorithms.cpp
+    ContentSecurityPolicy/FetchIntegration.cpp
     ContentSecurityPolicy/Directives/Directive.cpp
     ContentSecurityPolicy/Directives/DirectiveOperations.cpp
     ContentSecurityPolicy/Directives/FetchIntegration.cpp
@@ -831,6 +832,7 @@ set(SOURCES
     Speech/SpeechSynthesis.cpp
     Speech/SpeechSynthesisUtterance.cpp
     Speech/SpeechSynthesisVoice.cpp
+    SRI/IntegrityPolicy.cpp
     SRI/SRI.cpp
     StorageAPI/NavigatorStorage.cpp
     StorageAPI/StorageBottle.cpp
