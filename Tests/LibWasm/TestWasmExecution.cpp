@@ -1301,6 +1301,87 @@ TEST_CASE(native_direct_call_falls_back_for_imported_callee)
     EXPECT_EQ(result.values()[0].to<i32>(), 10);
 }
 
+TEST_CASE(native_import_call_passes_arguments_at_every_arity)
+{
+    auto file = MUST(Core::File::open("Fixtures/native-import-arguments.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+    for (auto const& function : module->code_section().functions())
+        expect_direct_frontend(function.func().body().compiled_instructions);
+
+    Wasm::ValueType const i32_type { Wasm::ValueType::I32 };
+    Wasm::ValueType const i64_type { Wasm::ValueType::I64 };
+    Wasm::ValueType const f32_type { Wasm::ValueType::F32 };
+    Wasm::ValueType const f64_type { Wasm::ValueType::F64 };
+
+    Vector<Vector<Wasm::Value>> received;
+    auto allocate_host = [&](Vector<Wasm::ValueType> parameters, Wasm::ValueType result_type, Wasm::Value result) {
+        auto address = machine.store().allocate(Wasm::HostFunction {
+            [&received, result](Wasm::Configuration&, Span<Wasm::Value> arguments) -> Wasm::Result {
+                received.append({});
+                received.last().append(arguments.data(), arguments.size());
+                return Wasm::Result { Vector<Wasm::Value> { result } };
+            },
+            Wasm::FunctionType { move(parameters), { result_type } },
+            "host" });
+        VERIFY(address.has_value());
+        return Wasm::ExternValue { *address };
+    };
+
+    Vector<Wasm::ExternValue> imports;
+    imports.append(allocate_host({}, i32_type, Wasm::Value(static_cast<i32>(-3))));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type }, i64_type, Wasm::Value(static_cast<i64>(-5000000000))));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type, f64_type }, f64_type, Wasm::Value(-2.75)));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type, f64_type, i32_type, i64_type, f32_type, f64_type }, f32_type, Wasm::Value(0.5f)));
+    auto instance = MUST(machine.instantiate(*module, move(imports)));
+
+    auto invoke = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        auto result = machine.invoke(*address, {});
+        EXPECT(!result.is_trap());
+        EXPECT_EQ(result.values().size(), 1u);
+        return result.values()[0];
+    };
+
+    EXPECT_EQ(invoke("call_none"sv).to<i32>(), -3);
+    EXPECT_EQ(invoke("call_three"sv).to<i64>(), -5000000000);
+    EXPECT_EQ(invoke("call_four"sv).to<double>(), -2.75);
+    EXPECT_EQ(invoke("call_eight"sv).to<float>(), 0.5f);
+
+    VERIFY(received.size() == 4);
+    EXPECT(received[0].is_empty());
+
+    EXPECT_EQ(received[1].size(), 3u);
+    EXPECT_EQ(received[1][0].to<i32>(), -7);
+    EXPECT_EQ(received[1][1].to<i64>(), 0x123456789);
+    EXPECT_EQ(received[1][2].to<float>(), -1.5f);
+
+    EXPECT_EQ(received[2].size(), 4u);
+    EXPECT_EQ(received[2][0].to<i32>(), -7);
+    EXPECT_EQ(received[2][1].to<i64>(), -2);
+    EXPECT_EQ(received[2][2].to<float>(), 0.25f);
+    EXPECT_EQ(received[2][3].to<double>(), 1e300);
+
+    EXPECT_EQ(received[3].size(), 8u);
+    EXPECT_EQ(received[3][0].to<i32>(), 1);
+    EXPECT_EQ(received[3][1].to<i64>(), -1);
+    EXPECT_EQ(received[3][2].to<float>(), 2.5f);
+    EXPECT_EQ(received[3][3].to<double>(), -0.5);
+    EXPECT_EQ(received[3][4].to<i32>(), NumericLimits<i32>::min());
+    EXPECT_EQ(received[3][5].to<i64>(), 9007199254740993);
+    EXPECT_EQ(bit_cast<u32>(received[3][6].to<float>()), 0x80000000u);
+    EXPECT_EQ(received[3][7].to<double>(), 3.25);
+}
+
 TEST_CASE(native_direct_call_restores_context_after_trap)
 {
     auto file = MUST(Core::File::open("Fixtures/call-record-native-trap.wasm"sv, Core::File::OpenMode::Read));

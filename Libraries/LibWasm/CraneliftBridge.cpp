@@ -412,7 +412,7 @@ static size_t compiler_instruction_count(BatchInput const& input)
 // any rebuild that changes those will simply miss the cache rather than try to
 // execute incompatible bytes.
 constexpr u64 cache_blob_magic = 0x4354494A4D534157ULL; // "WASMJITC" little-endian
-constexpr u32 cache_blob_format_version = 34;
+constexpr u32 cache_blob_format_version = 35;
 
 struct CacheBlobHeader {
     u64 magic;
@@ -529,7 +529,7 @@ static u64 compute_layout_hash(RuntimeLayout const& layout)
 }
 
 using RuntimeHelperAddresses = Array<size_t, HELPER_COUNT>;
-static_assert(HELPER_COUNT == 18);
+static_assert(HELPER_COUNT == 15);
 static_assert(sizeof(CraneliftRelocation) == 32);
 
 static Optional<FlatPtr> apply_addend(FlatPtr target, i64 addend)
@@ -1381,43 +1381,13 @@ static ALWAYS_INLINE i32 wasm_cl_direct_call_impl(BytecodeInterpreter& interpret
     return wasm_cl_run_compiled(interpreter, config, entry, callee_locals);
 }
 
-i32 wasm_cl_direct_call_0(void* interp_ptr, void* config_ptr, i32 func_index);
-i32 wasm_cl_direct_call_0(void* interp_ptr, void* config_ptr, i32 func_index)
+i32 wasm_cl_direct_call(void* interp_ptr, void* config_ptr, i32 func_index, Value* args, u32 arg_count);
+i32 wasm_cl_direct_call(void* interp_ptr, void* config_ptr, i32 func_index, Value* args, u32 arg_count)
 {
     auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
     auto& config = *static_cast<Configuration*>(config_ptr);
     CompiledCallerContext caller_context { config };
-    return wasm_cl_direct_call_impl(interpreter, config, func_index, nullptr, 0);
-}
-
-i32 wasm_cl_direct_call_1(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0);
-i32 wasm_cl_direct_call_1(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0)
-{
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    auto& config = *static_cast<Configuration*>(config_ptr);
-    CompiledCallerContext caller_context { config };
-    Value args[] = { Value(arg0) };
-    return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 1);
-}
-
-i32 wasm_cl_direct_call_2(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0, i64 arg1);
-i32 wasm_cl_direct_call_2(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0, i64 arg1)
-{
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    auto& config = *static_cast<Configuration*>(config_ptr);
-    CompiledCallerContext caller_context { config };
-    Value args[] = { Value(arg0), Value(arg1) };
-    return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 2);
-}
-
-i32 wasm_cl_direct_call_3(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0, i64 arg1, i64 arg2);
-i32 wasm_cl_direct_call_3(void* interp_ptr, void* config_ptr, i32 func_index, i64 arg0, i64 arg1, i64 arg2)
-{
-    auto& interpreter = *static_cast<BytecodeInterpreter*>(interp_ptr);
-    auto& config = *static_cast<Configuration*>(config_ptr);
-    CompiledCallerContext caller_context { config };
-    Value args[] = { Value(arg0), Value(arg1), Value(arg2) };
-    return wasm_cl_direct_call_impl(interpreter, config, func_index, args, 3);
+    return wasm_cl_direct_call_impl(interpreter, config, func_index, args, arg_count);
 }
 }
 
@@ -1430,10 +1400,7 @@ static RuntimeHelperAddresses make_runtime_helper_addresses()
     addresses[to_underlying(HelperId::memory_size)] = bit_cast<uintptr_t>(&wasm_cl_memory_size);
     addresses[to_underlying(HelperId::memory_grow)] = bit_cast<uintptr_t>(&wasm_cl_memory_grow);
     addresses[to_underlying(HelperId::call_with_record)] = bit_cast<uintptr_t>(&wasm_cl_call_with_record);
-    addresses[to_underlying(HelperId::direct_call_0)] = bit_cast<uintptr_t>(&wasm_cl_direct_call_0);
-    addresses[to_underlying(HelperId::direct_call_1)] = bit_cast<uintptr_t>(&wasm_cl_direct_call_1);
-    addresses[to_underlying(HelperId::direct_call_2)] = bit_cast<uintptr_t>(&wasm_cl_direct_call_2);
-    addresses[to_underlying(HelperId::direct_call_3)] = bit_cast<uintptr_t>(&wasm_cl_direct_call_3);
+    addresses[to_underlying(HelperId::direct_call)] = bit_cast<uintptr_t>(&wasm_cl_direct_call);
     addresses[to_underlying(HelperId::call_indirect)] = bit_cast<uintptr_t>(&wasm_cl_call_indirect);
     addresses[to_underlying(HelperId::memory_copy)] = bit_cast<uintptr_t>(&wasm_cl_memory_copy);
     addresses[to_underlying(HelperId::memory_fill)] = bit_cast<uintptr_t>(&wasm_cl_memory_fill);

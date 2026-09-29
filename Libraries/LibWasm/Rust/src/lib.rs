@@ -214,23 +214,20 @@ pub enum HelperId {
     memory_size = 1,
     memory_grow = 2,
     call_with_record = 3,
-    direct_call_0 = 4,
-    direct_call_1 = 5,
-    direct_call_2 = 6,
-    direct_call_3 = 7,
-    call_indirect = 8,
-    memory_copy = 9,
-    memory_fill = 10,
-    primitive_storage_cage_base = 11,
-    call_indirect_with_record = 12,
-    stack_exhaustion = 13,
-    raise_trap = 14,
-    check_indirect_type = 15,
-    current_interpreter = 16,
-    call_indirect_with_function_reference_result = 17,
+    direct_call = 4,
+    call_indirect = 5,
+    memory_copy = 6,
+    memory_fill = 7,
+    primitive_storage_cage_base = 8,
+    call_indirect_with_record = 9,
+    stack_exhaustion = 10,
+    raise_trap = 11,
+    check_indirect_type = 12,
+    current_interpreter = 13,
+    call_indirect_with_function_reference_result = 14,
 }
 
-pub const HELPER_COUNT: u32 = 18;
+pub const HELPER_COUNT: u32 = 15;
 pub const SERIALIZED_CODE_ALIGNMENT: usize = 16;
 
 /// Ladybird-specific Cranelift trap codes. The numeric values are embedded in generated code and
