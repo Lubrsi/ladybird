@@ -10,6 +10,7 @@
 #include <AK/Forward.h>
 #include <AK/HashTable.h>
 #include <AK/NonnullRefPtr.h>
+#include <AK/ScopeGuard.h>
 #include <AK/Utf16FlyString.h>
 #include <AK/Utf16View.h>
 #include <LibCrypto/Forward.h>
@@ -121,6 +122,32 @@ struct EvalDeclarationData {
 };
 
 ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, EvalDeclarationData&, Environment* variable_environment, Environment* lexical_environment, PrivateEnvironment* private_environment, bool strict);
+
+// Calls function with argument_count arguments that write_arguments stores directly into the callee's frame.
+// The frame is not yet visible to the garbage collector, so write_arguments must not allocate.
+template<typename WriteArguments>
+ALWAYS_INLINE ThrowCompletionOr<Value> call_with_argument_writer(VM& vm, FunctionObject& function, Value this_value, size_t argument_count, WriteArguments&& write_arguments)
+{
+    size_t registers_and_locals_count = 0;
+    ReadonlySpan<Value> constants;
+    size_t frame_argument_count = argument_count;
+    function.get_stack_frame_info(registers_and_locals_count, constants, frame_argument_count);
+
+    auto& stack = vm.interpreter_stack();
+    auto* stack_mark = stack.top();
+    auto* callee_context = stack.allocate(registers_and_locals_count, constants, frame_argument_count);
+    if (!callee_context) [[unlikely]]
+        return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
+    ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
+
+    auto* argument_values = callee_context->arguments_data();
+    write_arguments(Span<Value> { argument_values, argument_count });
+    for (size_t i = argument_count; i < frame_argument_count; ++i)
+        argument_values[i] = js_undefined();
+    callee_context->passed_argument_count = argument_count;
+
+    return function.internal_call(*callee_context, this_value);
+}
 
 // 7.3.14 Call ( F, V [ , argumentsList ] ), https://tc39.es/ecma262/#sec-call
 ALWAYS_INLINE ThrowCompletionOr<Value> call(VM& vm, Value function, Value this_value, ReadonlySpan<Value> arguments_list)

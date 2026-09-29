@@ -88,27 +88,10 @@ ThrowCompletionOr<Value> call_impl(VM& vm, Value function, Value this_value, Rea
         return vm.throw_completion<TypeError>(ErrorType::NotAFunction, function);
 
     // 3. Return ? F.[[Call]](V, argumentsList).
-    auto& function_object = function.as_function();
-    size_t registers_and_locals_count = 0;
-    ReadonlySpan<Value> constants;
-    size_t argument_count = arguments_list.size();
-    function_object.get_stack_frame_info(registers_and_locals_count, constants, argument_count);
-
-    auto& stack = vm.interpreter_stack();
-    auto* stack_mark = stack.top();
-    auto* callee_context = stack.allocate(registers_and_locals_count, constants, argument_count);
-    if (!callee_context) [[unlikely]]
-        return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
-    ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
-
-    auto* argument_values = callee_context->arguments_data();
-    for (size_t i = 0; i < arguments_list.size(); ++i)
-        argument_values[i] = arguments_list[i];
-    for (size_t i = arguments_list.size(); i < argument_count; ++i)
-        argument_values[i] = js_undefined();
-    callee_context->passed_argument_count = arguments_list.size();
-
-    return function_object.internal_call(*callee_context, this_value);
+    return call_with_argument_writer(vm, function.as_function(), this_value, arguments_list.size(), [&](Span<Value> arguments) {
+        for (size_t i = 0; i < arguments_list.size(); ++i)
+            arguments[i] = arguments_list[i];
+    });
 }
 
 ThrowCompletionOr<Value> call_impl(VM& vm, FunctionObject& function, Value this_value, ReadonlySpan<Value> arguments_list)
@@ -119,26 +102,10 @@ ThrowCompletionOr<Value> call_impl(VM& vm, FunctionObject& function, Value this_
     // Note: Called with a FunctionObject ref
 
     // 3. Return ? F.[[Call]](V, argumentsList).
-    size_t registers_and_locals_count = 0;
-    ReadonlySpan<Value> constants;
-    size_t argument_count = arguments_list.size();
-    function.get_stack_frame_info(registers_and_locals_count, constants, argument_count);
-
-    auto& stack = vm.interpreter_stack();
-    auto* stack_mark = stack.top();
-    auto* callee_context = stack.allocate(registers_and_locals_count, constants, argument_count);
-    if (!callee_context) [[unlikely]]
-        return vm.throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
-    ScopeGuard deallocate_guard = [&stack, stack_mark] { stack.deallocate(stack_mark); };
-
-    auto* argument_values = callee_context->arguments_data();
-    for (size_t i = 0; i < arguments_list.size(); ++i)
-        argument_values[i] = arguments_list[i];
-    for (size_t i = arguments_list.size(); i < argument_count; ++i)
-        argument_values[i] = js_undefined();
-    callee_context->passed_argument_count = arguments_list.size();
-
-    return function.internal_call(*callee_context, this_value);
+    return call_with_argument_writer(vm, function, this_value, arguments_list.size(), [&](Span<Value> arguments) {
+        for (size_t i = 0; i < arguments_list.size(); ++i)
+            arguments[i] = arguments_list[i];
+    });
 }
 
 // 7.3.15 Construct ( F [ , argumentsList [ , newTarget ] ] ), https://tc39.es/ecma262/#sec-construct
