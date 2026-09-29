@@ -1288,6 +1288,14 @@ TEST_CASE(native_direct_call_falls_back_for_imported_callee)
     VERIFY(sum.has_value());
 
     auto instance = MUST(machine.instantiate(*module, { *sum }));
+    auto const* sum_callable = machine.store().get_callable(*sum);
+    VERIFY(sum_callable);
+    EXPECT(sum_callable->host_function_provenance.has_value());
+    EXPECT_EQ(sum_callable->host_function_provenance.value(), Wasm::HostFunctionProvenance::Native);
+
+    auto const& callable_entries = instance->compiled_fn_table(machine.store());
+    EXPECT_EQ(callable_entries[0].host_callable, sum_callable);
+
     Optional<Wasm::FunctionAddress> run;
     for (auto const& export_ : instance->exports()) {
         if (export_.name() == "run"sv)

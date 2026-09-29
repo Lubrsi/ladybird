@@ -287,6 +287,7 @@ Wasm::HostFunction create_host_function(JS::Realm& realm, JS::FunctionObject& fu
         },
         type,
         ByteString::number(function_index),
+        Wasm::HostFunctionProvenance::JavaScript,
     };
 }
 

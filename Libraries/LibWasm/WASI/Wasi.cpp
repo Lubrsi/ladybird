@@ -1060,7 +1060,8 @@ struct InvocationOf<impl> {
                 move(arguments_types),
                 return_ty,
             },
-            function_name);
+            function_name,
+            HostFunctionProvenance::WASI);
     }
 };
 

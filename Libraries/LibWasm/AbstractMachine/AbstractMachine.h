@@ -389,6 +389,7 @@ class ModuleInstance;
 class TableInstance;
 class MemoryInstance;
 class GlobalInstance;
+struct CallableMetadata;
 
 using TableInstanceTable = TableInstance**;
 using MemoryInstanceTable = MemoryInstance**;
@@ -399,7 +400,12 @@ struct CompiledFunctionEntry {
     FlatPtr handler_ptr { 0 };    // 0 = not compiled, use slow path
     FlatPtr dispatches_ptr { 0 }; // Dispatch const*
     FlatPtr src_dst_ptr { 0 };    // SourcesAndDestination const*
-    Instruction const* first_insn { nullptr };
+    // Published Wasm entries have a non-null module and use first_insn; host entries use host_callable.
+    // Unpublished Wasm entries have both module and first_insn null, so module alone does not identify hosts.
+    union {
+        Instruction const* first_insn { nullptr };
+        CallableMetadata const* host_callable;
+    };
     Expression const* expression { nullptr };
     ModuleInstance const* module { nullptr };
     u32 total_local_count { 0 };
@@ -535,18 +541,26 @@ private:
     CodeSection::Code const* m_code;
 };
 
+enum class HostFunctionProvenance : u8 {
+    Native,
+    JavaScript,
+    WASI,
+};
+
 class HostFunction {
 public:
-    explicit HostFunction(AK::Function<Result(Configuration&, Span<Value>)> function, FunctionType const& type, ByteString name)
+    explicit HostFunction(AK::Function<Result(Configuration&, Span<Value>)> function, FunctionType const& type, ByteString name, HostFunctionProvenance provenance = HostFunctionProvenance::Native)
         : m_function(move(function))
         , m_type(type)
         , m_name(move(name))
+        , m_provenance(provenance)
     {
     }
 
     auto& function() { return m_function; }
     auto& type() const { return m_type; }
     auto& name() const { return m_name; }
+    auto provenance() const { return m_provenance; }
 
     // Interned on the store.
     DefinedType const* defined_type() const { return m_defined_type; }
@@ -557,6 +571,7 @@ private:
     FunctionType m_type;
     DefinedType const* m_defined_type { nullptr };
     ByteString m_name;
+    HostFunctionProvenance m_provenance { HostFunctionProvenance::Native };
 };
 
 using FunctionInstance = Variant<WasmFunction, HostFunction>;
@@ -570,6 +585,7 @@ struct CallableMetadata {
     CompiledInstructions const* compiled_instructions { nullptr };
     u32 parameter_count { 0 };
     u32 result_count { 0 };
+    Optional<HostFunctionProvenance> host_function_provenance;
 
     static constexpr size_t defined_type_offset() { return __builtin_offsetof(CallableMetadata, defined_type); }
     static constexpr size_t module_offset() { return __builtin_offsetof(CallableMetadata, module); }

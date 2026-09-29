@@ -534,8 +534,10 @@ void ModuleInstance::initialize_compiled_fn_table(Store& store) const
     for (size_t i = 0; i < count; i++) {
         auto* instance = store.unsafe_get(m_functions[i]);
         auto* wasm_fn = instance->get_pointer<WasmFunction>();
-        if (!wasm_fn)
+        if (!wasm_fn) {
+            m_compiled_fn_table[i].host_callable = store.unsafe_get_callable(m_functions[i]);
             continue;
+        }
 
         auto module = wasm_fn->module_ref();
         if (!module)
@@ -637,6 +639,7 @@ Optional<FunctionAddress> Store::allocate(ModuleInstance& instance, Module const
         .compiled_instructions = &code.func().body().compiled_instructions,
         .parameter_count = static_cast<u32>(type.parameters().size()),
         .result_count = static_cast<u32>(type.results().size()),
+        .host_function_provenance = {},
     }));
     return address;
 }
@@ -649,12 +652,14 @@ Optional<FunctionAddress> Store::allocate(HostFunction&& function)
     auto const* defined_type = function.defined_type();
     auto parameter_count = static_cast<u32>(function.type().parameters().size());
     auto result_count = static_cast<u32>(function.type().results().size());
+    auto provenance = function.provenance();
     m_functions.empend(HostFunction { move(function) });
     m_callable_metadata.append(make<CallableMetadata>(CallableMetadata {
         .address = address,
         .defined_type = defined_type,
         .parameter_count = parameter_count,
         .result_count = result_count,
+        .host_function_provenance = provenance,
     }));
     return address;
 }

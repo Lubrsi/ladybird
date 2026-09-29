@@ -619,6 +619,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
                 },
                 function_type,
                 name,
+                Wasm::HostFunctionProvenance::JavaScript,
             };
             auto host_function_instance = machine.store().allocate(move(host_function));
             if (!host_function_instance.has_value()) {
