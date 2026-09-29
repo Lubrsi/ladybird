@@ -1288,6 +1288,12 @@ TEST_CASE(native_direct_call_falls_back_for_imported_callee)
     VERIFY(sum.has_value());
 
     auto instance = MUST(machine.instantiate(*module, { *sum }));
+    auto const* sum_callable = machine.store().get_callable(*sum);
+    VERIFY(sum_callable);
+
+    auto const& callable_entries = instance->compiled_fn_table(machine.store());
+    EXPECT_EQ(callable_entries[0].host_callable, sum_callable);
+
     Optional<Wasm::FunctionAddress> run;
     for (auto const& export_ : instance->exports()) {
         if (export_.name() == "run"sv)
@@ -1380,6 +1386,102 @@ TEST_CASE(native_import_call_passes_arguments_at_every_arity)
     EXPECT_EQ(received[3][5].to<i64>(), 9007199254740993);
     EXPECT_EQ(bit_cast<u32>(received[3][6].to<float>()), 0x80000000u);
     EXPECT_EQ(received[3][7].to<double>(), 3.25);
+}
+
+TEST_CASE(native_import_call_uses_host_call_entry)
+{
+    auto file = MUST(Core::File::open("Fixtures/native-import-arguments.wasm"sv, Core::File::OpenMode::Read));
+    auto bytes = MUST(file->read_until_eof());
+    FixedMemoryStream stream { bytes.bytes() };
+    auto module = MUST(Wasm::Module::parse(stream));
+
+    Wasm::AbstractMachine machine;
+    MUST(machine.validate(*module));
+
+    struct RecordingState final : public Wasm::HostCallState {
+        explicit RecordingState(Wasm::Value result)
+            : result(result)
+        {
+        }
+
+        Wasm::Value result;
+        Vector<Vector<Wasm::Value>> received;
+        bool trap_next_call { false };
+    };
+
+    Wasm::HostCallEntry const entry = [](Wasm::Configuration&, Wasm::HostCallState& host_state, ReadonlySpan<Wasm::Value> arguments, Wasm::Value& result) -> ErrorOr<void, Wasm::Trap> {
+        auto& state = static_cast<RecordingState&>(host_state);
+        if (state.trap_next_call)
+            return Wasm::Trap::from_string("host entry trap");
+        state.received.append({});
+        state.received.last().append(arguments.data(), arguments.size());
+        result = state.result;
+        return {};
+    };
+
+    Wasm::ValueType const i32_type { Wasm::ValueType::I32 };
+    Wasm::ValueType const i64_type { Wasm::ValueType::I64 };
+    Wasm::ValueType const f32_type { Wasm::ValueType::F32 };
+    Wasm::ValueType const f64_type { Wasm::ValueType::F64 };
+
+    size_t generic_calls = 0;
+    Vector<RecordingState*> states;
+    Vector<Wasm::FunctionAddress> host_addresses;
+    auto allocate_host = [&](Vector<Wasm::ValueType> parameters, Wasm::ValueType result_type, Wasm::Value result) {
+        Wasm::HostFunction host_function {
+            [&generic_calls, result](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
+                ++generic_calls;
+                return Wasm::Result { Vector<Wasm::Value> { result } };
+            },
+            Wasm::FunctionType { move(parameters), { result_type } },
+            "host"
+        };
+        auto state = make<RecordingState>(result);
+        states.append(state.ptr());
+        host_function.set_call_entry(entry, move(state));
+        auto address = machine.store().allocate(move(host_function));
+        VERIFY(address.has_value());
+        host_addresses.append(*address);
+        return Wasm::ExternValue { *address };
+    };
+
+    Vector<Wasm::ExternValue> imports;
+    imports.append(allocate_host({}, i32_type, Wasm::Value(static_cast<i32>(-3))));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type }, i64_type, Wasm::Value(static_cast<i64>(-5000000000))));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type, f64_type }, f64_type, Wasm::Value(-2.75)));
+    imports.append(allocate_host({ i32_type, i64_type, f32_type, f64_type, i32_type, i64_type, f32_type, f64_type }, f32_type, Wasm::Value(0.5f)));
+    auto instance = MUST(machine.instantiate(*module, move(imports)));
+
+    auto invoke = [&](StringView name) {
+        Optional<Wasm::FunctionAddress> address;
+        for (auto const& export_ : instance->exports()) {
+            if (export_.name() == name)
+                address = export_.value().get<Wasm::FunctionAddress>();
+        }
+        VERIFY(address.has_value());
+        return machine.invoke(*address, {});
+    };
+
+    EXPECT_EQ(invoke("call_none"sv).values()[0].to<i32>(), -3);
+    EXPECT_EQ(invoke("call_four"sv).values()[0].to<double>(), -2.75);
+    EXPECT_EQ(generic_calls, 0u);
+    EXPECT_EQ(states[0]->received.size(), 1u);
+    EXPECT_EQ(states[2]->received.size(), 1u);
+    EXPECT_EQ(states[2]->received[0][3].to<double>(), 1e300);
+
+    // Growing the store moves its HostFunctions, but compiled callers still reach the same state.
+    for (size_t i = 0; i < 256; ++i)
+        (void)allocate_host({}, i32_type, Wasm::Value(static_cast<i32>(0)));
+    EXPECT_EQ(invoke("call_four"sv).values()[0].to<double>(), -2.75);
+    EXPECT_EQ(states[2]->received.size(), 2u);
+    EXPECT_EQ(states[2]->received[1][0].to<i32>(), -7);
+
+    states[3]->trap_next_call = true;
+    EXPECT(invoke("call_eight"sv).is_trap());
+
+    auto direct_result = machine.invoke(host_addresses[0], {});
+    EXPECT(!direct_result.is_trap());
+    EXPECT_EQ(generic_calls, 1u);
 }
 
 TEST_CASE(native_direct_call_restores_context_after_trap)

@@ -247,9 +247,72 @@ namespace Detail {
         _temporary_result.release_value();                                                                                                              \
     })
 
+static bool is_number_type(Wasm::ValueType const& type)
+{
+    return type.kind() == Wasm::ValueType::I32 || type.kind() == Wasm::ValueType::F32 || type.kind() == Wasm::ValueType::F64;
+}
+
+static JS::Value number_to_js_value(Wasm::Value const& value, Wasm::ValueType const& type)
+{
+    switch (type.kind()) {
+    case Wasm::ValueType::I32:
+        return JS::Value(value.to<i32>());
+    case Wasm::ValueType::F64:
+        return JS::Value(value.to<double>());
+    case Wasm::ValueType::F32:
+        return JS::Value(static_cast<double>(value.to<float>()));
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+static JS::ThrowCompletionOr<Wasm::Value> number_to_webassembly_value(JS::VM& vm, JS::Value value, Wasm::ValueType const& type)
+{
+    switch (type.kind()) {
+    case Wasm::ValueType::I32:
+        return Wasm::Value { TRY(value.to_i32(vm)) };
+    case Wasm::ValueType::F64:
+        return Wasm::Value { TRY(value.to_double(vm)) };
+    case Wasm::ValueType::F32:
+        return Wasm::Value { static_cast<float>(TRY(value.to_double(vm))) };
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+namespace {
+
+struct JavaScriptHostCallState final : public Wasm::HostCallState {
+    JavaScriptHostCallState(JS::FunctionObject& function, Wasm::FunctionType const& type)
+        : function(function)
+        , type(type)
+    {
+    }
+
+    JS::FunctionObject& function;
+    Wasm::FunctionType type;
+};
+
+}
+
+static ErrorOr<void, Wasm::Trap> call_javascript_host_function(Wasm::Configuration&, Wasm::HostCallState& host_state, ReadonlySpan<Wasm::Value> arguments, Wasm::Value& result)
+{
+    auto& state = static_cast<JavaScriptHostCallState&>(host_state);
+    auto& vm = state.function.vm();
+    auto const& parameters = state.type.parameters();
+
+    auto return_value = TRY_OR_RETURN_TRAP(JS::call_with_argument_writer(vm, state.function, JS::js_undefined(), arguments.size(), [&](Span<JS::Value> js_arguments) {
+        for (size_t i = 0; i < arguments.size(); ++i)
+            js_arguments[i] = number_to_js_value(arguments[i], parameters[i]);
+    }));
+    if (!state.type.results().is_empty())
+        result = TRY_OR_RETURN_TRAP(number_to_webassembly_value(vm, return_value, state.type.results().first()));
+    return {};
+}
+
 Wasm::HostFunction create_host_function(JS::Realm& realm, JS::FunctionObject& function, Wasm::FunctionType const& type, size_t function_index)
 {
-    return Wasm::HostFunction {
+    Wasm::HostFunction host_function {
         // NOTE: `type` isn't a GC-backed reference, so copy it in instead.
         [&realm, &function, type = type](auto&, auto arguments) -> Wasm::Result {
             auto& vm = realm.vm();
@@ -288,6 +351,11 @@ Wasm::HostFunction create_host_function(JS::Realm& realm, JS::FunctionObject& fu
         type,
         ByteString::number(function_index),
     };
+
+    // Number conversions cannot allocate, which writing arguments straight into the callee's frame requires.
+    if (all_of(type.parameters(), is_number_type) && type.results().size() <= 1 && all_of(type.results(), is_number_type))
+        host_function.set_call_entry(call_javascript_host_function, make<JavaScriptHostCallState>(function, type));
+    return host_function;
 }
 
 JS::ThrowCompletionOr<NonnullRefPtr<Wasm::ModuleInstance>> instantiate_module(JS::Realm& realm, Wasm::Module const& module, GC::Ptr<JS::Object> import_object)
@@ -816,18 +884,10 @@ JS::ThrowCompletionOr<Wasm::Value> to_webassembly_value(JS::Realm& realm, JS::Va
         auto bigint = TRY(value.to_bigint(vm));
         return Wasm::Value { bigint->big_integer().to_i64() };
     }
-    case Wasm::ValueType::I32: {
-        auto _i32 = TRY(value.to_i32(vm));
-        return Wasm::Value { static_cast<i32>(_i32) };
-    }
-    case Wasm::ValueType::F64: {
-        auto number = TRY(value.to_double(vm));
-        return Wasm::Value { static_cast<double>(number) };
-    }
-    case Wasm::ValueType::F32: {
-        auto number = TRY(value.to_double(vm));
-        return Wasm::Value { static_cast<float>(number) };
-    }
+    case Wasm::ValueType::I32:
+    case Wasm::ValueType::F64:
+    case Wasm::ValueType::F32:
+        return number_to_webassembly_value(vm, value, type);
     case Wasm::ValueType::FunctionReference: {
         if (value.is_null())
             return Wasm::Value(Wasm::ValueType { Wasm::ValueType::Kind::FunctionReference });
@@ -916,11 +976,9 @@ JS::Value to_js_value(JS::Realm& realm, Wasm::Value& wasm_value, Wasm::ValueType
     case Wasm::ValueType::I64:
         return realm.create<JS::BigInt>(::Crypto::SignedBigInteger { wasm_value.to<i64>() });
     case Wasm::ValueType::I32:
-        return JS::Value(wasm_value.to<i32>());
     case Wasm::ValueType::F64:
-        return JS::Value(wasm_value.to<double>());
     case Wasm::ValueType::F32:
-        return JS::Value(static_cast<double>(wasm_value.to<float>()));
+        return number_to_js_value(wasm_value, type);
     case Wasm::ValueType::FunctionReference: {
         auto ref_ = wasm_value.to<Wasm::Reference>();
         if (ref_.ref().has<Wasm::Reference::Null>())

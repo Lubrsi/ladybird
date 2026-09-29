@@ -1355,15 +1355,33 @@ static NEVER_INLINE COLD i32 wasm_cl_direct_call_fallback(BytecodeInterpreter& i
     return wasm_cl_finish_call(interpreter, config, address, args, arg_count);
 }
 
+static ALWAYS_INLINE i32 wasm_cl_call_host_entry(BytecodeInterpreter& interpreter, Configuration& config, CallableMetadata const& callable, Value* args, size_t arg_count)
+{
+    if (interpreter.trap_if_insufficient_native_stack_space())
+        return 1;
+
+    auto result = callable.host_call_entry(config, *callable.host_call_state, { args, arg_count }, config.compiled_call_result_scratch());
+    if (result.is_error()) {
+        interpreter.set_trap(result.release_error());
+        return 1;
+    }
+    return 0;
+}
+
 // Direct compiled-to-compiled call. Falls back to wasm_cl_finish_call for non-compiled targets.
 static ALWAYS_INLINE i32 wasm_cl_direct_call_impl(BytecodeInterpreter& interpreter, Configuration& config, i32 func_index, Value* args, size_t arg_count)
 {
     auto const* table = config.current_compiled_fn_table();
     auto index = static_cast<size_t>(func_index);
-    if (!table || index >= table->size() || !(*table)[index].module) [[unlikely]]
+    if (!table || index >= table->size()) [[unlikely]]
         return wasm_cl_direct_call_fallback(interpreter, config, func_index, args, arg_count);
 
     auto const& entry = (*table)[index];
+    if (!entry.module) {
+        if (entry.host_callable && entry.host_callable->host_call_entry)
+            return wasm_cl_call_host_entry(interpreter, config, *entry.host_callable, args, arg_count);
+        return wasm_cl_direct_call_fallback(interpreter, config, func_index, args, arg_count);
+    }
 
     if (config.depth() > 500) [[unlikely]] {
         interpreter.set_trap(Constants::stack_exhaustion_message);

@@ -95,6 +95,8 @@
 #include <LibWeb/Painting/Scrolling.h>
 #include <LibWeb/ResizeObserver/ResizeObserver.h>
 #include <LibWeb/StyleValueRustFFI.h>
+#include <LibWeb/WebAssembly/Module.h>
+#include <LibWeb/WebAssembly/WebAssembly.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
 #include <LibWeb/WebIDL/Promise.h>
 #include <LibWeb/WebSockets/WebSocket.h>
@@ -434,6 +436,13 @@ bool Internals::has_activity_root(JS::Object& object)
     if (auto* web_socket = Bindings::impl_from<WebSockets::WebSocket>(&object))
         return web_socket->has_activity_root();
     return false;
+}
+
+void Internals::wait_for_web_assembly_compilation(JS::Object& object)
+{
+    // Compiles on this thread unless the background compilation has already started, in which case this waits for it.
+    if (auto* module = Bindings::impl_from<WebAssembly::Module>(&object))
+        Wasm::start_cranelift_compilation(*module->compiled_module()->module);
 }
 
 WebIDL::UnsignedLongLong Internals::message_port_pending_outgoing_message_count(HTML::MessagePort& port)

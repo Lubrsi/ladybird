@@ -389,6 +389,7 @@ class ModuleInstance;
 class TableInstance;
 class MemoryInstance;
 class GlobalInstance;
+struct CallableMetadata;
 
 using TableInstanceTable = TableInstance**;
 using MemoryInstanceTable = MemoryInstance**;
@@ -399,7 +400,12 @@ struct CompiledFunctionEntry {
     FlatPtr handler_ptr { 0 };    // 0 = not compiled, use slow path
     FlatPtr dispatches_ptr { 0 }; // Dispatch const*
     FlatPtr src_dst_ptr { 0 };    // SourcesAndDestination const*
-    Instruction const* first_insn { nullptr };
+    // Published Wasm entries have a non-null module and use first_insn; host entries use host_callable.
+    // Unpublished Wasm entries have both module and first_insn null, so module alone does not identify hosts.
+    union {
+        Instruction const* first_insn { nullptr };
+        CallableMetadata const* host_callable;
+    };
     Expression const* expression { nullptr };
     ModuleInstance const* module { nullptr };
     u32 total_local_count { 0 };
@@ -535,6 +541,15 @@ private:
     CodeSection::Code const* m_code;
 };
 
+class HostCallState {
+public:
+    AK_ALLOC_WITH_KMALLOC;
+
+    virtual ~HostCallState() = default;
+};
+
+using HostCallEntry = ErrorOr<void, Trap> (*)(Configuration&, HostCallState&, ReadonlySpan<Value> arguments, Value& result);
+
 class HostFunction {
 public:
     explicit HostFunction(AK::Function<Result(Configuration&, Span<Value>)> function, FunctionType const& type, ByteString name)
@@ -548,6 +563,15 @@ public:
     auto& type() const { return m_type; }
     auto& name() const { return m_name; }
 
+    // Compiled callers use the entry instead of function(), so the two must behave identically.
+    void set_call_entry(HostCallEntry entry, NonnullOwnPtr<HostCallState> state)
+    {
+        m_call_entry = entry;
+        m_call_state = move(state);
+    }
+    HostCallEntry call_entry() const { return m_call_entry; }
+    HostCallState* call_state() const { return m_call_state.ptr(); }
+
     // Interned on the store.
     DefinedType const* defined_type() const { return m_defined_type; }
     void set_defined_type(DefinedType const* defined_type) { m_defined_type = defined_type; }
@@ -557,6 +581,8 @@ private:
     FunctionType m_type;
     DefinedType const* m_defined_type { nullptr };
     ByteString m_name;
+    HostCallEntry m_call_entry { nullptr };
+    OwnPtr<HostCallState> m_call_state;
 };
 
 using FunctionInstance = Variant<WasmFunction, HostFunction>;
@@ -570,6 +596,9 @@ struct CallableMetadata {
     CompiledInstructions const* compiled_instructions { nullptr };
     u32 parameter_count { 0 };
     u32 result_count { 0 };
+    HostCallEntry host_call_entry { nullptr };
+    // Owned by the HostFunction on the heap, so it stays put when the Store's function list grows.
+    HostCallState* host_call_state { nullptr };
 
     static constexpr size_t defined_type_offset() { return __builtin_offsetof(CallableMetadata, defined_type); }
     static constexpr size_t module_offset() { return __builtin_offsetof(CallableMetadata, module); }

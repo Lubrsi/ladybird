@@ -36,6 +36,7 @@ interface Internals {
     undefined markAsGarbage(DOMString variableName);
     boolean wrapperIsPreserved(object object);
     boolean hasActivityRoot(object object);
+    undefined waitForWebAssemblyCompilation(object module);
     unsigned long long messagePortPendingOutgoingMessageCount(MessagePort port);
     unsigned long long htmlCollectionCacheGeneration(HTMLCollection collection);
     undefined failNextMessagePortTransfer(MessagePort port);

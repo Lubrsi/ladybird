@@ -1,0 +1,28 @@
+i32:
+  -1
+  2147483647
+  -2147483648
+f32:
+  -0
+  NaN
+  0.10000000149011612
+  1.5
+f64:
+  -0
+  NaN
+  1e+300
+  Infinity
+i32 result conversion:
+  1
+  7
+  0
+  2
+  valueOf called
+  5
+observe: count 3, values 3, 0.5, -0, undefined, undefined
+eight returned 42.5
+eight received -1, 0.10000000149011612, -0, -2147483648, NaN, Infinity, 7, 2.5
+thrown value is identical: true
+conversion exception is identical: true
+re-entry: 42
+after exceptions: 9
