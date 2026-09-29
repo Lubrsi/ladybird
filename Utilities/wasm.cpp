@@ -74,6 +74,13 @@ struct ParsedValue {
     Wasm::ValueType type;
 };
 
+struct NativeNoopExport {
+    ByteString module;
+    ByteString name;
+
+    bool operator==(NativeNoopExport const&) const = default;
+};
+
 static Optional<u128> convert_to_uint(StringView string)
 {
     if (string.is_empty())
@@ -352,6 +359,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Vector<StringView> args_if_wasi;
     Vector<StringView> wasi_preopened_mappings;
     HashMap<Wasm::Linker::Name, Wasm::ExternValue> js_exports;
+    Vector<NativeNoopExport> native_noop_exports;
 
     auto vm = JS::VM::create();
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
@@ -632,6 +640,30 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     });
     parser.add_option(Core::ArgsParser::Option {
         .argument_mode = Core::ArgsParser::OptionArgumentMode::Required,
+        .help_string = "Export a native noop host function as [module].[function]",
+        .long_name = "export-native-noop",
+        .short_name = 0,
+        .value_name = "module.function",
+        .accept_value = [&](StringView spec) {
+            GenericLexer lexer(spec);
+            auto module = lexer.consume_until('.');
+            if (module.is_empty() || !lexer.consume_specific('.')) {
+                warnln("Invalid native noop export module in '{}'", spec);
+                return false;
+            }
+
+            auto name = lexer.consume_all();
+            if (name.is_empty()) {
+                warnln("Invalid native noop export function in '{}'", spec);
+                return false;
+            }
+
+            native_noop_exports.append({ module, name });
+            return true;
+        },
+    });
+    parser.add_option(Core::ArgsParser::Option {
+        .argument_mode = Core::ArgsParser::OptionArgumentMode::Required,
         .help_string = "Directory mappings to expose via WASI",
         .long_name = "wasi-map-dir",
         .short_name = 0,
@@ -831,6 +863,53 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 #endif
 
         linker.link(js_exports);
+
+        if (!native_noop_exports.is_empty()) {
+            HashMap<Wasm::Linker::Name, Wasm::ExternValue> exports;
+
+            for (auto& entry : linker.unresolved_imports()) {
+                if (!native_noop_exports.contains_slow(NativeNoopExport { entry.module, entry.name }))
+                    continue;
+
+                Optional<Wasm::FunctionType> function_type;
+                entry.type.visit(
+                    [&](Wasm::TypeIndex const& type_index) {
+                        auto const& type = parse_result->type_section().types()[type_index.value()];
+                        if (type.is_function())
+                            function_type = type.function();
+                    },
+                    [&](Wasm::FunctionType const& type) {
+                        function_type = type;
+                    },
+                    [](auto const&) {});
+
+                if (!function_type.has_value()) {
+                    warnln("Native noop export '{}.{}' does not name a function import", entry.module, entry.name);
+                    return 1;
+                }
+
+                auto qualified_name = ByteString::formatted("{}.{}", entry.module, entry.name);
+                auto host_function = Wasm::HostFunction {
+                    [type = *function_type](Wasm::Configuration&, Span<Wasm::Value>) -> Wasm::Result {
+                        Vector<Wasm::Value, Wasm::ResultsStaticSize> results;
+                        results.ensure_capacity(type.results().size());
+                        for (auto const& result_type : type.results())
+                            results.unchecked_append(Wasm::Value(result_type));
+                        return Wasm::Result { move(results) };
+                    },
+                    *function_type,
+                    qualified_name,
+                };
+                auto address = machine.store().allocate(move(host_function));
+                if (!address.has_value()) {
+                    warnln("Failed to allocate native noop host function for '{}.{}'", entry.module, entry.name);
+                    return 1;
+                }
+                exports.set(entry, address.release_value());
+            }
+
+            linker.link(exports);
+        }
 
         if (export_all_imports) {
             HashMap<Wasm::Linker::Name, Wasm::ExternValue> exports;
