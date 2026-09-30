@@ -6,6 +6,7 @@
 
 #include <LibRequests/Request.h>
 #include <LibRequests/RequestClient.h>
+#include <LibRequests/RequestControlClient.h>
 #include <LibWebCommon/HTML/BrowsingContext.h>
 #include <LibWebCommon/HTML/NavigationParamsDescriptor.h>
 #include <LibWebView/Application.h>
@@ -13,6 +14,8 @@
 #include <LibWebView/CanonicalEnvironmentSettingsObject.h>
 #include <LibWebView/CanonicalWindow.h>
 #include <LibWebView/NavigationLoader.h>
+#include <LibWebView/WebContentClient.h>
+#include <LibWebView/WebContentPage.h>
 
 namespace WebView {
 
@@ -77,12 +80,26 @@ Optional<NavigationLoader::ResponseDocument> NavigationLoader::response_document
     };
 }
 
-static Web::HTML::NavigationResponseBodyHandle* response_body_handle(Web::HTML::NavigationPopulationResult& result)
+static Web::HTML::NavigationResponseBodyHandle const* response_body_handle(Web::HTML::NavigationPopulationResult const& result)
 {
     if (!result.navigation_params.has<Web::HTML::NavigationParamsDescriptor>())
         return nullptr;
-    auto& response = result.navigation_params.get<Web::HTML::NavigationParamsDescriptor>().response;
+    auto const& response = result.navigation_params.get<Web::HTML::NavigationParamsDescriptor>().response;
     return response.body.get_pointer<Web::HTML::NavigationResponseBodyHandle>();
+}
+
+static bool response_body_was_fetched_by(Web::HTML::NavigationResponseBodyHandle const& body_handle, WebContentPage const& population_worker)
+{
+    return Application::the().process_for_request_server_client(body_handle.request_server_client_id).ptr() == &population_worker.client();
+}
+
+bool NavigationLoader::response_body_belongs_to_another_process(Web::HTML::NavigationPopulationResult const& result, WebContentClient const& process)
+{
+    auto const* body_handle = response_body_handle(result);
+    if (!body_handle)
+        return false;
+    auto fetching_process = Application::the().process_for_request_server_client(body_handle->request_server_client_id);
+    return fetching_process && fetching_process.ptr() != &process;
 }
 
 NavigationLoader::~NavigationLoader()
@@ -140,7 +157,7 @@ void NavigationLoader::determine_the_origin_of_the_response()
     navigation_params->origin = Web::HTML::determine_the_origin(response_url, navigation_params->final_sandboxing_flag_set, entry.document_state.initiator_origin);
 }
 
-void NavigationLoader::acquire_response_body(Function<void(bool)> completion_steps)
+void NavigationLoader::acquire_response_body(WebContentPage const& population_worker, Function<void(bool)> completion_steps)
 {
     VERIFY(m_result.has_value());
     VERIFY(!m_response_body_request);
@@ -148,17 +165,18 @@ void NavigationLoader::acquire_response_body(Function<void(bool)> completion_ste
 
     m_completion_steps = move(completion_steps);
 
-    auto* body_handle = response_body_handle(*m_result);
+    auto const* body_handle = response_body_handle(*m_result);
     if (!body_handle) {
         did_acquire(true);
         return;
     }
+    if (!response_body_was_fetched_by(*body_handle, population_worker)) {
+        did_acquire(false);
+        return;
+    }
 
-    auto& request_client = Application::request_server_client(m_is_private);
-    auto request = request_client.adopt_request(
-        body_handle->request_server_client_id,
-        body_handle->request_server_request_id,
-        Requests::RequestClient::TransferLease::Yes);
+    // The UI process takes the body only from the client that fetched it.
+    auto request = Application::request_server_client(m_is_private).adopt_request(body_handle->request_server_client_id, body_handle->request_server_request_id, Requests::RequestClient::TransferLease::Yes, body_handle->request_server_client_id);
     if (!request) {
         did_acquire(false);
         return;
@@ -183,6 +201,38 @@ void NavigationLoader::acquire_response_body(Function<void(bool)> completion_ste
         });
 }
 
+void NavigationLoader::let_host_adopt_response_body(WebContentPage const& host, Function<void()> steps)
+{
+    VERIFY(m_result.has_value());
+    VERIFY(!m_steps_after_adopter_designation);
+
+    auto* host_process = host.routed_connection();
+    m_response_body_host = host_process;
+    if (!m_response_body_request || !host_process) {
+        steps();
+        return;
+    }
+
+    m_steps_after_adopter_designation = move(steps);
+    Requests::RequestTransferLeaseKey transfer_lease { *m_response_body_request_server_client_id, *m_response_body_request_server_request_id };
+    auto designation = Application::request_server_control_client().designate_request_adopter(transfer_lease, host_process->request_server_client_id());
+    auto weak_this = make_weak_ptr();
+    designation->when_resolved([weak_this](Empty) {
+        if (auto* loader = weak_this.ptr())
+            loader->did_designate_response_body_adopter();
+    });
+    designation->when_rejected([weak_this](Error&) {
+        if (auto* loader = weak_this.ptr())
+            loader->did_designate_response_body_adopter();
+    });
+}
+
+void NavigationLoader::did_designate_response_body_adopter()
+{
+    if (auto steps = move(m_steps_after_adopter_designation))
+        steps();
+}
+
 Web::HTML::NavigationPopulationResult NavigationLoader::take_result()
 {
     VERIFY(m_result.has_value());
@@ -197,11 +247,17 @@ bool NavigationLoader::response_body_matches(int request_server_client_id, u64 r
         && m_response_body_request_server_request_id == request_server_request_id;
 }
 
+bool NavigationLoader::response_body_was_handed_to(WebContentClient const& process) const
+{
+    return m_response_body_host.ptr() == &process;
+}
+
 void NavigationLoader::reclaim_response_body_after_failed_handoff()
 {
     if (!m_response_body_was_handed_off)
         return;
     m_response_body_was_handed_off = false;
+    m_response_body_host = nullptr;
     release_response_body();
 }
 
@@ -232,13 +288,14 @@ void NavigationLoader::set_window(CanonicalWindow const& window)
     navigation_params->agent_cluster_id = window.agent().agent_cluster_id();
 }
 
-void NavigationLoader::discard(IsPrivate is_private, Web::HTML::NavigationPopulationResult& result)
+void NavigationLoader::discard(WebContentPage const& population_worker, Web::HTML::NavigationPopulationResult& result)
 {
-    auto* body_handle = response_body_handle(result);
-    if (!body_handle)
+    auto const* body_handle = response_body_handle(result);
+    if (!body_handle || !response_body_was_fetched_by(*body_handle, population_worker))
         return;
 
-    auto request = Application::request_server_client(is_private).adopt_request(body_handle->request_server_client_id, body_handle->request_server_request_id);
+    // The UI process takes the body only from the client that fetched it.
+    auto request = Application::request_server_client(population_worker.client().is_private()).adopt_request(body_handle->request_server_client_id, body_handle->request_server_request_id, Requests::RequestClient::TransferLease::No, body_handle->request_server_client_id);
     if (request)
         request->stop();
 }

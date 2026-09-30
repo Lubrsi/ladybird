@@ -224,7 +224,7 @@ void FileDownloader::follow_download_redirect(u64 download_id, HTTP::HeaderList 
     start_download_request(download_id, redirect_url.release_value());
 }
 
-u64 FileDownloader::adopt_download(IsPrivate is_private, URL::URL const& url, LexicalPath destination, Optional<u64> total_size, int request_server_client_id, u64 request_server_request_id, ReadonlyBytes initial_data)
+u64 FileDownloader::adopt_download(IsPrivate is_private, URL::URL const& url, LexicalPath destination, Optional<u64> total_size, int request_server_client_id, u64 request_server_request_id, int owner_client_id, ReadonlyBytes initial_data)
 {
     auto download_id = start_download(is_private, url, move(destination), total_size);
     auto* active = active_download(download_id);
@@ -241,7 +241,7 @@ u64 FileDownloader::adopt_download(IsPrivate is_private, URL::URL const& url, Le
             return download_id;
     }
 
-    auto request = Application::request_server_client(is_private).adopt_request(request_server_client_id, request_server_request_id);
+    auto request = Application::request_server_client(is_private).adopt_request(request_server_client_id, request_server_request_id, Requests::RequestClient::TransferLease::No, owner_client_id);
     if (!request) {
         fail_download(download_id, "Unable to adopt request to download file"_string);
         return download_id;

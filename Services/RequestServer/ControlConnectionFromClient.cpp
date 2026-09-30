@@ -62,21 +62,21 @@ Messages::RequestServerControl::InitTransportResponse ControlConnectionFromClien
     VERIFY_NOT_REACHED();
 }
 
-ErrorOr<ControlConnectionFromClient::ClientSocket> ControlConnectionFromClient::create_client_socket(IsPrivate is_private)
+ErrorOr<ControlConnectionFromClient::ClientSocket> ControlConnectionFromClient::create_client_socket(IsPrivate is_private, ClientKind client_kind)
 {
     auto paired = TRY(IPC::Transport::create_paired());
     auto handle = move(paired.remote_handle);
     auto disk_cache = is_private == IsPrivate::Yes ? Optional<HTTP::DiskCache&> {} : m_disk_cache;
 
     // Note: A ref is stored in the m_connections map
-    auto client = adopt_ref(*new RequestServer::ConnectionFromClient(move(paired.local), is_private, m_connections, m_request_transfer_leases, disk_cache, m_alt_svc_cache_path));
+    auto client = adopt_ref(*new RequestServer::ConnectionFromClient(move(paired.local), is_private, m_connections, m_request_transfer_leases, disk_cache, m_alt_svc_cache_path, client_kind));
 
     return ClientSocket { .handle = move(handle), .client_id = client->client_id() };
 }
 
-Messages::RequestServerControl::ConnectNewClientResponse ControlConnectionFromClient::connect_new_client(IsPrivate is_private)
+Messages::RequestServerControl::ConnectNewClientResponse ControlConnectionFromClient::connect_new_client(IsPrivate is_private, ClientKind client_kind)
 {
-    auto client_socket = create_client_socket(is_private);
+    auto client_socket = create_client_socket(is_private, client_kind);
     if (client_socket.is_error()) {
         dbgln("Failed to create client socket: {}", client_socket.error());
         return { IPC::TransportHandle {}, -1 };
@@ -93,7 +93,7 @@ Messages::RequestServerControl::ConnectNewClientsResponse ControlConnectionFromC
     client_ids.ensure_capacity(count);
 
     for (size_t i = 0; i < count; ++i) {
-        auto client_socket = create_client_socket(is_private);
+        auto client_socket = create_client_socket(is_private, ClientKind::HelperProcess);
         if (client_socket.is_error()) {
             dbgln("Failed to create client socket: {}", client_socket.error());
             return { Vector<IPC::TransportHandle> {}, Vector<int> {} };
@@ -104,6 +104,14 @@ Messages::RequestServerControl::ConnectNewClientsResponse ControlConnectionFromC
     }
 
     return { move(handles), move(client_ids) };
+}
+
+void ControlConnectionFromClient::designate_request_adopter(u64 designation_id, int source_client_id, u64 source_request_id, int adopter_client_id)
+{
+    auto lease_key = Requests::RequestTransferLeaseKey { source_client_id, source_request_id };
+    if (auto lease = m_request_transfer_leases.get(lease_key); lease.has_value() && m_connections.contains(adopter_client_id))
+        lease->adopter_client_id = adopter_client_id;
+    async_request_adopter_designated(designation_id);
 }
 
 void ControlConnectionFromClient::set_disk_cache_settings(HTTP::DiskCacheSettings disk_cache_settings)

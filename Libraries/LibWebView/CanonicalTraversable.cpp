@@ -1391,7 +1391,7 @@ void CanonicalTraversable::did_finish_history_navigation_params_creation(WebCont
 {
     auto navigable_id = population.request.navigable_id;
     auto* operation = find_history_operation(operation_id);
-    auto discard = [&] { NavigationLoader::discard(source_page.client().is_private(), population.result); };
+    auto discard = [&] { NavigationLoader::discard(source_page, population.result); };
     if (!operation) {
         discard();
         return;
@@ -1406,7 +1406,7 @@ void CanonicalTraversable::did_finish_history_navigation_params_creation(WebCont
     auto& loader = job.value()->population_loader;
     loader = NavigationLoader::create(source_page.client().is_private(), move(population.request));
     loader->did_finish_navigation_params_creation(move(population.result));
-    loader->acquire_response_body([weak_this = make_weak_ptr(), operation_id, navigable_id, source_page = NonnullRefPtr<WebContentPage>(source_page)](bool succeeded) {
+    loader->acquire_response_body(source_page, [weak_this = make_weak_ptr(), operation_id, navigable_id, source_page = NonnullRefPtr<WebContentPage>(source_page)](bool succeeded) {
         if (!weak_this)
             return;
         auto& traversable = static_cast<CanonicalTraversable&>(*weak_this);
@@ -1475,10 +1475,26 @@ void CanonicalTraversable::continue_history_navigation_population(Web::HTML::Cro
     }
     add_history_operation_completion_endpoint(*operation, *endpoint);
     auto& job = *pending_job.value();
-    endpoint->owe_reply({ OwedReply::Kind::ChangingJob, operation_id, navigable_id });
-    endpoint->async_continue_history_navigation_population(operation_id, job.job.target_entry_descriptor(), job.job.navigation_type,
-        Web::HTML::HistoryNavigationPopulation { loader->request(), loader->take_result() });
     job.population_loader = move(loader);
+    job.population_loader->let_host_adopt_response_body(*endpoint, [weak_this = make_weak_ptr(), operation_id, navigable_id, endpoint] {
+        if (!weak_this)
+            return;
+        auto& traversable = static_cast<CanonicalTraversable&>(*weak_this);
+        auto* operation = traversable.find_history_operation(operation_id);
+        if (!operation)
+            return;
+        auto pending_job = operation->pending_changing_jobs.get(navigable_id);
+        if (!pending_job.has_value() || !pending_job.value()->population_loader)
+            return;
+        if (traversable.changing_job_endpoint(*operation, navigable_id) != endpoint) {
+            traversable.did_fail_history_navigation_population(operation_id, navigable_id, *endpoint);
+            return;
+        }
+        auto& job = *pending_job.value();
+        endpoint->owe_reply({ OwedReply::Kind::ChangingJob, operation_id, navigable_id });
+        endpoint->async_continue_history_navigation_population(operation_id, job.job.target_entry_descriptor(), job.job.navigation_type,
+            Web::HTML::HistoryNavigationPopulation { job.population_loader->request(), job.population_loader->take_result() });
+    });
 }
 
 void CanonicalTraversable::dispatch_changing_navigable_history_step_job(HistoryOperation& operation, Web::HTML::CrossProcessId navigable_id)

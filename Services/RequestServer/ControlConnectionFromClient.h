@@ -38,8 +38,10 @@ private:
 
     virtual Messages::RequestServerControl::InitTransportResponse init_transport(int peer_pid) override;
 
-    virtual Messages::RequestServerControl::ConnectNewClientResponse connect_new_client(IsPrivate) override;
+    virtual Messages::RequestServerControl::ConnectNewClientResponse connect_new_client(IsPrivate, ClientKind) override;
     virtual Messages::RequestServerControl::ConnectNewClientsResponse connect_new_clients(size_t count, IsPrivate) override;
+
+    virtual void designate_request_adopter(u64 designation_id, int source_client_id, u64 source_request_id, int adopter_client_id) override;
 
     virtual void set_disk_cache_settings(HTTP::DiskCacheSettings) override;
 
@@ -58,7 +60,7 @@ private:
         IPC::TransportHandle handle;
         int client_id { -1 };
     };
-    ErrorOr<ClientSocket> create_client_socket(IsPrivate);
+    ErrorOr<ClientSocket> create_client_socket(IsPrivate, ClientKind);
     void push_network_usage();
 
     RequestServer::ConnectionFromClient::ConnectionMap& m_connections;

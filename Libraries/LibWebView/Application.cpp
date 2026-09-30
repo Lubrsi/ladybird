@@ -269,7 +269,7 @@ Requests::RequestClient& Application::request_server_client(IsPrivate is_private
         return *the().m_request_server_client;
 
     if (!the().m_private_request_server_client) {
-        auto new_client = connect_new_request_server_client(session_for_new_view(IsPrivate::Yes)).release_value_but_fixme_should_propagate_errors();
+        auto new_client = connect_new_request_server_client(session_for_new_view(IsPrivate::Yes), RequestServer::ClientKind::UIProcess).release_value_but_fixme_should_propagate_errors();
         auto transport = new_client.handle.create_transport().release_value_but_fixme_should_propagate_errors();
         auto request_server_client = make_ref_counted<Requests::RequestClient>(move(transport));
 
@@ -1784,7 +1784,7 @@ ErrorOr<void> Application::launch_request_server()
 
     // The UI process speaks the control endpoint over the initial socket, and gets its own data connection from it,
     // exactly like every other client of RequestServer.
-    auto request_server_client = TRY(connect_new_request_server_client(*m_default_session));
+    auto request_server_client = TRY(connect_new_request_server_client(*m_default_session, RequestServer::ClientKind::UIProcess));
     auto request_server_transport = TRY(request_server_client.handle.create_transport());
     m_request_server_client = make_ref_counted<Requests::RequestClient>(move(request_server_transport));
 

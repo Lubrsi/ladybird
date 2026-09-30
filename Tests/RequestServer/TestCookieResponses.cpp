@@ -41,6 +41,24 @@ static void initialize_libcurl()
     (void)libcurl_initialized;
 }
 
+// Waits for the next message on a transport, which must be the only one waiting.
+template<typename Endpoint, typename MessageType>
+static NonnullOwnPtr<MessageType> take_message(IPC::Transport& transport)
+{
+    transport.wait_until_readable();
+
+    OwnPtr<MessageType> taken_message;
+    auto should_shutdown = transport.read_as_many_messages_as_possible_without_blocking([&](auto&& raw_message) {
+        auto message = MUST(Endpoint::decode_message(raw_message.bytes.bytes(), raw_message.attachments));
+        VERIFY(message->message_id() == MessageType::static_message_id());
+        VERIFY(!taken_message);
+        taken_message = message.template release_nonnull<MessageType>();
+    });
+    VERIFY(should_shutdown == IPC::Transport::ShouldShutdown::No);
+    VERIFY(taken_message);
+    return taken_message.release_nonnull();
+}
+
 // The initial socket: the only connection that may answer cookie lookups.
 class TestControlConnection {
 public:
@@ -82,6 +100,17 @@ public:
         VERIFY(!response);
     }
 
+    void designate_request_adopter(int source_client_id, u64 source_request_id, int adopter_client_id)
+    {
+        auto designation_id = m_next_designation_id++;
+        auto message = make<Messages::RequestServerControl::DesignateRequestAdopter>(designation_id, source_client_id, source_request_id, adopter_client_id);
+        auto response = MUST(static_cast<RequestServerControlEndpoint::Stub&>(*m_connection).handle(move(message)));
+        VERIFY(!response);
+
+        auto reply = take_message<RequestServerControlClientEndpoint, Messages::RequestServerControlClient::RequestAdopterDesignated>(*m_remote_transport);
+        VERIFY(reply->designation_id() == designation_id);
+    }
+
     // Runs the event loop until RequestServer asks the UI process to store a response's cookies and HSTS policy.
     NonnullOwnPtr<Messages::RequestServerControlClient::StoreResponseCookiesAndHstsPolicy> wait_for_storage_request(Core::EventLoop& event_loop)
     {
@@ -103,29 +132,19 @@ public:
 
     NonnullOwnPtr<Messages::RequestServerControlClient::RetrieveHttpCookie> take_cookie_request()
     {
-        m_remote_transport->wait_until_readable();
-
-        OwnPtr<Messages::RequestServerControlClient::RetrieveHttpCookie> cookie_request;
-        auto should_shutdown = m_remote_transport->read_as_many_messages_as_possible_without_blocking([&](auto&& raw_message) {
-            auto message = MUST(RequestServerControlClientEndpoint::decode_message(raw_message.bytes.bytes(), raw_message.attachments));
-            VERIFY(message->message_id() == Messages::RequestServerControlClient::RetrieveHttpCookie::static_message_id());
-            VERIFY(!cookie_request);
-            cookie_request = message.template release_nonnull<Messages::RequestServerControlClient::RetrieveHttpCookie>();
-        });
-        VERIFY(should_shutdown == IPC::Transport::ShouldShutdown::No);
-        VERIFY(cookie_request);
-        return cookie_request.release_nonnull();
+        return take_message<RequestServerControlClientEndpoint, Messages::RequestServerControlClient::RetrieveHttpCookie>(*m_remote_transport);
     }
 
 private:
     OwnPtr<IPC::Transport> m_remote_transport;
     RefPtr<RequestServer::ControlConnectionFromClient> m_connection;
+    u64 m_next_designation_id { 0 };
 };
 
 // A data connection, as handed out by the control connection to each helper process.
 class TestConnection {
 public:
-    explicit TestConnection(TestServer& server)
+    explicit TestConnection(TestServer& server, RequestServer::ClientKind client_kind = RequestServer::ClientKind::HelperProcess)
     {
         initialize_libcurl();
 
@@ -133,7 +152,7 @@ public:
         m_remote_transport = MUST(pair.remote_handle.create_transport());
         m_connection = RequestServer::ConnectionFromClient::construct(
             move(pair.local), RequestServer::IsPrivate::No,
-            server.connections, server.request_transfer_leases, Optional<HTTP::DiskCache&> {}, ByteString {});
+            server.connections, server.request_transfer_leases, Optional<HTTP::DiskCache&> {}, ByteString {}, client_kind);
 #ifdef AK_OS_WINDOWS
         auto pid = Core::System::getpid();
         m_connection->transport().set_peer_pid(pid);
@@ -149,6 +168,7 @@ public:
 
     int client_id() const { return m_connection->client_id(); }
     bool is_open() const { return m_connection->is_open(); }
+    void disconnect() { m_connection->shutdown(); }
 
     void set_certificate(u64 request_id)
     {
@@ -172,11 +192,16 @@ public:
         VERIFY(!response);
     }
 
-    void adopt_request(int source_client_id, u64 source_request_id, u64 target_request_id, bool preserve_transfer_lease = false)
+    void adopt_request(int source_client_id, u64 source_request_id, u64 target_request_id, bool preserve_transfer_lease = false, Optional<int> owner_client_id = {})
     {
-        auto message = make<Messages::RequestServer::AdoptRequest>(source_client_id, source_request_id, target_request_id, preserve_transfer_lease);
+        auto message = make<Messages::RequestServer::AdoptRequest>(source_client_id, source_request_id, target_request_id, preserve_transfer_lease, owner_client_id);
         auto response = dispatch(move(message));
         VERIFY(!response);
+    }
+
+    NonnullOwnPtr<Messages::RequestClient::RequestFinished> take_request_finished()
+    {
+        return take_message<RequestClientEndpoint, Messages::RequestClient::RequestFinished>(*m_remote_transport);
     }
 
 private:
@@ -304,12 +329,176 @@ TEST_CASE(live_transfer_lease_request_id_cannot_be_reused)
     source_connection.start_request(0);
     auto original_cookie_request = control.take_cookie_request();
     EXPECT_EQ(original_cookie_request->client_id(), source_connection.client_id());
+    control.designate_request_adopter(source_connection.client_id(), 0, target_connection.client_id());
     target_connection.adopt_request(source_connection.client_id(), 0, 1, true);
     auto transferred_cookie_request = control.take_cookie_request();
     EXPECT_EQ(transferred_cookie_request->client_id(), target_connection.client_id());
 
     source_connection.start_request(0);
     EXPECT(!source_connection.is_open());
+}
+
+// A helper process's client may adopt a leased request only as the UI process designated, once per designation. Any
+// other adoption fails and leaves the request with its owner.
+TEST_CASE(only_designated_client_adopts_leased_request)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection source_connection { server };
+    TestConnection designated_connection { server };
+    TestConnection other_connection { server };
+
+    source_connection.start_request(0);
+    (void)control.take_cookie_request();
+    Requests::RequestTransferLeaseKey lease_key { source_connection.client_id(), 0 };
+    auto lease = [&] { return server.request_transfer_leases.get(lease_key).value(); };
+
+    other_connection.adopt_request(source_connection.client_id(), 0, 1, true);
+    EXPECT_EQ(other_connection.take_request_finished()->request_id(), 1u);
+    other_connection.adopt_request(source_connection.client_id(), 0, 1, true, source_connection.client_id());
+    EXPECT_EQ(other_connection.take_request_finished()->request_id(), 1u);
+    EXPECT_EQ(lease().owner->client_id(), source_connection.client_id());
+
+    control.designate_request_adopter(source_connection.client_id(), 0, designated_connection.client_id());
+    other_connection.adopt_request(source_connection.client_id(), 0, 2, true);
+    EXPECT_EQ(other_connection.take_request_finished()->request_id(), 2u);
+    EXPECT_EQ(lease().owner->client_id(), source_connection.client_id());
+
+    designated_connection.adopt_request(source_connection.client_id(), 0, 1, true);
+    EXPECT_EQ(control.take_cookie_request()->client_id(), designated_connection.client_id());
+    EXPECT_EQ(lease().owner->client_id(), designated_connection.client_id());
+    EXPECT_EQ(lease().request_id, 1u);
+
+    designated_connection.adopt_request(source_connection.client_id(), 0, 2, true);
+    EXPECT_EQ(lease().owner->client_id(), designated_connection.client_id());
+    EXPECT_EQ(lease().request_id, 1u);
+
+    // A refused adoption is not misbehavior.
+    EXPECT(other_connection.is_open());
+    EXPECT(designated_connection.is_open());
+}
+
+// A client's designations lapse when it disconnects, and other clients' designations stay. A designation naming a
+// client that is not connected is dropped.
+TEST_CASE(designation_needs_a_connected_client)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection source_connection { server };
+    TestConnection designated_connection { server };
+    TestConnection other_designated_connection { server };
+
+    source_connection.start_request(0);
+    (void)control.take_cookie_request();
+    source_connection.start_request(1);
+    (void)control.take_cookie_request();
+    auto adopter_client_id = [&](u64 request_id) {
+        return server.request_transfer_leases.get(Requests::RequestTransferLeaseKey { source_connection.client_id(), request_id })->adopter_client_id;
+    };
+
+    control.designate_request_adopter(source_connection.client_id(), 0, designated_connection.client_id());
+    control.designate_request_adopter(source_connection.client_id(), 1, other_designated_connection.client_id());
+    EXPECT(adopter_client_id(0) == designated_connection.client_id());
+
+    designated_connection.disconnect();
+    EXPECT(!adopter_client_id(0).has_value());
+    EXPECT(adopter_client_id(1) == other_designated_connection.client_id());
+
+    control.designate_request_adopter(source_connection.client_id(), 0, designated_connection.client_id());
+    EXPECT(!adopter_client_id(0).has_value());
+}
+
+// RequestServer answers a designation for a lease that does not exist, and records nothing.
+TEST_CASE(designation_of_missing_lease_is_answered)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection connection { server };
+
+    control.designate_request_adopter(connection.client_id(), 0, connection.client_id());
+    EXPECT(server.request_transfer_leases.is_empty());
+    EXPECT(control.is_open());
+}
+
+// The UI process's own client adopts a leased request without a designation, but only from the owner it names.
+TEST_CASE(ui_process_client_adopts_only_from_named_owner)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection source_connection { server };
+    TestConnection host_connection { server };
+    TestConnection ui_connection { server, RequestServer::ClientKind::UIProcess };
+
+    source_connection.start_request(0);
+    (void)control.take_cookie_request();
+    Requests::RequestTransferLeaseKey lease_key { source_connection.client_id(), 0 };
+    auto lease = [&] { return server.request_transfer_leases.get(lease_key).value(); };
+
+    ui_connection.adopt_request(source_connection.client_id(), 0, 1, true);
+    EXPECT_EQ(ui_connection.take_request_finished()->request_id(), 1u);
+    ui_connection.adopt_request(source_connection.client_id(), 0, 2, true, host_connection.client_id());
+    EXPECT_EQ(ui_connection.take_request_finished()->request_id(), 2u);
+    EXPECT_EQ(lease().owner->client_id(), source_connection.client_id());
+
+    // Once the host holds the request, naming the client that created the lease does not take it from the host.
+    control.designate_request_adopter(source_connection.client_id(), 0, host_connection.client_id());
+    host_connection.adopt_request(source_connection.client_id(), 0, 1, true);
+    (void)control.take_cookie_request();
+    ui_connection.adopt_request(source_connection.client_id(), 0, 3, true, source_connection.client_id());
+    EXPECT_EQ(ui_connection.take_request_finished()->request_id(), 3u);
+    EXPECT_EQ(lease().owner->client_id(), host_connection.client_id());
+
+    ui_connection.adopt_request(source_connection.client_id(), 0, 4, true, host_connection.client_id());
+    EXPECT_EQ(control.take_cookie_request()->client_id(), ui_connection.client_id());
+    EXPECT_EQ(lease().owner->client_id(), ui_connection.client_id());
+    EXPECT(ui_connection.is_open());
+}
+
+// An adoption that does not keep the lease ends it.
+TEST_CASE(ui_process_client_adoption_can_end_the_lease)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection source_connection { server };
+    TestConnection ui_connection { server, RequestServer::ClientKind::UIProcess };
+
+    source_connection.start_request(0);
+    (void)control.take_cookie_request();
+
+    ui_connection.adopt_request(source_connection.client_id(), 0, 1, false, source_connection.client_id());
+    EXPECT_EQ(control.take_cookie_request()->client_id(), ui_connection.client_id());
+    EXPECT(!server.request_transfer_leases.contains(Requests::RequestTransferLeaseKey { source_connection.client_id(), 0 }));
+}
+
+// While the UI process holds a leased request, it may take it back by naming the client it designated to adopt it,
+// whose adoption then fails. A download can claim a response body its host has not adopted yet this way.
+TEST_CASE(ui_process_client_takes_back_lease_by_naming_its_designated_adopter)
+{
+    TestServer server;
+    TestControlConnection control { server };
+    TestConnection source_connection { server };
+    TestConnection host_connection { server };
+    TestConnection ui_connection { server, RequestServer::ClientKind::UIProcess };
+
+    source_connection.start_request(0);
+    (void)control.take_cookie_request();
+    Requests::RequestTransferLeaseKey lease_key { source_connection.client_id(), 0 };
+
+    ui_connection.adopt_request(source_connection.client_id(), 0, 1, true, source_connection.client_id());
+    (void)control.take_cookie_request();
+    EXPECT_EQ(server.request_transfer_leases.get(lease_key)->owner->client_id(), ui_connection.client_id());
+
+    ui_connection.adopt_request(source_connection.client_id(), 0, 2, false, host_connection.client_id());
+    EXPECT(server.request_transfer_leases.contains(lease_key));
+
+    control.designate_request_adopter(source_connection.client_id(), 0, host_connection.client_id());
+    ui_connection.adopt_request(source_connection.client_id(), 0, 3, false, host_connection.client_id());
+    EXPECT_EQ(control.take_cookie_request()->client_id(), ui_connection.client_id());
+    EXPECT(!server.request_transfer_leases.contains(lease_key));
+
+    host_connection.adopt_request(source_connection.client_id(), 0, 1, true);
+    EXPECT_EQ(host_connection.take_request_finished()->request_id(), 1u);
+    EXPECT(host_connection.is_open());
 }
 
 TEST_CASE(duplicate_cookie_response_is_rejected)
@@ -339,6 +528,7 @@ TEST_CASE(transferring_request_reissues_cookie_lookup_for_new_owner)
     EXPECT_EQ(initial_cookie_request->client_id(), source_connection.client_id());
     EXPECT_EQ(initial_cookie_request->request_id(), 0u);
 
+    control.designate_request_adopter(source_connection.client_id(), 0, target_connection.client_id());
     target_connection.adopt_request(source_connection.client_id(), 0, 1);
     auto transferred_cookie_request = control.take_cookie_request();
     EXPECT_EQ(transferred_cookie_request->client_id(), target_connection.client_id());
@@ -370,6 +560,7 @@ TEST_CASE(transferring_request_reissues_response_storage_for_new_owner)
     EXPECT_EQ(initial_storage_request->request_id(), 0u);
     EXPECT_EQ(initial_storage_request->cookies().size(), 1u);
 
+    control.designate_request_adopter(source_connection.client_id(), 0, target_connection.client_id());
     target_connection.adopt_request(source_connection.client_id(), 0, 1);
     auto transferred_storage_request = control.wait_for_storage_request(server.event_loop);
     EXPECT_EQ(transferred_storage_request->client_id(), target_connection.client_id());

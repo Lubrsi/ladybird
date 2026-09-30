@@ -26,6 +26,10 @@ void RequestControlClient::die()
     m_pending_cache_size_estimations.clear();
     m_pending_clear_cache_requests.clear();
 
+    auto pending_adopter_designations = move(m_pending_adopter_designations);
+    for (auto& [id, promise] : pending_adopter_designations)
+        promise->reject(Error::from_string_literal("RequestServer process died"));
+
     if (auto request_server_died_callback = move(on_request_server_died)) {
         Core::deferred_invoke([request_server_died_callback = move(request_server_died_callback)]() mutable {
             request_server_died_callback();
@@ -96,6 +100,28 @@ NonnullRefPtr<Core::Promise<Empty>> RequestControlClient::clear_cache(UnixDateTi
 void RequestControlClient::removed_cache_entries(u64 clear_cache_request_id)
 {
     if (auto promise = m_pending_clear_cache_requests.take(clear_cache_request_id); promise.has_value())
+        (*promise)->resolve({});
+}
+
+NonnullRefPtr<Core::Promise<Empty>> RequestControlClient::designate_request_adopter(RequestTransferLeaseKey transfer_lease, int adopter_client_id)
+{
+    auto promise = Core::Promise<Empty>::construct();
+    if (!is_open()) {
+        promise->reject(Error::from_string_literal("RequestServer process died"));
+        return promise;
+    }
+
+    auto designation_id = m_next_adopter_designation_id++;
+    m_pending_adopter_designations.set(designation_id, promise);
+
+    async_designate_request_adopter(designation_id, transfer_lease.source_client_id, transfer_lease.source_request_id, adopter_client_id);
+
+    return promise;
+}
+
+void RequestControlClient::request_adopter_designated(u64 designation_id)
+{
+    if (auto promise = m_pending_adopter_designations.take(designation_id); promise.has_value())
         (*promise)->resolve({});
 }
 

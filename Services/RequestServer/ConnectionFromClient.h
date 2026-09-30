@@ -22,6 +22,7 @@
 #include <LibRequests/RequestTransferLease.h>
 #include <LibRequests/WebSocket.h>
 #include <LibWebSocket/WebSocket.h>
+#include <RequestServer/ClientKind.h>
 #include <RequestServer/Forward.h>
 #include <RequestServer/IsPrivate.h>
 #include <RequestServer/RequestClientEndpoint.h>
@@ -56,6 +57,8 @@ public:
     struct RequestTransferLease {
         NonnullRefPtr<ConnectionFromClient> owner;
         u64 request_id { 0 };
+        // The one client that may adopt the request, until it does.
+        Optional<int> adopter_client_id {};
     };
 
     using RequestTransferLeaseMap = HashMap<Requests::RequestTransferLeaseKey, RequestTransferLease>;
@@ -73,14 +76,14 @@ public:
     void fetch_aia_intermediate(Badge<Request>, ByteString const& url, u64 for_request_id);
 
 private:
-    ConnectionFromClient(NonnullOwnPtr<IPC::Transport>, IsPrivate, ConnectionMap&, RequestTransferLeaseMap&, Optional<HTTP::DiskCache&>, ByteString alt_svc_cache_path);
+    ConnectionFromClient(NonnullOwnPtr<IPC::Transport>, IsPrivate, ConnectionMap&, RequestTransferLeaseMap&, Optional<HTTP::DiskCache&>, ByteString alt_svc_cache_path, ClientKind = ClientKind::HelperProcess);
 
     virtual Messages::RequestServer::InitTransportResponse init_transport(int peer_pid) override;
 
     virtual Messages::RequestServer::IsSupportedProtocolResponse is_supported_protocol(ByteString) override;
     virtual Messages::RequestServer::GetClientIdResponse get_client_id() override;
     virtual void start_request(u64 request_id, ByteString, URL::URL, Vector<HTTP::Header>, ByteBuffer, HTTP::CacheMode, HTTP::Cookie::IncludeCredentials, bool create_transfer_lease, Optional<u32> address_selection_hint, bool notify_on_cache_miss, i32 originating_process_id, u64 originating_page_id) override;
-    virtual void adopt_request(int source_client_id, u64 source_request_id, u64 target_request_id, bool preserve_transfer_lease) override;
+    virtual void adopt_request(int source_client_id, u64 source_request_id, u64 target_request_id, bool preserve_transfer_lease, Optional<int> owner_client_id) override;
     virtual void release_request_transfer_lease(int source_client_id, u64 source_request_id) override;
     virtual Messages::RequestServer::StopRequestResponse stop_request(u64 request_id) override;
     virtual Messages::RequestServer::SetCertificateResponse set_certificate(u64 request_id, ByteString, ByteString) override;
@@ -105,6 +108,7 @@ private:
     void connect_websocket(u64 websocket_id, URL::URL, ByteString origin, Vector<ByteString> protocols, Vector<ByteString> extensions, Vector<HTTP::Header> request_headers);
 
     IsPrivate m_is_private { IsPrivate::No };
+    ClientKind m_client_kind { ClientKind::HelperProcess };
 
     ConnectionMap& m_connections;
     RequestTransferLeaseMap& m_request_transfer_leases;

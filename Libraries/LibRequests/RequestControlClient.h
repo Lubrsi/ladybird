@@ -13,6 +13,7 @@
 #include <LibIPC/ConnectionToServer.h>
 #include <LibRequests/CacheSizes.h>
 #include <LibRequests/NetworkUsage.h>
+#include <LibRequests/RequestTransferLease.h>
 #include <RequestServer/IsPrivate.h>
 #include <RequestServer/RequestServerControlClientEndpoint.h>
 #include <RequestServer/RequestServerControlEndpoint.h>
@@ -33,6 +34,8 @@ public:
 
     NonnullRefPtr<Core::Promise<CacheSizes>> estimate_cache_size_accessed_since(UnixDateTime since);
     NonnullRefPtr<Core::Promise<Empty>> clear_cache(UnixDateTime since);
+    // Resolves once RequestServer has handled the designation.
+    NonnullRefPtr<Core::Promise<Empty>> designate_request_adopter(RequestTransferLeaseKey, int adopter_client_id);
 
     Function<void(Vector<NetworkUsage>, u64 interval_microseconds)> on_network_usage;
     Function<void(int client_id)> on_client_disconnected;
@@ -49,12 +52,16 @@ private:
     virtual void store_response_cookies_and_hsts_policy(int client_id, u64 request_id, u64 store_request_id, URL::URL url, Vector<HTTP::Cookie::ParsedCookie> cookies, Optional<HTTP::HSTS::ParsedHSTSPolicy> hsts_policy) override;
     virtual void estimated_cache_size(u64 cache_size_estimation_id, CacheSizes sizes) override;
     virtual void removed_cache_entries(u64 clear_cache_request_id) override;
+    virtual void request_adopter_designated(u64 designation_id) override;
 
     HashMap<u64, NonnullRefPtr<Core::Promise<CacheSizes>>> m_pending_cache_size_estimations;
     u64 m_next_cache_size_estimation_id { 0 };
 
     HashMap<u64, NonnullRefPtr<Core::Promise<Empty>>> m_pending_clear_cache_requests;
     u64 m_next_clear_cache_request_id { 0 };
+
+    HashMap<u64, NonnullRefPtr<Core::Promise<Empty>>> m_pending_adopter_designations;
+    u64 m_next_adopter_designation_id { 0 };
 };
 
 }

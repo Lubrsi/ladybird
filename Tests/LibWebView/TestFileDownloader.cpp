@@ -462,7 +462,7 @@ void expect_leased_request_is_torn_down_when_transferred_after_finishing(TestHtt
     VERIFY(!finished);
 
     // Adopting the finished request transfers it away from its original owner — which has to be told to let go of it.
-    auto adopted_request = request_client.adopt_request(request_client.request_server_client_id(), request->id());
+    auto adopted_request = request_client.adopt_request(request_client.request_server_client_id(), request->id(), Requests::RequestClient::TransferLease::No, request_client.request_server_client_id());
     VERIFY(adopted_request);
 
     size_t delivered_size = 0;
