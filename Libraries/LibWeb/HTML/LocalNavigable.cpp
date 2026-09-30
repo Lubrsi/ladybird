@@ -41,6 +41,7 @@
 #include <LibWeb/Editing/EditingHistory.h>
 #include <LibWeb/Editing/Internal/Algorithms.h>
 #include <LibWeb/Editing/SpellCheckController.h>
+#include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
@@ -2280,6 +2281,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
 
         // 2. Set request's reserved client to null.
         state_holder->request->set_reserved_client(nullptr);
+        state_holder->request->set_reserved_client_snapshot(nullptr);
 
         // 3. Set commitEarlyHints to null.
         state_holder->commit_early_hints = nullptr;
@@ -2320,7 +2322,9 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
         //    creation URL is currentURL,
         //    top-level creation URL is topLevelCreationURL,
         //    and top-level origin is topLevelOrigin.
-        state_holder->request->set_reserved_client(realm.create<Environment>(EnvironmentId::generate(), state_holder->current_url, top_level_creation_url, top_level_origin, state_holder->navigable->active_browsing_context()));
+        auto reserved_client = realm.create<Environment>(EnvironmentId::generate(), state_holder->current_url, top_level_creation_url, top_level_origin, state_holder->navigable->active_browsing_context());
+        state_holder->request->set_reserved_client(reserved_client);
+        state_holder->request->set_reserved_client_snapshot(Fetch::Fetching::snapshot_reserved_client_context(reserved_client));
     }
 
     // 3. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then set response to a network error and break. [CSP]
