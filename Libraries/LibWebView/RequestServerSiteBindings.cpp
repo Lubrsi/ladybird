@@ -24,8 +24,14 @@ unsigned RequestServerSiteBindings::SiteTraits::hash(Site const& site)
 void RequestServerSiteBindings::did_connect(int client_id)
 {
     m_client_id = client_id;
+    m_connected_client_ids.set(client_id);
     for (auto const& site : m_sites)
         send(site);
+}
+
+void RequestServerSiteBindings::did_disconnect(int client_id)
+{
+    m_connected_client_ids.remove(client_id);
 }
 
 void RequestServerSiteBindings::bind_sites_of(CanonicalDocument const& document)

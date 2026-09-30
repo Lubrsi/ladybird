@@ -1276,7 +1276,7 @@ void CanonicalTraversable::add_history_operation_completion_endpoint(HistoryOper
 void CanonicalTraversable::did_finish_history_navigation_params_creation(WebContentPage& source_page, Web::HTML::CrossProcessId operation_id, Web::HTML::HistoryNavigationPopulation population)
 {
     auto navigable_id = population.request.navigable_id;
-    auto discard = [&] { NavigationLoader::discard(source_page.client().is_private(), population.result); };
+    auto discard = [&] { NavigationLoader::discard(source_page.client().request_server_site_bindings(), population.result); };
     auto* operation = find_history_operation(operation_id);
     auto* changing_navigable = operation ? operation->pending_changing_job(navigable_id) : nullptr;
     if (!changing_navigable || changing_navigable->population_loader
@@ -1294,9 +1294,9 @@ void CanonicalTraversable::did_finish_history_navigation_params_creation(WebCont
     // The document's sandboxing flags are at least those the UI process snapshots for the navigable.
     population.request.target_snapshot_params.sandboxing_flags |= changing_navigable->navigable().snapshot_target_snapshot_params().sandboxing_flags;
     auto& loader = changing_navigable->population_loader;
-    loader = NavigationLoader::create(source_page.client().is_private(), move(population.request));
-    loader->did_finish_navigation_params_creation(move(population.result));
-    loader->acquire_response_body([this, operation_id, navigable_id](bool succeeded) {
+    loader = NavigationLoader::create(move(population.request));
+    loader->did_finish_navigation_params_creation(source_page.client().request_server_site_bindings(), move(population.result));
+    loader->acquire_response_body(source_page.client().request_server_site_bindings(), [this, operation_id, navigable_id](bool succeeded) {
         auto* operation = find_history_operation(operation_id);
         auto* changing_navigable = operation ? operation->pending_changing_job(navigable_id) : nullptr;
         if (!changing_navigable)
@@ -1353,10 +1353,20 @@ void CanonicalTraversable::continue_history_navigation_population(HistoryOperati
             did_fail_history_navigation_population(*operation, *changing_navigable);
             return;
         }
-        auto& loader = *changing_navigable->population_loader;
-        endpoint->owe_reply({ OwedReply::Kind::ChangingJob, operation_id, navigable_id });
-        endpoint->async_continue_history_navigation_population(operation_id, changing_navigable->target_entry_descriptor(), operation->algorithm->navigation_type(),
-            changing_navigable->navigable().ongoing_navigation().has<CanonicalNavigable::Traversal>(), Web::HTML::HistoryNavigationPopulation { loader.request(), loader.take_result() });
+        weak_loader->let_host_adopt_response_body(*endpoint, [this, operation_id, navigable_id, weak_loader, endpoint] {
+            auto* operation = find_history_operation(operation_id);
+            auto* changing_navigable = operation ? operation->pending_changing_job(navigable_id) : nullptr;
+            if (!changing_navigable || !weak_loader || changing_navigable->population_loader.ptr() != weak_loader.ptr())
+                return;
+            if (!endpoint->is_open() || changing_job_endpoint(*changing_navigable) != endpoint) {
+                did_fail_history_navigation_population(*operation, *changing_navigable);
+                return;
+            }
+            auto& loader = *changing_navigable->population_loader;
+            endpoint->owe_reply({ OwedReply::Kind::ChangingJob, operation_id, navigable_id });
+            endpoint->async_continue_history_navigation_population(operation_id, changing_navigable->target_entry_descriptor(), operation->algorithm->navigation_type(),
+                changing_navigable->navigable().ongoing_navigation().has<CanonicalNavigable::Traversal>(), Web::HTML::HistoryNavigationPopulation { loader.request(), loader.take_result() });
+        });
     };
     if (auto client_id = endpoint->client().request_server_site_bindings().client_id(); client_id.has_value()) {
         if (auto request_server = RequestServerManager::the().instance_for_client(*client_id)) {
