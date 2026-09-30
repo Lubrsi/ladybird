@@ -516,7 +516,7 @@ void expect_leased_request_is_torn_down_when_transferred_after_finishing(TestHtt
             VERIFY(request->ref_count() == 1);
             return request_client.import_request(move(exported));
         }
-        return request_client.adopt_request(request_client.request_server_client_id(), request->id());
+        return request_client.adopt_request(request_client.request_server_client_id(), request->id(), Requests::RequestClient::TransferLease::No, request_client.request_server_client_id());
     }();
     VERIFY(adopted_request);
 

@@ -7,6 +7,7 @@
 #include <LibTest/TestCase.h>
 #include <LibURL/Parser.h>
 #include <LibWebView/NavigationLoader.h>
+#include <LibWebView/RequestServerSiteBindings.h>
 
 static Web::HTML::NavigationParamsDescriptor navigation_params_for(URL::URL const& url)
 {
@@ -32,13 +33,15 @@ TEST_CASE(response_document_uses_history_entry_url_when_response_url_list_is_emp
     auto url = URL::Parser::basic_parse("https://ladybird.org/"sv).release_value();
     Web::HTML::NavigationPopulationRequest request {};
     request.history_entry.url = url;
-    auto loader = WebView::NavigationLoader::create(WebView::IsPrivate::No, move(request));
-    loader->did_finish_navigation_params_creation({
+    auto loader = WebView::NavigationLoader::create(move(request));
+    Web::HTML::NavigationPopulationResult result {
         .navigation_params = navigation_params_for(url),
         .redirected_url = {},
         .classic_history_api_state = {},
         .replacement_document_state = {},
-    });
+    };
+    WebView::RequestServerSiteBindings population_worker_bindings;
+    loader->did_finish_navigation_params_creation(population_worker_bindings, move(result));
 
     auto document = loader->response_document();
     EXPECT(document.has_value());
@@ -52,15 +55,17 @@ TEST_CASE(response_document_uses_last_response_url_after_redirects)
     auto final_url = URL::Parser::basic_parse("https://example.com/"sv).release_value();
     Web::HTML::NavigationPopulationRequest request {};
     request.history_entry.url = initial_url;
-    auto loader = WebView::NavigationLoader::create(WebView::IsPrivate::No, move(request));
+    auto loader = WebView::NavigationLoader::create(move(request));
     auto params = navigation_params_for(initial_url);
     params.response.url_list = { initial_url, final_url };
-    loader->did_finish_navigation_params_creation({
+    Web::HTML::NavigationPopulationResult result {
         .navigation_params = move(params),
         .redirected_url = {},
         .classic_history_api_state = {},
         .replacement_document_state = {},
-    });
+    };
+    WebView::RequestServerSiteBindings population_worker_bindings;
+    loader->did_finish_navigation_params_creation(population_worker_bindings, move(result));
 
     auto document = loader->response_document();
     EXPECT(document.has_value());

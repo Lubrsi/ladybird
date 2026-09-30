@@ -10,6 +10,7 @@
 #include <AK/Optional.h>
 #include <AK/Utf16String.h>
 #include <LibURL/Forward.h>
+#include <LibWebView/Export.h>
 #include <LibWebView/Forward.h>
 
 namespace WebView {
@@ -19,7 +20,7 @@ namespace WebView {
 //
 // NB: Bindings last for the life of the process and are never revoked. A process that has hosted a site's document may
 //     have kept anything that document could reach, so leaving the site grants it nothing it lacked.
-class RequestServerSiteBindings {
+class WEBVIEW_API RequestServerSiteBindings {
     AK_MAKE_NONCOPYABLE(RequestServerSiteBindings);
     AK_MAKE_NONMOVABLE(RequestServerSiteBindings);
 
@@ -28,8 +29,13 @@ public:
 
     Optional<int> client_id() const { return m_client_id; }
 
+    // Whether client_id is a connected RequestServer client of the process, either its client or an earlier one.
+    bool has_client(int client_id) const { return m_connected_client_ids.contains(client_id); }
+
     // The process has a new RequestServer client. It is bound to every site the previous client was bound to.
     void did_connect(int client_id);
+
+    void did_disconnect(int client_id);
 
     // Binds the client to the sites of a document, before the process is told to host it.
     void bind_sites_of(CanonicalDocument const&);
@@ -55,6 +61,7 @@ private:
     void send(Site const&) const;
 
     Optional<int> m_client_id;
+    HashTable<int> m_connected_client_ids;
     HashTable<Site, SiteTraits> m_sites;
 };
 
