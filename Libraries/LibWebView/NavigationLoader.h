@@ -10,6 +10,7 @@
 #include <AK/Optional.h>
 #include <AK/OwnPtr.h>
 #include <AK/RefPtr.h>
+#include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
 #include <LibRequests/Forward.h>
 #include <LibRequests/Request.h>
@@ -49,14 +50,18 @@ public:
     void set_document(CanonicalDocument const&, CanonicalNavigable const&);
 
     void did_finish_navigation_params_creation(Web::HTML::NavigationPopulationResult);
-    void acquire_response_body(Function<void(bool)> completion_steps);
+    void acquire_response_body(WebContentPage const& population_worker, Function<void(bool)> completion_steps);
     bool response_body_matches(int request_server_client_id, u64 request_server_request_id) const;
+    // The host may adopt the response body once. The steps run when RequestServer allows it, or has gone away.
+    void let_host_adopt_response_body(WebContentPage const& host, Function<void()> steps);
+    bool response_body_was_handed_to(WebContentClient const&) const;
     Web::HTML::NavigationPopulationRequest const& request() const { return m_request; }
     Web::HTML::NavigationPopulationResult const& result() const;
     Web::HTML::NavigationPopulationResult take_result();
     void reclaim_response_body_after_failed_handoff();
 
-    static void discard(IsPrivate, Web::HTML::NavigationPopulationResult&);
+    static bool response_body_belongs_to_another_process(Web::HTML::NavigationPopulationResult const&, WebContentClient const&);
+    static void discard(WebContentPage const& population_worker, Web::HTML::NavigationPopulationResult&);
 
 private:
     NavigationLoader(IsPrivate is_private, Web::HTML::NavigationPopulationRequest request)
@@ -67,6 +72,7 @@ private:
 
     void determine_the_origin_of_the_response();
     void did_acquire(bool succeeded);
+    void did_designate_response_body_adopter();
     void release_response_body();
 
     IsPrivate m_is_private { IsPrivate::No };
@@ -76,7 +82,9 @@ private:
     Optional<int> m_response_body_request_server_client_id;
     Optional<u64> m_response_body_request_server_request_id;
     bool m_response_body_was_handed_off { false };
+    WeakPtr<WebContentClient> m_response_body_host;
     Function<void(bool)> m_completion_steps;
+    Function<void()> m_steps_after_adopter_designation;
 };
 
 }

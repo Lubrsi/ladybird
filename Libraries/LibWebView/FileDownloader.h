@@ -81,7 +81,7 @@ public:
     ~FileDownloader();
 
     u64 download_file(IsPrivate, URL::URL const&, LexicalPath);
-    u64 adopt_download(IsPrivate, URL::URL const&, LexicalPath, Optional<u64> total_size, int request_server_client_id, u64 request_server_request_id, ReadonlyBytes initial_data = {});
+    u64 adopt_download(IsPrivate, URL::URL const&, LexicalPath, Optional<u64> total_size, int request_server_client_id, u64 request_server_request_id, int owner_client_id, ReadonlyBytes initial_data = {});
     u64 start_download(IsPrivate, URL::URL const&, LexicalPath, Optional<u64> total_size = {});
     bool has_active_downloads() const;
     bool has_unresumable_downloads() const;
