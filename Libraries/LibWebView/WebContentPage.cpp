@@ -334,9 +334,23 @@ bool WebContentPage::continue_navigation_population_in_selected_process(Web::HTM
         // The host takes the navigable over when the document is activated, after the displayed document is unloaded.
         navigable->place_pending_document(*host);
     }
-    auto& loader = *navigable->ongoing_navigation()->loader;
     navigable->set_navigation_host(*host);
-    host->async_populate_navigation(loader.request(), loader.take_result());
+    navigable->ongoing_navigation()->loader->let_host_adopt_response_body(*host, [host, weak_navigable = navigable->make_weak_ptr(), navigation_id] {
+        auto* navigable = weak_navigable.ptr();
+        if (!navigable || !navigable->navigation_transaction_matches(navigation_id, *host) || !navigable->ongoing_navigation()->loader)
+            return;
+        // A closed host page cannot adopt the response body.
+        if (!host->is_open()) {
+            if (navigable->is_top_level_traversable()) {
+                if (auto view = navigable->top_level_traversable().view(); view.has_value())
+                    view->did_cancel_loading(navigation_id);
+            }
+            navigable->clear_ongoing_navigation();
+            return;
+        }
+        auto& loader = *navigable->ongoing_navigation()->loader;
+        host->async_populate_navigation(loader.request(), loader.take_result());
+    });
     return true;
 }
 
@@ -2059,16 +2073,21 @@ void WebContentPage::did_request_navigation_population(Web::HTML::CrossProcessId
 
 void WebContentPage::did_finish_navigation_params_creation(Web::HTML::CrossProcessId navigable_id, Utf16String navigation_id, Optional<Web::HTML::NavigationPopulationResult> result)
 {
+    if (result.has_value() && NavigationLoader::response_body_belongs_to_another_process(*result, client())) {
+        client().did_misbehave("did_finish_navigation_params_creation"sv, "response body fetched by another process"sv);
+        return;
+    }
+
     auto navigable = population_worker_navigable(navigable_id);
     if (!navigable.has_value()) {
         if (result.has_value())
-            NavigationLoader::discard(client().is_private(), *result);
+            NavigationLoader::discard(*this, *result);
         return;
     }
 
     if (!navigable->navigation_population_matches(*this, navigation_id)) {
         if (result.has_value())
-            NavigationLoader::discard(client().is_private(), *result);
+            NavigationLoader::discard(*this, *result);
         return;
     }
 
@@ -2087,7 +2106,7 @@ void WebContentPage::did_finish_navigation_params_creation(Web::HTML::CrossProce
 
     auto& ongoing_navigation = navigable->ongoing_navigation();
     if (!ongoing_navigation.has_value() || !ongoing_navigation->loader) {
-        NavigationLoader::discard(client().is_private(), *result);
+        NavigationLoader::discard(*this, *result);
         end_recorded_load_for_canceled_navigation();
         navigable->clear_ongoing_navigation();
         return;
@@ -2099,7 +2118,7 @@ void WebContentPage::did_finish_navigation_params_creation(Web::HTML::CrossProce
     ongoing_navigation->loader->did_finish_navigation_params_creation(result.release_value());
     ongoing_navigation->url = ongoing_navigation->loader->request().history_entry.url;
 
-    ongoing_navigation->loader->acquire_response_body([page = NonnullRefPtr<WebContentPage>(*this), navigable_id, navigation_id = move(navigation_id)](bool succeeded) {
+    ongoing_navigation->loader->acquire_response_body(*this, [page = NonnullRefPtr<WebContentPage>(*this), navigable_id, navigation_id = move(navigation_id)](bool succeeded) {
         // The page may have closed while the body was fetched; its navigation then has nothing left to finish.
         if (!page->is_open())
             return;
@@ -2126,6 +2145,11 @@ void WebContentPage::did_finish_navigation_params_creation(Web::HTML::CrossProce
 
 void WebContentPage::did_finish_history_navigation_params_creation(Web::HTML::CrossProcessId operation_id, Web::HTML::HistoryNavigationPopulation population)
 {
+    if (NavigationLoader::response_body_belongs_to_another_process(population.result, client())) {
+        client().did_misbehave("did_finish_history_navigation_params_creation"sv, "response body fetched by another process"sv);
+        return;
+    }
+
     auto& host = this->traversable();
     host.top_level_traversable().did_finish_history_navigation_params_creation(*this, operation_id, move(population));
 }
@@ -2254,6 +2278,10 @@ Messages::WebContentClient::DidStartDownloadResponse WebContentPage::did_start_d
             && ongoing_navigation->phase == CanonicalNavigation::Phase::Populating
             && ongoing_navigation->loader
             && ongoing_navigation->loader->response_body_matches(request_server_client_id, request_server_request_id)) {
+            if (!ongoing_navigation->loader->response_body_was_handed_to(client())) {
+                client().did_misbehave("did_start_download"sv, "response body handed to another process"sv);
+                return { Optional<u64> {} };
+            }
             if (navigable->is_top_level_traversable()) {
                 if (displays_tab())
                     view().did_cancel_loading(ongoing_navigation->navigation_id);
@@ -2265,12 +2293,16 @@ Messages::WebContentClient::DidStartDownloadResponse WebContentPage::did_start_d
     if (!matches_in_flight_navigation)
         return { Optional<u64> {} };
 
+    auto owner_client_id = client().request_server_site_bindings().client_id();
+    if (!owner_client_id.has_value())
+        return { Optional<u64> {} };
+
     auto destination = choose_download_destination_or_report_error(url, suggested_filename);
     if (!destination.has_value())
         return { Optional<u64> {} };
 
     auto& file_downloader = Application::the().file_downloader();
-    auto download_id = file_downloader.adopt_download(client().is_private(), url, destination.release_value(), total_size, request_server_client_id, request_server_request_id, initial_data.bytes());
+    auto download_id = file_downloader.adopt_download(client().is_private(), url, destination.release_value(), total_size, request_server_client_id, request_server_request_id, *owner_client_id, initial_data.bytes());
     if (!is_download_in_progress(file_downloader, download_id))
         return { Optional<u64> {} };
 

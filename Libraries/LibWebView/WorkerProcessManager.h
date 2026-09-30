@@ -27,7 +27,7 @@
 
 namespace WebView {
 
-class WorkerProcessManager {
+class WEBVIEW_API WorkerProcessManager {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
