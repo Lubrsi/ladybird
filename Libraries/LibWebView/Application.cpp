@@ -269,8 +269,8 @@ Requests::RequestClient& Application::request_server_client(IsPrivate is_private
         return *the().m_request_server_client;
 
     if (!the().m_private_request_server_client) {
-        auto handle = connect_new_request_server_client(session_for_new_view(IsPrivate::Yes)).release_value_but_fixme_should_propagate_errors();
-        auto transport = handle.create_transport().release_value_but_fixme_should_propagate_errors();
+        auto new_client = connect_new_request_server_client(session_for_new_view(IsPrivate::Yes)).release_value_but_fixme_should_propagate_errors();
+        auto transport = new_client.handle.create_transport().release_value_but_fixme_should_propagate_errors();
         auto request_server_client = make_ref_counted<Requests::RequestClient>(move(transport));
 
 #ifdef AK_OS_WINDOWS
@@ -1022,7 +1022,7 @@ void Application::open_bookmark_in_new_window(String const& bookmark_id, IsPriva
 ErrorOr<NonnullRefPtr<WebContentClient>> Application::create_web_content_client(Optional<ViewImplementation&> view, IsPrivate is_private, Web::PageId initial_page_id, Optional<Web::HTML::CrossProcessId> navigable_to_adopt, Optional<Web::HTML::CrossProcessId> initial_document_state_id, Vector<Web::HTML::RemoteNavigableDescriptor> remote_navigables, Optional<Web::HTML::SessionHistoryEntryDescriptor> canonical_initial_history_entry, Web::HTML::VisibilityState system_visibility_state)
 {
     // The client's WebContentClient picks up this same session when it is created.
-    auto request_server_handle = TRY(connect_new_request_server_client(session_for_new_view(is_private)));
+    auto request_server_client = TRY(connect_new_request_server_client(session_for_new_view(is_private)));
     auto image_decoder_handle = TRY(connect_new_image_decoder_client());
 #if defined(HAVE_WASM_COMPILER_SERVICE)
     auto wasm_compiler_handle = TRY(connect_new_wasm_compiler_client());
@@ -1056,7 +1056,7 @@ ErrorOr<NonnullRefPtr<WebContentClient>> Application::create_web_content_client(
     if (view.has_value())
         client->assign_view({}, *view);
 
-    client->async_connect_to_request_server(request_server_handle);
+    client->connect_to_request_server({}, move(request_server_client.handle), request_server_client.client_id);
     client->async_set_site_compatibility_data(m_site_compatibility_data);
     client->async_connect_to_image_decoder(image_decoder_handle);
 #if defined(HAVE_WASM_COMPILER_SERVICE)
@@ -1128,6 +1128,18 @@ Vector<int> Application::request_server_client_ids_for_testing(BrowsingSession c
 RefPtr<BrowsingSession> Application::session_for_request_server_client(int client_id) const
 {
     if (auto it = m_request_server_client_sessions.find(client_id); it != m_request_server_client_sessions.end())
+        return it->value.strong_ref();
+    return {};
+}
+
+void Application::set_process_for_request_server_client(int client_id, WebContentClient& process)
+{
+    m_request_server_client_processes.set(client_id, WeakPtr<WebContentClient> { process });
+}
+
+RefPtr<WebContentClient> Application::process_for_request_server_client(int client_id) const
+{
+    if (auto it = m_request_server_client_processes.find(client_id); it != m_request_server_client_processes.end())
         return it->value.strong_ref();
     return {};
 }
@@ -1767,12 +1779,13 @@ ErrorOr<void> Application::launch_request_server()
 {
     // A new RequestServer hands out client IDs from the start again.
     m_request_server_client_sessions.clear();
+    m_request_server_client_processes.clear();
     m_request_server_control_client = TRY(launch_request_server_process());
 
     // The UI process speaks the control endpoint over the initial socket, and gets its own data connection from it,
     // exactly like every other client of RequestServer.
-    auto request_server_handle = TRY(connect_new_request_server_client(*m_default_session));
-    auto request_server_transport = TRY(request_server_handle.create_transport());
+    auto request_server_client = TRY(connect_new_request_server_client(*m_default_session));
+    auto request_server_transport = TRY(request_server_client.handle.create_transport());
     m_request_server_client = make_ref_counted<Requests::RequestClient>(move(request_server_transport));
 
 #ifdef AK_OS_WINDOWS
@@ -1784,6 +1797,7 @@ ErrorOr<void> Application::launch_request_server()
 
     m_request_server_control_client->on_client_disconnected = [](int client_id) {
         the().m_request_server_client_sessions.remove(client_id);
+        the().m_request_server_client_processes.remove(client_id);
     };
 
     m_request_server_control_client->on_store_response_cookies_and_hsts_policy = [](int client_id, URL::URL const& url, Vector<HTTP::Cookie::ParsedCookie> const& cookies, Optional<HTTP::HSTS::ParsedHSTSPolicy> const& hsts_policy) {
@@ -1859,8 +1873,9 @@ ErrorOr<void> Application::launch_request_server()
             auto& new_clients = client.is_private() == IsPrivate::No ? normal_clients : private_clients;
             // A replacement client belongs to the session of the process it is for, which may be a private session
             // that has since been replaced by a newer one.
-            did_connect_request_server_client(new_clients.client_ids.take_last(), client.session());
-            client.async_connect_to_request_server(new_clients.handles.take_last());
+            auto client_id = new_clients.client_ids.take_last();
+            did_connect_request_server_client(client_id, client.session());
+            client.connect_to_request_server({}, new_clients.handles.take_last(), client_id);
             return IterationDecision::Continue;
         });
 

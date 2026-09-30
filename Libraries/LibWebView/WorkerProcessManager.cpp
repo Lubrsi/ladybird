@@ -143,7 +143,7 @@ Web::HTML::WorkerAgentId WorkerProcessManager::start_worker_agent(Owner owner, O
     auto session = client->session();
     if (!session)
         session = Application::session_for_new_view(is_private);
-    auto request_server_handle = MUST(connect_new_request_server_client(*session));
+    auto request_server_handle = MUST(connect_new_request_server_client(*session)).handle;
     auto image_decoder_handle = MUST(connect_new_image_decoder_client());
 #if defined(HAVE_WASM_COMPILER_SERVICE)
     auto wasm_compiler_handle = MUST(connect_new_wasm_compiler_client());
@@ -318,8 +318,8 @@ ErrorOr<void> WorkerProcessManager::reconnect_to_request_server(Function<bool(Wo
         if (!session)
             continue;
 
-        auto request_server_handle = TRY(connect_new_request_server_client(*session));
-        agent.client->async_connect_to_request_server(move(request_server_handle));
+        auto request_server_client = TRY(connect_new_request_server_client(*session));
+        agent.client->async_connect_to_request_server(move(request_server_client.handle));
     }
     return {};
 }
@@ -343,8 +343,8 @@ ErrorOr<void> WorkerProcessManager::simulate_request_server_connection_loss_for_
     for (auto& client : clients) {
         auto session = client->session();
         VERIFY(session);
-        auto request_server_handle = TRY(connect_new_request_server_client(*session));
-        auto response = client->send_sync_but_allow_failure<Messages::WebWorkerServer::SimulateRequestServerConnectionLossAndReconnectForTesting>(move(request_server_handle));
+        auto request_server_client = TRY(connect_new_request_server_client(*session));
+        auto response = client->send_sync_but_allow_failure<Messages::WebWorkerServer::SimulateRequestServerConnectionLossAndReconnectForTesting>(move(request_server_client.handle));
         if (!response)
             return Error::from_string_literal("WebWorker disconnected while reconnecting to RequestServer");
     }

@@ -37,8 +37,13 @@ WEBVIEW_API ErrorOr<NonnullRefPtr<Requests::RequestControlClient>> launch_reques
 WEBVIEW_API ErrorOr<NonnullRefPtr<WasmCompilerClient::Client>> launch_wasm_compiler_process();
 #endif
 
+struct NewRequestServerClient {
+    IPC::TransportHandle handle;
+    int client_id { -1 };
+};
+
 // The new client uses the cookies of the given session. That must be the session of the process the client is for.
-WEBVIEW_API ErrorOr<IPC::TransportHandle> connect_new_request_server_client(BrowsingSession&);
+WEBVIEW_API ErrorOr<NewRequestServerClient> connect_new_request_server_client(BrowsingSession&);
 WEBVIEW_API ErrorOr<IPC::TransportHandle> connect_new_image_decoder_client();
 // Launches the MediaServer for a renderer if it has none, keeping its controller connection in the given slot, and
 // connects a new client to it.

@@ -758,15 +758,28 @@ Messages::WebContentClient::DidIsKnownHstsHostResponse WebContentClient::did_is_
     return m_session->hsts_store->is_known_hsts_host(domain);
 }
 
+void WebContentClient::connect_to_request_server(Badge<Application>, IPC::TransportHandle handle, int request_server_client_id)
+{
+    remember_request_server_client(request_server_client_id);
+    async_connect_to_request_server(move(handle));
+}
+
+void WebContentClient::remember_request_server_client(int request_server_client_id)
+{
+    m_request_server_client_id = request_server_client_id;
+    Application::the().set_process_for_request_server_client(request_server_client_id, *this);
+}
+
 Messages::WebContentClient::DidLoseRequestServerConnectionResponse WebContentClient::did_lose_request_server_connection()
 {
-    auto handle = connect_new_request_server_client(*m_session);
-    if (handle.is_error()) {
-        warnln("Unable to connect a replacement RequestServer client: {}", handle.error());
+    auto new_client = connect_new_request_server_client(*m_session);
+    if (new_client.is_error()) {
+        warnln("Unable to connect a replacement RequestServer client: {}", new_client.error());
         return OptionalNone {};
     }
 
-    return handle.release_value();
+    remember_request_server_client(new_client.value().client_id);
+    return move(new_client.value().handle);
 }
 
 Messages::WebContentClient::RequestMediaServerConnectionResponse WebContentClient::request_media_server_connection()

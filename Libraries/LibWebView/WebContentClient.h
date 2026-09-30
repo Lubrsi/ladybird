@@ -22,6 +22,7 @@
 #include <LibHTTP/Header.h>
 #include <LibIPC/ConnectionToServer.h>
 #include <LibIPC/Transport.h>
+#include <LibIPC/TransportHandle.h>
 #include <LibMediaClient/Client.h>
 #include <LibRequests/CameFromCache.h>
 #include <LibRequests/NetworkError.h>
@@ -92,6 +93,10 @@ public:
     IsPrivate is_private() const { return m_is_private; }
     BrowsingSession& session() const { return *m_session; }
     void remove_blob_url_entries();
+
+    void connect_to_request_server(Badge<Application>, IPC::TransportHandle, int request_server_client_id);
+    // The RequestServer client the UI process gave this process last.
+    int request_server_client_id() const { return m_request_server_client_id.value(); }
 
     void connect_test_endpoint(NonnullOwnPtr<IPC::Transport>);
     // Null outside test mode: the test endpoint is only connected when the UI process runs tests.
@@ -179,11 +184,13 @@ private:
 
     void remember_compositor_context(Web::CompositorContextId, Optional<Web::PageId> page_id);
     void fail_renderer_owned_downloads();
+    void remember_request_server_client(int request_server_client_id);
 
     RefPtr<WebContentTestClient> m_test_connection;
 
     IsPrivate m_is_private { IsPrivate::No };
     RefPtr<BrowsingSession> m_session;
+    Optional<int> m_request_server_client_id;
     bool m_requested_close { false };
     bool m_rejected_ipc { false };
 

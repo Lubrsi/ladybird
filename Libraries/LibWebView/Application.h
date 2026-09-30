@@ -168,6 +168,10 @@ public:
     RefPtr<BrowsingSession> session_for_request_server_client(int client_id) const;
     Vector<int> request_server_client_ids_for_testing(BrowsingSession const&) const;
 
+    // The WebContent process a RequestServer client was created for, while the client is connected.
+    void set_process_for_request_server_client(int client_id, WebContentClient&);
+    RefPtr<WebContentClient> process_for_request_server_client(int client_id) const;
+
     // NB: Null once that session has ended, so a closed private tab is not offered back afterwards.
     static SessionStore* session_store(IsPrivate);
 
@@ -587,6 +591,7 @@ private:
     RefPtr<BrowsingSession> m_default_session;
     WeakPtr<BrowsingSession> m_private_session;
     HashMap<int, WeakPtr<BrowsingSession>> m_request_server_client_sessions;
+    HashMap<int, WeakPtr<WebContentClient>> m_request_server_client_processes;
 
     OwnPtr<Core::GeolocationProvider> m_geolocation_provider;
     OwnPtr<Core::TimeZoneWatcher> m_time_zone_watcher;
