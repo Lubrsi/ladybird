@@ -22,6 +22,7 @@
 #include <LibWeb/DOM/EventDispatcher.h>
 #include <LibWeb/DOM/IDLEventListener.h>
 #include <LibWeb/DOMURL/DOMURL.h>
+#include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/NetworkPartitionKey.h>
 #include <LibWeb/Fetch/Infrastructure/PortBlocking.h>
@@ -196,6 +197,7 @@ ErrorOr<void> WebSocket::establish_web_socket_connection(URL::URL const& url_rec
     // FIXME: Fetch request as per the remaining steps of https://websockets.spec.whatwg.org/#concept-websocket-establish
     // AD-HOC: Until the opening handshake goes through fetch, run the blocking checks of main fetch here.
     request->set_policy_container(client.policy_container()->clone());
+    request->set_client_snapshot(Fetch::Fetching::snapshot_client_context(client));
     auto report_violation = ContentSecurityPolicy::violation_reporter_for_request(client.realm(), request);
     ContentSecurityPolicy::report_content_security_policy_violations_for_request(request, report_violation);
     if (Fetch::Infrastructure::block_bad_port(request) == Fetch::Infrastructure::RequestOrResponseBlocking::Blocked
