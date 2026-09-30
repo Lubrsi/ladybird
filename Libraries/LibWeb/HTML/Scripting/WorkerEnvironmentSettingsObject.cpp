@@ -5,7 +5,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Random.h>
 #include <LibGC/Heap.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
@@ -19,7 +18,7 @@ namespace Web::HTML {
 GC_DEFINE_ALLOCATOR(WorkerEnvironmentSettingsObject);
 
 // https://html.spec.whatwg.org/multipage/workers.html#set-up-a-worker-environment-settings-object
-GC::Ref<WorkerEnvironmentSettingsObject> WorkerEnvironmentSettingsObject::setup(GC::Ref<Page> page, NonnullOwnPtr<JS::ExecutionContext> execution_context, SerializedEnvironmentSettingsObject const& outside_settings, HighResolutionTime::DOMHighResTimeStamp unsafe_worker_creation_time, URL::Origin origin, EnvironmentId id)
+GC::Ref<WorkerEnvironmentSettingsObject> WorkerEnvironmentSettingsObject::setup(GC::Ref<Page> page, NonnullOwnPtr<JS::ExecutionContext> execution_context, SerializedEnvironmentSettingsObject const& outside_settings, HighResolutionTime::DOMHighResTimeStamp unsafe_worker_creation_time, URL::Origin origin, EnvironmentId id, u64 agent_cluster_id)
 {
     // 1. Let realm be the value of execution context's Realm component.
     auto realm = execution_context->realm;
@@ -38,13 +37,9 @@ GC::Ref<WorkerEnvironmentSettingsObject> WorkerEnvironmentSettingsObject::setup(
     // 3. Let origin be a unique opaque origin if worker global scope's url's scheme is "data"; otherwise outside settings's origin.
     // NB: The browser process determines it, as it holds the worker's environment too.
 
-    // AD-HOC: A dedicated worker agent belongs to its owner's agent cluster, and a shared or service worker agent to a
-    //         new one — which the spec settles while obtaining the agent, from outside settings' relevant agent. Here,
-    //         the owner's cluster arrives with the serialized outside settings.
-    auto agent_cluster_id = is<DedicatedWorkerGlobalScope>(*worker) ? outside_settings.agent_cluster_id : Optional<u64> { get_random<u64>() };
-
     // 4. Let settings object be a new environment settings object whose algorithms are defined as follows:
     // NOTE: See the functions defined for this class.
+    // NB: The browser process obtains the worker's agent, and names its agent cluster.
     // FIXME: Is it enough to cache the has_cross_site_ancestor of outside_settings, or do we need to check the live object somehow?
     auto settings_object = realm->create<WorkerEnvironmentSettingsObject>(move(execution_context), *worker, move(origin), outside_settings.has_cross_site_ancestor, unsafe_worker_creation_time, agent_cluster_id);
     settings_object->target_browsing_context = nullptr;

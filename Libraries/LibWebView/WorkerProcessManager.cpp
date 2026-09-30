@@ -109,14 +109,15 @@ static CanonicalWorkerEnvironmentSettingsObject::Settings worker_environment_set
 // https://html.spec.whatwg.org/multipage/workers.html#dom-sharedworker
 Web::HTML::WorkerAgentId WorkerProcessManager::start_worker_agent(Owner owner, Optional<CanonicalEnvironmentSettingsObject const&> outside_settings, Web::HTML::WorkerAgentStartRequest request, IsPrivate is_private)
 {
-    // The owner names outside settings, which must be an environment it holds.
-    // FIXME: The worker takes the rest of the outside settings, such as their top-level origin, policy container and
-    //        cross-origin isolated capability, as the owner's process gave them.
+    // The owner names outside settings, which must be an environment it holds, and the worker takes the settings the UI
+    // process holds for it.
+    // FIXME: The worker takes the rest of the outside settings, such as their policy container, as the owner's process
+    //        gave them.
     if (!outside_settings.has_value()) {
         notify_worker_script_load_failure(owner);
         return 0;
     }
-    request.outside_settings.origin = outside_settings->origin();
+    outside_settings->serialize_into(request.outside_settings);
 
     // 9. Let outsideStorageKey be the result of running obtain a storage key for non-storage purposes given
     //    outsideSettings.
@@ -246,8 +247,9 @@ Web::HTML::WorkerAgentId WorkerProcessManager::start_worker_agent(Owner owner, O
     }
 
     auto inside_origin = agent.inside_settings->origin();
+    auto inside_agent_cluster_id = agent.inside_settings->agent_cluster_id();
     m_agents.set(agent_id, move(agent));
-    client->async_start_worker(request.url, request.type, request.credentials, request.name, move(request.outside_port), request.outside_settings, request.agent_type, move(inside_origin), move(environment_id));
+    client->async_start_worker(request.url, request.type, request.credentials, request.name, move(request.outside_port), request.outside_settings, request.agent_type, move(inside_origin), move(environment_id), inside_agent_cluster_id);
 
     return agent_id;
 }

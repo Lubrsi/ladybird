@@ -17,7 +17,7 @@ NonnullRefPtr<CanonicalSimilarOriginWindowAgent> CanonicalSimilarOriginWindowAge
     return adopt_ref(*new CanonicalSimilarOriginWindowAgent(agent_cluster_cross_origin_isolation_mode));
 }
 
-// Random, so that it cannot collide with the id a WebContent process gives a shared worker's agent cluster.
+// Random, like the id of a shared worker's agent cluster.
 CanonicalSimilarOriginWindowAgent::CanonicalSimilarOriginWindowAgent(CrossOriginIsolationMode agent_cluster_cross_origin_isolation_mode)
     : m_agent_cluster_id(get_random<u64>())
     , m_agent_cluster_cross_origin_isolation_mode(agent_cluster_cross_origin_isolation_mode)

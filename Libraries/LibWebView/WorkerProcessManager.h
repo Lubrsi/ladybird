@@ -21,6 +21,7 @@
 #include <LibWebCommon/HTML/WorkerAgentTypes.h>
 #include <LibWebCommon/Page/PageId.h>
 #include <LibWebView/BrowsingSession.h>
+#include <LibWebView/Export.h>
 #include <LibWebView/Forward.h>
 
 namespace WebView {
@@ -29,7 +30,7 @@ class WorkerProcessManager {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static WorkerProcessManager& the();
+    static WEBVIEW_API WorkerProcessManager& the();
 
     struct SharedWorkerKey {
         IsPrivate is_private { IsPrivate::No };
@@ -42,7 +43,7 @@ public:
 
     Web::HTML::WorkerAgentId start_worker_agent(WebContentClient&, Web::PageId page_id, Optional<CanonicalEnvironmentSettingsObject const&> outside_settings, Web::HTML::WorkerAgentStartRequest);
     Web::HTML::WorkerAgentId start_worker_agent(WebWorkerClient&, Optional<CanonicalEnvironmentSettingsObject const&> outside_settings, Web::HTML::WorkerAgentStartRequest);
-    Optional<CanonicalWorkerEnvironmentSettingsObject const&> inside_settings(Web::HTML::WorkerAgentId) const;
+    WEBVIEW_API Optional<CanonicalWorkerEnvironmentSettingsObject const&> inside_settings(Web::HTML::WorkerAgentId) const;
     void update_site_compatibility_data(JsonValue const&);
 
     void close_worker_agent(WebContentClient&, Web::HTML::WorkerAgentId, Web::HTML::WorkerAgentOwnerToken);

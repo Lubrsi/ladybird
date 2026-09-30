@@ -20,6 +20,7 @@
 #include <LibWebCommon/HTML/PreparedNavigationDescriptor.h>
 #include <LibWebCommon/HTML/Scripting/SerializedEnvironmentSettingsObject.h>
 #include <LibWebCommon/HTML/SessionHistoryEntryDescriptor.h>
+#include <LibWebCommon/HTML/WorkerAgentTypes.h>
 #include <LibWebCommon/Page/NavigationTarget.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/CanonicalDocument.h>
@@ -32,6 +33,8 @@
 #include <LibWebView/Utilities.h>
 #include <LibWebView/WebContentClient.h>
 #include <LibWebView/WebContentPage.h>
+#include <LibWebView/WebWorkerClient.h>
+#include <LibWebView/WorkerProcessManager.h>
 
 namespace {
 
@@ -83,7 +86,7 @@ RecordedSettings recorded_settings_of_active_document(WebView::CanonicalNavigabl
 
 }
 
-// A navigation renderers start or request has the UI process's record of its source document's environment: its origin,
+// A navigation or worker renderers start has the UI process's record of the environment starting it: its origin,
 // top-level creation URL, top-level origin, cross-site ancestor, agent cluster and cross-origin isolated capability.
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
@@ -322,9 +325,80 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     else
         fail("a navigation requested of a frame another process hosts"sv, "does not start"sv);
 
+    auto worker_start_request = [&](Web::HTML::SerializedEnvironmentSettingsObject outside_settings) {
+        return Web::HTML::WorkerAgentStartRequest {
+            .url = URL::about_blank(),
+            .agent_type = Web::HTML::AgentType::DedicatedWorker,
+            .type = Web::HTML::WorkerType::Classic,
+            .credentials = Web::HTML::RequestCredentials::SameOrigin,
+            .name = {},
+            .extended_lifetime = false,
+            .outside_port = Web::HTML::TransferDataEncoder {},
+            .outside_settings = move(outside_settings),
+            .caller_is_secure_context = false,
+            .maximum_frames_per_second = 60,
+            .owner_token = 1,
+        };
+    };
+
+    // A dedicated worker's environment has the origin, top-level origin, cross-site ancestor, agent cluster and
+    // cross-origin isolated capability of the environment starting it, as the UI process holds them.
+    auto expect_worker_settings = [&](StringView what, Web::HTML::WorkerAgentId agent_id, WebView::CanonicalEnvironmentSettingsObject const& outside_settings) -> WebView::CanonicalWorkerEnvironmentSettingsObject const* {
+        auto inside_settings = WebView::WorkerProcessManager::the().inside_settings(agent_id);
+        if (!inside_settings.has_value()) {
+            fail(what, "has no environment"sv);
+            return nullptr;
+        }
+        if (inside_settings->origin() != outside_settings.origin())
+            fail(what, "has the claimed origin"sv);
+        if (inside_settings->top_level_creation_url().has_value())
+            fail(what, "has a top-level creation URL"sv);
+        if (inside_settings->top_level_origin() != outside_settings.top_level_origin())
+            fail(what, "has the claimed top-level origin"sv);
+        if (inside_settings->has_cross_site_ancestor() != outside_settings.has_cross_site_ancestor())
+            fail(what, "has the claimed cross-site ancestor"sv);
+        if (inside_settings->agent_cluster_id() != outside_settings.agent_cluster_id())
+            fail(what, "has the claimed agent cluster"sv);
+        if (inside_settings->cross_origin_isolated_capability() != outside_settings.cross_origin_isolated_capability())
+            fail(what, "has the claimed cross-origin isolated capability"sv);
+        return &*inside_settings;
+    };
+
+    auto const& sandboxed_frame_settings = sandboxed_frame.active_document().relevant_global_object().relevant_settings_object();
+    auto worker_agent_id = stub.start_worker_agent(page_id, worker_start_request(forged_fetch_client(recorded_settings_of_active_document(sandboxed_frame)))).agent_id();
+    auto const* worker_settings = expect_worker_settings("a worker a frame starts"sv, worker_agent_id, sandboxed_frame_settings);
+
+    if (worker_settings) {
+        WebView::WebWorkerClient* worker_client = nullptr;
+        WebView::WorkerProcessManager::the().for_each_client([&](WebView::WebWorkerClient& client) {
+            if (!client.hosted_environment(worker_settings->id()).has_value())
+                return IterationDecision::Continue;
+            worker_client = &client;
+            return IterationDecision::Break;
+        });
+        VERIFY(worker_client);
+
+        Web::HTML::SerializedEnvironmentSettingsObject forged_worker_settings {
+            .id = worker_settings->id(),
+            .creation_url = URL::about_blank(),
+            .top_level_creation_url = victim_url,
+            .top_level_origin = victim_url.origin(),
+            .api_base_url = URL::about_blank(),
+            .origin = victim_url.origin(),
+            .has_cross_site_ancestor = !worker_settings->has_cross_site_ancestor(),
+            .policy_container = no_source_document.source_policy_container,
+            .cross_origin_isolated_capability = Web::HTML::CanUseCrossOriginIsolatedAPIs::Yes,
+            .agent_cluster_id = worker_settings->agent_cluster_id() + 1,
+            .time_origin = 0,
+            .global = Web::HTML::SerializedWorkerGlobalScope {},
+        };
+        auto nested_worker_agent_id = worker_client->start_worker_agent(worker_start_request(move(forged_worker_settings))).agent_id();
+        expect_worker_settings("a worker a worker starts"sv, nested_worker_agent_id, *worker_settings);
+    }
+
     if (failed)
         return 1;
 
-    outln("PASS: navigations go on with the UI process's record of their source, whatever renderers claim");
+    outln("PASS: navigations and workers have the UI process's record of the environment starting them, whatever renderers claim");
     return 0;
 }
