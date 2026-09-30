@@ -125,6 +125,9 @@ public:
     // https://html.spec.whatwg.org/multipage/webappapis.html#concept-settings-object-time-origin
     virtual double time_origin() const = 0;
 
+    // The global object of the environment this stands for, when another process hosts that environment.
+    virtual Optional<SerializedGlobal const&> remote_global() const { return {}; }
+
     Optional<URL::URL> parse_url(Utf16View);
     Optional<URL::URL> encoding_parse_url(Utf16View);
     Optional<Utf16String> encoding_parse_and_serialize_url(Utf16View);

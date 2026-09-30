@@ -69,6 +69,17 @@ Optional<URL::URL> determine_requests_referrer(Fetch::Infrastructure::Request co
             // Note: If request’s referrer is "no-referrer", Fetch will not call into this algorithm.
             VERIFY(referrer == Fetch::Infrastructure::Request::Referrer::Client);
 
+            // AD-HOC: A client standing in for an environment another process hosts has its global object there, so
+            //         the steps below read the global object as that process serialized it.
+            if (auto remote_global = environment->remote_global(); remote_global.has_value()) {
+                auto const* window = remote_global->get_pointer<HTML::SerializedWindow>();
+                if (!window)
+                    return environment->creation_url;
+                if (environment->origin().is_opaque())
+                    return {};
+                return window->associated_document.url;
+            }
+
             // FIXME: Add a const global_object() getter to ESO
             auto& global_object = const_cast<HTML::EnvironmentSettingsObject&>(*environment).global_object();
 

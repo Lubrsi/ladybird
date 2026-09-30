@@ -118,14 +118,6 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
     // IMPLEMENTATION DEFINED: We need an object to represent the fetch response's client
     auto outside_settings = GC::Heap::the().allocate<Web::HTML::EnvironmentSettingsSnapshot>(inside_settings->realm_execution_context().copy(), outside_settings_snapshot);
 
-    // HACK: The environment settings object used for the worker script fetch should have a Window as its global scope,
-    //       but the EnvironmentSettingsSnapshot used here has a WorkerGlobalScope (we don't have access to a Window).
-    //       This causes the Referrer-Policy spec's "determine request's referrer" algorithm to read the ESO's creation
-    //       URL, whereas it would normally read the document's URL. To hack around this, we overwrite the creation URL
-    //       (which is only used in the initial worker script fetch).
-    if (auto const* window = outside_settings_snapshot.global.get_pointer<Web::HTML::SerializedWindow>())
-        outside_settings->creation_url = window->associated_document.url;
-
     // 10. If is shared is true, then:
     if (is_shared) {
         auto& shared_global_scope = static_cast<Web::HTML::SharedWorkerGlobalScope&>(*worker_global_scope);

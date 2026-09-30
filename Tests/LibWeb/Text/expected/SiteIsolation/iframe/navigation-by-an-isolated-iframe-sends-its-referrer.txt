@@ -1,0 +1,5 @@
+Referer is the source iframe's URL: true
+Referer is the sibling's previous URL: false
+WebContent#0
+  iframe#0: remote WebContent#1
+  iframe#1: remote WebContent#2

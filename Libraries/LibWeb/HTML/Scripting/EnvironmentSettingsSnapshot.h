@@ -31,6 +31,7 @@ public:
     virtual CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability() const override { return CanUseCrossOriginIsolatedAPIs::No; }
     virtual Optional<u64> agent_cluster_id() const override { return m_agent_cluster_id; }
     virtual double time_origin() const override { return m_time_origin; }
+    virtual Optional<SerializedGlobal const&> remote_global() const override { return m_global; }
 
 protected:
     virtual void visit_edges(Cell::Visitor&) override;
@@ -42,6 +43,7 @@ private:
     GC::Ref<PolicyContainer> m_policy_container;
     Optional<u64> m_agent_cluster_id;
     double m_time_origin { 0 };
+    SerializedGlobal m_global;
 };
 
 }

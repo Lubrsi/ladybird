@@ -677,6 +677,8 @@ bool is_non_secure_context(Environment const& environment)
 SerializedEnvironmentSettingsObject EnvironmentSettingsObject::serialize()
 {
     auto serialized_global = [this]() -> SerializedGlobal {
+        if (auto remote_global = this->remote_global(); remote_global.has_value())
+            return *remote_global;
         bool relevant_settings_object_is_secure_context = is_secure_context(*this);
         auto& global = global_object();
         if (auto const* window = window_from_global_object(global)) {
