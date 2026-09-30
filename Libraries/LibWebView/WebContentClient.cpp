@@ -293,7 +293,6 @@ void WebContentClient::discard_page_of_undisplayed_top_level_traversable(Web::Pa
 
 void WebContentClient::unregister_view(Web::PageId page_id)
 {
-    forget_compositor_context(Web::compositor_context_id_for_page(page_id));
     if (auto* page = this->page(page_id))
         page->traversable().remove_page(*page);
 
