@@ -26,6 +26,7 @@
 #include <LibURL/Origin.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Export.h>
+#include <LibWeb/Fetch/Infrastructure/ClientContextSnapshot.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWeb/Fetch/Infrastructure/KeepaliveQuotaAccountant.h>
@@ -196,6 +197,12 @@ public:
     [[nodiscard]] ReservedClientType const& reserved_client() const { return m_reserved_client; }
     [[nodiscard]] ReservedClientType& reserved_client() { return m_reserved_client; }
     void set_reserved_client(ReservedClientType reserved_client) { m_reserved_client = move(reserved_client); }
+
+    [[nodiscard]] RefPtr<ClientContextSnapshot const> const& client_snapshot() const { return m_client_snapshot; }
+    void set_client_snapshot(RefPtr<ClientContextSnapshot const> client_snapshot) { m_client_snapshot = move(client_snapshot); }
+
+    [[nodiscard]] RefPtr<ReservedClientContextSnapshot const> const& reserved_client_snapshot() const { return m_reserved_client_snapshot; }
+    void set_reserved_client_snapshot(RefPtr<ReservedClientContextSnapshot const> reserved_client_snapshot) { m_reserved_client_snapshot = move(reserved_client_snapshot); }
 
     [[nodiscard]] HTML::EnvironmentId const& replaces_client_id() const { return m_replaces_client_id; }
     void set_replaces_client_id(HTML::EnvironmentId replaces_client_id) { m_replaces_client_id = move(replaces_client_id); }
@@ -383,6 +390,10 @@ private:
     // A request has an associated reserved client (null, an environment, or an environment settings object). Unless
     // stated otherwise it is null.
     ReservedClientType m_reserved_client;
+
+    // What fetching reads from the client and the reserved client, null when the respective one is.
+    RefPtr<ClientContextSnapshot const> m_client_snapshot;
+    RefPtr<ReservedClientContextSnapshot const> m_reserved_client_snapshot;
 
     // https://fetch.spec.whatwg.org/#concept-request-replaces-client-id
     // A request has an associated replaces client id (a string). Unless stated otherwise it is the empty string.
