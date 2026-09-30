@@ -76,6 +76,13 @@ ProhibitsMixedSecurityContexts does_settings_prohibit_mixed_security_contexts(GC
     return ProhibitsMixedSecurityContexts::DoesNotRestrictMixedSecurityContexts;
 }
 
+// NB: A navigation request's target browsing context is the one its reserved client names.
+static bool target_browsing_context_is_top_level(Fetch::Infrastructure::Request const& request)
+{
+    auto reserved_client = request.reserved_client();
+    return reserved_client && reserved_client->target_browsing_context && reserved_client->target_browsing_context->is_top_level();
+}
+
 // https://w3c.github.io/webappsec-mixed-content/#should-block-fetch
 Fetch::Infrastructure::RequestOrResponseBlocking should_fetching_request_be_blocked_as_mixed_content(Fetch::Infrastructure::Request& request)
 {
@@ -92,7 +99,7 @@ Fetch::Infrastructure::RequestOrResponseBlocking should_fetching_request_be_bloc
 
         // 4. request’s destination is "document", and request’s target browsing context has no parent browsing context.
         // TODO: "parent browsing context" doesn't exist anymore and is a spec bug, seems like it should be `is_top_level`
-        || (request.destination() == Fetch::Infrastructure::Request::Destination::Document && request.client()->target_browsing_context && request.client()->target_browsing_context->is_top_level())) {
+        || (request.destination() == Fetch::Infrastructure::Request::Destination::Document && target_browsing_context_is_top_level(request))) {
         return Fetch::Infrastructure::RequestOrResponseBlocking::Allowed;
     }
 
@@ -117,7 +124,7 @@ Web::Fetch::Infrastructure::RequestOrResponseBlocking should_response_to_request
 
         // 4. request’s destination is "document", and request’s target browsing context has no parent browsing context.
         // TODO: "parent browsing context" doesn't exist anymore and is a spec bug, seems like it should be `is_top_level`
-        || (request.destination() == Fetch::Infrastructure::Request::Destination::Document && request.client()->target_browsing_context && request.client()->target_browsing_context->is_top_level())) {
+        || (request.destination() == Fetch::Infrastructure::Request::Destination::Document && target_browsing_context_is_top_level(request))) {
         return Fetch::Infrastructure::RequestOrResponseBlocking::Allowed;
     }
 
