@@ -275,6 +275,27 @@ void CanonicalNavigable::begin_navigation_waiting_for_traversal()
     begin_navigation(m_navigation_waiting_for_traversal.release_value());
 }
 
+static constexpr size_t max_requested_navigation_sources = 16;
+
+void CanonicalNavigable::record_requested_navigation_source(RequestedNavigationSource source)
+{
+    if (m_requested_navigation_sources.size() == max_requested_navigation_sources)
+        m_requested_navigation_sources.take_first();
+    m_requested_navigation_sources.append(move(source));
+}
+
+Optional<CanonicalNavigable::RequestedNavigationSource> CanonicalNavigable::take_requested_navigation_source(Utf16String const& navigation_id)
+{
+    auto index = m_requested_navigation_sources.find_first_index_if([&](auto const& source) {
+        return source.navigation_id == navigation_id;
+    });
+    if (!index.has_value())
+        return {};
+    auto source = move(m_requested_navigation_sources[*index]);
+    m_requested_navigation_sources.remove(0, *index + 1);
+    return source;
+}
+
 // https://html.spec.whatwg.org/multipage/browsers.html#obtain-browsing-context-navigation
 // NB: The browsing context is returned with its active document, which nothing else holds for a new one.
 CanonicalBrowsingContext::BrowsingContextAndDocument CanonicalNavigable::obtain_a_browsing_context_to_use_for_a_navigation_response(NavigationLoader::ResponseDocument const& navigation_params)

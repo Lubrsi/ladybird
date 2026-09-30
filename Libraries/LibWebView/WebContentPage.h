@@ -139,6 +139,7 @@ public:
 private:
     Optional<CanonicalNavigable&> population_worker_navigable(Web::HTML::CrossProcessId navigable_id) const;
     bool continue_navigation_population_in_selected_process(Web::HTML::CrossProcessId navigable_id, Utf16String navigation_id);
+    bool replace_claimed_navigation_source(URL::Origin& initiator_origin, Web::HTML::NavigationSourceSnapshot&) const;
     void for_each_hosted_document(Function<IterationDecision(CanonicalDocument&)> const&) const;
     Optional<CanonicalDocument&> document_with_hosted_environment(Web::HTML::EnvironmentId const& environment_id) const;
     StorageJar* storage_jar(Web::StorageAPI::StorageEndpointType) const;

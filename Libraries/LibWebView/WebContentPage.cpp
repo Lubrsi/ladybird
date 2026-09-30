@@ -622,16 +622,26 @@ bool WebContentPage::take_owed_reply(OwedReply owed)
 
 void WebContentPage::did_request_navigation_of_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::PreparedNavigationDescriptor navigation)
 {
+    if (!replace_claimed_navigation_source(navigation.initiator_origin_snapshot, navigation.source_snapshot_params))
+        return;
+
     // A document that was lost with the process that hosted it is navigated from step 8 on here: no process hosts it.
-    if (auto target = traversable().top_level_traversable().find(navigable_id); target.has_value() && !target->active_document().host()) {
+    auto target = traversable().top_level_traversable().find(navigable_id);
+    if (target.has_value() && !target->active_document().host()) {
         target->begin_navigation(move(navigation));
         return;
     }
 
-    // The request continues navigate at step 8 in the process hosting the target's document.
+    // The request continues navigate at step 8 in the process hosting the target's document, which starts the
+    // navigation with the source held here.
     auto endpoint = endpoint_hosting_navigable_represented_by(navigable_id);
     if (!endpoint)
         return;
+    target->record_requested_navigation_source({
+        .navigation_id = navigation.navigation_id,
+        .initiator_origin = navigation.initiator_origin_snapshot,
+        .source_snapshot_params = navigation.source_snapshot_params,
+    });
     endpoint->async_navigate_navigable(navigable_id, move(navigation));
 }
 
@@ -1595,25 +1605,19 @@ void WebContentPage::did_request_set_system_visibility_state(Web::HTML::Visibili
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
-// NB: initiatorOriginSnapshot is sourceDocument's origin. The process names sourceDocument's relevant settings object as
-//     the fetch client, an environment that a process hosts, and the UI process takes the origin from it. Without a
-//     sourceDocument, the process gives a new opaque origin, which no document may hold yet.
-static Optional<URL::Origin> initiator_origin_snapshot(URL::Origin const& given_origin, Web::HTML::NavigationSourceSnapshot const& source_snapshot_params)
+// NB: initiatorOriginSnapshot and the fetch client are the UI process's record of sourceDocument's relevant settings
+//     object, one the process hosts, or a new opaque origin no document holds when there is no sourceDocument.
+bool WebContentPage::replace_claimed_navigation_source(URL::Origin& initiator_origin, Web::HTML::NavigationSourceSnapshot& source_snapshot_params) const
 {
-    if (!source_snapshot_params.fetch_client.has_value()) {
-        if (!given_origin.is_opaque() || CanonicalTraversable::is_origin_held_by_a_document(given_origin))
-            return {};
-        return given_origin;
-    }
-    Optional<URL::Origin> origin;
-    WebContentClient::for_each_client([&](WebContentClient& client) {
-        auto source_settings = client.hosted_environment(source_snapshot_params.fetch_client->id);
-        if (!source_settings.has_value())
-            return IterationDecision::Continue;
-        origin = source_settings->origin();
-        return IterationDecision::Break;
-    });
-    return origin;
+    if (!source_snapshot_params.fetch_client.has_value())
+        return initiator_origin.is_opaque() && !CanonicalTraversable::is_origin_held_by_a_document(initiator_origin);
+
+    auto source_settings = client().hosted_environment(source_snapshot_params.fetch_client->id);
+    if (!source_settings.has_value())
+        return false;
+    source_settings->serialize_into(*source_snapshot_params.fetch_client);
+    initiator_origin = source_settings->origin();
+    return true;
 }
 
 void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navigable_id, Web::NavigationTarget target, URL::URL url, Utf16String navigation_id, Optional<Web::HTML::NavigationStartRequest> start_request)
@@ -1628,19 +1632,24 @@ void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navi
     //         Recheck it here so navigation admission and history traversal remain ordered by the UI process.
     auto navigation_is_blocked_by_history_traversal = target_navigable
         && target_navigable->ongoing_navigation_is_traversal();
-    Optional<URL::Origin> initiator_origin;
-    if (start_request.has_value())
-        initiator_origin = initiator_origin_snapshot(start_request->initiator_origin, start_request->source_snapshot_params);
     if (!target_navigable
         || target_navigable->id() != navigable_id
         || (start_request.has_value() && start_request->navigable_id != navigable_id)
-        || (start_request.has_value() && !initiator_origin.has_value())
         || navigation_is_blocked_by_history_traversal) {
         async_cancel_navigation_params_creation(navigable_id, navigation_id);
         return;
     }
-    if (start_request.has_value())
-        start_request->initiator_origin = initiator_origin.release_value();
+
+    // A navigation another process requested of the navigable goes on with the source held for it.
+    if (start_request.has_value()) {
+        if (auto source = target_navigable->take_requested_navigation_source(navigation_id); source.has_value()) {
+            start_request->initiator_origin = move(source->initiator_origin);
+            start_request->source_snapshot_params = move(source->source_snapshot_params);
+        } else if (!replace_claimed_navigation_source(start_request->initiator_origin, start_request->source_snapshot_params)) {
+            async_cancel_navigation_params_creation(navigable_id, navigation_id);
+            return;
+        }
+    }
 
     auto sequence_number = target_navigable->top_level_traversable().next_sequence_number();
 
@@ -1727,6 +1736,12 @@ void WebContentPage::did_complete_navigation_unload_check(Web::HTML::CrossProces
 
 void WebContentPage::did_request_navigation_population(Web::HTML::CrossProcessId navigable_id, Web::NavigationTarget target, Web::HTML::NavigationPopulationRequest request)
 {
+    // A process requests population only for a navigation without a source document, which has no fetch client.
+    if (request.source_snapshot_params.fetch_client.has_value()) {
+        client().did_misbehave("did_request_navigation_population"sv, "population request with a fetch client"sv);
+        return;
+    }
+
     auto const& target_url = request.history_entry.url;
 
     CanonicalNavigable* target_navigable = &traversable();

@@ -19,6 +19,7 @@
 #include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
 #include <LibRequests/Forward.h>
+#include <LibURL/Origin.h>
 #include <LibURL/URL.h>
 #include <LibWebCommon/Forward.h>
 #include <LibWebCommon/HTML/CrossOrigin/OpenerPolicyEnforcementResult.h>
@@ -121,6 +122,16 @@ public:
     void begin_navigation(Web::HTML::PreparedNavigationDescriptor);
     bool has_navigation_waiting_for_traversal() const { return m_navigation_waiting_for_traversal.has_value(); }
     void begin_navigation_waiting_for_traversal();
+
+    // The source of a navigation of the navigable that another process requested, as the UI process holds it.
+    struct RequestedNavigationSource {
+        Utf16String navigation_id;
+        URL::Origin initiator_origin;
+        Web::HTML::NavigationSourceSnapshot source_snapshot_params;
+    };
+    void record_requested_navigation_source(RequestedNavigationSource);
+    // Takes the source of a requested navigation, and drops those of the navigations requested before it.
+    Optional<RequestedNavigationSource> take_requested_navigation_source(Utf16String const& navigation_id);
 
     CanonicalBrowsingContext::BrowsingContextAndDocument obtain_a_browsing_context_to_use_for_a_navigation_response(NavigationLoader::ResponseDocument const&);
     NonnullRefPtr<CanonicalDocument> create_and_initialize_a_document(NavigationLoader::ResponseDocument const&);
@@ -249,6 +260,8 @@ private:
     RefPtr<CanonicalSessionHistoryEntry> m_active_session_history_entry;
     Optional<CanonicalNavigation> m_ongoing_navigation;
     Optional<Web::HTML::PreparedNavigationDescriptor> m_navigation_waiting_for_traversal;
+    // Oldest first, the order in which the process hosting the navigable starts the navigations.
+    Vector<RequestedNavigationSource> m_requested_navigation_sources;
 
     BlobURLStore* blob_url_store() const;
     BlobURLHandle m_pending_navigation_blob_url;

@@ -47,6 +47,9 @@ public:
 
     bool may_use_cookies_of(URL::URL const&) const;
 
+    // Replaces the settings held here in a serialization of this environment.
+    void serialize_into(Web::HTML::SerializedEnvironmentSettingsObject&) const;
+
 protected:
     CanonicalEnvironmentSettingsObject(Web::HTML::EnvironmentId id, Optional<URL::URL> top_level_creation_url, Optional<URL::Origin> top_level_origin)
         : m_id(move(id))

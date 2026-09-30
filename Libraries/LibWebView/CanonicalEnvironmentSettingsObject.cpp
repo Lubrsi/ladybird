@@ -16,6 +16,17 @@ bool CanonicalEnvironmentSettingsObject::may_use_cookies_of(URL::URL const& url)
     return !origin().is_opaque() && url.origin().is_same_origin(origin());
 }
 
+void CanonicalEnvironmentSettingsObject::serialize_into(Web::HTML::SerializedEnvironmentSettingsObject& settings) const
+{
+    VERIFY(settings.id == id());
+    settings.top_level_creation_url = top_level_creation_url();
+    settings.top_level_origin = top_level_origin();
+    settings.origin = origin();
+    settings.has_cross_site_ancestor = has_cross_site_ancestor();
+    settings.cross_origin_isolated_capability = cross_origin_isolated_capability();
+    settings.agent_cluster_id = agent_cluster_id();
+}
+
 CanonicalWindowEnvironmentSettingsObject::CanonicalWindowEnvironmentSettingsObject(CanonicalWindow& window, Web::HTML::EnvironmentId id, URL::URL top_level_creation_url, URL::Origin top_level_origin, RefPtr<CanonicalDocument const> container_document)
     : CanonicalEnvironmentSettingsObject(move(id), move(top_level_creation_url), move(top_level_origin))
     , m_window(window)
