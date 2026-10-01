@@ -131,7 +131,7 @@ CORSSettingAttribute cors_setting_from_preload_scanner(RustFfiPreloadScannerCors
 void issue_speculative_fetch(JS::Realm& realm, DOM::Document& document, URL::URL url, Optional<Fetch::Infrastructure::Request::Destination> destination, CORSSettingAttribute cors_setting)
 {
     auto request = create_potential_CORS_request(url, destination, cors_setting);
-    request->set_client(&document.relevant_settings_object());
+    request->set_client(document.relevant_settings_object().address());
 
     Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input { Fetch::Engine::BodyIntent::DrainAndDiscard };
     auto algorithms = Fetch::Infrastructure::FetchAlgorithms::create(move(fetch_algorithms_input));
@@ -182,7 +182,7 @@ void issue_speculative_module_fetch(DOM::Document& document, URL::URL const& url
     request->set_url(url);
     request->set_mode(Fetch::Infrastructure::Request::Mode::CORS);
     request->set_referrer(Fetch::Infrastructure::Request::Referrer::Client);
-    request->set_client(&settings_object);
+    request->set_client(settings_object.address());
     request->set_destination(destination);
     if (first_is_one_of(destination,
             Fetch::Infrastructure::Request::Destination::Worker,

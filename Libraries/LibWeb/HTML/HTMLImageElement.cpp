@@ -1080,7 +1080,7 @@ after_step_7:
         auto request = create_potential_CORS_request(*url_record, Fetch::Infrastructure::Request::Destination::Image, m_cors_setting);
 
         // 20. Set request's client to the element's node document's relevant settings object.
-        request->set_client(&document().relevant_settings_object());
+        request->set_client(document().relevant_settings_object().address());
 
         // 21. If the element uses srcset or picture, set request's initiator to "imageset".
         if (uses_srcset_or_picture())
@@ -1351,7 +1351,7 @@ void HTMLImageElement::react_to_changes_in_the_environment()
         auto request = create_potential_CORS_request(*url_record, Fetch::Infrastructure::Request::Destination::Image, m_cors_setting);
 
         // 2. Set request's client to client, set request's initiator to "imageset", and set request's synchronous flag.
-        request->set_client(&client);
+        request->set_client(client.address());
         request->set_initiator(Fetch::Infrastructure::Request::Initiator::ImageSet);
 
         // 3. Set request's referrer policy to the current state of the element's referrerpolicy attribute.
