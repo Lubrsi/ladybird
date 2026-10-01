@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Atomic.h>
 #include <LibGC/Heap.h>
 #include <LibURL/InternalURLs.h>
 #include <LibWeb/Bindings/HostDefined.h>
@@ -54,8 +55,15 @@ void Environment::visit_edges(Cell::Visitor& visitor)
     visitor.visit(target_browsing_context);
 }
 
+static EnvironmentSettingsObjectAddress allocate_an_address()
+{
+    static Atomic<u64> s_next_address { 1 };
+    return EnvironmentSettingsObjectAddress { s_next_address.fetch_add(1) };
+}
+
 EnvironmentSettingsObject::EnvironmentSettingsObject(NonnullOwnPtr<JS::ExecutionContext> realm_execution_context)
     : m_realm_execution_context(move(realm_execution_context))
+    , m_address(allocate_an_address())
     , m_keepalive_quota_accountant(Fetch::Infrastructure::KeepaliveQuotaAccountant::create())
 {
     m_module_map = GC::Heap::the().allocate<ModuleMap>();
@@ -372,6 +380,11 @@ JS::Realm& incumbent_realm()
 {
     // Then, the incumbent realm is the realm of the incumbent settings object.
     return incumbent_settings_object().realm();
+}
+
+GC::Ptr<EnvironmentSettingsObject> environment_settings_object_at(EnvironmentSettingsObjectAddress address)
+{
+    return main_thread_event_loop().environment_settings_object_at(address);
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#incumbent-settings-object

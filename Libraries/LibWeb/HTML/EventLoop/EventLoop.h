@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Function.h>
+#include <AK/HashMap.h>
 #include <AK/Noncopyable.h>
 #include <AK/OwnPtr.h>
 #include <AK/Queue.h>
@@ -16,6 +17,7 @@
 #include <LibJS/Forward.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/HTML/EventLoop/TaskQueue.h>
+#include <LibWeb/HTML/Scripting/EnvironmentSettingsObjectAddress.h>
 #include <LibWebCommon/HighResolutionTime/DOMHighResTimeStamp.h>
 
 namespace Web::Layout::RustFFI {
@@ -143,6 +145,7 @@ public:
 
     void register_environment_settings_object(Badge<EnvironmentSettingsObject>, EnvironmentSettingsObject&);
     void unregister_environment_settings_object(Badge<EnvironmentSettingsObject>, EnvironmentSettingsObject&);
+    GC::Ptr<EnvironmentSettingsObject> environment_settings_object_at(EnvironmentSettingsObjectAddress) const;
 
     double compute_deadline() const;
 
@@ -243,7 +246,7 @@ private:
 
     // Used to implement step 4 of "perform a microtask checkpoint".
     // NOTE: These are weak references! ESO registers and unregisters itself from the event loop manually.
-    Vector<RawPtr<EnvironmentSettingsObject>> m_related_environment_settings_objects;
+    OrderedHashMap<EnvironmentSettingsObjectAddress, RawPtr<EnvironmentSettingsObject>> m_related_environment_settings_objects;
 
     // https://html.spec.whatwg.org/multipage/webappapis.html#backup-incumbent-settings-object-stack
     Vector<GC::Ref<EnvironmentSettingsObject>> m_backup_incumbent_realm_stack;

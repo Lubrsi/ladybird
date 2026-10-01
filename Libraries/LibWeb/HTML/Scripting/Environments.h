@@ -18,6 +18,7 @@
 #include <LibWeb/Fetch/Infrastructure/KeepaliveQuotaAccountant.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
+#include <LibWeb/HTML/Scripting/EnvironmentSettingsObjectAddress.h>
 #include <LibWeb/HTML/Scripting/ModuleMap.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
 #include <LibWeb/ServiceWorker/Registration.h>
@@ -90,6 +91,8 @@ struct WEB_API EnvironmentSettingsObject : public Environment {
 
 public:
     virtual void finalize() override;
+
+    EnvironmentSettingsObjectAddress address() const { return m_address; }
 
     // https://html.spec.whatwg.org/multipage/webappapis.html#concept-environment-target-browsing-context
     JS::ExecutionContext& realm_execution_context();
@@ -184,6 +187,7 @@ protected:
 
 private:
     NonnullOwnPtr<JS::ExecutionContext> m_realm_execution_context;
+    EnvironmentSettingsObjectAddress m_address;
     GC::Ptr<ModuleMap> m_module_map;
 
     GC::Ptr<EventLoop> m_responsible_event_loop;
@@ -228,6 +232,8 @@ WEB_API void clean_up_after_running_callback(EnvironmentSettingsObject const&);
 WEB_API bool module_type_allowed(EnvironmentSettingsObject const&, Utf16View module_type);
 
 WEB_API void add_module_to_resolved_module_set(EnvironmentSettingsObject&, Utf16View serialized_base_url, Utf16View normalized_specifier, Optional<URL::URL> const& as_url);
+
+WEB_API GC::Ptr<EnvironmentSettingsObject> environment_settings_object_at(EnvironmentSettingsObjectAddress);
 
 WEB_API EnvironmentSettingsObject& incumbent_settings_object();
 WEB_API JS::Realm& incumbent_realm();
