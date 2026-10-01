@@ -157,7 +157,7 @@ private:
     virtual bool is_implicitly_potentially_render_blocking() const override;
 
     GC::Ref<LinkProcessingOptions> create_link_options();
-    GC::Ptr<Fetch::Infrastructure::Request> create_link_request(LinkProcessingOptions const&);
+    RefPtr<Fetch::Infrastructure::Request> create_link_request(LinkProcessingOptions const&);
 
     void fetch_and_process_linked_resource();
     void default_fetch_and_process_linked_resource(u64 fetch_generation);
