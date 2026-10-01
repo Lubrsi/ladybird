@@ -45,8 +45,8 @@ ALLOWED_REALM_MENTIONS = {
     "DOM": (10, 33, "DOM abort plumbing and node helpers still have callback/materialization realm use"),
     "DOMURL": (2, 4, "URLSearchParams iterator objects still materialize JS iterator results in selected realms"),
     "Fetch": (
-        23,
-        64,
+        22,
+        63,
         "Fetch bodies, headers, requests, responses, and controllers still materialize JS values/streams; "
         "the body receiver's delivery and close tasks carry the realm its stream is enqueued and closed in; "
         "the byte-channel pull adapter materializes stream pulls and errors on the consumer side",
@@ -55,7 +55,7 @@ ALLOWED_REALM_MENTIONS = {
     "Geometry": (8, 8, "geometry constructors and structured clone still materialize JS-facing geometry objects"),
     "HTML": (
         73,
-        223,
+        222,
         "HTML algorithms still contain structured serialization, including posted-message preparation, canvas, navigation transfer/reconstruction, worker/worklet, and event realm use, and cross-origin Window/Location property functions are created in the current realm; RemoteWindow mirrors Window's postMessage",
     ),
     "IndexedDB": (

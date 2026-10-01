@@ -7,35 +7,35 @@
 #include <LibGC/Heap.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Fetch/Fetching/PendingResponse.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
+#include <LibWeb/Fetch/Infrastructure/FetchParams.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 
 namespace Web::Fetch::Fetching {
 
 GC_DEFINE_ALLOCATOR(PendingResponse);
 
-GC::Ref<PendingResponse> PendingResponse::create(GC::Ref<Infrastructure::Request> request)
+GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params)
 {
-    return GC::Heap::the().allocate<PendingResponse>(request);
+    return GC::Heap::the().allocate<PendingResponse>(fetch_params);
 }
 
-GC::Ref<PendingResponse> PendingResponse::create(GC::Ref<Infrastructure::Request> request, GC::Ref<Infrastructure::Response> response)
+GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params, GC::Ref<Infrastructure::Response> response)
 {
-    return GC::Heap::the().allocate<PendingResponse>(request, response);
+    return GC::Heap::the().allocate<PendingResponse>(fetch_params, response);
 }
 
-PendingResponse::PendingResponse(GC::Ref<Infrastructure::Request> request, GC::Ptr<Infrastructure::Response> response)
-    : m_request(request)
+PendingResponse::PendingResponse(Infrastructure::FetchParams const& fetch_params, GC::Ptr<Infrastructure::Response> response)
+    : m_fetch_params(fetch_params)
     , m_response(response)
 {
-    m_request->add_pending_response({}, *this);
+    m_fetch_params->add_pending_response({}, *this);
 }
 
 void PendingResponse::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_callback);
-    visitor.visit(m_request);
+    visitor.visit(m_fetch_params);
     visitor.visit(m_response);
 }
 
@@ -63,7 +63,7 @@ void PendingResponse::run_callback()
         VERIFY(m_callback);
         VERIFY(m_response);
         m_callback->function()(*m_response);
-        m_request->remove_pending_response({}, *this);
+        m_fetch_params->remove_pending_response({}, *this);
     }));
 }
 

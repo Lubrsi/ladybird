@@ -6,6 +6,7 @@
 
 #include <LibGC/Heap.h>
 #include <LibJS/Runtime/VM.h>
+#include <LibWeb/Fetch/Fetching/PendingResponse.h>
 #include <LibWeb/Fetch/Infrastructure/FetchParams.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 
@@ -13,8 +14,8 @@ namespace Web::Fetch::Infrastructure {
 
 GC_DEFINE_ALLOCATOR(FetchParams);
 
-FetchParams::FetchParams(GC::Ref<Request> request, GC::Ref<FetchAlgorithms const> algorithms, GC::Ref<FetchController> controller, NonnullRefPtr<FetchTimingInfo> timing_info)
-    : m_request(request)
+FetchParams::FetchParams(NonnullRefPtr<Request> request, GC::Ref<FetchAlgorithms const> algorithms, GC::Ref<FetchController> controller, NonnullRefPtr<FetchTimingInfo> timing_info)
+    : m_request(move(request))
     , m_algorithms(algorithms)
     , m_controller(controller)
     , m_timing_info(move(timing_info))
@@ -35,10 +36,10 @@ FetchParams::FetchParams(FetchParams const& params)
 {
 }
 
-GC::Ref<FetchParams> FetchParams::create(GC::Ref<Request> request, GC::Ref<FetchAlgorithms const> algorithms, NonnullRefPtr<FetchTimingInfo> timing_info)
+GC::Ref<FetchParams> FetchParams::create(NonnullRefPtr<Request> request, GC::Ref<FetchAlgorithms const> algorithms, NonnullRefPtr<FetchTimingInfo> timing_info)
 {
     auto controller = Infrastructure::FetchController::create();
-    return GC::Heap::the().allocate<FetchParams>(request, algorithms, controller, move(timing_info));
+    return GC::Heap::the().allocate<FetchParams>(move(request), algorithms, controller, move(timing_info));
 }
 
 GC::Ref<FetchParams> FetchParams::copy(FetchParams const& params)
@@ -49,11 +50,11 @@ GC::Ref<FetchParams> FetchParams::copy(FetchParams const& params)
 void FetchParams::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_request);
     visitor.visit(m_algorithms);
     visitor.visit(m_controller);
     visitor.visit(m_task_destination);
     visitor.visit(m_preloaded_response_candidate);
+    visitor.visit(m_pending_responses);
 }
 
 // https://fetch.spec.whatwg.org/#fetch-params-aborted

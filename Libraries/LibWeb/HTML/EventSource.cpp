@@ -224,7 +224,6 @@ void EventSource::finalize()
 void EventSource::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_request);
     visitor.visit(m_fetch_algorithms);
     visitor.visit(m_fetch_controller);
     visitor.visit(m_global_object);
