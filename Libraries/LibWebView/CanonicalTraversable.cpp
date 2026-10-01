@@ -2574,13 +2574,17 @@ void CanonicalTraversable::finalize_a_cross_document_navigation(HistoryOperation
 
         // 8. Assert: initiatorOrigin is newDocument's origin.
         // NB: The UI process creates its newDocument with initiatorOrigin.
+
+        // 14. Let coop be targetNavigable's active document's opener policy.
+        auto const& coop = navigable->active_document().opener_policy();
+
         NavigationLoader::ResponseDocument response_document {
             .is_inline_content = false,
-            .coop_enforcement_result = { .url = history_entry->url, .origin = *initiator_origin, .opener_policy = {} },
+            .coop_enforcement_result = { .url = history_entry->url, .origin = *initiator_origin, .opener_policy = coop },
             .response_url = history_entry->url,
             .request_current_url = {},
             .origin = *initiator_origin,
-            .opener_policy = {},
+            .opener_policy = coop,
             .environment_id = parameters.environment_id,
         };
 

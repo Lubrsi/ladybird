@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Random.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
@@ -54,6 +55,55 @@ Optional<CanonicalWorkerEnvironmentSettingsObject const&> WorkerProcessManager::
     if (agent == m_agents.end())
         return {};
     return *agent->value.inside_settings;
+}
+
+// The settings of a worker's environment, as running the worker gives them.
+static CanonicalWorkerEnvironmentSettingsObject::Settings worker_environment_settings(CanonicalEnvironmentSettingsObject const& outside_settings, Web::HTML::WorkerAgentStartRequest const& request)
+{
+    auto is_shared = request.agent_type == Web::HTML::AgentType::SharedWorker;
+
+    // https://html.spec.whatwg.org/multipage/workers.html#run-a-worker
+    // 4. Let agent be the result of obtaining a dedicated/shared worker agent given outside settings and is shared.
+    // NB: A dedicated worker's agent is in the agent cluster of outside settings, and a shared worker's in a new one.
+    auto agent_cluster_id = is_shared ? get_random<u64>() : outside_settings.agent_cluster_id();
+
+    auto cross_origin_isolated_capability = [&] {
+        // AD-HOC: A shared worker has the cross-origin isolated capability of the outside settings it is started with.
+        if (is_shared)
+            return outside_settings.cross_origin_isolated_capability();
+
+        // 7. Set worker global scope's cross-origin isolated capability to true if agent's agent cluster's cross-origin
+        //    isolation mode is "concrete".
+        // 8. If is shared is false and owner's cross-origin isolated capability is false, then set worker global
+        //    scope's cross-origin isolated capability to false.
+        // NB: outside settings has the capability only if its agent cluster, which is agent's, is "concrete".
+
+        // 9. If is shared is false and response's URL's scheme is "data", then set worker global scope's cross-origin
+        //    isolated capability to false.
+        // NB: The response's URL is a data: URL only if the worker's URL is.
+        if (request.url.scheme() == "data"sv)
+            return Web::HTML::CanUseCrossOriginIsolatedAPIs::No;
+        return outside_settings.cross_origin_isolated_capability();
+    }();
+
+    // https://html.spec.whatwg.org/multipage/workers.html#set-up-a-worker-environment-settings-object
+    return {
+        .url = request.url,
+
+        // 3. Let origin be a unique opaque origin if worker global scope's url's scheme is "data"; otherwise outside
+        //    settings's origin.
+        .origin = request.url.scheme() == "data"sv ? URL::Origin::create_opaque() : outside_settings.origin(),
+
+        // 6. If worker global scope is a DedicatedWorkerGlobalScope object, then set settings object's top-level origin
+        //    to outside settings's top-level origin.
+        // 7. Otherwise, set settings object's top-level origin to an implementation-defined value.
+        // NB: That is outside settings's top-level origin too.
+        .top_level_origin = outside_settings.top_level_origin(),
+
+        .outside_settings_has_cross_site_ancestor = outside_settings.has_cross_site_ancestor(),
+        .cross_origin_isolated_capability = cross_origin_isolated_capability,
+        .agent_cluster_id = agent_cluster_id,
+    };
 }
 
 // https://html.spec.whatwg.org/multipage/workers.html#dom-sharedworker
@@ -163,12 +213,8 @@ Web::HTML::WorkerAgentId WorkerProcessManager::start_worker_agent(Owner owner, O
     owners.append(owner);
 
     // https://html.spec.whatwg.org/multipage/workers.html#set-up-a-worker-environment-settings-object
-    // 3. Let origin be a unique opaque origin if worker global scope's url's scheme is "data"; otherwise outside
-    //    settings's origin.
-    auto origin = request.url.scheme() == "data"sv ? URL::Origin::create_opaque() : outside_settings->origin();
-
     // 5. Set settings object's id to a new unique opaque string, [...]
-    auto inside_settings = make<CanonicalWorkerEnvironmentSettingsObject>(move(origin), Web::HTML::EnvironmentId::generate());
+    auto inside_settings = make<CanonicalWorkerEnvironmentSettingsObject>(Web::HTML::EnvironmentId::generate(), worker_environment_settings(*outside_settings, request));
     auto environment_id = inside_settings->id();
 
     // AD-HOC: Seed worker_is_secure_context with the caller's value so reuse requests arriving before

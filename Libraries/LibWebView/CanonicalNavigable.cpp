@@ -16,6 +16,7 @@
 #include <LibWebView/CanonicalBrowsingContext.h>
 #include <LibWebView/CanonicalBrowsingContextGroup.h>
 #include <LibWebView/CanonicalDocument.h>
+#include <LibWebView/CanonicalEnvironmentSettingsObject.h>
 #include <LibWebView/CanonicalTraversable.h>
 #include <LibWebView/CanonicalWindow.h>
 #include <LibWebView/ViewImplementation.h>
@@ -365,12 +366,32 @@ NonnullRefPtr<CanonicalDocument> CanonicalNavigable::create_and_initialize_a_doc
         //    - For the global object, create a new Window object.
         //    - For the global this binding, use browsingContext's WindowProxy object.
         // 6. Set window to the global object of realmExecutionContext's Realm component.
-        // NB: The realm is in the process hosting agent, which runs steps 7 to 10.
+        // NB: The realm is in the process hosting agent.
         window = CanonicalWindow::create(agent);
+
+        // 7. Let topLevelCreationURL be creationURL.
+        auto top_level_creation_url = creation_url;
+
+        // 8. Let topLevelOrigin be navigationParams's origin.
+        auto top_level_origin = navigation_params.origin;
+
+        // 9. If navigable's container is not null:
+        // NB: The container's relevant settings object is that of its node document, the navigable's container
+        //     document.
+        if (m_container_document) {
+            // 1. Let parentEnvironment be navigable's container's relevant settings object.
+            auto const& parent_environment = m_container_document->relevant_global_object().relevant_settings_object();
+
+            // 2. Set topLevelCreationURL to parentEnvironment's top-level creation URL.
+            top_level_creation_url = parent_environment.top_level_creation_url().value();
+
+            // 3. Set topLevelOrigin to parentEnvironment's top-level origin.
+            top_level_origin = parent_environment.top_level_origin().value();
+        }
 
         // 10. Set up a window environment settings object with creationURL, realmExecutionContext, navigationParams's
         //     reserved environment, topLevelCreationURL, and topLevelOrigin.
-        window->set_up_a_window_environment_settings_object(navigation_params.environment_id);
+        window->set_up_a_window_environment_settings_object(navigation_params.environment_id, move(top_level_creation_url), move(top_level_origin), m_container_document);
     }
 
     // 9. Let document be a new Document, with

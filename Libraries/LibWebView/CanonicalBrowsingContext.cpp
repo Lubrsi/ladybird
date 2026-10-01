@@ -9,6 +9,7 @@
 #include <LibWebView/CanonicalBrowsingContext.h>
 #include <LibWebView/CanonicalBrowsingContextGroup.h>
 #include <LibWebView/CanonicalDocument.h>
+#include <LibWebView/CanonicalEnvironmentSettingsObject.h>
 #include <LibWebView/CanonicalTraversable.h>
 #include <LibWebView/CanonicalWindow.h>
 #include <LibWebView/WebContentClient.h>
@@ -77,9 +78,24 @@ CanonicalBrowsingContext::BrowsingContextAndDocument CanonicalBrowsingContext::c
     // NB: The realm is in the process creating the document, which hosts agent once it holds the document.
     auto window = CanonicalWindow::create(agent);
 
+    // NB: embedder's node document is creator.
+    RefPtr<CanonicalDocument const> container_document = embedder.has_value() ? creator : nullptr;
+
+    // 11. Let topLevelCreationURL be about:blank if embedder is null; otherwise embedder's relevant settings object's
+    //     top-level creation URL.
+    auto top_level_creation_url = container_document
+        ? container_document->relevant_global_object().relevant_settings_object().top_level_creation_url().value()
+        : about_blank;
+
+    // 12. Let topLevelOrigin be origin if embedder is null; otherwise embedder's relevant settings object's top-level
+    //     origin.
+    auto top_level_origin = container_document
+        ? container_document->relevant_global_object().relevant_settings_object().top_level_origin().value()
+        : origin;
+
     // 13. Set up a window environment settings object with about:blank, realm execution context, null,
     //     topLevelCreationURL, and topLevelOrigin.
-    window->set_up_a_window_environment_settings_object(move(environment_id));
+    window->set_up_a_window_environment_settings_object(move(environment_id), move(top_level_creation_url), move(top_level_origin), move(container_document));
 
     // 15. Let document be a new Document, with:
     //     origin: origin
