@@ -12,6 +12,7 @@
 #include <LibWeb/ContentSecurityPolicy/Violation.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOMURL/DOMURL.h>
+#include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
@@ -80,7 +81,7 @@ ContentSecurityPolicy::Directives::Directive::Result require_trusted_types_for_p
     //      "Location href":
     auto converted_script_source = process_value_with_a_default_policy(
         TrustedTypeName::TrustedScript,
-        request.client()->global_object(),
+        Fetch::Fetching::resolve_client(request)->global_object(),
         Utf16String::from_utf8(encoded_script_source),
         InjectionSink::Location_href);
 

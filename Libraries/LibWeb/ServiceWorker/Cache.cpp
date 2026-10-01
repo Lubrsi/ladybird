@@ -9,6 +9,7 @@
 #include <LibWeb/Bindings/Wrappable.h>
 #include <LibWeb/Bindings/WrapperWorld.h>
 #include <LibWeb/DOM/AbortSignal.h>
+#include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
@@ -274,7 +275,7 @@ void Cache::add_all(JS::Realm& realm, ReadonlySpan<Fetch::RequestInfo> requests,
         }
 
         // 3. If r’s client’s global object is a ServiceWorkerGlobalScope object, set request’s service-workers mode to "none".
-        if (Bindings::service_worker_global_scope_from_global_object(inner_request->client()->global_object()))
+        if (Bindings::service_worker_global_scope_from_global_object(Fetch::Fetching::resolve_client(inner_request)->global_object()))
             inner_request->set_service_workers_mode(Fetch::Infrastructure::Request::ServiceWorkersMode::None);
 
         // 4. Add r to requestList.

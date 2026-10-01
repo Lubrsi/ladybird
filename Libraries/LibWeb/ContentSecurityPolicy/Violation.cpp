@@ -15,6 +15,7 @@
 #include <LibWeb/ContentSecurityPolicy/Violation.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOMURL/DOMURL.h>
+#include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
@@ -83,7 +84,7 @@ GC::Ref<Violation> Violation::create_a_violation_object_for_request_and_policy(G
 
     // 2. Let violation be the result of executing § 2.4.1 Create a violation object for global, policy, and directive
     //      on request’s client’s global object, policy, and directive.
-    auto violation = create_a_violation_object_for_global_policy_and_directive(request->client()->global_object(), policy, String { directive->view().to_utf8_but_should_be_ported_to_utf16() });
+    auto violation = create_a_violation_object_for_global_policy_and_directive(Fetch::Fetching::resolve_client(request)->global_object(), policy, String { directive->view().to_utf8_but_should_be_ported_to_utf16() });
 
     // 3. Set violation’s resource to request’s url.
     // Spec Note: We use request’s url, and not its current url, as the latter might contain information about redirect
@@ -419,7 +420,7 @@ void Violation::report_a_violation(JS::Realm& realm)
 
                         // client
                         //    violation's global object's relevant settings object
-                        request->set_client(&environment_settings_object);
+                        request->set_client(environment_settings_object.address());
 
                         // destination
                         //    "report"
