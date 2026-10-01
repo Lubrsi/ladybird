@@ -161,7 +161,7 @@ public:
     // Members are implementation-defined
     struct InternalPriority { };
 
-    using BodyType = Variant<Empty, ByteBuffer, GC::Ref<Body>>;
+    using BodyType = Variant<Empty, ByteBuffer, FetchBody>;
     using OriginType = Variant<Origin, URL::Origin>;
     using PolicyContainerType = Variant<PolicyContainer, NonnullRefPtr<HTML::PolicyContainer const>>;
     using ReferrerType = RequestReferrerType;
@@ -190,7 +190,11 @@ public:
         if (body.has<Empty>())
             m_keepalive_quota_reservation.clear();
         m_body = move(body);
+        ++m_body_generation;
     }
+
+    // Changes whenever the body is set.
+    [[nodiscard]] u64 body_generation() const { return m_body_generation; }
 
     [[nodiscard]] Optional<HTML::EnvironmentSettingsObjectAddress> client() const { return m_client; }
     void set_client(Optional<HTML::EnvironmentSettingsObjectAddress> client) { m_client = client; }
@@ -333,11 +337,7 @@ public:
     [[nodiscard]] String serialize_origin() const;
     [[nodiscard]] ByteString byte_serialize_origin() const;
 
-    enum class BodyCloning : u8 {
-        Tee,
-        FromSource,
-    };
-    [[nodiscard]] GC::Ref<Request> clone(JS::Realm&, BodyCloning) const;
+    [[nodiscard]] GC::Ref<Request> clone() const;
 
     void add_range_header(u64 first, Optional<u64> const& last);
     void add_origin_header();
@@ -381,7 +381,9 @@ private:
 
     // https://fetch.spec.whatwg.org/#concept-request-body
     // A request has an associated body (null, a byte sequence, or a body). Unless stated otherwise it is null.
+    // NB: A body is held without its stream.
     BodyType m_body;
+    u64 m_body_generation { 0 };
 
     // https://fetch.spec.whatwg.org/#concept-request-client
     // A request has an associated client (null or an environment settings object).

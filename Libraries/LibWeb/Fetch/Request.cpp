@@ -183,6 +183,7 @@ void Request::visit_edges(GC::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_request);
+    visitor.visit(m_body);
     visitor.visit(m_headers);
     visitor.visit(m_signal);
 }
@@ -202,11 +203,10 @@ GC::Ptr<Infrastructure::Body const> Request::body_impl() const
 {
     // Objects including the Body interface mixin have an associated body (null or a body).
     // A Request object’s body is its request’s body.
-    return m_request->body().visit(
-        [](GC::Ref<Infrastructure::Body> const& b) -> GC::Ptr<Infrastructure::Body const> { return b; },
-        [](Empty) -> GC::Ptr<Infrastructure::Body const> { return nullptr; },
-        // A byte sequence will be safely extracted into a body early on in fetch.
-        [](ByteBuffer const&) -> GC::Ptr<Infrastructure::Body const> { VERIFY_NOT_REACHED(); });
+    // NB: A body fetching sets on the request in place of this one has a stream that nothing holds.
+    if (m_request->body_generation() != m_body_generation)
+        return nullptr;
+    return m_body;
 }
 
 // https://fetch.spec.whatwg.org/#concept-body-body
@@ -215,11 +215,10 @@ GC::Ptr<Infrastructure::Body> Request::body_impl()
 {
     // Objects including the Body interface mixin have an associated body (null or a body).
     // A Request object’s body is its request’s body.
-    return m_request->body().visit(
-        [](GC::Ref<Infrastructure::Body>& b) -> GC::Ptr<Infrastructure::Body> { return b; },
-        [](Empty) -> GC::Ptr<Infrastructure::Body> { return {}; },
-        // A byte sequence will be safely extracted into a body early on in fetch.
-        [](ByteBuffer&) -> GC::Ptr<Infrastructure::Body> { VERIFY_NOT_REACHED(); });
+    // NB: A body fetching sets on the request in place of this one has a stream that nothing holds.
+    if (m_request->body_generation() != m_body_generation)
+        return nullptr;
+    return m_body;
 }
 
 // https://fetch.spec.whatwg.org/#request-create
@@ -591,16 +590,16 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::create_with_settings(HTML::Enviro
     }
 
     // 34. Let inputBody be input’s request’s body if input is a Request object; otherwise null.
-    Optional<Infrastructure::Request::BodyType const&> input_body;
+    GC::Ptr<Infrastructure::Body> input_body;
     if (input.has<GC::Ref<Request>>())
-        input_body = input.get<GC::Ref<Request>>()->request()->body();
+        input_body = input.get<GC::Ref<Request>>()->body_impl();
 
     // 35. If either init["body"] exists and is non-null or inputBody is non-null, and request’s method is `GET` or `HEAD`, then throw a TypeError.
-    if (((init.body.has_value() && !init.body->has<Empty>()) || (input_body.has_value() && !input_body.value().has<Empty>())) && request->method().is_one_of("GET"sv, "HEAD"sv))
+    if (((init.body.has_value() && !init.body->has<Empty>()) || input_body) && request->method().is_one_of("GET"sv, "HEAD"sv))
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Method must not be GET or HEAD when body is provided"_utf16 };
 
     // 36. Let initBody be null.
-    Optional<Infrastructure::Request::BodyType> init_body;
+    GC::Ptr<Infrastructure::Body> init_body;
 
     // 37. If init["body"] exists and is non-null, then:
     if (init.body.has_value() && !init.body->has<Empty>()) {
@@ -619,13 +618,12 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::create_with_settings(HTML::Enviro
     }
 
     // 38. Let inputOrInitBody be initBody if it is non-null; otherwise inputBody.
-    auto input_or_init_body = init_body.value_or<Optional<Infrastructure::Request::BodyType const&>>(input_body);
+    auto input_or_init_body = init_body ? init_body : input_body;
 
     // 39. If inputOrInitBody is non-null and inputOrInitBody’s source is null, then:
-    // FIXME: The spec doesn't check if inputOrInitBody is a body before accessing source.
-    if (input_or_init_body.has_value() && input_or_init_body->has<GC::Ref<Infrastructure::Body>>() && !input_or_init_body->get<GC::Ref<Infrastructure::Body>>()->source().has_value()) {
+    if (input_or_init_body && !input_or_init_body->source().has_value()) {
         // 1. If initBody is non-null and init["duplex"] does not exist, then throw a TypeError.
-        if (init_body.has_value() && !init.duplex.has_value())
+        if (init_body && !init.duplex.has_value())
             return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Body without source requires 'duplex' value to be set"_utf16 };
 
         // 2. If this’s request’s mode is neither "same-origin" nor "cors", then throw a TypeError.
@@ -637,10 +635,10 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::create_with_settings(HTML::Enviro
     }
 
     // 40. Let finalBody be inputOrInitBody.
-    auto const& final_body = input_or_init_body;
+    auto final_body = input_or_init_body;
 
     // 41. If initBody is null and inputBody is non-null, then:
-    if (!init_body.has_value() && input_body.has_value()) {
+    if (!init_body && input_body) {
         // 2. If input is unusable, then throw a TypeError.
         if (input.has<GC::Ref<Request>>() && input.get<GC::Ref<Request>>()->is_unusable())
             return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Request is unusable"_utf16 };
@@ -649,8 +647,11 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::create_with_settings(HTML::Enviro
     }
 
     // 42. Set this’s request’s body to finalBody.
-    if (final_body.has_value())
-        request_object->request()->set_body(*final_body);
+    if (final_body) {
+        request_object->request()->set_body(final_body->fetch_body());
+        request_object->m_body = final_body;
+        request_object->m_body_generation = request_object->request()->body_generation();
+    }
 
     return GC::Ref { *request_object };
 }
@@ -785,7 +786,9 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::clone(JS::Realm& realm) const
         return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "Request is unusable"_utf16 };
 
     // 2. Let clonedRequest be the result of cloning this’s request.
-    auto cloned_request = m_request->clone(realm, Infrastructure::Request::BodyCloning::Tee);
+    // NB: Cloning the body tees the stream held here.
+    auto cloned_request = m_request->clone();
+    auto cloned_body = body_impl() ? m_body->clone(realm) : GC::Ptr<Infrastructure::Body> {};
 
     // 3. Assert: this’s signal is non-null.
     VERIFY(m_signal);
@@ -795,6 +798,8 @@ WebIDL::ExceptionOr<GC::Ref<Request>> Request::clone(JS::Realm& realm) const
 
     // 5. Let clonedRequestObject be the result of creating a Request object, given clonedRequest, this’s headers’s guard, clonedSignal and this’s relevant realm.
     auto cloned_request_object = Request::create(cloned_request, m_headers->guard(), cloned_signal);
+    cloned_request_object->m_body = cloned_body;
+    cloned_request_object->m_body_generation = cloned_request->body_generation();
 
     // 6. Return clonedRequestObject.
     return cloned_request_object;
