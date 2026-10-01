@@ -250,8 +250,8 @@ GC::Ref<Infrastructure::FetchController> fetch(JS::Realm& realm, Infrastructure:
     fetch_params->set_has_response_body_transfer_lease(create_response_body_transfer_lease == CreateResponseBodyTransferLease::Yes);
 
     // 9. If request’s body is a byte sequence, then set request’s body to request’s body as a body.
-    if (auto const* buffer = request.body().get_pointer<ByteBuffer>())
-        request.set_body(Infrastructure::byte_sequence_as_body(realm, buffer->bytes()));
+    if (auto* buffer = request.body().get_pointer<ByteBuffer>())
+        request.set_body(Infrastructure::FetchBody::from_bytes(Core::ImmutableBytes::adopt(move(*buffer))));
 
     // AD-HOC: The blob URL entry of request’s URL is resolved here, when the fetch starts, so that scheme fetch needs no
     //         page. It is the entry of request’s current URL there, since no redirect leads to a blob URL.
@@ -394,7 +394,7 @@ GC::Ref<Infrastructure::FetchController> fetch(JS::Realm& realm, Infrastructure:
             auto body_length = request.body().visit(
                 [](Empty) -> u64 { return 0; },
                 [](ByteBuffer const& buffer) -> u64 { return buffer.size(); },
-                [](GC::Ref<Infrastructure::Body> body) -> u64 { return body->length().value_or(0); });
+                [](Infrastructure::FetchBody const& body) -> u64 { return body.length().value_or(0); });
             request.set_keepalive_quota_reservation(request.client_snapshot()->keepalive_quota_accountant->reserve(body_length));
         }
     }
@@ -1450,7 +1450,7 @@ GC::Ref<PendingResponse> http_fetch(JS::Realm& realm, Infrastructure::FetchParam
     // 3. If request’s service-workers mode is "all", then:
     if (request->service_workers_mode() == Infrastructure::Request::ServiceWorkersMode::All) {
         // 1. Let requestForServiceWorker be a clone of request.
-        auto request_for_service_worker = request->clone(realm, Infrastructure::Request::BodyCloning::FromSource);
+        auto request_for_service_worker = request->clone();
 
         // 2. If requestForServiceWorker’s body is non-null, then:
         if (!request_for_service_worker->body().has<Empty>()) {
@@ -1724,7 +1724,7 @@ GC::Ptr<PendingResponse> http_redirect_fetch(JS::Realm& realm, Infrastructure::F
     //     return a network error.
     if (internal_response->status() != 303
         && !request->body().has<Empty>()
-        && !request->body().get<GC::Ref<Infrastructure::Body>>()->source().has_value()) {
+        && !request->body().get<Infrastructure::FetchBody>().source().has_value()) {
         return PendingResponse::create(request, Infrastructure::Response::network_error("Request has body but no body source"_string));
     }
 
@@ -1766,8 +1766,8 @@ GC::Ptr<PendingResponse> http_redirect_fetch(JS::Realm& realm, Infrastructure::F
     //     request’s body’s source.
     // NOTE: request’s body’s source’s nullity has already been checked.
     if (!request->body().has<Empty>()) {
-        auto [body, _] = safely_extract_body(realm, *request->body().get<GC::Ref<Infrastructure::Body>>()->source());
-        request->set_body(body);
+        auto source = *request->body().get<Infrastructure::FetchBody>().source();
+        request->set_body(Infrastructure::FetchBody::from_bytes(source));
     }
 
     // 15. Let timingInfo be fetchParams’s timing info.
@@ -1858,7 +1858,7 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
             // NOTE: Implementations are encouraged to avoid teeing request’s body’s stream when request’s body’s
             //       source is null as only a single body is needed in that case. E.g., when request’s body’s source
             //       is null, redirects and authentication will end up failing the fetch.
-            http_request = request->clone(realm, Infrastructure::Request::BodyCloning::FromSource);
+            http_request = request->clone();
 
             // 2. Set httpFetchParams to a copy of fetchParams.
             auto new_http_fetch_params = Infrastructure::FetchParams::copy(fetch_params);
@@ -1887,8 +1887,8 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
             include_credentials = HTTP::Cookie::IncludeCredentials::No;
 
         // 5. Let contentLength be httpRequest’s body’s length, if httpRequest’s body is non-null; otherwise null.
-        auto content_length = http_request->body().has<GC::Ref<Infrastructure::Body>>()
-            ? http_request->body().get<GC::Ref<Infrastructure::Body>>()->length()
+        auto content_length = http_request->body().has<Infrastructure::FetchBody>()
+            ? http_request->body().get<Infrastructure::FetchBody>().length()
             : Optional<u64> {};
 
         // 6. Let contentLengthHeaderValue be null.
@@ -2200,15 +2200,14 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
             // 2. If request’s body is non-null, then:
             if (!request->body().has<Empty>()) {
                 // 1. If request’s body’s source is null, then return a network error.
-                auto const& source = request->body().get<GC::Ref<Infrastructure::Body>>()->source();
+                auto source = request->body().get<Infrastructure::FetchBody>().source();
                 if (!source.has_value()) {
                     returned_pending_response->resolve(Infrastructure::Response::network_error("Request has body but no body source"_string));
                     return;
                 }
 
                 // 2. Set request’s body to the body of the result of safely extracting request’s body’s source.
-                auto [body, _] = safely_extract_body(realm, *source);
-                request->set_body(body);
+                request->set_body(Infrastructure::FetchBody::from_bytes(*source));
             }
 
             // 3. If request’s use-URL-credentials flag is unset or isAuthenticationFetch is true, then:
@@ -2269,7 +2268,7 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
                 // - isNewConnectionFetch is false
                 && is_new_connection_fetch == IsNewConnectionFetch::No
                 // - request’s body is null, or request’s body is non-null and request’s body’s source is non-null
-                && (request->body().has<Empty>() || request->body().get<GC::Ref<Infrastructure::Body>>()->source().has_value())
+                && (request->body().has<Empty>() || request->body().get<Infrastructure::FetchBody>().source().has_value())
                 // then:
             ) {
                 // 1. If fetchParams is canceled, then return the appropriate network error for fetchParams.
@@ -2386,8 +2385,8 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
     else if (auto const& client = request->client_snapshot())
         load_request.set_top_level_creation_url(client->top_level_creation_url);
 
-    if (auto const* body = request->body().get_pointer<GC::Ref<Infrastructure::Body>>()) {
-        if (auto const& source = (*body)->source(); source.has_value())
+    if (auto const* body = request->body().get_pointer<Infrastructure::FetchBody>()) {
+        if (auto const& source = body->source(); source.has_value())
             load_request.set_body(MUST(source->copy_to_byte_buffer()));
     }
 
