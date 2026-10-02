@@ -18,9 +18,9 @@
 #include <LibWeb/Fetch/Infrastructure/FetchRecord.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/DedicatedWorkerGlobalScope.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Scripting/Agent.h>
-#include <LibWeb/HTML/Scripting/EnvironmentSettingsSnapshot.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/WorkerGlobalScope.h>
 #include <LibWeb/HTML/WorkletGlobalScope.h>
 #include <LibWeb/Infra/SerializedURL.h>
+#include <LibWeb/MixedContent/AbstractOperations.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/SecureContexts/AbstractOperations.h>
 #include <LibWeb/ServiceWorker/ServiceWorker.h>
@@ -692,8 +693,6 @@ bool is_non_secure_context(Environment const& environment)
 SerializedEnvironmentSettingsObject EnvironmentSettingsObject::serialize()
 {
     auto serialized_global = [this]() -> SerializedGlobal {
-        if (auto const* snapshot = as_if<EnvironmentSettingsSnapshot>(*this))
-            return snapshot->serialized_global();
         bool relevant_settings_object_is_secure_context = is_secure_context(*this);
         auto& global = global_object();
         if (auto const* window = window_from_global_object(global)) {
@@ -701,7 +700,8 @@ SerializedEnvironmentSettingsObject EnvironmentSettingsObject::serialize()
                 .associated_document {
                     .url = window->associated_document().url(),
                     .relevant_settings_object_is_secure_context = relevant_settings_object_is_secure_context,
-                }
+                },
+                .navigable_is_top_level = window->navigable() && !window->navigable()->parent(),
             };
         }
         VERIFY(Bindings::worker_global_scope_from_global_object(global));
@@ -724,6 +724,7 @@ SerializedEnvironmentSettingsObject EnvironmentSettingsObject::serialize()
         .has_cross_site_ancestor = has_cross_site_ancestor(),
         .policy_container = policy_container()->serialize(),
         .cross_origin_isolated_capability = cross_origin_isolated_capability(),
+        .prohibits_mixed_security_contexts = MixedContent::does_settings_prohibit_mixed_security_contexts(*this),
         .agent_cluster_id = agent_cluster_id(),
         .time_origin = this->time_origin(),
         .global = move(serialized_global),

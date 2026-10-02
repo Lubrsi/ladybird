@@ -13,8 +13,8 @@
 #include <LibURL/URL.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Infrastructure/KeepaliveQuotaAccountant.h>
-#include <LibWeb/MixedContent/ProhibitsMixedSecurityContexts.h>
 #include <LibWebCommon/HTML/Scripting/SerializedEnvironmentSettingsObject.h>
+#include <LibWebCommon/MixedContent/ProhibitsMixedSecurityContexts.h>
 
 namespace Web::Fetch::Infrastructure {
 

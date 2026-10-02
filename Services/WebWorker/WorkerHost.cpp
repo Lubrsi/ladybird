@@ -20,9 +20,9 @@
 #include <LibWeb/HTML/MessageEvent.h>
 #include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
-#include <LibWeb/HTML/Scripting/EnvironmentSettingsSnapshot.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/Fetching.h>
+#include <LibWeb/HTML/Scripting/RemoteEnvironmentSettings.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/Scripting/WorkerEnvironmentSettingsObject.h>
 #include <LibWeb/HTML/SharedWorkerGlobalScope.h>
@@ -116,15 +116,13 @@ void WorkerHost::run(GC::Ref<Web::Page> page, Web::HTML::TransferDataEncoder mes
     // 8. Set worker global scope's name to options["name"].
     worker_global_scope->set_name(m_name);
 
-    // IMPLEMENTATION DEFINED: We need an object to represent the fetch response's client
-    auto outside_settings = GC::Heap::the().allocate<Web::HTML::EnvironmentSettingsSnapshot>(inside_settings->realm_execution_context().copy(), outside_settings_snapshot);
-    m_outside_settings = outside_settings;
+    NonnullRefPtr<Web::HTML::RemoteEnvironmentSettings const> outside_settings = make_ref_counted<Web::HTML::RemoteEnvironmentSettings>(outside_settings_snapshot);
 
     // 10. If is shared is true, then:
     if (is_shared) {
         auto& shared_global_scope = static_cast<Web::HTML::SharedWorkerGlobalScope&>(*worker_global_scope);
         // 1. Set worker global scope's constructor origin to outside settings's origin.
-        shared_global_scope.set_constructor_origin(outside_settings->origin());
+        shared_global_scope.set_constructor_origin(outside_settings->settings.origin);
 
         // 2. Set worker global scope's constructor URL to url.
         shared_global_scope.set_constructor_url(m_url);

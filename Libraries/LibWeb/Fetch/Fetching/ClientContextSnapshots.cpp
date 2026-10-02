@@ -9,7 +9,6 @@
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/LocalNavigable.h>
-#include <LibWeb/HTML/Scripting/EnvironmentSettingsSnapshot.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/HTML/WorkerGlobalScope.h>
@@ -19,30 +18,76 @@ namespace Web::Fetch::Fetching {
 
 GC::Ptr<HTML::EnvironmentSettingsObject> resolve_client(Infrastructure::Request const& request)
 {
-    auto address = request.client();
-    if (!address.has_value())
+    auto const& client = request.client();
+    if (!client.has_value())
         return nullptr;
-    auto client = HTML::environment_settings_object_at(*address);
-    VERIFY(client);
-    return client;
+    auto const* address = client->get_pointer<HTML::EnvironmentSettingsObjectAddress>();
+    if (!address)
+        return nullptr;
+    auto settings_object = HTML::environment_settings_object_at(*address);
+    VERIFY(settings_object);
+    return settings_object;
+}
+
+RefPtr<HTML::RemoteEnvironmentSettings const> remote_client(Infrastructure::Request const& request)
+{
+    auto const& client = request.client();
+    if (!client.has_value())
+        return nullptr;
+    if (auto const* settings = client->get_pointer<NonnullRefPtr<HTML::RemoteEnvironmentSettings const>>())
+        return *settings;
+    return nullptr;
+}
+
+Optional<HTML::FetchClient> resolve_fetch_client(Infrastructure::Request const& request)
+{
+    if (auto settings_object = resolve_client(request))
+        return HTML::FetchClient { *settings_object };
+    if (auto settings = remote_client(request))
+        return HTML::FetchClient { settings.release_nonnull() };
+    return {};
+}
+
+Infrastructure::Request::ClientType request_client(HTML::FetchClient const& fetch_client)
+{
+    return fetch_client.visit(
+        [](GC::Ref<HTML::EnvironmentSettingsObject> const& settings_object) -> Infrastructure::Request::ClientType {
+            return settings_object->address();
+        },
+        [](NonnullRefPtr<HTML::RemoteEnvironmentSettings const> const& settings) -> Infrastructure::Request::ClientType {
+            return settings;
+        });
+}
+
+// https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer
+// NB: The steps of the "client" case that read environment, for a client another process hosts.
+static Optional<URL::URL> referrer_source_of_client(HTML::SerializedEnvironmentSettingsObject const& environment)
+{
+    // 2. If environment’s global object is a Window object, then
+    if (auto const* window = environment.global.get_pointer<HTML::SerializedWindow>()) {
+        // 1. Let document be the associated Document of environment’s global object.
+        auto const& document = window->associated_document;
+
+        // 2. If document’s origin is an opaque origin, return no referrer.
+        // NB: document's origin is environment's origin.
+        if (environment.origin.is_opaque())
+            return {};
+
+        // FIXME: 3. While document is an iframe srcdoc document, let document be document’s browsing context’s
+        //           browsing context container’s node document.
+
+        // 4. Let referrerSource be document’s URL.
+        return document.url;
+    }
+
+    // 3. Otherwise, let referrerSource be environment’s creation URL.
+    return environment.creation_url;
 }
 
 // https://w3c.github.io/webappsec-referrer-policy/#determine-requests-referrer
 // NB: The steps of the "client" case that read environment, which is non-null.
 static Optional<URL::URL> referrer_source_of_client(HTML::EnvironmentSettingsObject& environment)
 {
-    // NB: A snapshot of an environment in another process — a navigation's fetch client, once the navigation
-    //     continues in the process hosting its target — has a global object from this process, so it answers
-    //     from the global object it was taken from.
-    if (auto const* snapshot = as_if<HTML::EnvironmentSettingsSnapshot>(environment)) {
-        if (auto const* window = snapshot->serialized_global().get_pointer<HTML::SerializedWindow>()) {
-            if (snapshot->origin().is_opaque())
-                return {};
-            return window->associated_document.url;
-        }
-        return environment.creation_url;
-    }
-
     // 2. If environment’s global object is a Window object, then
     if (auto const* window = HTML::window_from_global_object(environment.global_object())) {
         // 1. Let document be the associated Document of environment’s global object.
@@ -93,6 +138,40 @@ NonnullRefPtr<Infrastructure::ClientContextSnapshot const> snapshot_client_conte
         snapshot->content_blocker_source_url = document->fallback_base_url();
     else
         snapshot->content_blocker_source_url = client.api_base_url();
+
+    return snapshot;
+}
+
+NonnullRefPtr<Infrastructure::ClientContextSnapshot const> snapshot_client_context(HTML::RemoteEnvironmentSettings const& client)
+{
+    using Snapshot = Infrastructure::ClientContextSnapshot;
+
+    auto const& settings = client.settings;
+    auto snapshot = make_ref_counted<Snapshot>(settings.origin, Infrastructure::KeepaliveQuotaAccountant::create());
+    snapshot->creation_url = settings.creation_url;
+    snapshot->top_level_creation_url = settings.top_level_creation_url;
+    snapshot->top_level_origin = settings.top_level_origin;
+
+    settings.global.visit(
+        [&](HTML::SerializedWindow const& window) {
+            snapshot->global_kind = Snapshot::GlobalKind::Window;
+            if (window.navigable_is_top_level)
+                snapshot->is_window_of_a_top_level_navigable = Snapshot::IsWindowOfATopLevelNavigable::Yes;
+            if (window.associated_document.relevant_settings_object_is_secure_context)
+                snapshot->is_secure_context = Snapshot::IsSecureContext::Yes;
+        },
+        [&](HTML::SerializedWorkerGlobalScope const& worker_global_scope) {
+            snapshot->global_kind = Snapshot::GlobalKind::Worker;
+            if (worker_global_scope.relevant_settings_object_is_secure_context)
+                snapshot->is_secure_context = Snapshot::IsSecureContext::Yes;
+        });
+
+    if (settings.has_cross_site_ancestor)
+        snapshot->has_cross_site_ancestor = Infrastructure::HasCrossSiteAncestor::Yes;
+    snapshot->cross_origin_isolated_capability = settings.cross_origin_isolated_capability;
+    snapshot->prohibits_mixed_security_contexts = settings.prohibits_mixed_security_contexts;
+    snapshot->referrer_source = referrer_source_of_client(settings);
+    snapshot->content_blocker_source_url = settings.api_base_url;
 
     return snapshot;
 }

@@ -33,7 +33,7 @@ GC::Ref<SourceSnapshotParams> snapshot_source_snapshot_params(GC::Ptr<DOM::Docum
             true,
             // fetch client
             //     null
-            nullptr,
+            OptionalNone {},
             // source policy container
             //     a new policy container
             PolicyContainer::create());
@@ -56,7 +56,7 @@ GC::Ref<SourceSnapshotParams> snapshot_source_snapshot_params(GC::Ptr<DOM::Docum
 
         // fetch client
         //     sourceDocument's relevant settings object
-        relevant_settings_object(*source_document),
+        GC::Ref { relevant_settings_object(*source_document) },
 
         // source policy container
         //     a clone of sourceDocument's policy container
@@ -66,7 +66,10 @@ GC::Ref<SourceSnapshotParams> snapshot_source_snapshot_params(GC::Ptr<DOM::Docum
 void SourceSnapshotParams::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(fetch_client);
+    if (fetch_client.has_value()) {
+        if (auto const* settings_object = fetch_client->get_pointer<GC::Ref<EnvironmentSettingsObject>>())
+            visitor.visit(*settings_object);
+    }
 }
 
 }

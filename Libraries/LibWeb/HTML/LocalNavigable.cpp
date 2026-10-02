@@ -2601,8 +2601,8 @@ static void create_navigation_params_by_fetching(
     //    traversable for user prompts: navigable's top-level traversable
     auto request = Fetch::Infrastructure::Request::create();
     request->set_url(url);
-    if (source_snapshot_params->fetch_client)
-        request->set_client(source_snapshot_params->fetch_client->address());
+    if (source_snapshot_params->fetch_client.has_value())
+        request->set_client(Fetch::Fetching::request_client(*source_snapshot_params->fetch_client));
     request->set_destination(Fetch::Infrastructure::Request::Destination::Document);
     request->set_credentials_mode(Fetch::Infrastructure::Request::CredentialsMode::Include);
     request->set_use_url_credentials(true);
@@ -2740,8 +2740,9 @@ static void create_navigation_params_by_fetching(
         //    then set request's initiator type to navigable's container's local name.
         // NOTE: This ensure that only container-initiated navigations are reported to resource timing.
         // FIXME: A container document in another process is not here, and the fetch client of a navigation it started
-        //        is a snapshot, so its resource timing is not told of the navigation.
-        if (auto container_document = navigable->container_document(); container_document && source_snapshot_params->fetch_client.ptr() == &container_document->relevant_settings_object()) {
+        //        is that process's, so its resource timing is not told of the navigation.
+        auto fetch_client = settings_object_of_fetch_client(source_snapshot_params->fetch_client);
+        if (auto container_document = navigable->container_document(); container_document && fetch_client.ptr() == &container_document->relevant_settings_object()) {
             // FIXME: Are there other container types? If so, we need a helper here
             request->set_initiator_type(container_is_iframe ? Web::Fetch::Infrastructure::Request::InitiatorType::IFrame
                                                             : Web::Fetch::Infrastructure::Request::InitiatorType::Object);
@@ -3075,7 +3076,7 @@ void LocalNavigable::populate_session_history_entry_document(
         queue_navigation_and_traversal_task_for_session_history_entry_population(
             url,
             source_snapshot_params->allows_downloading,
-            source_snapshot_params->fetch_client ? Optional<URL::Origin> { source_snapshot_params->fetch_client->origin() } : Optional<URL::Origin> {},
+            source_snapshot_params->fetch_client.map([](FetchClient const& fetch_client) { return origin_of_fetch_client(fetch_client); }),
             user_involvement,
             navigation_id,
             move(result->navigation_params),
@@ -3589,8 +3590,8 @@ void LocalNavigable::navigate_to_a_javascript_url_from_ui_process(URL::URL const
     request->set_policy_container(source_snapshot_params->source_policy_container);
 
     // AD-HOC: See https://github.com/whatwg/html/issues/4651, requires some investigation to figure out what we should be setting here.
-    if (source_snapshot_params->fetch_client)
-        request->set_client(source_snapshot_params->fetch_client->address());
+    if (source_snapshot_params->fetch_client.has_value())
+        request->set_client(Fetch::Fetching::request_client(*source_snapshot_params->fetch_client));
 
     //     2. Queue a global task on the navigation and traversal task source given navigable's active window to
     //        navigate to a javascript: URL given navigable, request, historyHandling, initiatorOriginSnapshot,
@@ -3773,8 +3774,8 @@ void LocalNavigable::begin_navigation(PreparedNavigation navigation)
         //     URL operates on a request. It will never hit the network.
         auto request = Fetch::Infrastructure::Request::create();
         request->set_url(url);
-        if (source_snapshot_params->fetch_client)
-            request->set_client(source_snapshot_params->fetch_client->address());
+        if (source_snapshot_params->fetch_client.has_value())
+            request->set_client(Fetch::Fetching::request_client(*source_snapshot_params->fetch_client));
         request->set_policy_container(source_snapshot_params->source_policy_container);
 
         // 2. Queue a global task on the navigation and traversal task source given navigable's active window to navigate to a javascript: URL given navigable, request, historyHandling, initiatorOriginSnapshot, userInvolvement, cspNavigationType, initialInsertion, and navigationId.
