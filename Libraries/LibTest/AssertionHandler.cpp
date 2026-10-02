@@ -6,6 +6,11 @@
 
 #include <LibTest/Macros.h>
 
+#if defined(HAS_ADDRESS_SANITIZER) && !defined(AK_OS_WINDOWS) && __has_include(<sanitizer/lsan_interface.h>)
+#    include <sanitizer/lsan_interface.h>
+#    define LIBTEST_HAS_LEAK_SANITIZER_INTERFACE
+#endif
+
 namespace Test {
 
 static libtest_jmp_buf g_assert_jmp_buf = {};
@@ -16,7 +21,17 @@ libtest_jmp_buf& assertion_jump_buffer() { return g_assert_jmp_buf; }
 
 void set_assertion_jump_validity(bool validity)
 {
+    if (validity == g_assert_jmp_buf_valid)
+        return;
     g_assert_jmp_buf_valid = validity;
+
+    // Allocations made while a death test's expression runs are not reported as leaks.
+#ifdef LIBTEST_HAS_LEAK_SANITIZER_INTERFACE
+    if (validity)
+        __lsan_disable();
+    else
+        __lsan_enable();
+#endif
 }
 
 static bool is_assertion_jump_valid()
