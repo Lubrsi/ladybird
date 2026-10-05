@@ -613,6 +613,8 @@ scrollendEvent
 spoofCurrentURL
 test
 timeout
+uniqueID
 uniqueLocalhostHostname
+uniqueTestHostname
 webkitURL
 withCollectedWrapper
