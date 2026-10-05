@@ -18,6 +18,7 @@
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/Fetch/Infrastructure/URL.h>
 #include <LibWeb/HTML/PolicyContainers.h>
+#include <LibWeb/HTML/Scripting/EnvironmentSettingsSnapshot.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/SRI/SRI.h>
@@ -28,6 +29,14 @@
 #include <LibWebCommon/Infra/Strings.h>
 
 namespace Web::ContentSecurityPolicy {
+
+// AD-HOC: A client standing in for an environment another process hosts has its global object there, and its
+//         violations belong to that global, so none is reported here.
+// FIXME: Report those violations in the process hosting the client's environment.
+static bool may_report_violations_for(GC::Ptr<HTML::EnvironmentSettingsObject const> client)
+{
+    return !client || !is<HTML::EnvironmentSettingsSnapshot>(*client);
+}
 
 // https://w3c.github.io/webappsec-csp/#does-resource-hint-violate-policy
 [[nodiscard]] static GC::Ptr<Directives::Directive> does_resource_hint_request_violate_policy(GC::Heap& heap, GC::Ref<Fetch::Infrastructure::Request const> request, GC::Ref<Policy const> policy)
@@ -99,7 +108,7 @@ void report_content_security_policy_violations_for_request(JS::Realm& realm, GC:
 
         // 3. If violates is not "Does Not Violate", then execute § 5.5 Report a violation on the result of executing
         //    § 2.4.2 Create a violation object for request, and policy. on request, and policy.
-        if (violates) {
+        if (violates && may_report_violations_for(request->client())) {
             auto violation = Violation::create_a_violation_object_for_request_and_policy(request, policy);
             violation->report_a_violation(realm);
         }
@@ -128,8 +137,10 @@ Directives::Directive::Result should_request_be_blocked_by_content_security_poli
         if (violates) {
             // 1. Execute § 5.5 Report a violation on the result of executing § 2.4.2 Create a violation object for
             //    request, and policy. on request, and policy.
-            auto violation = Violation::create_a_violation_object_for_request_and_policy(request, policy);
-            violation->report_a_violation(realm);
+            if (may_report_violations_for(request->client())) {
+                auto violation = Violation::create_a_violation_object_for_request_and_policy(request, policy);
+                violation->report_a_violation(realm);
+            }
 
             // 2. Set result to "Blocked".
             result = Directives::Directive::Result::Blocked;
@@ -219,8 +230,10 @@ Directives::Directive::Result should_response_to_request_be_blocked_by_content_s
             if (directive->post_request_check(GC::Heap::the(), request, response, policy) == Directives::Directive::Result::Blocked) {
                 // 1. Execute § 5.5 Report a violation on the result of executing § 2.4.2 Create a violation object for
                 //    request, and policy. on request, and policy.
-                auto violation = Violation::create_a_violation_object_for_request_and_policy(request, policy);
-                violation->report_a_violation(realm);
+                if (may_report_violations_for(request->client())) {
+                    auto violation = Violation::create_a_violation_object_for_request_and_policy(request, policy);
+                    violation->report_a_violation(realm);
+                }
 
                 // 2. If policy’s disposition is "enforce", then set result to "Blocked".
                 if (policy->disposition() == Policy::Disposition::Enforce) {
@@ -250,16 +263,18 @@ Directives::Directive::Result should_navigation_request_of_type_be_blocked_by_co
             if (directive_result == Directives::Directive::Result::Allowed)
                 continue;
 
-            // 2. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global, policy, and directive on navigation request’s
-            //    client’s global object, policy, and directive’s name.
-            auto& realm = navigation_request->client()->realm();
-            auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive->name().view().to_utf8_but_should_be_ported_to_utf16());
+            if (may_report_violations_for(navigation_request->client())) {
+                // 2. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global, policy, and directive on navigation request’s
+                //    client’s global object, policy, and directive’s name.
+                auto& realm = navigation_request->client()->realm();
+                auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive->name().view().to_utf8_but_should_be_ported_to_utf16());
 
-            // 3. Set violation’s resource to navigation request’s URL.
-            violation->set_resource(navigation_request->url());
+                // 3. Set violation’s resource to navigation request’s URL.
+                violation->set_resource(navigation_request->url());
 
-            // 4. Execute § 5.5 Report a violation on violation.
-            violation->report_a_violation(realm);
+                // 4. Execute § 5.5 Report a violation on violation.
+                violation->report_a_violation(realm);
+            }
 
             // 5. If policy’s disposition is "enforce", then set result to "Blocked".
             if (policy->disposition() == Policy::Disposition::Enforce)
@@ -297,15 +312,17 @@ Directives::Directive::Result should_navigation_request_of_type_be_blocked_by_co
                 if (directive->inline_check(GC::Heap::the(), nullptr, Directives::Directive::InlineType::Navigation, policy, serialized_url_utf16.utf16_view()) == Directives::Directive::Result::Allowed)
                     continue;
 
-                // 3. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global,
-                //    policy, and directive on navigation request’s client’s global object, policy, and directive-name.
-                auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive_name.view().to_utf8_but_should_be_ported_to_utf16());
+                if (may_report_violations_for(navigation_request->client())) {
+                    // 3. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global,
+                    //    policy, and directive on navigation request’s client’s global object, policy, and directive-name.
+                    auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive_name.view().to_utf8_but_should_be_ported_to_utf16());
 
-                // 4. Set violation’s resource to navigation request’s URL.
-                violation->set_resource(navigation_request->url());
+                    // 4. Set violation’s resource to navigation request’s URL.
+                    violation->set_resource(navigation_request->url());
 
-                // 5. Execute § 5.5 Report a violation on violation.
-                violation->report_a_violation(realm);
+                    // 5. Execute § 5.5 Report a violation on violation.
+                    violation->report_a_violation(realm);
+                }
 
                 // 6. If policy’s disposition is "enforce", then set result to "Blocked".
                 if (policy->disposition() == Policy::Disposition::Enforce)
@@ -378,15 +395,17 @@ Directives::Directive::Result should_navigation_response_to_navigation_request_o
             if (directive_result == Directives::Directive::Result::Allowed)
                 continue;
 
-            // 2. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global, policy, and directive on navigation request’s client’s global object, policy, and directive’s name.
-            auto& realm = navigation_request->client()->realm();
-            auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive->name().view().to_utf8_but_should_be_ported_to_utf16());
+            if (may_report_violations_for(navigation_request->client())) {
+                // 2. Otherwise, let violation be the result of executing § 2.4.1 Create a violation object for global, policy, and directive on navigation request’s client’s global object, policy, and directive’s name.
+                auto& realm = navigation_request->client()->realm();
+                auto violation = Violation::create_a_violation_object_for_global_policy_and_directive(navigation_request->client()->global_object(), policy, directive->name().view().to_utf8_but_should_be_ported_to_utf16());
 
-            // 3. Set violation’s resource to navigation request’s URL.
-            violation->set_resource(navigation_request->url());
+                // 3. Set violation’s resource to navigation request’s URL.
+                violation->set_resource(navigation_request->url());
 
-            // 4. Execute § 5.5 Report a violation on violation.
-            violation->report_a_violation(realm);
+                // 4. Execute § 5.5 Report a violation on violation.
+                violation->report_a_violation(realm);
+            }
 
             // 5. If policy’s disposition is "enforce", then set result to "Blocked".
             if (policy->disposition() == Policy::Disposition::Enforce)
