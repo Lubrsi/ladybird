@@ -51,6 +51,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     StringView cache_path;
     bool wait_for_debugger = false;
     bool disable_sandbox = false;
+    bool enable_test_mode = false;
 
     int crash_report_fd = -1;
     Core::ArgsParser args_parser;
@@ -62,6 +63,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     args_parser.add_option(cache_path, "Path to the profile cache", "cache-path", 0, "path");
     args_parser.add_option(wait_for_debugger, "Wait for debugger", "wait-for-debugger");
     args_parser.add_option(disable_sandbox, "Disable process sandboxing", "disable-sandbox");
+    args_parser.add_option(enable_test_mode, "Enable test mode", "test-mode");
     args_parser.parse(arguments);
 
     if (crash_report_fd >= 0) {
@@ -76,6 +78,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         warnln("Could not adopt the foreground application task role: {}", result.error());
     if (auto result = Core::Platform::set_current_thread_qos(Core::Platform::ThreadQoS::UserInitiated); result.is_error())
         warnln("Could not set main thread QoS: {}", result.error());
+
+    if (enable_test_mode)
+        RequestServer::DNSInfo::the().loopback_domains.append("test"sv);
 
     // FIXME: Update RequestServer to support multiple custom root certificates.
     if (!certificates.is_empty())
