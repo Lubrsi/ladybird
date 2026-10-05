@@ -80,6 +80,7 @@ NonnullRefPtr<Resolver> Resolver::default_resolver()
             },
         };
     }));
+    resolver->dns.set_loopback_domains(DNSInfo::the().loopback_domains);
 
     g_resolver = resolver;
     return resolver;

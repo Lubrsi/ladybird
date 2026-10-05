@@ -576,6 +576,9 @@ ErrorOr<NonnullRefPtr<Requests::RequestControlClient>> launch_request_server_pro
     if (request_server_options.resource_substitution_map_path.has_value())
         arguments.append(ByteString::formatted("--resource-map={}", *request_server_options.resource_substitution_map_path));
 
+    if (Application::web_content_options().is_test_mode == IsTestMode::Yes)
+        arguments.append("--test-mode"sv);
+
     auto client = TRY(launch_server_process<Requests::RequestControlClient>("RequestServer"sv, move(arguments)));
 
     auto const& browsing_data_settings = Application::settings().browsing_data_settings();
