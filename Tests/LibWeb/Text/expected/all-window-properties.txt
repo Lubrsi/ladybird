@@ -619,7 +619,9 @@ scrollendEvent
 spoofCurrentURL
 test
 timeout
+uniqueID
 uniqueLocalhostHostname
+uniqueTestHostname
 webkitURL
 wheelTargetToString
 withCollectedWrapper
