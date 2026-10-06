@@ -11,10 +11,13 @@
 #include <LibURL/Forward.h>
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/ContentSecurityPolicy/FetchIntegration.h>
+#include <LibWebCommon/ContentSecurityPolicy/PolicyId.h>
+#include <LibWebCommon/ContentSecurityPolicy/RemoteViolationDirective.h>
 
 namespace Web::ContentSecurityPolicy {
 
 [[nodiscard]] ViolationReporter violation_reporter_for_request(JS::Realm&, NonnullRefPtr<Fetch::Infrastructure::Request>);
+WEB_API void report_a_violation_found_in_another_process(HTML::EnvironmentSettingsObject&, PolicyId, RemoteViolationDirective, URL::URL const& resource);
 
 Directives::Directive::Result should_navigation_request_of_type_be_blocked_by_content_security_policy(NonnullRefPtr<Fetch::Infrastructure::Request> navigation_request, Directives::Directive::NavigationType navigation_type);
 Directives::Directive::Result should_navigation_response_to_navigation_request_of_type_in_target_be_blocked_by_content_security_policy(

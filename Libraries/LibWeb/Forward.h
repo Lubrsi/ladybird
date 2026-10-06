@@ -863,6 +863,7 @@ struct NavigationParams;
 struct PreparedNavigation;
 struct PaintConfig;
 struct PolicyContainer;
+struct RemoteEnvironmentSettings;
 struct SerializedFormData;
 struct SourceSnapshotParams;
 struct ToggleTaskTracker;
