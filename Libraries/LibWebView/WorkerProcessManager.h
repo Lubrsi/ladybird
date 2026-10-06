@@ -19,6 +19,9 @@
 #include <AK/kmalloc.h>
 #include <LibCore/Forward.h>
 #include <LibURL/Origin.h>
+#include <LibURL/URL.h>
+#include <LibWebCommon/ContentSecurityPolicy/PolicyId.h>
+#include <LibWebCommon/ContentSecurityPolicy/RemoteViolationDirective.h>
 #include <LibWebCommon/HTML/BroadcastChannelMessage.h>
 #include <LibWebCommon/HTML/WorkerAgentTypes.h>
 #include <LibWebCommon/Loader/NavigatorCompatibilityMode.h>
@@ -100,18 +103,22 @@ private:
     struct Owner {
         Variant<WebContentOwner, WebWorkerOwner> client;
         Web::HTML::WorkerAgentOwnerToken token { 0 };
+        // Whether the agent was started for this owner, whose outside settings are its script fetches' client.
+        bool started_the_agent { false };
     };
 
     Web::HTML::WorkerAgentId start_worker_agent(Owner, Optional<CanonicalEnvironmentSettingsObject const&> outside_settings, Web::HTML::WorkerAgentStartRequest, IsPrivate);
 
     void notify_worker_script_load_failure(Owner const&);
     void notify_worker_exception(Owner const&, Utf16String const& message, Utf16String const& filename, u32 lineno, u32 colno);
+    void notify_worker_violation(Owner const&, Web::ContentSecurityPolicy::PolicyId, Web::ContentSecurityPolicy::RemoteViolationDirective, URL::URL const& resource);
     void notify_worker_close(Owner const&);
     void notify_worker_death(Owner const&);
 
     void worker_did_finish_loading_script(Web::HTML::WorkerAgentId, bool worker_is_secure_context);
     void worker_did_fail_loading_script(Web::HTML::WorkerAgentId);
     void worker_did_report_exception(Web::HTML::WorkerAgentId, Utf16String message, Utf16String filename, u32 lineno, u32 colno);
+    void worker_did_report_violation(Web::HTML::WorkerAgentId, Web::ContentSecurityPolicy::PolicyId, Web::ContentSecurityPolicy::RemoteViolationDirective, URL::URL const& resource);
     void worker_did_close(Web::HTML::WorkerAgentId);
     void worker_did_die(Web::HTML::WorkerAgentId);
     void worker_process_did_exit(WebWorkerClient&);

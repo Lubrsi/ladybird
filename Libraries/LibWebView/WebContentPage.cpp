@@ -677,11 +677,13 @@ void WebContentPage::did_request_navigation_of_navigable(Web::HTML::CrossProcess
     //     again, with the sourceDocument and sandboxing flags it holds. sourceDocument can be in another tab, in this
     //     process's page for it.
     Optional<CanonicalNavigable&> source;
+    RefPtr<WebContentPage> source_page;
     client().for_each_page([&](WebContentPage& page) {
         auto navigable = page.traversable().find(source_navigable_id);
         if (!navigable.has_value() || navigable->active_document().id() != source_document_id || navigable->active_document().host() != &page)
             return IterationDecision::Continue;
         source = *navigable;
+        source_page = page;
         return IterationDecision::Break;
     });
     if (!source.has_value())
@@ -707,7 +709,7 @@ void WebContentPage::did_request_navigation_of_navigable(Web::HTML::CrossProcess
     //    3. Set initiatorOriginSnapshot to sourceDocument's origin.
     navigation.initiator_origin_snapshot = source_document.origin();
 
-    target->begin_navigation(move(navigation));
+    target->begin_navigation(move(navigation), move(source_page));
 }
 
 void WebContentPage::did_post_message_to_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::PostedMessageDescriptor message)
@@ -717,6 +719,46 @@ void WebContentPage::did_post_message_to_navigable(Web::HTML::CrossProcessId nav
     if (!endpoint)
         return;
     endpoint->async_deliver_posted_message(navigable_id, move(message));
+}
+
+static bool navigation_can_violate(Web::ContentSecurityPolicy::RemoteViolationDirective directive, CanonicalNavigable const& navigable, Web::HTML::NavigationPopulationRequest const& request)
+{
+    switch (directive) {
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FrameSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::ObjectSrc:
+        return !navigable.is_top_level_traversable();
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FormAction:
+        return request.csp_navigation_type == Web::ContentSecurityPolicy::Directives::NavigationType::FormSubmission;
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::WorkerSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::ConnectSrc:
+        return false;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+// The process populating a navigation reports a violation of a policy of its source, which the process hosting the
+// source reports with the URL the navigation started with.
+void WebContentPage::did_report_navigation_violation(Web::HTML::CrossProcessId navigable_id, Utf16String navigation_id, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive)
+{
+    auto navigable = population_worker_navigable(navigable_id);
+    if (!navigable.has_value())
+        return;
+    auto navigation = navigable->navigation_with_id(navigation_id);
+    auto* creating = navigation ? navigation->state.get_pointer<CanonicalNavigation::CreatingNavigationParams>() : nullptr;
+    if (!creating || navigation->worker() != this)
+        return;
+
+    auto const& request = creating->loader->request();
+    auto const& fetch_client = request.source_snapshot_params.fetch_client;
+    if (!fetch_client.has_value() || !navigation_can_violate(directive, *navigable, request)) {
+        client().did_misbehave("did_report_navigation_violation"sv, "violation the navigation cannot have"sv);
+        return;
+    }
+
+    auto const& source_page = navigation->source_page;
+    if (!source_page || !source_page->is_open() || !source_page->hosted_environment(fetch_client->id).has_value())
+        return;
+    source_page->async_report_violation_of_environment(fetch_client->id, policy_id, directive, request.history_entry.url);
 }
 
 void WebContentPage::did_request_focusing_steps_for_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::FocusTrigger focus_trigger)

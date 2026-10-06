@@ -77,6 +77,31 @@ void WebWorkerClient::did_report_worker_exception(Utf16String message, Utf16Stri
     WorkerProcessManager::the().worker_did_report_exception(m_agent_id, move(message), move(filename), lineno, colno);
 }
 
+// The only fetches of a worker whose client another process hosts are those of its script graph, which violate
+// worker-src, or connect-src for a module's json and text imports.
+static bool script_graph_can_violate(Web::ContentSecurityPolicy::RemoteViolationDirective directive)
+{
+    switch (directive) {
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::WorkerSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::ConnectSrc:
+        return true;
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FrameSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::ObjectSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FormAction:
+        return false;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+void WebWorkerClient::did_report_violation(Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL resource)
+{
+    if (!script_graph_can_violate(directive)) {
+        did_misbehave("did_report_violation"sv, "directive a worker's script graph cannot violate"sv);
+        return;
+    }
+    WorkerProcessManager::the().worker_did_report_violation(m_agent_id, policy_id, directive, resource);
+}
+
 void WebWorkerClient::remove_blob_url_entries()
 {
     if (auto session = m_session.strong_ref())
