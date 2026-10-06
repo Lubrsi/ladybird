@@ -30,7 +30,7 @@ NonnullRefPtr<Policy> Policy::parse_a_serialized_csp(Variant<ByteString, String>
         : TextCodec::isomorphic_decode(serialized.get<ByteString>());
 
     // 2. Let policy be a new policy with an empty directive set, a source of source, and a disposition of disposition.
-    auto policy = adopt_ref(*new Policy);
+    auto policy = adopt_ref(*new Policy(generate_a_policy_id()));
     policy->m_pre_parsed_policy_string = serialized_string;
     policy->m_source = source;
     policy->m_disposition = disposition;
@@ -146,7 +146,7 @@ PolicyList Policy::parse_a_responses_content_security_policies(Fetch::Infrastruc
 
 NonnullRefPtr<Policy> Policy::create_from_serialized_policy(SerializedPolicy const& serialized_policy)
 {
-    auto policy = adopt_ref(*new Policy);
+    auto policy = adopt_ref(*new Policy(serialized_policy.id));
 
     for (auto const& serialized_directive : serialized_policy.directives)
         policy->m_directives.append(Directives::Directive::create(serialized_directive.name, serialized_directive.value));
@@ -186,6 +186,7 @@ SerializedPolicy Policy::serialize() const
         serialized_directives.append(directive.serialize());
 
     return SerializedPolicy {
+        .id = m_id,
         .directives = move(serialized_directives),
         .disposition = m_disposition,
         .source = m_source,

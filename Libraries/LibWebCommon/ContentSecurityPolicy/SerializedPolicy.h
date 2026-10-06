@@ -12,12 +12,14 @@
 #include <LibURL/Origin.h>
 #include <LibWebCommon/Bindings/SecurityPolicyViolationEvent.h>
 #include <LibWebCommon/ContentSecurityPolicy/Directives/SerializedDirective.h>
+#include <LibWebCommon/ContentSecurityPolicy/PolicyId.h>
 #include <LibWebCommon/ContentSecurityPolicy/PolicySource.h>
 #include <LibWebCommon/Export.h>
 
 namespace Web::ContentSecurityPolicy {
 
 struct SerializedPolicy {
+    PolicyId id;
     Vector<Directives::SerializedDirective> directives;
     Bindings::SecurityPolicyViolationEventDisposition disposition;
     PolicySource source;
