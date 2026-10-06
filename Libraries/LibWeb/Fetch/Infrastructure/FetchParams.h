@@ -16,6 +16,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/Task.h>
+#include <LibWebCommon/Loader/LoaderConfigSnapshot.h>
 
 namespace Web::Fetch::Infrastructure {
 
@@ -28,13 +29,15 @@ public:
     struct PreloadedResponseCandidatePendingTag { };
     using PreloadedResponseCandidate = Variant<Empty, PreloadedResponseCandidatePendingTag, GC::Ref<Response>>;
 
-    [[nodiscard]] static GC::Ref<FetchParams> create(GC::Ref<Request>, NonnullRefPtr<FetchTimingInfo>);
+    [[nodiscard]] static GC::Ref<FetchParams> create(GC::Ref<Request>, NonnullRefPtr<FetchTimingInfo>, NonnullRefPtr<LoaderConfigSnapshot const>);
     [[nodiscard]] static GC::Ref<FetchParams> copy(FetchParams const&);
 
     [[nodiscard]] GC::Ref<Request> request() const { return m_request; }
     void set_request(GC::Ref<Request> request) { m_request = request; }
     [[nodiscard]] GC::Ref<FetchController> controller() const { return m_controller; }
     [[nodiscard]] NonnullRefPtr<FetchTimingInfo> timing_info() const { return m_timing_info; }
+    [[nodiscard]] LoaderConfig const& loader_config() const { return m_loader_config->config; }
+    [[nodiscard]] NonnullRefPtr<LoaderConfigSnapshot const> const& loader_config_snapshot() const { return m_loader_config; }
 
     [[nodiscard]] GC::Ref<FetchAlgorithms const> algorithms() const { return m_algorithms; }
     void set_algorithms(GC::Ref<FetchAlgorithms const> algorithms) { m_algorithms = algorithms; }
@@ -57,7 +60,7 @@ public:
     void set_has_response_body_transfer_lease(bool value) { m_has_response_body_transfer_lease = value; }
 
 private:
-    FetchParams(GC::Ref<Request>, GC::Ref<FetchAlgorithms>, GC::Ref<FetchController>, NonnullRefPtr<FetchTimingInfo>);
+    FetchParams(GC::Ref<Request>, GC::Ref<FetchAlgorithms>, GC::Ref<FetchController>, NonnullRefPtr<FetchTimingInfo>, NonnullRefPtr<LoaderConfigSnapshot const>);
     FetchParams(FetchParams const&);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
@@ -109,6 +112,9 @@ private:
 
     // Non-spec process integration: a navigation response is retained while the UI process selects its document host.
     bool m_has_response_body_transfer_lease { false };
+
+    // The loader configuration as it was when the fetch started.
+    NonnullRefPtr<LoaderConfigSnapshot const> m_loader_config;
 };
 
 }
