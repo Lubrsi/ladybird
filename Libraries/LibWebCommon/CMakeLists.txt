@@ -1,6 +1,7 @@
 set(SOURCES
     Clipboard/SystemClipboard.cpp
     ContentSecurityPolicy/Directives/SerializedDirective.cpp
+    ContentSecurityPolicy/PolicyId.cpp
     ContentSecurityPolicy/SerializedPolicy.cpp
     CSS/PreferredColorScheme.cpp
     CSS/StyleSheetIdentifier.cpp

@@ -1028,6 +1028,7 @@ static ErrorOr<Web::ContentSecurityPolicy::SerializedPolicy> build_csp_policy(Cs
         return Error::from_string_literal("Persisted CSP policy has an empty self origin");
 
     return Web::ContentSecurityPolicy::SerializedPolicy {
+        .id = Web::ContentSecurityPolicy::generate_a_policy_id(),
         .directives = move(directives),
         .disposition = TRY(decode_csp_disposition(row.disposition)),
         .source = TRY(decode_csp_source(row.source)),

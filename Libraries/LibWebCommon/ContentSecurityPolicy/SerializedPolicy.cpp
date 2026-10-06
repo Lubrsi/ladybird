@@ -13,6 +13,7 @@ namespace IPC {
 template<>
 ErrorOr<void> encode(Encoder& encoder, Web::ContentSecurityPolicy::SerializedPolicy const& serialized_policy)
 {
+    TRY(encoder.encode(serialized_policy.id));
     TRY(encoder.encode(serialized_policy.directives));
     TRY(encoder.encode(serialized_policy.disposition));
     TRY(encoder.encode(serialized_policy.source));
@@ -26,6 +27,7 @@ template<>
 ErrorOr<Web::ContentSecurityPolicy::SerializedPolicy> decode(Decoder& decoder)
 {
     return Web::ContentSecurityPolicy::SerializedPolicy {
+        .id = TRY(decoder.decode<Web::ContentSecurityPolicy::PolicyId>()),
         .directives = TRY(decoder.decode<Vector<Web::ContentSecurityPolicy::Directives::SerializedDirective>>()),
         .disposition = TRY(decoder.decode<Web::Bindings::SecurityPolicyViolationEventDisposition>()),
         .source = TRY(decoder.decode<Web::ContentSecurityPolicy::PolicySource>()),

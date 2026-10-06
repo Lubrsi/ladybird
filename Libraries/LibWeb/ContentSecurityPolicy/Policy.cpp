@@ -147,6 +147,7 @@ PolicyList Policy::parse_a_responses_content_security_policies(Fetch::Infrastruc
 NonnullRefPtr<Policy> Policy::create_from_serialized_policy(SerializedPolicy const& serialized_policy)
 {
     auto policy = adopt_ref(*new Policy);
+    policy->m_id = serialized_policy.id;
 
     for (auto const& serialized_directive : serialized_policy.directives)
         policy->m_directives.append(Directives::Directive::create(serialized_directive.name, serialized_directive.value));
@@ -186,6 +187,7 @@ SerializedPolicy Policy::serialize() const
         serialized_directives.append(directive.serialize());
 
     return SerializedPolicy {
+        .id = m_id,
         .directives = move(serialized_directives),
         .disposition = m_disposition,
         .source = m_source,

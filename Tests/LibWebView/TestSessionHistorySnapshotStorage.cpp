@@ -389,6 +389,7 @@ static i32 count_history_owned_rows(Database::Database& database, StringView tab
 static Web::HTML::SerializedPolicyContainer make_policy_container()
 {
     Web::ContentSecurityPolicy::SerializedPolicy enforced_policy {
+        .id = Web::ContentSecurityPolicy::generate_a_policy_id(),
         .directives = {
             { .name = "script-src"_utf16, .value = { "'self'"_utf16, "https://cdn.example"_utf16 } },
             { .name = "upgrade-insecure-requests"_utf16, .value = {} },
@@ -399,6 +400,7 @@ static Web::HTML::SerializedPolicyContainer make_policy_container()
         .pre_parsed_policy_string = "script-src 'self' https://cdn.example; upgrade-insecure-requests"_string,
     };
     Web::ContentSecurityPolicy::SerializedPolicy report_only_policy {
+        .id = Web::ContentSecurityPolicy::generate_a_policy_id(),
         .directives = {
             { .name = "img-src"_utf16, .value = { "'none'"_utf16 } },
         },
