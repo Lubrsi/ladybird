@@ -1207,6 +1207,25 @@ void CanonicalNavigable::retain_blob_url_token(URL::BlobURLEntry::Token token)
         m_pending_navigation_blob_url = BlobURLHandle { *store, token };
 }
 
+static constexpr size_t maximum_forwarded_navigations = 16;
+
+void CanonicalNavigable::remember_forwarded_navigation(WebContentClient& host, Web::HTML::PreparedNavigationDescriptor const& navigation)
+{
+    if (m_forwarded_navigations.size() == maximum_forwarded_navigations)
+        m_forwarded_navigations.remove(0);
+    m_forwarded_navigations.append({ .host = host, .navigation = navigation });
+}
+
+Optional<CanonicalNavigable::ForwardedNavigation> CanonicalNavigable::take_forwarded_navigation(WebContentClient const& host, Utf16String const& navigation_id)
+{
+    auto index = m_forwarded_navigations.find_first_index_if([&](auto const& forwarded) {
+        return forwarded.host.ptr() == &host && forwarded.navigation.navigation_id == navigation_id;
+    });
+    if (!index.has_value())
+        return {};
+    return m_forwarded_navigations.take(*index);
+}
+
 void CanonicalNavigable::set_navigation_population_worker(WebContentPage& page)
 {
     auto& ongoing_navigation = ensure_ongoing_navigation();

@@ -623,11 +623,17 @@ bool WebContentPage::take_owed_reply(OwedReply owed)
     return m_owed_replies.remove(owed);
 }
 
+static Optional<Web::HTML::PreparedNavigationDescriptor> navigation_from_page(WebContentClient& requesting_client, Web::HTML::PreparedNavigationDescriptor);
+
 void WebContentPage::did_request_navigation_of_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::PreparedNavigationDescriptor navigation)
 {
+    auto verified_navigation = navigation_from_page(client(), move(navigation));
+    if (!verified_navigation.has_value())
+        return;
+
     // A document that was lost with the process that hosted it is navigated from step 8 on here: no process hosts it.
     if (auto target = traversable().top_level_traversable().find(navigable_id); target.has_value() && !target->active_document().host()) {
-        target->begin_navigation(move(navigation));
+        target->begin_navigation(verified_navigation.release_value());
         return;
     }
 
@@ -635,7 +641,9 @@ void WebContentPage::did_request_navigation_of_navigable(Web::HTML::CrossProcess
     auto endpoint = endpoint_hosting_navigable_represented_by(navigable_id);
     if (!endpoint)
         return;
-    endpoint->async_navigate_navigable(navigable_id, move(navigation));
+    auto target = traversable().find(navigable_id);
+    target->remember_forwarded_navigation(endpoint->client(), *verified_navigation);
+    endpoint->async_navigate_navigable(navigable_id, verified_navigation.release_value());
 }
 
 void WebContentPage::did_post_message_to_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::PostedMessageDescriptor message)
@@ -823,14 +831,13 @@ void WebContentPage::did_unhover_link()
         view().on_link_unhover();
 }
 
-static Optional<URL::Origin> initiator_origin_snapshot(URL::Origin const& given_origin, Web::HTML::NavigationSourceSnapshot const& source_snapshot_params, WebContentClient* hosting_client = nullptr);
+static Optional<URL::Origin> initiator_origin_snapshot(URL::Origin const& given_origin, Web::HTML::NavigationSourceSnapshot const& source_snapshot_params, WebContentClient& hosting_client);
 
-// A navigation a page asked the browser's UI to start for it, with the initiator origin the UI process takes from the
-// fetch client — as it does for a navigation the page starts itself, so a process names only a source it hosts.
+// A navigation a page asked the browser's UI to start or pass on for it, with the initiator origin the UI process takes
+// from the fetch client, as it does for a navigation the page starts itself, so a process names only a source it hosts.
 static Optional<Web::HTML::PreparedNavigationDescriptor> navigation_from_page(WebContentClient& requesting_client, Web::HTML::PreparedNavigationDescriptor navigation)
 {
-    // A page's own click or context menu names a document the page's process hosts, so only that process vouches for it.
-    auto initiator_origin = initiator_origin_snapshot(navigation.initiator_origin_snapshot, navigation.source_snapshot_params, &requesting_client);
+    auto initiator_origin = initiator_origin_snapshot(navigation.initiator_origin_snapshot, navigation.source_snapshot_params, requesting_client);
     if (!initiator_origin.has_value())
         return {};
     navigation.initiator_origin_snapshot = initiator_origin.release_value();
@@ -1635,31 +1642,37 @@ void WebContentPage::did_request_set_system_visibility_state(Web::HTML::Visibili
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
 // NB: initiatorOriginSnapshot is sourceDocument's origin. The process names sourceDocument's relevant settings object as
-//     the fetch client, an environment that a process hosts, and the UI process takes the origin from it. Without a
+//     the fetch client, an environment that process hosts, and the UI process takes the origin from it. Without a
 //     sourceDocument, the process gives a new opaque origin, which no document may hold yet.
-// The origin of the environment a navigation names as its fetch client, from the process hosting that environment. A
-// navigation a page starts in another process's navigable continues in that process (step 8 of navigate), so the
-// process asking isn't necessarily the one hosting the client; a caller that knows the host names it.
-static Optional<URL::Origin> initiator_origin_snapshot(URL::Origin const& given_origin, Web::HTML::NavigationSourceSnapshot const& source_snapshot_params, WebContentClient* hosting_client)
+static Optional<URL::Origin> initiator_origin_snapshot(URL::Origin const& given_origin, Web::HTML::NavigationSourceSnapshot const& source_snapshot_params, WebContentClient& hosting_client)
 {
     if (!source_snapshot_params.fetch_client.has_value()) {
         if (!given_origin.is_opaque() || CanonicalTraversable::is_origin_held_by_a_document(given_origin))
             return {};
         return given_origin;
     }
-    Optional<URL::Origin> origin;
-    auto take_origin_from = [&](WebContentClient& client) {
-        auto source_settings = client.hosted_environment(source_snapshot_params.fetch_client->id);
-        if (!source_settings.has_value())
-            return IterationDecision::Continue;
-        origin = source_settings->origin();
-        return IterationDecision::Break;
-    };
-    if (hosting_client)
-        take_origin_from(*hosting_client);
-    else
-        WebContentClient::for_each_client(take_origin_from);
-    return origin;
+    auto source_settings = hosting_client.hosted_environment(source_snapshot_params.fetch_client->id);
+    if (!source_settings.has_value())
+        return {};
+    return source_settings->origin();
+}
+
+static Optional<Web::HTML::EnvironmentId> fetch_client_id(Web::HTML::NavigationSourceSnapshot const& source_snapshot_params)
+{
+    return source_snapshot_params.fetch_client.map([](auto const& settings) { return settings.id; });
+}
+
+// The parts of a navigation's start request that come from its source.
+static void take_source_of_forwarded_navigation(Web::HTML::NavigationStartRequest& start_request, Web::HTML::PreparedNavigationDescriptor navigation)
+{
+    start_request.url = move(navigation.url);
+    start_request.document_resource = move(navigation.document_resource);
+    start_request.request_referrer_policy = navigation.referrer_policy;
+    start_request.initiator_origin = move(navigation.initiator_origin_snapshot);
+    start_request.initiator_base_url = move(navigation.initiator_base_url_snapshot);
+    start_request.source_snapshot_params = move(navigation.source_snapshot_params);
+    start_request.csp_navigation_type = navigation.csp_navigation_type;
+    start_request.user_involvement = navigation.user_involvement;
 }
 
 void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navigable_id, Web::NavigationTarget target, URL::URL url, Utf16String navigation_id, Optional<Web::HTML::NavigationStartRequest> start_request)
@@ -1674,9 +1687,25 @@ void WebContentPage::did_request_navigation_start(Web::HTML::CrossProcessId navi
     //         Recheck it here so navigation admission and history traversal remain ordered by the UI process.
     auto navigation_is_blocked_by_history_traversal = target_navigable
         && target_navigable->ongoing_navigation_is_traversal();
+    // A navigation another process passed on to this one has the source part that process gave the UI process.
+    Optional<CanonicalNavigable::ForwardedNavigation> forwarded_navigation;
+    if (target_navigable && target_navigable->id() == navigable_id)
+        forwarded_navigation = target_navigable->take_forwarded_navigation(client(), navigation_id);
     Optional<URL::Origin> initiator_origin;
-    if (start_request.has_value())
-        initiator_origin = initiator_origin_snapshot(start_request->initiator_origin, start_request->source_snapshot_params);
+    if (start_request.has_value()) {
+        auto names_forwarded_source = false;
+        if (forwarded_navigation.has_value()) {
+            auto forwarded_fetch_client = fetch_client_id(forwarded_navigation->navigation.source_snapshot_params);
+            names_forwarded_source = forwarded_fetch_client == fetch_client_id(start_request->source_snapshot_params);
+        }
+        if (names_forwarded_source) {
+            take_source_of_forwarded_navigation(*start_request, move(forwarded_navigation->navigation));
+            url = start_request->url;
+            initiator_origin = start_request->initiator_origin;
+        } else {
+            initiator_origin = initiator_origin_snapshot(start_request->initiator_origin, start_request->source_snapshot_params, client());
+        }
+    }
     if (!target_navigable
         || target_navigable->id() != navigable_id
         || (start_request.has_value() && start_request->navigable_id != navigable_id)
@@ -1788,9 +1817,13 @@ void WebContentPage::did_request_navigation_population(Web::HTML::CrossProcessId
     //         request, so validate the canonical ongoing-navigation value before admitting it.
     auto navigation_is_blocked_by_history_traversal = target_navigable
         && target_navigable->ongoing_navigation_is_traversal();
+    // A process names only a source it hosts.
+    auto const& fetch_client = request.source_snapshot_params.fetch_client;
+    auto names_unhosted_source = fetch_client.has_value() && !client().hosted_environment(fetch_client->id).has_value();
     if (!target_navigable
         || target_navigable->id() != navigable_id
         || request.navigable_id != navigable_id
+        || names_unhosted_source
         || navigation_is_blocked_by_history_traversal) {
         async_cancel_navigation_params_creation(navigable_id, request.navigation_id);
         return;

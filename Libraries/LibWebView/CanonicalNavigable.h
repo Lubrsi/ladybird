@@ -221,6 +221,16 @@ public:
     void clear_ongoing_navigation_traversal(Web::HTML::CrossProcessId operation_id);
     virtual void clear_ongoing_navigation();
     void clear_ongoing_navigation_state();
+
+    // A navigation another process passed on to the process hosting this navigable's document, as the UI process
+    // checked it.
+    struct ForwardedNavigation {
+        NonnullRefPtr<WebContentClient> host;
+        Web::HTML::PreparedNavigationDescriptor navigation;
+    };
+    void remember_forwarded_navigation(WebContentClient& host, Web::HTML::PreparedNavigationDescriptor const&);
+    Optional<ForwardedNavigation> take_forwarded_navigation(WebContentClient const& host, Utf16String const& navigation_id);
+
     void set_navigation_population_worker(WebContentPage&);
     bool navigation_population_matches(WebContentPage const&, Utf16String const& navigation_id) const;
     bool navigation_population_worker_matches(WebContentPage const&) const;
@@ -252,6 +262,7 @@ private:
     RefPtr<CanonicalSessionHistoryEntry> m_active_session_history_entry;
     Optional<CanonicalNavigation> m_ongoing_navigation;
     Optional<Web::HTML::PreparedNavigationDescriptor> m_navigation_waiting_for_traversal;
+    Vector<ForwardedNavigation> m_forwarded_navigations;
 
     BlobURLStore* blob_url_store() const;
     BlobURLHandle m_pending_navigation_blob_url;
