@@ -2598,6 +2598,7 @@ static void create_navigation_params_by_fetching(
     //    referrer: entry's document state's request referrer
     //    referrer policy: entry's document state's request referrer policy
     //    policy container: sourceSnapshotParams's source policy container
+    //    traversable for user prompts: navigable's top-level traversable
     auto request = Fetch::Infrastructure::Request::create();
     request->set_url(url);
     if (source_snapshot_params->fetch_client)
@@ -2611,6 +2612,7 @@ static void create_navigation_params_by_fetching(
     request->set_referrer(request_referrer);
     request->set_referrer_policy(request_referrer_policy);
     request->set_policy_container(source_snapshot_params->source_policy_container);
+    request->set_traversable_for_user_prompts(navigable->traversable_navigable()->id());
 
     // 4. If navigable is a top-level traversable, then set request's top-level navigation initiator origin to entry's
     //    document state's initiator origin.
