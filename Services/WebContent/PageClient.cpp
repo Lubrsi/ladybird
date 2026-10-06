@@ -28,6 +28,7 @@
 #include <LibWeb/CSS/StyleSheetImport.h>
 #include <LibWeb/CSS/StyleSheetState.h>
 #include <LibWeb/Compositor/CompositorHost.h>
+#include <LibWeb/ContentSecurityPolicy/BlockingAlgorithms.h>
 #include <LibWeb/DOM/CharacterData.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
@@ -295,6 +296,14 @@ void PageClient::deliver_posted_message(Web::HTML::CrossProcessId navigable_id, 
 {
     if (auto* navigable = as_if<Web::HTML::LocalNavigable>(page().navigable_with_id(navigable_id).ptr()))
         navigable->deliver_posted_message_from_another_process(move(message));
+}
+
+void PageClient::report_violation_of_environment(Web::HTML::EnvironmentId const& environment_id, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const& resource)
+{
+    auto settings = Web::HTML::environment_settings_object_with_id(environment_id);
+    if (!settings)
+        return;
+    Web::ContentSecurityPolicy::report_a_violation_found_in_another_process(*settings, policy_id, directive, resource);
 }
 
 void PageClient::navigation_params_creation_finished(Web::HTML::LocalNavigable& navigable, Web::HTML::NavigationPopulationRequest request, Web::HTML::NavigationPopulationResult result)
@@ -1497,6 +1506,15 @@ void PageClient::page_did_update_indexed_database(String const& url, Web::Indexe
 void PageClient::page_did_post_broadcast_channel_message(Web::HTML::PostedBroadcastChannelMessage const& message)
 {
     client().async_did_post_broadcast_channel_message(m_id, message);
+}
+
+// The UI process finds the navigation's source and reports the violation in the process hosting it.
+void PageClient::page_did_report_violation_of_remote_client(Web::HTML::RemoteEnvironmentSettings const& remote_client, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const&)
+{
+    auto const& navigation = remote_client.navigation;
+    if (!navigation.has_value())
+        return;
+    client().async_did_report_navigation_violation(m_id, navigation->navigable_id, navigation->navigation_id, policy_id, directive);
 }
 
 void PageClient::page_did_update_resource_count(i32 count_waiting)

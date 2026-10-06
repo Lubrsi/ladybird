@@ -298,6 +298,12 @@ void ConnectionFromClient::deliver_posted_message(Web::PageId page_id, Web::HTML
         page->deliver_posted_message(navigable_id, move(message));
 }
 
+void ConnectionFromClient::report_violation_of_environment(Web::PageId page_id, Web::HTML::EnvironmentId environment_id, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL resource)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->report_violation_of_environment(environment_id, policy_id, directive, resource);
+}
+
 void ConnectionFromClient::close_traversable_from_script(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::HTML::CrossProcessId source_navigable_id)
 {
     auto page = this->page(page_id);
@@ -3527,6 +3533,11 @@ void ConnectionFromClient::did_worker_agent_fail_loading_script(Web::HTML::Worke
 void ConnectionFromClient::did_worker_agent_report_exception(Web::HTML::WorkerAgentOwnerToken owner_token, Utf16String message, Utf16String filename, u32 lineno, u32 colno)
 {
     Web::HTML::WorkerAgentParent::did_report_worker_exception(owner_token, move(message), move(filename), lineno, colno);
+}
+
+void ConnectionFromClient::did_worker_agent_report_violation(Web::HTML::WorkerAgentOwnerToken owner_token, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL resource)
+{
+    Web::HTML::WorkerAgentParent::did_report_worker_violation(owner_token, policy_id, directive, resource);
 }
 
 void ConnectionFromClient::did_worker_agent_close(Web::HTML::WorkerAgentOwnerToken owner_token)

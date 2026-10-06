@@ -9,6 +9,7 @@
 #include <LibGC/Heap.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
 #include <LibWeb/Bindings/WrapperWorld.h>
+#include <LibWeb/ContentSecurityPolicy/BlockingAlgorithms.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventTarget.h>
@@ -134,6 +135,16 @@ void WorkerAgentParent::did_report_worker_exception(WorkerAgentOwnerToken owner_
     if (parent == worker_agent_parents().end())
         return;
     parent->value->dispatch_worker_exception(move(message), move(filename), lineno, colno);
+}
+
+// The worker's script fetches have the outside settings it was started with as their client.
+void WorkerAgentParent::did_report_worker_violation(WorkerAgentOwnerToken owner_token, ContentSecurityPolicy::PolicyId policy_id, ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const& resource)
+{
+    auto parent = worker_agent_parents().find(owner_token);
+    if (parent == worker_agent_parents().end())
+        return;
+    auto& outside_settings = *parent->value->m_outside_settings;
+    ContentSecurityPolicy::report_a_violation_found_in_another_process(outside_settings, policy_id, directive, resource);
 }
 
 void WorkerAgentParent::did_close_worker(WorkerAgentOwnerToken owner_token)

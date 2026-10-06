@@ -2554,6 +2554,18 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
     });
 }
 
+// A client another process hosts names the navigation, by which the UI process routes its violations back to it.
+static Fetch::Infrastructure::Request::ClientType navigation_request_client(FetchClient const& fetch_client, LocalNavigable const& navigable, Optional<Utf16String> const& navigation_id)
+{
+    auto const* remote_client = fetch_client.get_pointer<NonnullRefPtr<RemoteEnvironmentSettings const>>();
+    if (!remote_client || !navigation_id.has_value())
+        return Fetch::Fetching::request_client(fetch_client);
+
+    RemoteClientNavigation navigation { navigable.id(), *navigation_id };
+    auto client = make_ref_counted<RemoteEnvironmentSettings>((*remote_client)->settings, move(navigation));
+    return NonnullRefPtr<RemoteEnvironmentSettings const> { move(client) };
+}
+
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#create-navigation-params-by-fetching
 static void create_navigation_params_by_fetching(
     URL::URL url,
@@ -2602,7 +2614,7 @@ static void create_navigation_params_by_fetching(
     auto request = Fetch::Infrastructure::Request::create();
     request->set_url(url);
     if (source_snapshot_params->fetch_client.has_value())
-        request->set_client(Fetch::Fetching::request_client(*source_snapshot_params->fetch_client));
+        request->set_client(navigation_request_client(*source_snapshot_params->fetch_client, *navigable, navigation_id));
     request->set_destination(Fetch::Infrastructure::Request::Destination::Document);
     request->set_credentials_mode(Fetch::Infrastructure::Request::CredentialsMode::Include);
     request->set_use_url_credentials(true);

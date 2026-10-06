@@ -68,6 +68,16 @@ void WebWorkerClient::did_report_worker_exception(Utf16String message, Utf16Stri
     WorkerProcessManager::the().worker_did_report_exception(m_agent_id, move(message), move(filename), lineno, colno);
 }
 
+// The only fetches of a worker whose client another process hosts are its script fetches, which violate worker-src.
+void WebWorkerClient::did_report_violation(Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL resource)
+{
+    if (directive != Web::ContentSecurityPolicy::RemoteViolationDirective::WorkerSrc) {
+        did_misbehave("did_report_violation"sv, "directive a worker's script cannot violate"sv);
+        return;
+    }
+    WorkerProcessManager::the().worker_did_report_violation(m_agent_id, policy_id, directive, resource);
+}
+
 void WebWorkerClient::remove_blob_url_entries()
 {
     if (auto session = m_session.strong_ref())

@@ -183,6 +183,7 @@ Web::HTML::WorkerAgentId WorkerProcessManager::start_worker_agent(Owner owner, O
         client->async_connect_to_compositor(compositor_handle.release_value());
 
     Vector<Owner> owners;
+    owner.started_the_agent = true;
     owners.append(owner);
 
     // https://html.spec.whatwg.org/multipage/workers.html#set-up-a-worker-environment-settings-object
@@ -416,6 +417,18 @@ void WorkerProcessManager::notify_worker_exception(Owner const& owner, Utf16Stri
         });
 }
 
+void WorkerProcessManager::notify_worker_violation(Owner const& owner, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const& resource)
+{
+    owner.client.visit(
+        [&](WebContentOwner const& web_content_owner) {
+            if (web_content_owner.client)
+                web_content_owner.client->async_did_worker_agent_report_violation(owner.token, policy_id, directive, resource);
+        },
+        [&](WebWorkerOwner const& web_worker_owner) {
+            web_worker_owner.client->async_did_worker_agent_report_violation(owner.token, policy_id, directive, resource);
+        });
+}
+
 void WorkerProcessManager::notify_worker_close(Owner const& owner)
 {
     owner.client.visit(
@@ -478,6 +491,20 @@ void WorkerProcessManager::worker_did_report_exception(Web::HTML::WorkerAgentId 
 
     for (auto const& owner : maybe_agent->value.owners)
         notify_worker_exception(owner, message, filename, lineno, colno);
+}
+
+// A worker's script fetches report a violation of a policy of the owner the agent was started for.
+void WorkerProcessManager::worker_did_report_violation(Web::HTML::WorkerAgentId agent_id, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const& resource)
+{
+    auto maybe_agent = m_agents.find(agent_id);
+    if (maybe_agent == m_agents.end())
+        return;
+
+    auto const& owners = maybe_agent->value.owners;
+    auto owner = owners.first_matching([](Owner const& candidate) { return candidate.started_the_agent; });
+    if (!owner.has_value())
+        return;
+    notify_worker_violation(*owner, policy_id, directive, resource);
 }
 
 void WorkerProcessManager::worker_did_close(Web::HTML::WorkerAgentId agent_id)

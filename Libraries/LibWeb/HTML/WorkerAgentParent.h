@@ -10,6 +10,8 @@
 #include <LibURL/URL.h>
 #include <LibWeb/Bindings/Worker.h>
 #include <LibWeb/Forward.h>
+#include <LibWebCommon/ContentSecurityPolicy/PolicyId.h>
+#include <LibWebCommon/ContentSecurityPolicy/RemoteViolationDirective.h>
 #include <LibWebCommon/HTML/WorkerAgentTypes.h>
 
 namespace Web::HTML {
@@ -28,6 +30,7 @@ public:
 
     static WEB_API void did_fail_loading_worker_script(WorkerAgentOwnerToken);
     static WEB_API void did_report_worker_exception(WorkerAgentOwnerToken, Utf16String message, Utf16String filename, u32 lineno, u32 colno);
+    static WEB_API void did_report_worker_violation(WorkerAgentOwnerToken, ContentSecurityPolicy::PolicyId, ContentSecurityPolicy::RemoteViolationDirective, URL::URL const& resource);
     static WEB_API void did_close_worker(WorkerAgentOwnerToken);
     static WEB_API void did_worker_agent_die(WorkerAgentOwnerToken);
 

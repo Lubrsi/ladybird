@@ -210,6 +210,11 @@ void ConnectionFromClient::did_worker_agent_report_exception(Web::HTML::WorkerAg
     Web::HTML::WorkerAgentParent::did_report_worker_exception(owner_token, move(message), move(filename), lineno, colno);
 }
 
+void ConnectionFromClient::did_worker_agent_report_violation(Web::HTML::WorkerAgentOwnerToken owner_token, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL resource)
+{
+    Web::HTML::WorkerAgentParent::did_report_worker_violation(owner_token, policy_id, directive, resource);
+}
+
 void ConnectionFromClient::did_worker_agent_close(Web::HTML::WorkerAgentOwnerToken owner_token)
 {
     Web::HTML::WorkerAgentParent::did_close_worker(owner_token);

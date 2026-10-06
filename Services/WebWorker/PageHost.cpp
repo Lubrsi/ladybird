@@ -104,6 +104,12 @@ void PageHost::page_did_report_worker_exception(Utf16String const& message, Utf1
     m_client.async_did_report_worker_exception(message, filename, lineno, colno);
 }
 
+// The worker's only client another process hosts is the outside settings of the owner it was started for.
+void PageHost::page_did_report_violation_of_remote_client(Web::HTML::RemoteEnvironmentSettings const&, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive, URL::URL const& resource)
+{
+    m_client.async_did_report_violation(policy_id, directive, resource);
+}
+
 void PageHost::page_did_post_broadcast_channel_message(Web::HTML::PostedBroadcastChannelMessage const& message)
 {
     m_client.async_did_post_broadcast_channel_message(message);

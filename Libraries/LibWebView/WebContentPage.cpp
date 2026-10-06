@@ -655,6 +655,60 @@ void WebContentPage::did_post_message_to_navigable(Web::HTML::CrossProcessId nav
     endpoint->async_deliver_posted_message(navigable_id, move(message));
 }
 
+static RefPtr<WebContentPage> page_hosting_environment(Web::HTML::EnvironmentId const& environment_id)
+{
+    RefPtr<WebContentPage> host;
+    WebContentClient::for_each_client([&](WebContentClient& client) {
+        client.for_each_page([&](WebContentPage& page) {
+            if (!page.hosted_environment(environment_id).has_value())
+                return IterationDecision::Continue;
+            host = page;
+            return IterationDecision::Break;
+        });
+        return host ? IterationDecision::Break : IterationDecision::Continue;
+    });
+    return host;
+}
+
+static bool navigation_can_violate(Web::ContentSecurityPolicy::RemoteViolationDirective directive, CanonicalNavigable const& navigable, Web::HTML::NavigationPopulationRequest const& request)
+{
+    switch (directive) {
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FrameSrc:
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::ObjectSrc:
+        return !navigable.is_top_level_traversable();
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::FormAction:
+        return request.csp_navigation_type == Web::ContentSecurityPolicy::Directives::NavigationType::FormSubmission;
+    case Web::ContentSecurityPolicy::RemoteViolationDirective::WorkerSrc:
+        return false;
+    }
+    // A renderer can send a value outside the enumeration.
+    return false;
+}
+
+// The process populating a navigation reports a violation of a policy of its source, which the process hosting the
+// source reports with the URL the navigation started with.
+void WebContentPage::did_report_navigation_violation(Web::HTML::CrossProcessId navigable_id, Utf16String navigation_id, Web::ContentSecurityPolicy::PolicyId policy_id, Web::ContentSecurityPolicy::RemoteViolationDirective directive)
+{
+    auto navigable = population_worker_navigable(navigable_id);
+    if (!navigable.has_value() || !navigable->navigation_population_matches(*this, navigation_id))
+        return;
+    auto const& loader = navigable->ongoing_navigation()->loader;
+    if (!loader)
+        return;
+
+    auto const& request = loader->request();
+    auto const& fetch_client = request.source_snapshot_params.fetch_client;
+    if (!fetch_client.has_value() || !navigation_can_violate(directive, *navigable, request)) {
+        client().did_misbehave("did_report_navigation_violation"sv, "violation the navigation cannot have"sv);
+        return;
+    }
+
+    auto host = page_hosting_environment(fetch_client->id);
+    if (!host)
+        return;
+    host->async_report_violation_of_environment(fetch_client->id, policy_id, directive, request.history_entry.url);
+}
+
 void WebContentPage::did_request_focusing_steps_for_navigable(Web::HTML::CrossProcessId navigable_id, Web::HTML::FocusTrigger focus_trigger)
 {
     // The focusing steps for a navigable container go on in the process hosting its content navigable's document.
