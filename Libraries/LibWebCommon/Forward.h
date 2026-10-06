@@ -19,6 +19,8 @@ enum class WheelDeltaPrecision : u8;
 
 struct InitiatorSourceSnapshot;
 struct KeyEvent;
+struct LoaderConfig;
+struct LoaderConfigSnapshot;
 struct MouseEvent;
 struct PinchEvent;
 

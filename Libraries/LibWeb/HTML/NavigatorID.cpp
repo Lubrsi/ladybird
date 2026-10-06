@@ -8,6 +8,7 @@
 #include <AK/ByteString.h>
 #include <AK/Utf16StringBuilder.h>
 #include <LibWeb/HTML/NavigatorID.h>
+#include <LibWeb/Loader/LoaderConfig.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWebCommon/Loader/UserAgent.h>
 
@@ -18,7 +19,7 @@ Utf16String NavigatorIDMixin::app_version() const
 {
     // 1. Let userAgent be this's relevant settings object's environment default `User-Agent` value.
     // FIXME: Store that on the settings object?
-    auto user_agent = ResourceLoader::the().user_agent_for_url(navigator_id_url());
+    auto user_agent = current_loader_config()->config.user_agent_for_url(navigator_id_url());
 
     // 2. If userAgent does not start with `Mozilla/5.0 (`, then return the empty string.
     if (!user_agent.starts_with_bytes("Mozilla/5.0 ("sv))
@@ -90,7 +91,7 @@ Utf16FlyString NavigatorIDMixin::product_sub() const
 Utf16String NavigatorIDMixin::user_agent() const
 {
     // Must return the default `User-Agent` value.
-    auto user_agent = ResourceLoader::the().user_agent_for_url(navigator_id_url());
+    auto user_agent = current_loader_config()->config.user_agent_for_url(navigator_id_url());
     return Utf16String::from_ascii_without_validation(user_agent.bytes());
 }
 
