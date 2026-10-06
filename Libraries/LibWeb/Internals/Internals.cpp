@@ -91,6 +91,7 @@
 #include <LibWeb/Layout/TreeBuilderRustFFI.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Loader/ContentBlocker.h>
+#include <LibWeb/Loader/LoaderConfig.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Page/Page.h>
@@ -1022,7 +1023,9 @@ WebIDL::ExceptionOr<void> Internals::set_site_compatibility_data(Utf16String con
     if (data.is_error())
         return window().principal_realm().vm().throw_completion<JS::InternalError>(Utf16String::formatted("Could not set site compatibility data: {}", data.error()));
 
-    ResourceLoader::the().set_site_compatibility_data(data.release_value());
+    update_loader_config([&](auto& config) {
+        config.site_compatibility = make_ref_counted<SharedSiteCompatibilityData>(data.release_value());
+    });
     return {};
 }
 

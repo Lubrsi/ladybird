@@ -12,6 +12,8 @@
 #include <LibWeb/FileAPI/BlobURLStore.h>
 #include <LibWeb/HTML/BroadcastChannel.h>
 #include <LibWeb/HTML/WorkerAgentParent.h>
+#include <LibWeb/Loader/LoaderConfig.h>
+#include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Platform/FontPlugin.h>
 #include <WebWorker/ConnectionFromClient.h>
 #include <WebWorker/PageHost.h>
@@ -107,7 +109,9 @@ void ConnectionFromClient::set_site_compatibility_data(JsonValue data)
         warnln("Ignoring invalid site compatibility data: {}", parsed_data.error());
         return;
     }
-    Web::ResourceLoader::the().set_site_compatibility_data(parsed_data.release_value());
+    Web::update_loader_config([&](auto& config) {
+        config.site_compatibility = make_ref_counted<Web::SharedSiteCompatibilityData>(parsed_data.release_value());
+    });
 }
 
 void ConnectionFromClient::close_worker()

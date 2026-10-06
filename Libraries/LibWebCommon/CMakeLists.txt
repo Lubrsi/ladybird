@@ -41,6 +41,7 @@ set(SOURCES
     HTML/WorkerAgentTypes.cpp
     Infra/Strings.cpp
     Loader/DownloadFilename.cpp
+    Loader/LoaderConfigSnapshot.cpp
     Loader/SiteCompatibility.cpp
     MimeSniff/MimeType.cpp
     Page/AsyncScrollNodeStableID.cpp

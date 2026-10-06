@@ -14,6 +14,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
+#include <LibWeb/Loader/LoaderConfig.h>
 
 namespace {
 
@@ -76,7 +77,7 @@ TEST_CASE(http_redirect_fetch_releases_intermediate_response_transfer_lease)
     request->set_url_list({ request_url.release_value() });
     request->set_redirect_count(20);
 
-    auto fetch_params = Web::Fetch::Infrastructure::FetchParams::create(request, Web::Fetch::Infrastructure::FetchTimingInfo::create());
+    auto fetch_params = Web::Fetch::Infrastructure::FetchParams::create(request, Web::Fetch::Infrastructure::FetchTimingInfo::create(), Web::current_loader_config());
     auto response = TransferTrackingResponse::create(*vm);
     response->set_status(302);
     response->set_header_list(HTTP::HeaderList::create({ { "Location"sv, "/redirected"sv } }));

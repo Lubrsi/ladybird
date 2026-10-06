@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
+#include <LibWeb/Loader/LoaderConfig.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
@@ -183,7 +184,8 @@ ErrorOr<void> WebSocket::establish_web_socket_connection(URL::URL const& url_rec
 
     auto additional_headers = HTTP::HeaderList::create();
 
-    additional_headers->append({ "User-Agent"sv, ResourceLoader::the().user_agent_for_websocket_url(url_record).to_byte_string() });
+    auto user_agent = current_loader_config()->config.user_agent_for_websocket_url(url_record);
+    additional_headers->append({ "User-Agent"sv, user_agent.to_byte_string() });
 
     auto request_client = ResourceLoader::the().request_client();
 

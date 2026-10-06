@@ -13,11 +13,12 @@ namespace Web::Fetch::Infrastructure {
 
 GC_DEFINE_ALLOCATOR(FetchParams);
 
-FetchParams::FetchParams(GC::Ref<Request> request, GC::Ref<FetchAlgorithms> algorithms, GC::Ref<FetchController> controller, NonnullRefPtr<FetchTimingInfo> timing_info)
+FetchParams::FetchParams(GC::Ref<Request> request, GC::Ref<FetchAlgorithms> algorithms, GC::Ref<FetchController> controller, NonnullRefPtr<FetchTimingInfo> timing_info, NonnullRefPtr<LoaderConfigSnapshot const> loader_config)
     : m_request(request)
     , m_algorithms(algorithms)
     , m_controller(controller)
     , m_timing_info(move(timing_info))
+    , m_loader_config(move(loader_config))
 {
     m_controller->set_fetch_params({}, *this);
 }
@@ -31,14 +32,15 @@ FetchParams::FetchParams(FetchParams const& params)
     , m_timing_info(params.m_timing_info)
     , m_preloaded_response_candidate(params.m_preloaded_response_candidate)
     , m_has_response_body_transfer_lease(params.m_has_response_body_transfer_lease)
+    , m_loader_config(params.m_loader_config)
 {
 }
 
-GC::Ref<FetchParams> FetchParams::create(GC::Ref<Request> request, NonnullRefPtr<FetchTimingInfo> timing_info)
+GC::Ref<FetchParams> FetchParams::create(GC::Ref<Request> request, NonnullRefPtr<FetchTimingInfo> timing_info, NonnullRefPtr<LoaderConfigSnapshot const> loader_config)
 {
     auto algorithms = Infrastructure::FetchAlgorithms::create({});
     auto controller = Infrastructure::FetchController::create();
-    return GC::Heap::the().allocate<FetchParams>(request, algorithms, controller, move(timing_info));
+    return GC::Heap::the().allocate<FetchParams>(request, algorithms, controller, move(timing_info), move(loader_config));
 }
 
 GC::Ref<FetchParams> FetchParams::copy(FetchParams const& params)
