@@ -13,6 +13,7 @@
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/Forward.h>
 #include <LibWebCommon/Bindings/SecurityPolicyViolationEvent.h>
+#include <LibWebCommon/ContentSecurityPolicy/PolicyId.h>
 #include <LibWebCommon/ContentSecurityPolicy/PolicySource.h>
 
 namespace Web::ContentSecurityPolicy {
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] static PolicyList parse_a_responses_content_security_policies(Fetch::Infrastructure::Response const&);
     [[nodiscard]] static NonnullRefPtr<Policy> create_from_serialized_policy(SerializedPolicy const&);
 
+    [[nodiscard]] PolicyId id() const { return m_id; }
     [[nodiscard]] Vector<Directives::Directive> const& directives() const { return m_directives; }
     [[nodiscard]] Disposition disposition() const { return m_disposition; }
     [[nodiscard]] Source source() const { return m_source; }
@@ -51,6 +53,8 @@ public:
 
 private:
     Policy() = default;
+
+    PolicyId m_id { generate_a_policy_id() };
 
     // https://w3c.github.io/webappsec-csp/#policy-directive-set
     // Each policy has an associated directive set, which is an ordered set of directives that define the policy’s
