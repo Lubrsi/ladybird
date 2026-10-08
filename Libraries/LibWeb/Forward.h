@@ -571,6 +571,7 @@ namespace Web::Fetch::Engine {
 
 class FetchBodyDeliveryGate;
 class FetchByteChannel;
+class NetworkTransportHandle;
 class WholeBodyTransport;
 
 }
