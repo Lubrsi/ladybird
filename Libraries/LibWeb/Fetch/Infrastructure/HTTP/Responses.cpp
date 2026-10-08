@@ -116,28 +116,28 @@ bool Response::is_network_error() const
 
 void Response::release_request_transfer_lease() const
 {
-    if (m_request_server_request.has_value() && m_request_server_request->request)
-        m_request_server_request->request->release_transfer_lease();
+    if (m_network_transport.has_value())
+        m_network_transport->handle->release_transfer_lease();
 }
 
 void Response::resume_body_delivery() const
 {
     release_request_transfer_lease();
-    if (m_request_server_request.has_value()) {
-        if (m_request_server_request->body_delivery_gate)
-            m_request_server_request->body_delivery_gate->release_hold();
-        else if (m_request_server_request->request)
-            m_request_server_request->request->resume_body_delivery();
+    if (m_network_transport.has_value()) {
+        if (m_network_transport->body_delivery_gate)
+            m_network_transport->body_delivery_gate->release_hold();
+        else
+            m_network_transport->handle->resume_body_delivery();
     }
 }
 
 void Response::resume_body_delivery_up_to(size_t byte_count) const
 {
-    if (m_request_server_request.has_value()) {
-        if (m_request_server_request->body_delivery_gate)
-            m_request_server_request->body_delivery_gate->release_hold_up_to(byte_count);
-        else if (m_request_server_request->request)
-            m_request_server_request->request->resume_body_delivery_up_to(byte_count);
+    if (m_network_transport.has_value()) {
+        if (m_network_transport->body_delivery_gate)
+            m_network_transport->body_delivery_gate->release_hold_up_to(byte_count);
+        else
+            m_network_transport->handle->resume_body_delivery_up_to(byte_count);
     }
 }
 
@@ -218,8 +218,8 @@ GC::Ref<Response> Response::clone(JS::Realm& realm) const
     new_response->set_redirect_taint(m_redirect_taint);
     new_response->set_javascript_bytecode_cache(m_javascript_bytecode_cache);
     new_response->set_javascript_bytecode_cache_vary_key(m_javascript_bytecode_cache_vary_key);
-    if (m_request_server_request.has_value())
-        new_response->set_request_server_request(*m_request_server_request);
+    if (m_network_transport.has_value())
+        new_response->set_network_transport(*m_network_transport);
     if (m_javascript_bytecode_cache_memory_cache_request_headers.has_value())
         new_response->set_javascript_bytecode_cache_memory_cache_request_headers(HTTP::HeaderList::create((*m_javascript_bytecode_cache_memory_cache_request_headers)->headers()));
     // FIXME: service worker timing info

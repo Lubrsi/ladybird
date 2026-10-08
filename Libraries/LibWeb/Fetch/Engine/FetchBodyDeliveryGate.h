@@ -10,7 +10,6 @@
 #include <AK/NumericLimits.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
-#include <LibRequests/Forward.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Engine/FetchByteChannel.h>
 
@@ -43,7 +42,6 @@ public:
 
     // Allowances granted before the transport exists are applied on attach.
     void attach_transport(NonnullRefPtr<Transport>);
-    void attach_transport(NonnullRefPtr<Requests::Request>);
 
     // Delivery consumes both allowances.
     void did_deliver(u64 byte_count);
