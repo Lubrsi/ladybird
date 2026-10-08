@@ -73,9 +73,15 @@ void NetworkBodyPump::handle_network_data(Requests::ResponseData data)
     // FIXME: 5. Increase response’s body info’s decoded size by bytes’s length.
     // FIXME: 6. If bytes is failure, then terminate fetchParams’s controller.
 
+    m_delivery_gate->did_deliver(bytes.size());
+
+    // 7. Append bytes to buffer. (Steps 7 and 8 live in FetchByteChannel::write().)
     auto const* file_backed = data.file_backed_slice();
+    m_channel->write(file_backed ? file_backed->slice : MUST(Core::ImmutableBytes::copy(bytes)));
 
     // Capture bytes for MIME sniffing
+    // NOTE: This follows the append, since a sniff waiter can hand the body to another process with the bytes buffered
+    //       so far.
     if (m_body) {
         if (file_backed && !m_body->source().has_value())
             m_body->set_source(file_backed->payload, static_cast<u64>(file_backed->payload.size()));
@@ -97,11 +103,6 @@ void NetworkBodyPump::handle_network_data(Requests::ResponseData data)
             m_cache_buffer.append(bytes);
         }
     }
-
-    m_delivery_gate->did_deliver(bytes.size());
-
-    // 7. Append bytes to buffer. (Steps 7 and 8 live in FetchByteChannel::write().)
-    m_channel->write(file_backed ? file_backed->slice : MUST(Core::ImmutableBytes::copy(bytes)));
 }
 
 void NetworkBodyPump::handle_network_complete()

@@ -186,6 +186,7 @@ void BodyStreamPullSource::settle_stream(Engine::FetchByteChannel::TakeResult co
     switch (result.state) {
     case Engine::FetchByteChannel::State::Open:
     case Engine::FetchByteChannel::State::ConsumerCancelled:
+    case Engine::FetchByteChannel::State::Transferred:
         break;
     case Engine::FetchByteChannel::State::Closed:
         if (result.buffered_byte_count == 0 && m_stream->is_readable()) {
@@ -274,7 +275,7 @@ void BodyStreamPullSource::drain_into_stream()
         m_fetch_params->controller()->terminate();
 
     settle_stream(result);
-    if (result.state == Engine::FetchByteChannel::State::ConsumerCancelled)
+    if (result.state == Engine::FetchByteChannel::State::ConsumerCancelled || result.state == Engine::FetchByteChannel::State::Transferred)
         m_detached = true;
 }
 

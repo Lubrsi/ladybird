@@ -57,6 +57,7 @@ public:
         Closed,
         Errored,
         ConsumerCancelled,
+        Transferred,
     };
 
     // The error a consumer turns into an exception in its own realm.
@@ -97,6 +98,10 @@ public:
     [[nodiscard]] TakeResult take_up_to(u64 limit);
     [[nodiscard]] TakeResult take_all();
     TerminateResult cancel();
+
+    // Ends an open or closed channel for a body that moves to another process, returning its undrained bytes. The
+    // transport hears nothing, and later writes and endings do nothing.
+    [[nodiscard]] Vector<Core::ImmutableBytes> transfer_out();
 
     enum class WakeOn : u8 {
         BytesOrTerminal,
