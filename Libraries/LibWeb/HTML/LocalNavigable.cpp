@@ -532,18 +532,17 @@ void LocalNavigable::handle_as_a_download(GC::Ref<Fetch::Infrastructure::Respons
     start_download_for_response(response, download_url, move(suggested_filename), fetch_controller);
 }
 
-static void stop_or_resume_response_body_delivery(LocalNavigable::NavigationParamsVariant const& navigation_params)
+// AD-HOC: Stopping the fetch controller, or the network transport of a body adopted without one, is an implementation
+//         hook for tearing down a network body when no spec consumer remains.
+static void stop_response_body_delivery(NavigationParams const& navigation_params)
 {
-    // AD-HOC: FetchController::stop_fetch() is an implementation hook for tearing down a paused network body when no
-    //         spec consumer remains.
-    auto const* nav_params = navigation_params.get_pointer<GC::Ref<NavigationParams>>();
-    if (!nav_params)
-        return;
+    stop_body_delivery(navigation_params.body_delivery());
+}
 
-    if ((*nav_params)->fetch_controller)
-        (*nav_params)->fetch_controller->stop_fetch();
-    else
-        (*nav_params)->response->resume_body_delivery();
+static void stop_response_body_delivery(LocalNavigable::NavigationParamsVariant const& navigation_params)
+{
+    if (auto const* nav_params = navigation_params.get_pointer<GC::Ref<NavigationParams>>())
+        stop_response_body_delivery(**nav_params);
 }
 
 static bool handle_navigation_response_as_download(GC::Ref<NavigationParams> navigation_params, bool source_allows_downloading, Optional<URL::Origin> interface_origin, Optional<ReadonlyBytes> initial_data = {})
@@ -556,17 +555,14 @@ static bool handle_navigation_response_as_download(GC::Ref<NavigationParams> nav
     //        uaAllowsDownloading is currently always true.
     auto target_allows_downloading = !has_flag(navigation_params->final_sandboxing_flag_set, SandboxingFlagSet::SandboxedDownloads);
     if (!source_allows_downloading || !target_allows_downloading) {
-        if (navigation_params->fetch_controller)
-            navigation_params->fetch_controller->stop_fetch();
-        else
-            response->resume_body_delivery();
+        stop_response_body_delivery(*navigation_params);
         return true;
     }
 
     VERIFY(navigation_params->navigable);
     auto active_window = navigation_params->navigable->active_window();
     if (!active_window) {
-        stop_or_resume_response_body_delivery(navigation_params);
+        stop_response_body_delivery(*navigation_params);
         return true;
     }
 
@@ -2953,7 +2949,7 @@ void LocalNavigable::populate_session_history_entry_document(NavigationPopulatio
 
     auto received_navigation_params = GC::create_function(heap(), [this, response_steps, respond_without_an_active_window](GC::Ref<InternalNavigationResult> result) {
         if (!active_window()) {
-            stop_or_resume_response_body_delivery(result->navigation_params);
+            stop_response_body_delivery(result->navigation_params);
             respond_without_an_active_window();
             return;
         }
@@ -3012,7 +3008,7 @@ static void load_document_or_handle_download(GC::Ref<NavigationParams> navigatio
 {
     // AD-HOC: Match other browsers and show a UA error page for an empty HTTP error response to a top-level navigation.
     if (navigation_params->navigable->is_top_level_traversable() && navigation_params->response->status() >= 400 && navigation_params->response->status() <= 599 && sniff_bytes.is_empty()) {
-        stop_or_resume_response_body_delivery(navigation_params);
+        stop_response_body_delivery(*navigation_params);
 
         if (navigation_params->reserved_environment)
             navigation_params->reserved_environment->discard_environment();
@@ -3059,7 +3055,7 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
     GC::Ptr<GC::Function<void(GC::Ptr<PopulateSessionHistoryEntryDocumentOutput>)>> completion_steps)
 {
     if (!active_window()) {
-        stop_or_resume_response_body_delivery(navigation_params);
+        stop_response_body_delivery(navigation_params);
         return;
     }
     if (auto* params = navigation_params.get_pointer<GC::Ref<NavigationParams>>())
@@ -3069,7 +3065,7 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
     queue_global_task(Task::Source::NavigationAndTraversal, HTML::relevant_global_object(*active_window()), GC::create_function(heap(), [this, url, source_allows_downloading, source_interface_origin, user_involvement, navigation_id, navigation_params, csp_navigation_type, navigation_timing_type, output, completion_steps]() mutable {
         // 1. If navigable's ongoing navigation no longer equals navigationId, then run completionSteps and abort these steps.
         if (navigation_id.has_value() && ongoing_navigation() != navigation_id) {
-            stop_or_resume_response_body_delivery(navigation_params);
+            stop_response_body_delivery(navigation_params);
             if (completion_steps)
                 completion_steps->function()(nullptr);
             return;
@@ -3126,10 +3122,7 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
                 // 1. Run the environment discarding steps for navigationParams's reserved environment.
                 navigation_params.visit(
                     [](GC::Ref<NavigationParams> const& it) {
-                        if (it->fetch_controller)
-                            it->fetch_controller->stop_fetch();
-                        else
-                            it->response->resume_body_delivery();
+                        stop_response_body_delivery(*it);
                         it->reserved_environment->discard_environment();
                     },
                     [](auto const&) { });
@@ -3166,7 +3159,7 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
                         if (nav_params->navigable->active_browsing_context() && sniff_bytes.outcome == Fetch::Infrastructure::FetchBody::SniffOutcome::Complete) {
                             load_document_or_handle_download(nav_params, sniff_bytes.bytes, url, source_allows_downloading, source_interface_origin, *output);
                         } else {
-                            stop_or_resume_response_body_delivery(navigation_params);
+                            stop_response_body_delivery(navigation_params);
                             if (sniff_bytes.outcome == Fetch::Infrastructure::FetchBody::SniffOutcome::Failed)
                                 output->save_extra_document_state = false;
                         }
@@ -3182,11 +3175,11 @@ void LocalNavigable::queue_navigation_and_traversal_task_for_session_history_ent
             if (sniff_bytes->outcome == Fetch::Infrastructure::FetchBody::SniffOutcome::Complete) {
                 load_document_or_handle_download(nav_params, sniff_bytes->bytes, url, source_allows_downloading, source_interface_origin, *output);
             } else {
-                stop_or_resume_response_body_delivery(navigation_params);
+                stop_response_body_delivery(navigation_params);
                 output->save_extra_document_state = false;
             }
         } else {
-            stop_or_resume_response_body_delivery(navigation_params);
+            stop_response_body_delivery(navigation_params);
         }
 
         output->navigation_params = navigation_params;
@@ -3201,7 +3194,7 @@ void LocalNavigable::create_navigation_params_for_navigation(NavigationPopulatio
     auto navigation_id = request.navigation_id;
 
     if (!active_window()) {
-        stop_or_resume_response_body_delivery(navigation_params);
+        stop_response_body_delivery(navigation_params);
         return;
     }
 
@@ -3212,13 +3205,13 @@ void LocalNavigable::create_navigation_params_for_navigation(NavigationPopulatio
 
     auto received_navigation_params = GC::create_function(heap(), [this, request, navigation_id](GC::Ref<InternalNavigationResult> result) mutable {
         if (!active_window() || ongoing_navigation() != navigation_id) {
-            stop_or_resume_response_body_delivery(result->navigation_params);
+            stop_response_body_delivery(result->navigation_params);
             return;
         }
 
         create_navigation_population_result(*active_window(), result, GC::create_function(heap(), [this, request = move(request), navigation_id, result](NavigationPopulationResult population_result) mutable {
             if (!active_window() || ongoing_navigation() != navigation_id) {
-                stop_or_resume_response_body_delivery(result->navigation_params);
+                stop_response_body_delivery(result->navigation_params);
                 return;
             }
             page().client().navigation_params_creation_finished(*this, move(request), move(population_result));

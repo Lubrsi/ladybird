@@ -14,6 +14,7 @@
 #include <LibHTTP/Cookie/IncludeCredentials.h>
 #include <LibHTTP/Forward.h>
 #include <LibJS/Forward.h>
+#include <LibRequests/RequestTransferLease.h>
 #include <LibURL/Forward.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Infrastructure/NetworkPartitionKey.h>
@@ -56,6 +57,7 @@ WEB_API GC::Ptr<PendingResponse> http_redirect_fetch(JS::Realm&, Infrastructure:
 GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm&, Infrastructure::FetchParams const&, IsAuthenticationFetch is_authentication_fetch = IsAuthenticationFetch::No, IsNewConnectionFetch is_new_connection_fetch = IsNewConnectionFetch::No);
 GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(JS::Realm&, Infrastructure::FetchParams const&, HTTP::Cookie::IncludeCredentials include_credentials = HTTP::Cookie::IncludeCredentials::No, IsNewConnectionFetch is_new_connection_fetch = IsNewConnectionFetch::No, RefPtr<HTTP::MemoryCache> = {});
 GC::Ref<PendingResponse> cors_preflight_fetch(JS::Realm&, Infrastructure::FetchParams const&);
+GC::Ptr<Infrastructure::Body> adopt_navigation_response_body(JS::Realm&, Infrastructure::Response&, Requests::RequestTransferLeaseKey, RefPtr<Infrastructure::FetchTimingInfo>);
 // Stopping the transport also cancels the channel.
 WEB_API NonnullRefPtr<Engine::WholeBodyTransport> create_whole_body_transport(Engine::FetchBodyDeliveryGate&, Engine::FetchByteChannel&);
 void set_sec_fetch_dest_header(Infrastructure::Request&);

@@ -48,7 +48,6 @@ ALLOWED_HEADERS = {
     "LibJS/Runtime/Error.h",
     "LibJS/Runtime/ErrorConstructor.h",
     "LibJS/Runtime/ErrorData.h",
-    "LibJS/Runtime/ErrorTypes.h",
     "LibJS/Runtime/ExternalMemory.h",
     "LibJS/Runtime/FinalizationRegistry.h",
     "LibJS/Runtime/FunctionEnvironment.h",

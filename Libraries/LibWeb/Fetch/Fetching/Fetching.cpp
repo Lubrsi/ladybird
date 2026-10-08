@@ -2367,6 +2367,117 @@ NonnullRefPtr<Engine::WholeBodyTransport> create_whole_body_transport(Engine::Fe
     return transport;
 }
 
+namespace {
+
+// A network response's body stream and the objects that fill it from the transport.
+struct NetworkBodyStream {
+    GC::Ref<Streams::ReadableStream> stream;
+    NonnullRefPtr<Engine::FetchByteChannel> channel;
+    NonnullRefPtr<Engine::FetchBodyDeliveryGate> delivery_gate;
+    GC::Ref<NetworkBodyPump> body_pump;
+    GC::Ref<BodyStreamPullSource> pull_source;
+};
+
+}
+
+// https://fetch.spec.whatwg.org/#concept-http-network-fetch
+// NB: Steps 9 to 13 of HTTP-network fetch.
+static NetworkBodyStream create_network_body_stream(JS::Realm& realm, GC::Ptr<Infrastructure::FetchParams const> fetch_params, Engine::FetchBodyDeliveryGate::NavigationHold navigation_hold, RefPtr<HTTP::MemoryCache> http_cache)
+{
+    // 10. Let stream be a new ReadableStream.
+    auto stream = GC::Heap::the().allocate<Streams::ReadableStream>();
+
+    // 9. Let buffer be an empty byte sequence.
+    // NB: The buffer is the FetchByteChannel; its watermarks are the user-agent-chosen lower and upper limits.
+    static constexpr Engine::FetchByteChannel::Watermarks network_body_watermarks { .low = 256 * KiB, .high = 1 * MiB };
+    auto delivery_gate = Engine::FetchBodyDeliveryGate::create(navigation_hold);
+    auto wake_sink = BodyStreamWakeSink::create();
+    auto channel = Engine::FetchByteChannel::create(network_body_watermarks, wake_sink, delivery_gate->create_channel_sink());
+    delivery_gate->grant_credit(channel->initial_credit());
+
+    auto body_pump = GC::Heap::the().allocate<NetworkBodyPump>(fetch_params, channel, delivery_gate, move(http_cache));
+    auto pull_source = GC::Heap::the().allocate<BodyStreamPullSource>(fetch_params, stream, channel, *wake_sink);
+
+    // 11. Let pullAlgorithm be the following steps:
+    auto pull_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source]() {
+        return pull_source->pull(realm);
+    });
+
+    // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s controller with reason, given reason.
+    auto cancel_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source](JS::Value reason) {
+        return pull_source->cancel(realm, reason);
+    });
+
+    // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
+    stream->set_up_with_byte_reading_support(realm, pull_algorithm, cancel_algorithm);
+
+    return { stream, move(channel), move(delivery_gate), body_pump, pull_source };
+}
+
+GC::Ptr<Infrastructure::Body> adopt_navigation_response_body(JS::Realm& realm, Infrastructure::Response& response, Requests::RequestTransferLeaseKey transfer_lease, RefPtr<Infrastructure::FetchTimingInfo> timing_info)
+{
+    if (!ResourceLoader::is_initialized() || !ResourceLoader::the().request_client())
+        return {};
+
+    auto& request_client = *ResourceLoader::the().request_client();
+    auto request = request_client.adopt_request(transfer_lease.source_client_id, transfer_lease.source_request_id, Requests::RequestClient::TransferLease::Yes);
+    if (!request)
+        return {};
+
+    HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+
+    // No body byte is delivered until the navigation decides whether the response becomes a document or a download.
+    auto network_body_stream = create_network_body_stream(realm, nullptr, Engine::FetchBodyDeliveryGate::NavigationHold::Held, nullptr);
+    auto body = Infrastructure::Body::create(network_body_stream.stream);
+    network_body_stream.body_pump->set_body(body);
+
+    auto channel = network_body_stream.channel;
+    auto delivery_gate = network_body_stream.delivery_gate;
+    auto network_transport = Engine::NetworkTransportHandle::create(*request);
+    delivery_gate->attach_transport(network_transport);
+    // The gate detaches before the cancellation reaches it.
+    network_transport->set_on_teardown([delivery_gate, channel](Requests::Request::TeardownReason) {
+        delivery_gate->detach_transport();
+        channel->cancel();
+    });
+
+    auto body_pump = GC::make_root(network_body_stream.body_pump);
+    auto pull_source = GC::make_root(network_body_stream.pull_source);
+    auto cross_origin_isolated_capability = Bindings::principal_host_defined_environment_settings_object(realm).cross_origin_isolated_capability();
+    request->set_unbuffered_request_callbacks(
+        [](NonnullRefPtr<HTTP::HeaderList>, Optional<u32>, Optional<String> const&, Optional<Core::ImmutableBytes>, Optional<u64>, Requests::CacheState) { },
+        [body_pump](Requests::ResponseData data) {
+            body_pump->handle_network_data(move(data));
+        },
+        [body_pump](Core::ImmutableBytes data) {
+            body_pump->set_cached_response_body(move(data));
+        },
+        [&realm, body_pump, pull_source, delivery_gate, timing_info, cross_origin_isolated_capability](u64, Requests::RequestTimingInfo const& request_timing_info, Optional<Requests::NetworkError> network_error) {
+            HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
+            delivery_gate->detach_transport();
+
+            if (network_error.has_value()) {
+                body_pump->handle_network_error("Transferred navigation response failed"sv);
+            } else {
+                // AD-HOC: Nothing reports timing for a navigation fetch, so record the network phases and end time
+                //         here for the Document's navigation timing entry.
+                if (timing_info) {
+                    timing_info->update_final_timings(request_timing_info, cross_origin_isolated_capability);
+                    timing_info->set_end_time(HighResolutionTime::unsafe_shared_current_time());
+                }
+                body_pump->handle_network_complete();
+            }
+
+            pull_source->handle_network_settled();
+        });
+
+    response.set_network_transport({
+        .handle = move(network_transport),
+        .body_delivery_gate = move(delivery_gate),
+    });
+    return body;
+}
+
 // https://fetch.spec.whatwg.org/#concept-http-network-fetch
 // Drop-in replacement for 'HTTP-network fetch', but obviously non-standard :^)
 // It also handles file:// URLs since those can also go through ResourceLoader.
@@ -2429,35 +2540,16 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
 
     HTML::TemporaryExecutionContext execution_context { realm, HTML::TemporaryExecutionContext::CallbacksEnabled::Yes };
 
-    // 10. Let stream be a new ReadableStream.
-    auto stream = GC::Heap::the().allocate<Streams::ReadableStream>();
-
-    // 9. Let buffer be an empty byte sequence.
-    // NB: The buffer is the FetchByteChannel; its watermarks are the user-agent-chosen lower and upper limits.
-    static constexpr Engine::FetchByteChannel::Watermarks network_body_watermarks { .low = 256 * KiB, .high = 1 * MiB };
+    // NB: Steps 9 to 13 run in create_network_body_stream().
     auto navigation_hold = fetch_params.has_response_body_transfer_lease()
         ? Engine::FetchBodyDeliveryGate::NavigationHold::Held
         : Engine::FetchBodyDeliveryGate::NavigationHold::None;
-    auto delivery_gate = Engine::FetchBodyDeliveryGate::create(navigation_hold);
-    auto wake_sink = BodyStreamWakeSink::create();
-    auto channel = Engine::FetchByteChannel::create(network_body_watermarks, wake_sink, delivery_gate->create_channel_sink());
-    delivery_gate->grant_credit(channel->initial_credit());
-
-    auto body_pump = GC::Heap::the().allocate<NetworkBodyPump>(fetch_params, channel, delivery_gate, move(http_cache));
-    auto pull_source = GC::Heap::the().allocate<BodyStreamPullSource>(fetch_params, stream, channel, *wake_sink);
-
-    // 11. Let pullAlgorithm be the following steps:
-    auto pull_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source]() {
-        return pull_source->pull(realm);
-    });
-
-    // 12. Let cancelAlgorithm be an algorithm that aborts fetchParams’s controller with reason, given reason.
-    auto cancel_algorithm = GC::create_function(GC::Heap::the(), [&realm, pull_source](JS::Value reason) {
-        return pull_source->cancel(realm, reason);
-    });
-
-    // 13. Set up stream with byte reading support with pullAlgorithm set to pullAlgorithm, cancelAlgorithm set to cancelAlgorithm.
-    stream->set_up_with_byte_reading_support(realm, pull_algorithm, cancel_algorithm);
+    auto network_body_stream = create_network_body_stream(realm, &fetch_params, navigation_hold, move(http_cache));
+    auto stream = network_body_stream.stream;
+    auto channel = network_body_stream.channel;
+    auto delivery_gate = network_body_stream.delivery_gate;
+    auto body_pump = network_body_stream.body_pump;
+    auto pull_source = network_body_stream.pull_source;
 
     // A load without a RequestServer request, such as one for a file: URL, hands over its whole body at once.
     auto whole_body_transport = create_whole_body_transport(*delivery_gate, *channel);
