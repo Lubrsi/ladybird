@@ -63,9 +63,7 @@ public:
     // RequestServer bookkeeping is transport state, not JS-visible response data.
     struct NetworkTransport {
         NonnullRefPtr<Engine::NetworkTransportHandle> handle;
-        // Present when body delivery is flow-controlled by a FetchByteChannel; the navigation hold releases route
-        // through it.
-        RefPtr<Engine::FetchBodyDeliveryGate> body_delivery_gate;
+        NonnullRefPtr<Engine::FetchBodyDeliveryGate> body_delivery_gate;
     };
 
     [[nodiscard]] static GC::Ref<Response> create();

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // Runs on a hostname of its own, in a process apart from the test page.
+    async function checkUnreadBodiesAreReleased(urls) {
+        const output = [];
+        const println = line => output.push(line);
+
+        const countBodyCells = () => {
+            const counts = { pumps: 0, pullSources: 0 };
+            for (const cell of Object.values(JSON.parse(internals.dumpGCGraph()))) {
+                if (cell.class_name === "NetworkBodyPump")
+                    ++counts.pumps;
+                else if (cell.class_name === "BodyStreamPullSource")
+                    ++counts.pullSources;
+            }
+            return counts;
+        };
+
+        // A stale pointer on the stack can keep a cell alive through one conservative collection.
+        const waitForRelease = async initial => {
+            let counts;
+            for (let attempt = 0; attempt < 20; ++attempt) {
+                await internals.gcAsync();
+                counts = countBodyCells();
+                if (counts.pumps === initial.pumps && counts.pullSources === initial.pullSources)
+                    return "released";
+            }
+            return `left ${counts.pumps - initial.pumps} pumps and ${counts.pullSources - initial.pullSources} pull sources`;
+        };
+
+        await internals.gcAsync();
+        const initial = countBodyCells();
+
+        let frame = document.createElement("iframe");
+        await new Promise(resolve => {
+            frame.onload = resolve;
+            frame.src = urls.refused;
+            document.body.append(frame);
+        });
+        frame.remove();
+        frame = null;
+        println(`body of a refused document: ${await waitForRelease(initial)}`);
+
+        frame = document.createElement("iframe");
+        frame.src = urls.heldMidBody;
+        document.body.append(frame);
+        while (!frame.contentDocument?.body || !frame.contentDocument.URL.startsWith(urls.heldMidBodyPath))
+            await new Promise(resolve => setTimeout(resolve, 0));
+        frame.remove();
+        frame = null;
+        println(`body of a document removed while it arrives: ${await waitForRelease(initial)}`);
+        await fetch(urls.unblock);
+
+        return output;
+    }
+
+    promiseTest(async () => {
+        const hostname = uniqueLocalhostHostname("unread-navigation-body");
+        const server = httpTestServer();
+        const size = 2 * 1024 * 1024;
+
+        // Each body outgrows its channel and the request's pipe together, and its request ends only when the body is
+        // read or the request is stopped.
+        const refused = new URL(await server.createEcho("GET", `/unread-body-refused-${crypto.randomUUID()}`, {
+            status: 200,
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/html", "X-Frame-Options": "DENY" },
+            body: "x".repeat(size),
+        }));
+        refused.hostname = hostname;
+
+        // The server holds the body after its first chunk until the test lets it go.
+        const token = `unread-body-${crypto.randomUUID()}`;
+        const heldMidBody = new URL(await server.createEcho("GET", `/unread-body-held-${crypto.randomUUID()}`, {
+            status: 200,
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/html" },
+            body: `<!DOCTYPE html><body><!--${"a".repeat(2000)}-->${"x".repeat(size)}`,
+        }));
+        heldMidBody.hostname = hostname;
+        const heldMidBodyPath = heldMidBody.href;
+        heldMidBody.search = `?chunks=1500&chunk_unblock_tokens=${token}`;
+        const unblock = new URL(`/unblock/${token}`, heldMidBody);
+
+        const urls = { refused: refused.href, heldMidBody: heldMidBody.href, heldMidBodyPath, unblock: unblock.href };
+        const checker = new URL(await server.createEcho("GET", `/unread-body-checker-${crypto.randomUUID()}`, {
+            status: 200,
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/html" },
+            body: `<!DOCTYPE html><body><script>
+                (${checkUnreadBodiesAreReleased.toString()})(${JSON.stringify(urls)}).then(
+                    output => parent.postMessage({ output }, "*"),
+                    error => parent.postMessage({ error: String(error) }, "*"));
+            <\/script>`,
+        }));
+        checker.hostname = hostname;
+
+        const frame = document.createElement("iframe");
+        const result = new Promise(resolve => {
+            window.addEventListener("message", function receive(event) {
+                if (event.source !== frame.contentWindow)
+                    return;
+                window.removeEventListener("message", receive);
+                resolve(event.data);
+            });
+        });
+        frame.src = checker;
+        document.body.append(frame);
+        try {
+            const { output, error } = await result;
+            if (error)
+                throw new Error(error);
+            for (const line of output)
+                println(line);
+        } finally {
+            frame.remove();
+        }
+    });
+</script>

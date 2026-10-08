@@ -5,15 +5,10 @@
  */
 
 #include <LibGC/Heap.h>
-#include <LibGC/Root.h>
-#include <LibJS/Runtime/ErrorTypes.h>
-#include <LibRequests/Request.h>
-#include <LibRequests/RequestClient.h>
-#include <LibWeb/Bindings/PrincipalHostDefined.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Fetch/Engine/NetworkTransportHandle.h>
 #include <LibWeb/Fetch/Fetching/ClientContextSnapshots.h>
-#include <LibWeb/Fetch/Fetching/FetchedDataReceiver.h>
+#include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
@@ -23,11 +18,6 @@
 #include <LibWeb/HTML/NavigationParamsDescriptor.h>
 #include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
-#include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
-#include <LibWeb/HighResolutionTime/TimeOrigin.h>
-#include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Streams/ReadableStream.h>
-#include <LibWeb/WebIDL/Promise.h>
 
 namespace Web::HTML {
 
@@ -247,75 +237,6 @@ static RefPtr<Fetch::Infrastructure::Request> create_navigation_request_from_des
     return request;
 }
 
-static GC::Ptr<Fetch::Infrastructure::Body> adopt_navigation_response_body(JS::Realm& realm, NavigationResponseBodyHandle handle, Fetch::Infrastructure::Response& response, RefPtr<Fetch::Infrastructure::FetchTimingInfo> timing_info)
-{
-    if (!ResourceLoader::is_initialized() || !ResourceLoader::the().request_client())
-        return {};
-
-    // Preserve the original RequestServer identity while WebContent decides whether this response will become a
-    // document or a download. A download is adopted by the UI process using that identity.
-    auto request = ResourceLoader::the().request_client()->adopt_request(
-        handle.request_server_client_id,
-        handle.request_server_request_id,
-        Requests::RequestClient::TransferLease::Yes);
-    if (!request)
-        return {};
-
-    // Navigation may hand this response back to the UI process as a download. Do not consume any of its body before
-    // populate_session_history_entry_document() decides whether to load it as a document or transfer it again.
-    request->set_body_delivery_paused(true);
-
-    auto stream = realm.heap().allocate<Streams::ReadableStream>();
-    auto pull_algorithm = GC::create_function(realm.heap(), [&realm]() {
-        return WebIDL::create_resolved_promise(realm, JS::js_undefined());
-    });
-    auto cancel_algorithm = GC::create_function(realm.heap(), [&realm, request](JS::Value) {
-        request->stop();
-        return WebIDL::create_resolved_promise(realm, JS::js_undefined());
-    });
-    stream->set_up_with_byte_reading_support(realm, pull_algorithm, cancel_algorithm);
-
-    auto body = Fetch::Infrastructure::Body::create(stream);
-    auto receiver = realm.heap().allocate<Fetch::Fetching::FetchedDataReceiver>(stream);
-    receiver->set_response(response);
-    receiver->set_body(body);
-    auto receiver_root = GC::make_root(receiver);
-    auto cross_origin_isolated_capability = Bindings::principal_host_defined_environment_settings_object(realm).cross_origin_isolated_capability();
-
-    request->set_unbuffered_request_callbacks(
-        [](NonnullRefPtr<HTTP::HeaderList>, Optional<u32>, Optional<String> const&, Optional<Core::ImmutableBytes>, Optional<u64>, Requests::CacheState) {},
-        [receiver_root, &realm](Requests::ResponseData data) {
-            receiver_root->handle_network_data(realm, move(data), Fetch::Fetching::FetchedDataReceiver::NetworkState::Ongoing);
-        },
-        [receiver_root](Core::ImmutableBytes data) {
-            receiver_root->set_cached_response_body(move(data));
-        },
-        [receiver_root, stream = GC::make_root(stream), body = GC::make_root(body), timing_info, cross_origin_isolated_capability, &realm](u64, Requests::RequestTimingInfo const& request_timing_info, Optional<Requests::NetworkError> network_error) {
-            TemporaryExecutionContext execution_context { realm, TemporaryExecutionContext::CallbacksEnabled::Yes };
-            if (!network_error.has_value()) {
-                // AD-HOC: Nothing reports timing for a navigation fetch, so record the network phases and end time here
-                //         for the Document's navigation timing entry.
-                if (timing_info) {
-                    timing_info->update_final_timings(request_timing_info, cross_origin_isolated_capability);
-                    timing_info->set_end_time(HighResolutionTime::unsafe_shared_current_time());
-                }
-                receiver_root->handle_network_data(realm, Requests::ResponseData::from_bytes({}), Fetch::Fetching::FetchedDataReceiver::NetworkState::Complete);
-                return;
-            }
-
-            body->set_sniff_bytes_failed();
-            if (stream->is_readable())
-                stream->error(JS::TypeError::create(realm, "Transferred navigation response failed"_utf16));
-        });
-
-    auto network_transport = Fetch::Engine::NetworkTransportHandle::create(*request, handle.request_server_client_id, handle.request_server_request_id);
-    response.set_network_transport({
-        .handle = move(network_transport),
-        .body_delivery_gate = nullptr,
-    });
-    return body;
-}
-
 static ErrorOr<GC::Ref<Fetch::Infrastructure::Response>> create_navigation_response_from_descriptor(JS::Realm& realm, NavigationResponseDescriptor descriptor, RefPtr<Fetch::Infrastructure::FetchTimingInfo> timing_info)
 {
     auto response = descriptor.network_error_message.has_value()
@@ -333,7 +254,8 @@ static ErrorOr<GC::Ref<Fetch::Infrastructure::Response>> create_navigation_respo
     if (descriptor.body.has<ByteBuffer>()) {
         response->set_body(Fetch::Infrastructure::byte_sequence_as_body(realm, descriptor.body.get<ByteBuffer>().bytes()));
     } else if (descriptor.body.has<NavigationResponseBodyHandle>()) {
-        auto body = adopt_navigation_response_body(realm, descriptor.body.get<NavigationResponseBodyHandle>(), response, timing_info);
+        auto const& handle = descriptor.body.get<NavigationResponseBodyHandle>();
+        auto body = Fetch::Fetching::adopt_navigation_response_body(realm, response, handle.request_server_client_id, handle.request_server_request_id, timing_info);
         if (!body)
             return Error::from_string_literal("Unable to adopt transferred navigation response body");
         response->set_body(body);

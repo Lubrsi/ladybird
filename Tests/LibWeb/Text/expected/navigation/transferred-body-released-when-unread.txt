@@ -1,0 +1,2 @@
+body of a refused document: released
+body of a document removed while it arrives: released

@@ -123,22 +123,14 @@ void Response::release_request_transfer_lease() const
 void Response::resume_body_delivery() const
 {
     release_request_transfer_lease();
-    if (m_network_transport.has_value()) {
-        if (m_network_transport->body_delivery_gate)
-            m_network_transport->body_delivery_gate->release_hold();
-        else
-            m_network_transport->handle->resume_body_delivery();
-    }
+    if (m_network_transport.has_value())
+        m_network_transport->body_delivery_gate->release_hold();
 }
 
 void Response::resume_body_delivery_up_to(size_t byte_count) const
 {
-    if (m_network_transport.has_value()) {
-        if (m_network_transport->body_delivery_gate)
-            m_network_transport->body_delivery_gate->release_hold_up_to(byte_count);
-        else
-            m_network_transport->handle->resume_body_delivery_up_to(byte_count);
-    }
+    if (m_network_transport.has_value())
+        m_network_transport->body_delivery_gate->release_hold_up_to(byte_count);
 }
 
 // https://fetch.spec.whatwg.org/#concept-response-url
