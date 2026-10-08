@@ -116,6 +116,13 @@ void FetchBodyDeliveryGate::detach_transport()
     m_transport = nullptr;
 }
 
+void FetchBodyDeliveryGate::release_transport()
+{
+    if (auto transport = exchange(m_transport, nullptr))
+        transport->pause_body_delivery();
+    m_terminated = true;
+}
+
 void FetchBodyDeliveryGate::apply_to_transport()
 {
     if (!m_transport)

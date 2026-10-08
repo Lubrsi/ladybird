@@ -22,6 +22,7 @@
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Engine/FetchBodyDeliveryGate.h>
 #include <LibWeb/Fetch/Engine/NetworkTransportHandle.h>
+#include <LibWeb/Fetch/Engine/TransferredNavigationBody.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
 #include <LibWebCommon/Fetch/Infrastructure/HTTP/ResponseCacheState.h>
@@ -64,6 +65,7 @@ public:
     struct NetworkTransport {
         NonnullRefPtr<Engine::NetworkTransportHandle> handle;
         NonnullRefPtr<Engine::FetchBodyDeliveryGate> body_delivery_gate;
+        NonnullRefPtr<Engine::FetchByteChannel> body_channel;
     };
 
     [[nodiscard]] static GC::Ref<Response> create();
@@ -149,6 +151,9 @@ public:
     virtual void release_request_transfer_lease() const;
     virtual void resume_body_delivery() const;
     virtual void resume_body_delivery_up_to(size_t) const;
+
+    // Stops this process taking the body, whose request another process adopts next.
+    virtual Engine::TransferredNavigationBody release_body_for_transfer() const;
 
 protected:
     explicit Response(NonnullRefPtr<HTTP::HeaderList>);
@@ -291,6 +296,7 @@ public:
     virtual void release_request_transfer_lease() const override { m_internal_response->release_request_transfer_lease(); }
     virtual void resume_body_delivery() const override { m_internal_response->resume_body_delivery(); }
     virtual void resume_body_delivery_up_to(size_t byte_count) const override { m_internal_response->resume_body_delivery_up_to(byte_count); }
+    virtual Engine::TransferredNavigationBody release_body_for_transfer() const override { return m_internal_response->release_body_for_transfer(); }
 
     [[nodiscard]] GC::Ref<Response> internal_response() const { return m_internal_response; }
 

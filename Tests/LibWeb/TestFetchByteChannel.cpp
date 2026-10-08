@@ -108,12 +108,17 @@ Core::ImmutableBytes bytes_of(StringView text)
     return MUST(Core::ImmutableBytes::copy(text.bytes()));
 }
 
-ByteString flatten(FetchByteChannel::TakeResult const& result)
+ByteString flatten(Vector<FetchByteChannel::TakenBytes> const& taken_bytes)
 {
     ByteBuffer flat;
-    for (auto const& taken : result.taken)
+    for (auto const& taken : taken_bytes)
         flat.append(taken.bytes());
     return ByteString { flat.bytes() };
+}
+
+ByteString flatten(FetchByteChannel::TakeResult const& result)
+{
+    return flatten(result.taken);
 }
 
 }
@@ -358,7 +363,7 @@ TEST_CASE(error_discards_buffered_bytes_immediately)
 
 TEST_CASE(terminals_wake_an_armed_waiter)
 {
-    for (auto terminal : { FetchByteChannel::State::Closed, FetchByteChannel::State::Errored, FetchByteChannel::State::ConsumerCancelled }) {
+    for (auto terminal : { FetchByteChannel::State::Closed, FetchByteChannel::State::Errored, FetchByteChannel::State::ConsumerCancelled, FetchByteChannel::State::Transferred }) {
         ChannelHarness harness;
         auto ticket = harness.channel->arm_waiter();
 
@@ -371,6 +376,9 @@ TEST_CASE(terminals_wake_an_armed_waiter)
             break;
         case FetchByteChannel::State::ConsumerCancelled:
             EXPECT_EQ(harness.channel->cancel(), TerminateResult::Terminated);
+            break;
+        case FetchByteChannel::State::Transferred:
+            EXPECT(harness.channel->transfer_out().is_empty());
             break;
         case FetchByteChannel::State::Open:
             VERIFY_NOT_REACHED();
@@ -396,6 +404,72 @@ TEST_CASE(cancellation_notifies_the_producer)
     auto result = harness.channel->take_all();
     EXPECT(result.taken.is_empty());
     EXPECT_EQ(result.state, FetchByteChannel::State::ConsumerCancelled);
+}
+
+TEST_CASE(transfer_out_returns_the_undrained_bytes)
+{
+    ChannelHarness harness;
+    EXPECT_EQ(harness.channel->write(bytes_of("first "sv)), WriteResult::Accepted);
+    EXPECT_EQ(harness.channel->write(bytes_of("second "sv)), WriteResult::Accepted);
+    EXPECT_EQ(harness.channel->write(bytes_of("third"sv)), WriteResult::Accepted);
+    EXPECT_EQ(flatten(harness.channel->take_up_to(3)), "fir"sv);
+    (void)harness.take_events();
+
+    EXPECT_EQ(flatten(harness.channel->transfer_out()), "st second third"sv);
+    EXPECT(harness.take_events().is_empty());
+
+    auto result = harness.channel->take_all();
+    EXPECT(result.taken.is_empty());
+    EXPECT_EQ(result.state, FetchByteChannel::State::Transferred);
+    EXPECT_EQ(result.buffered_byte_count, 0u);
+}
+
+TEST_CASE(transfer_out_of_an_undrained_close_returns_its_tail)
+{
+    ChannelHarness harness;
+    EXPECT_EQ(harness.channel->write(bytes_of("tail"sv)), WriteResult::Accepted);
+    EXPECT_EQ(harness.channel->close(), TerminateResult::Terminated);
+
+    EXPECT_EQ(flatten(harness.channel->transfer_out()), "tail"sv);
+    EXPECT_EQ(harness.channel->take_all().state, FetchByteChannel::State::Transferred);
+}
+
+TEST_CASE(a_transferred_channel_tells_neither_side)
+{
+    ChannelHarness harness;
+    EXPECT_EQ(harness.channel->write(bytes_of("moving"sv)), WriteResult::Accepted);
+    (void)harness.take_events();
+    EXPECT_EQ(flatten(harness.channel->transfer_out()), "moving"sv);
+
+    EXPECT_EQ(harness.channel->write(bytes_of("late"sv)), WriteResult::Rejected);
+    EXPECT_EQ(harness.channel->close(), TerminateResult::AlreadyTerminated);
+    EXPECT_EQ(harness.channel->cancel(), TerminateResult::AlreadyTerminated);
+    EXPECT(harness.channel->transfer_out().is_empty());
+
+    auto result = harness.channel->take_all();
+    EXPECT(result.taken.is_empty());
+    EXPECT_EQ(result.state, FetchByteChannel::State::Transferred);
+
+    // Neither a consumer cancellation nor credit reaches the transport.
+    EXPECT(harness.take_events().is_empty());
+}
+
+TEST_CASE(an_errored_or_cancelled_channel_transfers_nothing)
+{
+    {
+        ChannelHarness harness;
+        EXPECT_EQ(harness.channel->write(bytes_of("junk"sv)), WriteResult::Accepted);
+        EXPECT_EQ(harness.channel->error({}), TerminateResult::Terminated);
+        EXPECT(harness.channel->transfer_out().is_empty());
+        EXPECT_EQ(harness.channel->take_all().state, FetchByteChannel::State::Errored);
+    }
+    {
+        ChannelHarness harness;
+        EXPECT_EQ(harness.channel->write(bytes_of("junk"sv)), WriteResult::Accepted);
+        EXPECT_EQ(harness.channel->cancel(), TerminateResult::Terminated);
+        EXPECT(harness.channel->transfer_out().is_empty());
+        EXPECT_EQ(harness.channel->take_all().state, FetchByteChannel::State::ConsumerCancelled);
+    }
 }
 
 TEST_CASE(no_credit_replenishment_after_terminal)

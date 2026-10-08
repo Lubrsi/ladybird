@@ -549,7 +549,7 @@ static void stop_response_body_delivery(LocalNavigable::NavigationParamsVariant 
         stop_response_body_delivery(**nav_params);
 }
 
-static bool handle_navigation_response_as_download(GC::Ref<NavigationParams> navigation_params, bool source_allows_downloading, Optional<URL::Origin> interface_origin, Optional<ReadonlyBytes> initial_data = {})
+static bool handle_navigation_response_as_download(GC::Ref<NavigationParams> navigation_params, bool source_allows_downloading, Optional<URL::Origin> interface_origin)
 {
     auto response = navigation_params->response;
     if (!response || !response->body())
@@ -572,19 +572,25 @@ static bool handle_navigation_response_as_download(GC::Ref<NavigationParams> nav
 
     auto download_url = response->url().value_or(navigation_params->request ? navigation_params->request->current_url() : URL::about_blank());
     if (auto const& network_transport = response->network_transport(); network_transport.has_value()) {
-        auto const& transport_handle = *network_transport->handle;
+        auto& transport_handle = *network_transport->handle;
         auto suggested_filename = suggested_download_filename(download_url, *response->header_list(), {}, interface_origin);
-        auto response_body_will_be_transferred_in_full = transport_handle.has_file_backed_response_body();
-        ByteBuffer initial_data_buffer;
-        if (initial_data.has_value() && !initial_data->is_empty() && !response_body_will_be_transferred_in_full)
-            initial_data_buffer = MUST(ByteBuffer::copy(*initial_data));
 
-        auto download_id = navigation_params->navigable->page().client().page_did_start_download(navigation_params->navigable->id(), navigation_params->id, download_url, suggested_filename, response_content_length(*response->header_list()), transport_handle.request_server_client_id(), transport_handle.request_server_request_id(), move(initial_data_buffer));
+        // The UI process downloads the bytes this process took from the body first, then the rest of the request.
+        auto initial_data = response->release_body_for_transfer().visit(
+            [](Fetch::Engine::StreamContinuation const& continuation) {
+                ByteBuffer prefix;
+                for (auto const& taken : continuation.prefix)
+                    prefix.append(taken.bytes());
+                return prefix;
+            },
+            [](Fetch::Engine::WholeFileReplay) { return ByteBuffer {}; });
+
+        auto download_id = navigation_params->navigable->page().client().page_did_start_download(navigation_params->navigable->id(), navigation_params->id, download_url, suggested_filename, response_content_length(*response->header_list()), transport_handle.request_server_client_id(), transport_handle.request_server_request_id(), move(initial_data));
         if (!download_id.has_value()) {
             if (navigation_params->fetch_controller)
                 navigation_params->fetch_controller->stop_fetch();
             else
-                response->resume_body_delivery();
+                transport_handle.stop();
             return true;
         }
 
@@ -3134,7 +3140,7 @@ static void load_document_or_handle_download(GC::Ref<NavigationParams> navigatio
     output.document = load_document(navigation_params, sniff_bytes);
 
     if (!output.document) {
-        output.download_handled = handle_navigation_response_as_download(navigation_params, source_allows_downloading, source_interface_origin, sniff_bytes);
+        output.download_handled = handle_navigation_response_as_download(navigation_params, source_allows_downloading, source_interface_origin);
         output.save_extra_document_state = false;
     } else {
         navigation_params->response->resume_body_delivery();

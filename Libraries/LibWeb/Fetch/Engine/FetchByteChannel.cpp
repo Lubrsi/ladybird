@@ -153,6 +153,26 @@ FetchByteChannel::TerminateResult FetchByteChannel::cancel()
     return result;
 }
 
+Vector<FetchByteChannel::TakenBytes> FetchByteChannel::transfer_out()
+{
+    PendingNotifications notifications;
+    Vector<TakenBytes> undrained_bytes;
+    {
+        MutexLocker locker { m_mutex };
+        if (m_state != State::Open && m_state != State::Closed)
+            return {};
+
+        for (auto const& chunk : m_chunks)
+            undrained_bytes.append({ chunk.bytes, chunk.offset, chunk.bytes.size() - chunk.offset });
+        m_chunks.clear();
+        m_buffered_byte_count = 0;
+        m_state = State::Transferred;
+        wake_armed_waiter_locked(notifications);
+    }
+    dispatch(notifications);
+    return undrained_bytes;
+}
+
 // This implements the buffer-draining half of the pullAlgorithm in HTTP-network fetch.
 // https://fetch.spec.whatwg.org/#concept-http-network-fetch
 FetchByteChannel::TakeResult FetchByteChannel::take_locked(u64 limit, PendingNotifications& notifications)

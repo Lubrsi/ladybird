@@ -183,6 +183,7 @@ void BodyStreamPullSource::handle_network_settled()
     switch (result.state) {
     case Engine::FetchByteChannel::State::Open:
     case Engine::FetchByteChannel::State::ConsumerCancelled:
+    case Engine::FetchByteChannel::State::Transferred:
         break;
     case Engine::FetchByteChannel::State::Closed:
         // Buffered bytes stay available to future pulls; only an already-drained body closes now.
@@ -281,6 +282,7 @@ void BodyStreamPullSource::drain_into_stream()
         break;
     }
     case Engine::FetchByteChannel::State::ConsumerCancelled:
+    case Engine::FetchByteChannel::State::Transferred:
         m_detached = true;
         break;
     }
