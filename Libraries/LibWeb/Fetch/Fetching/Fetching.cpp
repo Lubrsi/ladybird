@@ -45,6 +45,7 @@
 #include <LibWeb/Fetch/Infrastructure/HTTP/CORS.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/ResponseView.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/Fetch/Infrastructure/MimeTypeBlocking.h>
 #include <LibWeb/Fetch/Infrastructure/NetworkPartitionKey.h>
@@ -877,6 +878,8 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
 {
     dbgln_if(WEB_FETCH_DEBUG, "Fetch: Running 'fetch response handover' with: fetch_params @ {}, response @ {}", &fetch_params, &response);
 
+    auto response_view = Infrastructure::ResponseView::create(response);
+
     // 1. Let timingInfo be fetchParams’s timing info.
     auto timing_info = fetch_params.timing_info();
 
@@ -964,19 +967,19 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     };
 
     // 3. Let processResponseEndOfBody be the following steps:
-    auto process_response_end_of_body = [&fetch_params, &response, setup_report_timing_steps] {
+    auto process_response_end_of_body = [&fetch_params, response_view, setup_report_timing_steps] {
         // 1-2. (See setup_report_timing_steps above)
         setup_report_timing_steps();
 
         // 4. Let processResponseEndOfBodyTask be the following steps:
-        auto process_response_end_of_body_task = GC::create_function(GC::Heap::the(), [&fetch_params, &response] {
+        auto process_response_end_of_body_task = GC::create_function(GC::Heap::the(), [&fetch_params, response_view] {
             // 1. Set fetchParams’s request’s done flag.
             fetch_params.request()->set_done(true);
 
             // 2. If fetchParams’s process response end-of-body is non-null, then run fetchParams’s process response
             //    end-of-body given response.
             if (fetch_params.algorithms()->process_response_end_of_body())
-                (fetch_params.algorithms()->process_response_end_of_body())(response);
+                (fetch_params.algorithms()->process_response_end_of_body())(response_view);
 
             // 3. If fetchParams’s request’s initiator type is non-null and fetchParams’s request’s client’s global
             //    object is fetchParams’s task destination, then run fetchParams’s controller’s report timing steps
@@ -1000,8 +1003,8 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     // 4. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s process response
     //    given response, with fetchParams’s task destination.
     if (fetch_params.algorithms()->process_response()) {
-        Infrastructure::queue_fetch_task(fetch_params.controller(), fetch_params.task_destination(), GC::create_function(GC::Heap::the(), [&fetch_params, &response]() {
-            fetch_params.algorithms()->process_response()(response);
+        Infrastructure::queue_fetch_task(fetch_params.controller(), fetch_params.task_destination(), GC::create_function(GC::Heap::the(), [&fetch_params, response_view]() {
+            fetch_params.algorithms()->process_response()(response_view);
         }));
     }
 
@@ -1092,22 +1095,22 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     if (algorithms->process_response_consume_body()) {
         // 1. Let processBody given nullOrBytes be this step: run fetchParams’s process response consume body given
         //    response and nullOrBytes.
-        auto process_body = GC::create_function(GC::Heap::the(), [algorithms, &response](ByteBuffer bytes) {
+        auto process_body = GC::create_function(GC::Heap::the(), [algorithms, &response, response_view](ByteBuffer bytes) {
             if (response.body()) {
                 if (auto const& source = response.body()->source(); source.has_value()) {
-                    (algorithms->process_response_consume_body())(response, *source);
+                    (algorithms->process_response_consume_body())(response_view, *source);
                     return;
                 }
             }
-            (algorithms->process_response_consume_body())(response, Core::ImmutableBytes::adopt(move(bytes)));
+            (algorithms->process_response_consume_body())(response_view, Core::ImmutableBytes::adopt(move(bytes)));
         });
 
         // 2. Let processBodyError be this step: run fetchParams’s process response consume body given response and
         //    failure.
-        auto process_body_error = GC::create_function(GC::Heap::the(), [algorithms, &response, setup_report_timing_steps](JS::Value) {
+        auto process_body_error = GC::create_function(GC::Heap::the(), [algorithms, response_view, setup_report_timing_steps](JS::Value) {
             // AD-HOC: See comment on setup_report_timing_steps above.
             setup_report_timing_steps();
-            (algorithms->process_response_consume_body())(response, Infrastructure::FetchAlgorithms::ConsumeBodyFailureTag {});
+            (algorithms->process_response_consume_body())(response_view, Infrastructure::FetchAlgorithms::ConsumeBodyFailureTag {});
         });
 
         // 3. If internalResponse's body is null, then queue a fetch task to run processBody given null, with
@@ -1116,12 +1119,12 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
             // AD-HOC: On a parallel-queue task destination, run processBody directly (see read_body_in_parallel above;
             //         processResponseEndOfBody already ran, right after it).
             if (read_body_in_parallel) {
-                (algorithms->process_response_consume_body())(response, Empty {});
+                (algorithms->process_response_consume_body())(response_view, Empty {});
             } else {
-                Infrastructure::queue_fetch_task(fetch_params.controller(), fetch_params.task_destination(), GC::create_function(GC::Heap::the(), [algorithms, &response]() {
+                Infrastructure::queue_fetch_task(fetch_params.controller(), fetch_params.task_destination(), GC::create_function(GC::Heap::the(), [algorithms, response_view]() {
                     // NB: We have to provide fully_read a callback which accepts a ByteBuffer. Since that's not
                     //     nullable, we just invoke process_response_consume_body with a null value manually here.
-                    (algorithms->process_response_consume_body())(response, Empty {});
+                    (algorithms->process_response_consume_body())(response_view, Empty {});
                 }));
             }
         }

@@ -17,7 +17,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/ResponseView.h>
 #include <LibWeb/HTML/CORSSettingAttribute.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/EventNames.h>
@@ -114,7 +114,7 @@ WebIDL::ExceptionOr<GC::Ref<EventSource>> EventSource::create(WindowOrWorkerGlob
 
     // 14. Let processEventSourceEndOfBody given response res be the following step: if res is not a network error, then
     //     reestablish the connection.
-    auto process_event_source_end_of_body = [event_source](GC::Ref<Fetch::Infrastructure::Response> response) {
+    auto process_event_source_end_of_body = [event_source](GC::Ref<Fetch::Infrastructure::ResponseView> response) {
         if (!response->is_network_error())
             event_source->reestablish_the_connection();
     };
@@ -124,7 +124,7 @@ WebIDL::ExceptionOr<GC::Ref<EventSource>> EventSource::create(WindowOrWorkerGlob
     Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input { Fetch::Engine::BodyIntent::DeliverStreamToConsumerAgent };
     fetch_algorithms_input.process_response_end_of_body = move(process_event_source_end_of_body);
 
-    fetch_algorithms_input.process_response = [event_source](GC::Ref<Fetch::Infrastructure::Response> response) {
+    fetch_algorithms_input.process_response = [event_source](GC::Ref<Fetch::Infrastructure::ResponseView> response) {
         auto& realm = HTML::relevant_realm(event_source->relevant_global_object());
 
         // FIXME: If the response is CORS cross-origin, we must use its internal response to query any of its data. See:

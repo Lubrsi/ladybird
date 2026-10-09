@@ -108,7 +108,7 @@ GC::Ref<WebIDL::Promise> fetch(JS::Realm& realm, RequestInfo const& input, Bindi
 
     // 12. Set controller to the result of calling fetch given request and processResponse given response being these
     //     steps:
-    auto process_response = [locally_aborted, promise_capability, request_object, response_object, controller_holder, &relevant_realm](GC::Ref<Infrastructure::Response> response) mutable {
+    auto process_response = [locally_aborted, promise_capability, request_object, response_object, controller_holder, &relevant_realm](GC::Ref<Infrastructure::ResponseView> response) mutable {
         // 1. If locallyAborted is true, then abort these steps.
         if (locally_aborted->value())
             return;
