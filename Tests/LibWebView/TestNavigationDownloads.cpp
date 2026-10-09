@@ -50,12 +50,13 @@ public:
     virtual bool should_coordinate_browser_process() const override { return false; }
 };
 
-// Answers every request with the same response.
+// Answers every request with the same response, pausing after the first pause_after bytes of its body when given.
 class TestHttpServer {
 public:
-    TestHttpServer(ByteString headers, ByteBuffer body)
+    TestHttpServer(ByteString headers, ByteBuffer body, Optional<size_t> pause_after)
         : m_headers(move(headers))
         , m_body(move(body))
+        , m_pause_after(pause_after)
     {
         m_socket = MUST(Core::System::socket(AF_INET, SOCK_STREAM, 0));
 
@@ -130,8 +131,17 @@ private:
         }
 
         auto head = ByteString::formatted("HTTP/1.1 200 OK\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n", m_headers, m_body.size());
-        if (write_all(client, head.bytes()))
-            (void)write_all(client, m_body.bytes());
+        if (!write_all(client, head.bytes()))
+            return;
+
+        auto body = m_body.bytes();
+        if (m_pause_after.has_value()) {
+            if (!write_all(client, body.trim(*m_pause_after)))
+                return;
+            MUST(Core::System::sleep_ms(100));
+            body = body.slice(*m_pause_after);
+        }
+        (void)write_all(client, body);
     }
 
     static bool write_all(int fd, ReadonlyBytes bytes)
@@ -147,6 +157,7 @@ private:
 
     ByteString m_headers;
     ByteBuffer m_body;
+    Optional<size_t> m_pause_after;
     int m_socket { -1 };
     u16 m_port { 0 };
     RefPtr<Threading::Thread> m_thread;
@@ -175,9 +186,9 @@ ByteBuffer make_body(size_t size)
     return body;
 }
 
-void expect_navigation_downloads_body(Core::AnonymousBuffer const& theme, StringView what, ByteString headers, ByteBuffer const& body)
+void expect_navigation_downloads_body(Core::AnonymousBuffer const& theme, StringView what, ByteString headers, ByteBuffer const& body, Optional<size_t> pause_after = {})
 {
-    TestHttpServer server { move(headers), body };
+    TestHttpServer server { move(headers), body, pause_after };
     FinishedDownloadRecorder recorder;
 
     auto view = WebView::HeadlessWebView::create(theme, { 800, 600 });
@@ -201,7 +212,7 @@ void expect_navigation_downloads_body(Core::AnonymousBuffer const& theme, String
 }
 
 // A navigation response that becomes a download is handed back to the UI process and saved byte for byte, whether no
-// byte of it was read first or its first bytes were read to sniff its type.
+// byte of it was read first or its first bytes were read to sniff its type, also when those bytes arrive in parts.
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
@@ -227,6 +238,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     auto body = make_body(1 * MiB);
     expect_navigation_downloads_body(theme, "an attachment"sv, "Content-Disposition: attachment; filename=\"attachment.bin\"\r\n"sv, body);
     expect_navigation_downloads_body(theme, "a response sniffed as unrenderable"sv, "Content-Type: application/octet-stream\r\n"sv, body);
+    expect_navigation_downloads_body(theme, "a response sniffed from bytes that arrive in parts"sv, "Content-Type: application/octet-stream\r\n"sv, body, 500);
 
     outln("PASS: navigation responses download byte for byte");
     return 0;
