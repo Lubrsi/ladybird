@@ -45,8 +45,8 @@ ALLOWED_REALM_MENTIONS = {
     "DOM": (10, 33, "DOM abort plumbing and node helpers still have callback/materialization realm use"),
     "DOMURL": (2, 4, "URLSearchParams iterator objects still materialize JS iterator results in selected realms"),
     "Fetch": (
-        22,
-        60,
+        20,
+        61,
         "Fetch bodies, headers, requests, responses, response views, and controllers still materialize JS values/streams; "
         "the byte-channel pull adapter creates body streams and materializes their pulls and errors on the consumer side",
     ),
