@@ -81,7 +81,7 @@ public:
         u64 buffered_byte_count { 0 };
     };
 
-    [[nodiscard]] static NonnullRefPtr<FetchByteChannel> create(Watermarks, NonnullRefPtr<FetchByteChannelConsumerSink>, NonnullRefPtr<FetchByteChannelProducerSink>);
+    [[nodiscard]] static NonnullRefPtr<FetchByteChannel> create(Watermarks, NonnullRefPtr<FetchByteChannelProducerSink>);
 
     // The credit the producer should hand the transport before the first write.
     [[nodiscard]] u64 initial_credit() const { return m_watermarks.high; }
@@ -103,6 +103,8 @@ public:
     TerminateResult error(Error);
 
     // Consumer side.
+    // The consumer attaches its sink once, before arming any waiter.
+    void attach_consumer(NonnullRefPtr<FetchByteChannelConsumerSink>);
     [[nodiscard]] TakeResult take_up_to(u64 limit);
     [[nodiscard]] TakeResult take_all();
     TerminateResult cancel();
@@ -128,7 +130,7 @@ public:
     void disarm_waiter(WakeTicket);
 
 private:
-    FetchByteChannel(Watermarks, NonnullRefPtr<FetchByteChannelConsumerSink>, NonnullRefPtr<FetchByteChannelProducerSink>);
+    FetchByteChannel(Watermarks, NonnullRefPtr<FetchByteChannelProducerSink>);
 
     struct BufferedChunk {
         Core::ImmutableBytes bytes;
@@ -162,8 +164,8 @@ private:
     };
 
     Watermarks const m_watermarks;
-    NonnullRefPtr<FetchByteChannelConsumerSink> const m_consumer_sink;
     NonnullRefPtr<FetchByteChannelProducerSink> const m_producer_sink;
+    RefPtr<FetchByteChannelConsumerSink> m_consumer_sink;
 
     mutable Mutex m_mutex;
     Vector<BufferedChunk> m_chunks;

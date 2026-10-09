@@ -22,7 +22,7 @@ class BodyStreamPullSource;
 AK_TYPEDEF_DISTINCT_ORDERED_ID(u64, BodyStreamWakeToken);
 
 // A loop reference and a registry token, no GC state; the registry roots the pull source only while a wake is owed.
-class WEB_API BodyStreamWakeSink final : public Engine::FetchByteChannelConsumerSink {
+class BodyStreamWakeSink final : public Engine::FetchByteChannelConsumerSink {
 public:
     static NonnullRefPtr<BodyStreamWakeSink> create();
 
@@ -86,7 +86,7 @@ private:
     bool m_detached { false };
 };
 
-// A response body's stream read from channel, whose consumer sink is wake_sink.
-WEB_API GC::Ref<Streams::ReadableStream> create_body_stream_from_channel(JS::Realm&, GC::Ptr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>, BodyStreamWakeSink const&);
+// A response body's stream read from channel, which becomes the channel's consumer.
+WEB_API GC::Ref<Streams::ReadableStream> create_body_stream_from_channel(JS::Realm&, GC::Ptr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>);
 
 }

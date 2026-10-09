@@ -70,9 +70,8 @@ struct BodyStreamHarness {
 
     void create_stream()
     {
-        auto wake_sink = Web::Fetch::Fetching::BodyStreamWakeSink::create();
-        channel = FetchByteChannel::create({ .low = 16, .high = 64 }, wake_sink, adopt_ref(*new IgnoringProducerSink));
-        stream = Web::Fetch::Fetching::create_body_stream_from_channel(*realm, fetch_params, *channel, *wake_sink);
+        channel = FetchByteChannel::create({ .low = 16, .high = 64 }, adopt_ref(*new IgnoringProducerSink));
+        stream = Web::Fetch::Fetching::create_body_stream_from_channel(*realm, fetch_params, *channel);
     }
 
     double queued_byte_count() const
