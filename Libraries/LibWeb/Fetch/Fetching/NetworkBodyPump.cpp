@@ -80,8 +80,6 @@ void NetworkBodyPump::handle_network_data(Requests::ResponseData data)
     m_channel->write(file_backed ? file_backed->slice : MUST(Core::ImmutableBytes::copy(bytes)));
 
     // Capture bytes for MIME sniffing
-    // NOTE: This follows the append, since a sniff waiter can hand the body to another process with the bytes buffered
-    //       so far.
     if (m_body) {
         if (file_backed && !m_body->source().has_value())
             m_body->set_source(file_backed->payload, static_cast<u64>(file_backed->payload.size()));
