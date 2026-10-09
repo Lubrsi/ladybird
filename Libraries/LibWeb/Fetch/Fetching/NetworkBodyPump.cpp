@@ -82,8 +82,6 @@ void NetworkBodyPump::handle_network_data(Requests::ResponseData data)
     m_channel->write(move(chunk));
 
     // Capture bytes for MIME sniffing
-    // NOTE: This follows the append, since a sniff waiter can hand the body to another process with the bytes buffered
-    //       so far.
     if (m_body) {
         if (auto const& payload = data.file_backed_payload(); payload.has_value() && !m_body->source().has_value())
             m_body->set_source(*payload, static_cast<u64>(payload->size()));
