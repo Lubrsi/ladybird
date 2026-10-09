@@ -11,13 +11,13 @@ namespace Web::Fetch::Infrastructure {
 
 GC_DEFINE_ALLOCATOR(ResponseView);
 
-GC::Ref<ResponseView> ResponseView::create(GC::Ref<Response> record, GC::Ptr<Body> body_view)
+GC::Ref<ResponseView> ResponseView::create(NonnullRefPtr<Response const> record, GC::Ptr<Body> body_view)
 {
     VERIFY(record->unsafe_response()->body().has_value() == (body_view != nullptr));
-    return GC::Heap::the().allocate<ResponseView>(record, body_view);
+    return GC::Heap::the().allocate<ResponseView>(move(record), body_view);
 }
 
-GC::Ref<ResponseView> ResponseView::create(JS::Realm& realm, GC::Ref<Response> record)
+GC::Ref<ResponseView> ResponseView::create(JS::Realm& realm, NonnullRefPtr<Response const> record)
 {
     auto body = record->unsafe_response()->body();
     if (!body.has_value())
@@ -30,8 +30,8 @@ GC::Ref<ResponseView> ResponseView::network_error(String message)
     return create(Response::network_error(move(message)), nullptr);
 }
 
-ResponseView::ResponseView(GC::Ref<Response> record, GC::Ptr<Body> body_view)
-    : m_record(record)
+ResponseView::ResponseView(NonnullRefPtr<Response const> record, GC::Ptr<Body> body_view)
+    : m_record(move(record))
     , m_body_view(body_view)
 {
 }
@@ -39,7 +39,6 @@ ResponseView::ResponseView(GC::Ref<Response> record, GC::Ptr<Body> body_view)
 void ResponseView::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_record);
     visitor.visit(m_body_view);
 }
 

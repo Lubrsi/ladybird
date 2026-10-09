@@ -29,7 +29,7 @@ class NetworkBodyPump final : public JS::Cell {
 public:
     virtual ~NetworkBodyPump() override;
 
-    void set_response(GC::Ref<Fetch::Infrastructure::Response const> response) { m_response = response; }
+    void set_response(NonnullRefPtr<Fetch::Infrastructure::Response const> response) { m_response = move(response); }
 
     void handle_network_data(Requests::ResponseData);
     void handle_network_complete();
@@ -44,7 +44,7 @@ private:
     void finalize_cache_entry();
 
     GC::Ptr<Infrastructure::FetchParams const> m_fetch_params;
-    GC::Ptr<Fetch::Infrastructure::Response const> m_response;
+    RefPtr<Fetch::Infrastructure::Response const> m_response;
 
     NonnullRefPtr<Engine::FetchByteChannel> m_channel;
     NonnullRefPtr<Engine::FetchBodyDeliveryGate> m_delivery_gate;

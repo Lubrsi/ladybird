@@ -30,7 +30,6 @@ void NetworkBodyPump::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_fetch_params);
-    visitor.visit(m_response);
 }
 
 // This implements the transmission steps of HTTP-network fetch.
