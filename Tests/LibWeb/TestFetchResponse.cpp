@@ -18,13 +18,10 @@
 namespace {
 
 class TransferTrackingResponse final : public Web::Fetch::Infrastructure::Response {
-    GC_CELL(TransferTrackingResponse, Web::Fetch::Infrastructure::Response);
-    GC_DECLARE_ALLOCATOR(TransferTrackingResponse);
-
 public:
-    static GC::Ref<TransferTrackingResponse> create(JS::VM& vm)
+    static NonnullRefPtr<TransferTrackingResponse> create()
     {
-        return vm.heap().allocate<TransferTrackingResponse>();
+        return adopt_ref(*new TransferTrackingResponse);
     }
 
     bool transfer_lease_was_released() const { return m_transfer_lease_was_released; }
@@ -39,14 +36,10 @@ private:
     mutable bool m_transfer_lease_was_released { false };
 };
 
-GC_DEFINE_ALLOCATOR(TransferTrackingResponse);
-
 }
 
 TEST_CASE(javascript_bytecode_cache_memory_cache_request_headers_are_cloned)
 {
-    auto vm = JS::VM::create();
-
     auto request_headers = HTTP::HeaderList::create({
         { "User-Agent"sv, "Ladybird"sv },
     });
@@ -76,7 +69,7 @@ TEST_CASE(http_redirect_fetch_releases_intermediate_response_transfer_lease)
 
     auto algorithms = Web::Fetch::Infrastructure::FetchAlgorithms::create(Web::Fetch::Infrastructure::FetchAlgorithms::Input { Web::Fetch::Engine::BodyIntent::DeliverStreamToConsumerAgent });
     auto fetch_params = Web::Fetch::Infrastructure::FetchParams::create(request, algorithms, Web::Fetch::Infrastructure::FetchTimingInfo::create());
-    auto response = TransferTrackingResponse::create(*vm);
+    auto response = TransferTrackingResponse::create();
     response->set_status(302);
     response->set_header_list(HTTP::HeaderList::create({ { "Location"sv, "/redirected"sv } }));
 

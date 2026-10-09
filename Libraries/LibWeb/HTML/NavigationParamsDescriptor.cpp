@@ -233,8 +233,8 @@ static RefPtr<Fetch::Infrastructure::Request> create_navigation_request_from_des
 static ErrorOr<GC::Ref<Fetch::Infrastructure::ResponseView>> create_navigation_response_from_descriptor(JS::Realm& realm, NavigationResponseDescriptor descriptor, RefPtr<Fetch::Infrastructure::FetchTimingInfo> timing_info)
 {
     auto response = descriptor.network_error_message.has_value()
-        ? Fetch::Infrastructure::Response::network_error(realm.vm(), move(*descriptor.network_error_message))
-        : Fetch::Infrastructure::Response::create(realm.vm());
+        ? Fetch::Infrastructure::Response::network_error(move(*descriptor.network_error_message))
+        : Fetch::Infrastructure::Response::create();
     response->set_url_list(move(descriptor.url_list));
     response->set_status(descriptor.status);
     response->set_status_message(move(descriptor.status_message));

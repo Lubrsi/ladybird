@@ -19,14 +19,14 @@ GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams con
     return GC::Heap::the().allocate<PendingResponse>(fetch_params);
 }
 
-GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params, GC::Ref<Infrastructure::Response> response)
+GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params, NonnullRefPtr<Infrastructure::Response> response)
 {
-    return GC::Heap::the().allocate<PendingResponse>(fetch_params, response);
+    return GC::Heap::the().allocate<PendingResponse>(fetch_params, move(response));
 }
 
-PendingResponse::PendingResponse(Infrastructure::FetchParams const& fetch_params, GC::Ptr<Infrastructure::Response> response)
+PendingResponse::PendingResponse(Infrastructure::FetchParams const& fetch_params, RefPtr<Infrastructure::Response> response)
     : m_fetch_params(fetch_params)
-    , m_response(response)
+    , m_response(move(response))
 {
     m_fetch_params->add_pending_response({}, *this);
 }
@@ -36,7 +36,6 @@ void PendingResponse::visit_edges(JS::Cell::Visitor& visitor)
     Base::visit_edges(visitor);
     visitor.visit(m_callback);
     visitor.visit(m_fetch_params);
-    visitor.visit(m_response);
 }
 
 void PendingResponse::when_loaded(Callback callback)
@@ -47,10 +46,10 @@ void PendingResponse::when_loaded(Callback callback)
         run_callback();
 }
 
-void PendingResponse::resolve(GC::Ref<Infrastructure::Response> response)
+void PendingResponse::resolve(NonnullRefPtr<Infrastructure::Response> response)
 {
     VERIFY(!m_response);
-    m_response = response;
+    m_response = move(response);
     if (m_callback)
         run_callback();
 }
