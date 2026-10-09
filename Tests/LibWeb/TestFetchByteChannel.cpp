@@ -80,8 +80,9 @@ struct ChannelHarness {
     explicit ChannelHarness(FetchByteChannel::Watermarks watermarks = { .low = 16, .high = 64 })
         : consumer_sink(adopt_ref(*new RecordingConsumerSink(events)))
         , producer_sink(adopt_ref(*new RecordingProducerSink(events)))
-        , channel(FetchByteChannel::create(watermarks, *consumer_sink, *producer_sink))
+        , channel(FetchByteChannel::create(watermarks, *producer_sink))
     {
+        channel->attach_consumer(*consumer_sink);
     }
 
     Vector<SinkEvent> take_events() { return move(events); }
@@ -249,6 +250,38 @@ TEST_CASE(a_zero_byte_threshold_dies)
 {
     ChannelHarness harness;
     EXPECT_DEATH("a threshold counts at least one byte", (void)harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 0 }));
+}
+
+TEST_CASE(arming_before_a_consumer_attaches_dies)
+{
+    Vector<SinkEvent> events;
+    auto channel = FetchByteChannel::create({ .low = 16, .high = 64 }, adopt_ref(*new RecordingProducerSink(events)));
+    EXPECT_DEATH("a waiter needs a consumer to wake", (void)channel->arm_waiter());
+}
+
+TEST_CASE(attaching_a_second_consumer_dies)
+{
+    ChannelHarness harness;
+    EXPECT_DEATH("a channel has one consumer", harness.channel->attach_consumer(adopt_ref(*new RecordingConsumerSink(harness.events))));
+}
+
+TEST_CASE(a_channel_buffers_and_ends_before_its_consumer_attaches)
+{
+    Vector<SinkEvent> events;
+    auto producer_sink = adopt_ref(*new RecordingProducerSink(events));
+    auto channel = FetchByteChannel::create({ .low = 16, .high = 64 }, producer_sink);
+    EXPECT_EQ(channel->write(bytes_of("early"sv)), WriteResult::Accepted);
+    EXPECT_EQ(channel->close(), TerminateResult::Terminated);
+
+    channel->attach_consumer(adopt_ref(*new RecordingConsumerSink(events)));
+    auto ticket = channel->arm_waiter(FetchByteChannel::EndOnly {});
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].kind, SinkEvent::Kind::Wake);
+    EXPECT_EQ(events[0].value, ticket.value());
+
+    auto result = channel->take_all();
+    EXPECT_EQ(flatten(result), "early"sv);
+    EXPECT_EQ(result.state, FetchByteChannel::State::Closed);
 }
 
 TEST_CASE(armed_waiter_fires_on_write_and_arms_late)
@@ -509,7 +542,8 @@ TEST_CASE(concurrent_writer_never_loses_a_wakeup)
 {
     auto consumer_sink = adopt_ref(*new LatestTicketSink);
     auto producer_sink = adopt_ref(*new CountingProducerSink);
-    auto channel = FetchByteChannel::create({ .low = 16, .high = 64 }, *consumer_sink, *producer_sink);
+    auto channel = FetchByteChannel::create({ .low = 16, .high = 64 }, *producer_sink);
+    channel->attach_consumer(*consumer_sink);
     producer_sink->credit.store(channel->initial_credit(), AK::MemoryOrder::memory_order_release);
 
     // The writer delivers only what it was granted, as a transport does.
