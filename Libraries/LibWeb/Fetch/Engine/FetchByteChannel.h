@@ -102,6 +102,11 @@ public:
     TerminateResult close();
     TerminateResult error(Error);
 
+    // The bytes of a transport that delivers slices of one whole body. The first handed over while the channel is open
+    // is kept until it errors, is cancelled or is transferred.
+    void keep_whole_body(Core::ImmutableBytes);
+    [[nodiscard]] Optional<Core::ImmutableBytes> whole_body() const;
+
     // Consumer side.
     // The consumer attaches its sink once, before arming any waiter.
     void attach_consumer(NonnullRefPtr<FetchByteChannelConsumerSink>);
@@ -174,6 +179,7 @@ private:
     State m_state { State::Open };
     bool m_transport_ended { false };
     Optional<Error> m_error;
+    Optional<Core::ImmutableBytes> m_whole_body;
     Vector<ArmedWaiter, 2> m_armed_waiters;
     u64 m_next_ticket { 1 };
 };

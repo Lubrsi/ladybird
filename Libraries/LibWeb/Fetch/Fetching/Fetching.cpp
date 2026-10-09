@@ -1102,6 +1102,13 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
                     return;
                 }
             }
+            // A body the transport delivered as slices of one mapping keeps that mapping instead of the bytes read.
+            if (auto const& network_transport = response.network_transport(); network_transport.has_value()) {
+                if (auto whole_body = network_transport->body_channel->whole_body(); whole_body.has_value()) {
+                    (algorithms->process_response_consume_body())(response_view, whole_body.release_value());
+                    return;
+                }
+            }
             (algorithms->process_response_consume_body())(response_view, Core::ImmutableBytes::adopt(move(bytes)));
         });
 
