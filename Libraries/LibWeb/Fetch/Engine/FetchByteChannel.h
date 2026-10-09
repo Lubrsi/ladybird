@@ -73,7 +73,7 @@ public:
         [[nodiscard]] ReadonlyBytes bytes() const LIFETIME_BOUND { return chunk.bytes().slice(offset, length); }
     };
 
-    // Snapshotted atomically with the removal of the bytes.
+    // Snapshotted atomically with the bytes taken or peeked.
     struct TakeResult {
         Vector<TakenBytes> taken;
         State state { State::Open };
@@ -111,15 +111,21 @@ public:
     // transport hears nothing, and later writes and endings do nothing.
     [[nodiscard]] Vector<TakenBytes> transfer_out();
 
-    enum class WakeOn : u8 {
-        BytesOrTerminal,
-        // Buffered bytes neither fire nor consume the waiter; only a close, error or cancellation does.
-        TerminalOnly,
-    };
+    // Copies up to limit bytes from the front of the buffer, removing none and granting no credit.
+    [[nodiscard]] TakeResult peek_up_to(u64 limit) const;
 
-    // Returns the ticket the wake will carry; a wake already due fires before this returns, outside the lock.
-    WakeTicket arm_waiter(WakeOn = WakeOn::BytesOrTerminal);
-    void disarm_waiter();
+    // A waiter fires once the channel buffers at least byte_count bytes, or ends.
+    struct BufferedAtLeast {
+        u64 byte_count;
+    };
+    // A waiter fires only once the channel ends: closes, errors, or is cancelled or transferred.
+    struct EndOnly { };
+    using WakeOn = Variant<BufferedAtLeast, EndOnly>;
+
+    // Each call adds a waiter that fires once, and returns the ticket its wake will carry; a wake already due fires
+    // before this returns, outside the lock. Waiters due at the same time fire in the order they were added.
+    WakeTicket arm_waiter(WakeOn = BufferedAtLeast { 1 });
+    void disarm_waiter(WakeTicket);
 
 private:
     FetchByteChannel(Watermarks, NonnullRefPtr<FetchByteChannelConsumerSink>, NonnullRefPtr<FetchByteChannelProducerSink>);
@@ -145,8 +151,15 @@ private:
 
     [[nodiscard]] TakeResult take_locked(u64 limit, PendingNotifications&);
     [[nodiscard]] TerminateResult terminate_locked(State, Optional<Error>, PendingNotifications&);
-    void wake_armed_waiter_locked(PendingNotifications&);
+    [[nodiscard]] bool is_due_locked(WakeOn const&) const;
+    void wake_due_waiters_locked(PendingNotifications&);
+    void wake_all_waiters_locked(PendingNotifications&);
     void dispatch(PendingNotifications const&);
+
+    struct ArmedWaiter {
+        WakeTicket ticket { 0 };
+        WakeOn wake_on;
+    };
 
     Watermarks const m_watermarks;
     NonnullRefPtr<FetchByteChannelConsumerSink> const m_consumer_sink;
@@ -159,9 +172,7 @@ private:
     State m_state { State::Open };
     bool m_transport_ended { false };
     Optional<Error> m_error;
-    bool m_waiter_armed { false };
-    WakeOn m_armed_wake_on { WakeOn::BytesOrTerminal };
-    WakeTicket m_armed_ticket { 0 };
+    Vector<ArmedWaiter, 2> m_armed_waiters;
     u64 m_next_ticket { 1 };
 };
 
