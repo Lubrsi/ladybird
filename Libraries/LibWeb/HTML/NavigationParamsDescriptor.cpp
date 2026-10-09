@@ -12,7 +12,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Bodies.h>
-#include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/ResponseView.h>
 #include <LibWeb/FileAPI/Blob.h>
 #include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/NavigationParamsDescriptor.h>
@@ -58,7 +58,7 @@ static Optional<ByteBuffer> copy_body_source(Fetch::Infrastructure::Body const& 
     return {};
 }
 
-static NavigationResponseDescriptor create_navigation_response_descriptor(Fetch::Infrastructure::Response const& response)
+static NavigationResponseDescriptor create_navigation_response_descriptor(Fetch::Infrastructure::ResponseView const& response)
 {
     Vector<HTTP::Header> headers;
     headers.ensure_capacity(response.header_list()->headers().size());
@@ -239,7 +239,7 @@ static RefPtr<Fetch::Infrastructure::Request> create_navigation_request_from_des
     return request;
 }
 
-static ErrorOr<GC::Ref<Fetch::Infrastructure::Response>> create_navigation_response_from_descriptor(JS::Realm& realm, NavigationResponseDescriptor descriptor, RefPtr<Fetch::Infrastructure::FetchTimingInfo> timing_info)
+static ErrorOr<GC::Ref<Fetch::Infrastructure::ResponseView>> create_navigation_response_from_descriptor(JS::Realm& realm, NavigationResponseDescriptor descriptor, RefPtr<Fetch::Infrastructure::FetchTimingInfo> timing_info)
 {
     auto response = descriptor.network_error_message.has_value()
         ? Fetch::Infrastructure::Response::network_error(realm.vm(), move(*descriptor.network_error_message))
@@ -263,7 +263,7 @@ static ErrorOr<GC::Ref<Fetch::Infrastructure::Response>> create_navigation_respo
             return Error::from_string_literal("Unable to adopt transferred navigation response body");
         response->set_body(body);
     }
-    return response;
+    return Fetch::Infrastructure::ResponseView::create(response);
 }
 
 ErrorOr<NavigationParamsVariant> create_navigation_params_from_descriptor(JS::Realm& realm, LocalNavigable& navigable, NavigationParamsVariantDescriptor descriptor)

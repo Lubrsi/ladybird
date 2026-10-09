@@ -42,7 +42,7 @@ struct NavigationParams : GC::Cell {
     RefPtr<Fetch::Infrastructure::Request> request;
 
     // a response that ultimately was navigated to (potentially a network error)
-    GC::Ptr<Fetch::Infrastructure::Response> response;
+    GC::Ptr<Fetch::Infrastructure::ResponseView> response;
 
     // null or a fetch controller
     GC::Ptr<Fetch::Infrastructure::FetchController> fetch_controller { nullptr };
@@ -106,7 +106,7 @@ protected:
         Optional<Utf16String> id,
         GC::Ptr<LocalNavigable> navigable,
         RefPtr<Fetch::Infrastructure::Request> request,
-        GC::Ptr<Fetch::Infrastructure::Response> response,
+        GC::Ptr<Fetch::Infrastructure::ResponseView> response,
         GC::Ptr<Fetch::Infrastructure::FetchController> fetch_controller,
         GC::Ptr<GC::Function<void(DOM::Document&)>> commit_early_hints,
         OpenerPolicyEnforcementResult coop_enforcement_result,
@@ -197,6 +197,6 @@ using NavigationParamsVariant = Variant<NavigationParamsNullOrError, GC::Ref<Nav
 // Returns whether a delivery was still going.
 bool stop_body_delivery(NavigationParams::BodyDelivery const&);
 
-bool check_a_navigation_responses_adherence_to_x_frame_options(GC::Ptr<Fetch::Infrastructure::Response> response, LocalNavigable* navigable, ContentSecurityPolicy::PolicyList const& csp_list, URL::Origin destination_origin);
+bool check_a_navigation_responses_adherence_to_x_frame_options(GC::Ptr<Fetch::Infrastructure::ResponseView> response, LocalNavigable* navigable, ContentSecurityPolicy::PolicyList const& csp_list, URL::Origin destination_origin);
 
 }
