@@ -46,9 +46,9 @@ ALLOWED_REALM_MENTIONS = {
     "DOMURL": (2, 4, "URLSearchParams iterator objects still materialize JS iterator results in selected realms"),
     "Fetch": (
         22,
-        58,
+        60,
         "Fetch bodies, headers, requests, responses, response views, and controllers still materialize JS values/streams; "
-        "the byte-channel pull adapter materializes stream pulls and errors on the consumer side",
+        "the byte-channel pull adapter creates body streams and materializes their pulls and errors on the consumer side",
     ),
     "FileAPI": (6, 11, "File/Blob/FileReader algorithms still create streams, buffers, and events in selected realms"),
     "Geometry": (8, 8, "geometry constructors and structured clone still materialize JS-facing geometry objects"),
