@@ -44,8 +44,8 @@ ALLOWED_REALM_MENTIONS = {
     "Crypto": (8, 383, "WebCrypto algorithms still use realms for buffer/key/promise materialization"),
     "DOM": (10, 33, "DOM abort plumbing and node helpers still have callback/materialization realm use"),
     "Fetch": (
-        22,
-        60,
+        20,
+        61,
         "Fetch bodies, headers, requests, responses, response views, and controllers still materialize JS values/streams; "
         "the byte-channel pull adapter creates body streams and materializes their pulls and errors on the consumer side",
     ),
