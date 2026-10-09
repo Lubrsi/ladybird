@@ -245,12 +245,10 @@ TEST_CASE(a_write_after_consumer_cancellation_is_dropped)
     EXPECT_EQ(harness.channel->close(), TerminateResult::AlreadyTerminated);
 }
 
-TEST_CASE(arming_the_waiter_twice_dies)
+TEST_CASE(a_zero_byte_threshold_dies)
 {
-    // The death leaves the channel locked, so the harness is never destroyed.
-    auto& harness = *new ChannelHarness;
-    (void)harness.channel->arm_waiter();
-    EXPECT_DEATH("a waiter is armed once per pull", (void)harness.channel->arm_waiter());
+    ChannelHarness harness;
+    EXPECT_DEATH("a threshold counts at least one byte", (void)harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 0 }));
 }
 
 TEST_CASE(armed_waiter_fires_on_write_and_arms_late)
@@ -286,8 +284,8 @@ TEST_CASE(waiter_is_one_shot_and_disarmable)
     (void)harness.channel->take_all();
     (void)harness.take_events();
 
-    (void)harness.channel->arm_waiter();
-    harness.channel->disarm_waiter();
+    auto ticket = harness.channel->arm_waiter();
+    harness.channel->disarm_waiter(ticket);
     EXPECT_EQ(harness.channel->write(bytes_of("c"sv)), WriteResult::Accepted);
     EXPECT(harness.take_events().is_empty());
 }
@@ -551,7 +549,7 @@ TEST_CASE(stale_ticket_identifiable_after_rearm)
     ChannelHarness harness;
 
     auto first_ticket = harness.channel->arm_waiter();
-    harness.channel->disarm_waiter();
+    harness.channel->disarm_waiter(first_ticket);
     auto second_ticket = harness.channel->arm_waiter();
     EXPECT(first_ticket != second_ticket);
 
@@ -561,13 +559,13 @@ TEST_CASE(stale_ticket_identifiable_after_rearm)
     EXPECT_EQ(events[0].value, second_ticket.value());
 }
 
-TEST_CASE(terminal_only_waiter_ignores_writes)
+TEST_CASE(end_only_waiter_ignores_writes)
 {
     ChannelHarness harness;
     EXPECT_EQ(harness.channel->write(bytes_of("pending"sv)), WriteResult::Accepted);
 
-    // Buffered bytes neither fire nor consume a TerminalOnly waiter.
-    auto ticket = harness.channel->arm_waiter(FetchByteChannel::WakeOn::TerminalOnly);
+    // Buffered bytes neither fire nor consume an EndOnly waiter.
+    auto ticket = harness.channel->arm_waiter(FetchByteChannel::EndOnly {});
     EXPECT(harness.take_events().is_empty());
     EXPECT_EQ(harness.channel->write(bytes_of("more"sv)), WriteResult::Accepted);
     EXPECT(harness.take_events().is_empty());
@@ -579,8 +577,123 @@ TEST_CASE(terminal_only_waiter_ignores_writes)
     EXPECT_EQ(events[0].value, ticket.value());
 
     // An arm_waiter() call after the channel has ended fires at once.
-    auto late_ticket = harness.channel->arm_waiter(FetchByteChannel::WakeOn::TerminalOnly);
+    auto late_ticket = harness.channel->arm_waiter(FetchByteChannel::EndOnly {});
     events = harness.take_events();
     EXPECT_EQ(events.size(), 1u);
     EXPECT_EQ(events[0].value, late_ticket.value());
+}
+
+TEST_CASE(waiters_fire_once_each_in_the_order_they_were_added)
+{
+    ChannelHarness harness;
+    auto first_ticket = harness.channel->arm_waiter();
+    auto end_ticket = harness.channel->arm_waiter(FetchByteChannel::EndOnly {});
+    auto second_ticket = harness.channel->arm_waiter();
+
+    EXPECT_EQ(harness.channel->write(bytes_of("a"sv)), WriteResult::Accepted);
+    auto events = harness.take_events();
+    EXPECT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].value, first_ticket.value());
+    EXPECT_EQ(events[1].value, second_ticket.value());
+
+    EXPECT_EQ(harness.channel->write(bytes_of("b"sv)), WriteResult::Accepted);
+    EXPECT(harness.take_events().is_empty());
+
+    EXPECT_EQ(harness.channel->close(), TerminateResult::Terminated);
+    events = harness.take_events();
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].value, end_ticket.value());
+}
+
+TEST_CASE(threshold_waiter_waits_for_its_byte_count)
+{
+    ChannelHarness harness;
+    auto ticket = harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 5 });
+
+    EXPECT_EQ(harness.channel->write(bytes_of("abc"sv)), WriteResult::Accepted);
+    EXPECT(harness.take_events().is_empty());
+
+    EXPECT_EQ(harness.channel->write(bytes_of("de"sv)), WriteResult::Accepted);
+    auto events = harness.take_events();
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].value, ticket.value());
+
+    // A threshold already reached fires as the waiter is added.
+    auto late_ticket = harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 5 });
+    events = harness.take_events();
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].value, late_ticket.value());
+}
+
+TEST_CASE(threshold_waiter_fires_when_the_channel_ends_short)
+{
+    ChannelHarness harness;
+    auto ticket = harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 5 });
+
+    EXPECT_EQ(harness.channel->write(bytes_of("ab"sv)), WriteResult::Accepted);
+    EXPECT_EQ(harness.channel->close(), TerminateResult::Terminated);
+    auto events = harness.take_events();
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].value, ticket.value());
+}
+
+TEST_CASE(disarming_one_waiter_keeps_the_others)
+{
+    ChannelHarness harness;
+    auto first_ticket = harness.channel->arm_waiter();
+    auto second_ticket = harness.channel->arm_waiter();
+    harness.channel->disarm_waiter(first_ticket);
+
+    EXPECT_EQ(harness.channel->write(bytes_of("a"sv)), WriteResult::Accepted);
+    auto events = harness.take_events();
+    EXPECT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].value, second_ticket.value());
+}
+
+TEST_CASE(ending_fires_every_waiter)
+{
+    ChannelHarness harness;
+    auto threshold_ticket = harness.channel->arm_waiter(FetchByteChannel::BufferedAtLeast { 100 });
+    auto end_ticket = harness.channel->arm_waiter(FetchByteChannel::EndOnly {});
+
+    EXPECT_EQ(harness.channel->error({ .message = MUST(ByteBuffer::copy("failed"sv.bytes())) }), TerminateResult::Terminated);
+    auto events = harness.take_events();
+    EXPECT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].value, threshold_ticket.value());
+    EXPECT_EQ(events[1].value, end_ticket.value());
+}
+
+TEST_CASE(peek_copies_without_taking_or_granting_credit)
+{
+    ChannelHarness harness;
+    EXPECT_EQ(harness.channel->write(bytes_of("hello "sv)), WriteResult::Accepted);
+    EXPECT_EQ(harness.channel->write(bytes_of("world"sv)), WriteResult::Accepted);
+    (void)harness.take_events();
+
+    EXPECT_EQ(flatten(harness.channel->peek_up_to(8)), "hello wo"sv);
+    EXPECT_EQ(flatten(harness.channel->peek_up_to(100)), "hello world"sv);
+    EXPECT(harness.take_events().is_empty());
+
+    EXPECT_EQ(flatten(harness.channel->take_up_to(3)), "hel"sv);
+    EXPECT_EQ(flatten(harness.channel->peek_up_to(4)), "lo w"sv);
+    EXPECT_EQ(flatten(harness.channel->take_all()), "lo world"sv);
+}
+
+TEST_CASE(peek_reports_how_the_channel_ended)
+{
+    ChannelHarness closed;
+    EXPECT_EQ(closed.channel->write(bytes_of("tail"sv)), WriteResult::Accepted);
+    EXPECT_EQ(closed.channel->close(), TerminateResult::Terminated);
+    auto closed_peek = closed.channel->peek_up_to(100);
+    EXPECT_EQ(flatten(closed_peek), "tail"sv);
+    EXPECT_EQ(closed_peek.state, FetchByteChannel::State::Closed);
+    EXPECT_EQ(closed_peek.buffered_byte_count, 4u);
+
+    ChannelHarness errored;
+    EXPECT_EQ(errored.channel->write(bytes_of("lost"sv)), WriteResult::Accepted);
+    EXPECT_EQ(errored.channel->error({ .message = MUST(ByteBuffer::copy("failed"sv.bytes())) }), TerminateResult::Terminated);
+    auto errored_peek = errored.channel->peek_up_to(100);
+    EXPECT(errored_peek.taken.is_empty());
+    EXPECT_EQ(errored_peek.state, FetchByteChannel::State::Errored);
+    EXPECT(errored_peek.error.has_value());
 }

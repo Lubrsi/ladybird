@@ -40,12 +40,23 @@ void FetchByteChannelProducerSink::misbehaved(StringView reason)
     VERIFY_NOT_REACHED();
 }
 
-void FetchByteChannel::wake_armed_waiter_locked(PendingNotifications& notifications)
+bool FetchByteChannel::is_due_locked(WakeOn const& wake_on) const
 {
-    if (!m_waiter_armed)
-        return;
-    m_waiter_armed = false;
-    notifications.append(Wake { m_armed_ticket });
+    if (m_state != State::Open)
+        return true;
+    return wake_on.visit(
+        [&](BufferedAtLeast const& buffered_at_least) { return m_buffered_byte_count >= buffered_at_least.byte_count; },
+        [](EndOnly) { return false; });
+}
+
+void FetchByteChannel::wake_due_waiters_locked(PendingNotifications& notifications)
+{
+    m_armed_waiters.remove_all_matching([&](ArmedWaiter const& waiter) {
+        if (!is_due_locked(waiter.wake_on))
+            return false;
+        notifications.append(Wake { waiter.ticket });
+        return true;
+    });
 }
 
 // This implements the buffer-filling steps of HTTP-network fetch's transmission loop.
@@ -74,8 +85,7 @@ FetchByteChannel::WriteResult FetchByteChannel::write(Core::ImmutableBytes bytes
                 //    the user agent to suspend the ongoing fetch.
                 // Spent credit is the suspension: the transport delivers only what it was granted.
                 m_outstanding_transport_credit -= size;
-                if (m_armed_wake_on == WakeOn::BytesOrTerminal)
-                    wake_armed_waiter_locked(notifications);
+                wake_due_waiters_locked(notifications);
             }
         }
     }
@@ -95,7 +105,7 @@ FetchByteChannel::TerminateResult FetchByteChannel::terminate_locked(State termi
         m_buffered_byte_count = 0;
         m_error = move(error);
     }
-    wake_armed_waiter_locked(notifications);
+    wake_due_waiters_locked(notifications);
     return TerminateResult::Terminated;
 }
 
@@ -144,7 +154,7 @@ FetchByteChannel::TerminateResult FetchByteChannel::cancel()
             m_state = State::ConsumerCancelled;
             m_chunks.clear();
             m_buffered_byte_count = 0;
-            wake_armed_waiter_locked(notifications);
+            wake_due_waiters_locked(notifications);
             notifications.append(ConsumerCancelled {});
             result = TerminateResult::Terminated;
         }
@@ -165,7 +175,7 @@ Vector<Core::ImmutableBytes> FetchByteChannel::transfer_out()
         undrained_bytes = move(m_chunks);
         m_buffered_byte_count = 0;
         m_state = State::Transferred;
-        wake_armed_waiter_locked(notifications);
+        wake_due_waiters_locked(notifications);
     }
     dispatch(notifications);
     return undrained_bytes;
@@ -227,30 +237,48 @@ FetchByteChannel::TakeResult FetchByteChannel::take_all()
     return take_up_to(NumericLimits<u64>::max());
 }
 
+FetchByteChannel::TakeResult FetchByteChannel::peek_up_to(u64 limit) const
+{
+    MutexLocker locker { m_mutex };
+    TakeResult result;
+    u64 remaining = limit;
+    for (auto const& chunk : m_chunks) {
+        if (remaining == 0)
+            break;
+        auto length = static_cast<size_t>(min<u64>(chunk.size(), remaining));
+        result.taken.append(chunk.slice(0, length));
+        remaining -= length;
+    }
+    result.state = m_state;
+    result.error = m_error;
+    result.buffered_byte_count = m_buffered_byte_count;
+    return result;
+}
+
 WakeTicket FetchByteChannel::arm_waiter(WakeOn wake_on)
 {
+    wake_on.visit(
+        [](BufferedAtLeast const& buffered_at_least) { VERIFY(buffered_at_least.byte_count > 0); },
+        [](EndOnly) { });
+
     PendingNotifications notifications;
     WakeTicket ticket { 0 };
     {
         MutexLocker locker { m_mutex };
-        VERIFY(!m_waiter_armed);
         ticket = WakeTicket { m_next_ticket++ };
-        if (m_state != State::Open || (wake_on == WakeOn::BytesOrTerminal && !m_chunks.is_empty())) {
+        if (is_due_locked(wake_on))
             notifications.append(Wake { ticket });
-        } else {
-            m_waiter_armed = true;
-            m_armed_wake_on = wake_on;
-            m_armed_ticket = ticket;
-        }
+        else
+            m_armed_waiters.append({ ticket, move(wake_on) });
     }
     dispatch(notifications);
     return ticket;
 }
 
-void FetchByteChannel::disarm_waiter()
+void FetchByteChannel::disarm_waiter(WakeTicket ticket)
 {
     MutexLocker locker { m_mutex };
-    m_waiter_armed = false;
+    m_armed_waiters.remove_first_matching([&](ArmedWaiter const& waiter) { return waiter.ticket == ticket; });
 }
 
 }
