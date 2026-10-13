@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    promiseTest(async () => {
+        removeTestErrorHandler();
+
+        const server = httpTestServer();
+        const crossOriginHostname = uniqueLocalhostHostname("script-element-errors");
+
+        async function echoURL(path, options, hostname) {
+            const url = new URL(await server.createEcho("GET", path, options));
+            if (hostname) url.hostname = hostname;
+            return url;
+        }
+
+        function script(body, headers = {}) {
+            return { status: 200, headers: { "Content-Type": "text/javascript", ...headers }, body };
+        }
+
+        function runScript(url, crossOrigin) {
+            return new Promise(resolve => {
+                addEventListener("error", resolve, { once: true });
+                const element = document.createElement("script");
+                if (crossOrigin) element.crossOrigin = crossOrigin;
+                element.onerror = () => resolve({ message: "the script failed to load" });
+                element.src = url;
+                document.body.appendChild(element);
+            });
+        }
+
+        function printError(label, event) {
+            println(
+                `${label}: message "${event.message}", filename "${event.filename === "" ? "" : "(set)"}", line ${event.lineno}, column ${event.colno}, error ${event.error}`
+            );
+        }
+
+        const thrownError = "throw new TypeError('script detail');";
+        const sameOrigin = await echoURL("/same-origin.js", script(thrownError));
+        const crossOrigin = await echoURL("/cross-origin.js", script(thrownError), crossOriginHostname);
+        const syntaxError = await echoURL("/syntax-error.js", script("this is not { javascript"), crossOriginHostname);
+        const withCors = await echoURL(
+            "/with-cors.js",
+            script(thrownError, { "Access-Control-Allow-Origin": "*" }),
+            crossOriginHostname
+        );
+        const redirected = await echoURL(
+            "/redirect.js",
+            { status: 302, headers: { Location: sameOrigin.href } },
+            crossOriginHostname
+        );
+
+        printError("Same-origin", await runScript(sameOrigin));
+        printError("Cross-origin", await runScript(crossOrigin));
+        printError("Cross-origin syntax error", await runScript(syntaxError));
+        printError("Cross-origin with CORS", await runScript(withCors, "anonymous"));
+        printError("Cross-origin redirected to same-origin", await runScript(redirected));
+    });
+</script>

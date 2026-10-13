@@ -123,7 +123,7 @@ public:
         Yes,
         No,
     };
-    void report_an_exception(JS::Value exception, OmitError = OmitError::No);
+    void report_an_exception(JS::Value exception, OmitError = OmitError::No, GC::Ptr<ClassicScript const> running_script = {});
 
     void push_onto_outstanding_rejected_promises_weak_set(GC::Ptr<JS::Promise>);
     bool remove_from_outstanding_rejected_promises_weak_set(GC::Ptr<JS::Promise>);

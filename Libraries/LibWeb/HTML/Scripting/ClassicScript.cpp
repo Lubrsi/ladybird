@@ -243,7 +243,7 @@ JS::Completion ClassicScript::run(RethrowErrors rethrow_errors, GC::Ptr<JS::Envi
         // 1. Report an exception given by evaluationStatus.[[Value]] for script's settings object's global object.
         auto* window_or_worker = window_or_worker_global_scope_from_global_object(settings.global_object());
         VERIFY(window_or_worker);
-        window_or_worker->report_an_exception(evaluation_status.value());
+        window_or_worker->report_an_exception(evaluation_status.value(), WindowOrWorkerGlobalScopeMixin::OmitError::No, this);
 
         // 2. Clean up after running script with settings.
         clean_up_after_running_script(settings);
