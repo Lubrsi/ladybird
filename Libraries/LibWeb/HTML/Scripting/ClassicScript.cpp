@@ -241,7 +241,7 @@ JS::Completion ClassicScript::run(RethrowErrors rethrow_errors, GC::Ptr<JS::Envi
         VERIFY(rethrow_errors == RethrowErrors::No);
 
         // 1. Report an exception given by evaluationStatus.[[Value]] for script's settings object's global object.
-        report_an_exception(settings.global_object(), evaluation_status.value());
+        report_an_exception(settings.global_object(), evaluation_status.value(), OmitError::No, this);
 
         // 2. Clean up after running script with settings.
         clean_up_after_running_script(settings);

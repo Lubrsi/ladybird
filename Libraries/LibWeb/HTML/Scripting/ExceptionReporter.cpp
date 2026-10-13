@@ -67,7 +67,7 @@ void report_exception_to_console(JS::Value value, JS::Realm& realm, ErrorInPromi
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#report-an-exception
-void report_an_exception(JS::Object& global, JS::Value exception, OmitError omit_error)
+void report_an_exception(JS::Object& global, JS::Value exception, OmitError omit_error, GC::Ptr<ClassicScript const> running_script)
 {
     auto& realm = relevant_realm(global);
     auto& vm = realm.vm();
@@ -80,22 +80,23 @@ void report_an_exception(JS::Object& global, JS::Value exception, OmitError omit
 
     // 3. Let script be a script found in an implementation-defined way, or null. This should usually be the
     //    running script (most notably during run a classic script).
-    auto script_or_module = vm.get_active_script_or_module();
+    auto classic_script = running_script;
+    if (!classic_script) {
+        auto script_or_module = vm.get_active_script_or_module();
+        if (auto const* js_script = script_or_module.get_pointer<GC::Ref<JS::Script>>())
+            classic_script = as<ClassicScript>(script_from_host_defined((*js_script)->host_defined()));
+    }
 
     // 4. If script is a classic script and script's muted errors is true, then set errorInfo[error] to null,
     //    errorInfo[message] to "Script error.", errorInfo[filename] to the empty string, errorInfo[lineno] to
     //    0, and errorInfo[colno] to 0.
-    script_or_module.visit(
-        [&](GC::Ref<JS::Script> const& js_script) {
-            if (as<ClassicScript>(script_from_host_defined(js_script->host_defined()))->muted_errors() == ClassicScript::MutedErrors::Yes) {
-                error_info.error = JS::js_null();
-                error_info.message = "Script error."_utf16;
-                error_info.filename = Utf16String {};
-                error_info.lineno = 0;
-                error_info.colno = 0;
-            }
-        },
-        [](auto const&) { });
+    if (classic_script && classic_script->muted_errors() == ClassicScript::MutedErrors::Yes) {
+        error_info.error = JS::js_null();
+        error_info.message = "Script error."_utf16;
+        error_info.filename = Utf16String {};
+        error_info.lineno = 0;
+        error_info.colno = 0;
+    }
 
     // 5. If omitError is true, then set errorInfo[error] to null.
     if (omit_error == OmitError::Yes)
