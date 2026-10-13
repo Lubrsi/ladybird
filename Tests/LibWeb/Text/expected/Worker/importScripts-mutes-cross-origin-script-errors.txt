@@ -1,0 +1,2 @@
+Cross-origin script: NetworkError: Script error.
+data: URL script: TypeError: data: URL detail

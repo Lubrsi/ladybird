@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    promiseTest(async () => {
+        const server = httpTestServer();
+        const crossOriginURL = new URL(
+            await server.createEcho("GET", "/imported.js", {
+                status: 200,
+                headers: { "Content-Type": "text/javascript" },
+                body: "throw new TypeError('cross-origin detail');",
+            })
+        );
+        crossOriginURL.hostname = uniqueLocalhostHostname("imported-script-errors");
+        const dataURL = "data:text/javascript," + encodeURIComponent("throw new TypeError('data: URL detail');");
+
+        const workerSource = `
+            function importAndReport(url) {
+                try {
+                    importScripts(url);
+                    return "no exception";
+                } catch (e) {
+                    return e.name + ": " + e.message;
+                }
+            }
+            postMessage([
+                "Cross-origin script: " + importAndReport(${JSON.stringify(crossOriginURL.href)}),
+                "data: URL script: " + importAndReport(${JSON.stringify(dataURL)}),
+            ]);
+        `;
+        const worker = new Worker(URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" })));
+        const lines = await new Promise(resolve => {
+            worker.onmessage = event => resolve(event.data);
+            worker.onerror = event => resolve([`The worker failed: ${event.message}`]);
+        });
+        lines.forEach(line => println(line));
+    });
+</script>
