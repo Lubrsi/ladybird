@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    function firstProgressEvent(url) {
+        return new Promise(resolve => {
+            let first = null;
+            const xhr = new XMLHttpRequest();
+            xhr.onprogress = event => {
+                first ??= `lengthComputable ${event.lengthComputable}, total ${event.total}`;
+            };
+            xhr.onloadend = () => resolve(first ?? `no progress event, status ${xhr.status}`);
+            xhr.open("GET", url);
+            xhr.send();
+        });
+    }
+
+    promiseTest(async () => {
+        const server = httpTestServer();
+        const body = "x".repeat(1000);
+        const withLength = await server.createEcho("GET", "/progress-total-with-length", {
+            status: 200,
+            headers: { "Content-Type": "text/plain", "Content-Length": String(body.length), "Access-Control-Allow-Origin": "*" },
+            body,
+        });
+        const withoutLength = await server.createEcho("GET", "/progress-total-without-length", {
+            status: 200,
+            headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
+            body,
+        });
+
+        println(`with a Content-Length: ${await firstProgressEvent(withLength)}`);
+        println(`without one: ${await firstProgressEvent(withoutLength)}`);
+    });
+</script>

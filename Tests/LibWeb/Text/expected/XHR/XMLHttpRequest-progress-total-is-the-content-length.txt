@@ -1,0 +1,2 @@
+with a Content-Length: lengthComputable true, total 1000
+without one: lengthComputable false, total 0
