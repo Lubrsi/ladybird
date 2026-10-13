@@ -664,6 +664,9 @@ void fetch_classic_script(GC::Ref<HTMLScriptElement> element, URL::URL const& ur
     //    or a byte sequence bodyBytes:
     Fetch::Infrastructure::FetchAlgorithms::Input fetch_algorithms_input {};
     fetch_algorithms_input.process_response_consume_body = [request, &settings_object, options = move(options), character_encoding = move(character_encoding), on_complete = move(on_complete)](auto response, auto body_bytes) {
+        // NB: Step 6 asks whether response was CORS-cross-origin before step 1 replaced it.
+        auto response_was_cors_cross_origin = response->is_cors_cross_origin();
+
         // 1. Set response to response's unsafe response.
         response = response->unsafe_response();
 
@@ -691,7 +694,7 @@ void fetch_classic_script(GC::Ref<HTMLScriptElement> element, URL::URL const& ur
         VERIFY(fallback_decoder.has_value());
 
         // 6. Let muted errors be true if response was CORS-cross-origin, and false otherwise.
-        auto muted_errors = response->is_cors_cross_origin() ? ClassicScript::MutedErrors::Yes : ClassicScript::MutedErrors::No;
+        auto muted_errors = response_was_cors_cross_origin ? ClassicScript::MutedErrors::Yes : ClassicScript::MutedErrors::No;
 
         // 7. Let script be the result of creating a classic script given source text, settings object's realm, response's URL,
         //    options, and muted errors.
@@ -933,6 +936,9 @@ WebIDL::ExceptionOr<GC::Ref<ClassicScript>> fetch_a_classic_worker_imported_scri
         return !!response;
     }));
 
+    // NB: Step 9 asks whether response was CORS-cross-origin before step 6 replaced it.
+    auto response_was_cors_cross_origin = response->is_cors_cross_origin();
+
     // 6. Set response to response's unsafe response.
     response = response->unsafe_response();
 
@@ -951,7 +957,7 @@ WebIDL::ExceptionOr<GC::Ref<ClassicScript>> fetch_a_classic_worker_imported_scri
     auto source_text = Utf16String::from_utf8_with_replacement_character(body_bytes_view(body_bytes));
 
     // 9. Let mutedErrors be true if response was CORS-cross-origin, and false otherwise.
-    auto muted_errors = response->is_cors_cross_origin() ? ClassicScript::MutedErrors::Yes : ClassicScript::MutedErrors::No;
+    auto muted_errors = response_was_cors_cross_origin ? ClassicScript::MutedErrors::Yes : ClassicScript::MutedErrors::No;
 
     // 10. Let script be the result of creating a classic script given sourceText, settingsObject, response's URL, the default classic script fetch options, and mutedErrors.
     auto response_url = response->url().value_or({});
