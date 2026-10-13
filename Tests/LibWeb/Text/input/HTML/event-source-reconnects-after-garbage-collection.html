@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // A garbage collection between an EventSource's fetches leaves it able to reconnect.
+    promiseTest(async () => {
+        const server = httpTestServer();
+        const url = await server.createEcho("GET", "/event-source-reconnects-after-garbage-collection", {
+            status: 200,
+            headers: {
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+                "Content-Type": "text/event-stream",
+            },
+            body: "retry: 0\ndata: hello\n\n",
+        });
+
+        const source = new EventSource(url);
+        const messages = [];
+        await new Promise(resolve => {
+            source.onmessage = async event => {
+                messages.push(event.data);
+                if (messages.length === 1) {
+                    await internals.gcAsync();
+                    return;
+                }
+                source.close();
+                resolve();
+            };
+        });
+        println(`received ${messages.join(", ")}`);
+    });
+</script>
