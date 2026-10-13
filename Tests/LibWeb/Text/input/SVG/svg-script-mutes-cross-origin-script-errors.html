@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    promiseTest(async () => {
+        removeTestErrorHandler();
+
+        const server = httpTestServer();
+        const url = new URL(
+            await server.createEcho("GET", "/svg-script.js", {
+                status: 200,
+                headers: { "Content-Type": "text/javascript" },
+                body: "throw new TypeError('cross-origin detail');",
+            })
+        );
+        url.hostname = uniqueLocalhostHostname("svg-script-errors");
+
+        const event = await new Promise(resolve => {
+            addEventListener("error", resolve, { once: true });
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            const script = document.createElementNS("http://www.w3.org/2000/svg", "script");
+            script.setAttribute("href", url.href);
+            svg.appendChild(script);
+            document.body.appendChild(svg);
+        });
+        println(
+            `message "${event.message}", filename "${event.filename}", line ${event.lineno}, column ${event.colno}, error ${event.error}`
+        );
+    });
+</script>
