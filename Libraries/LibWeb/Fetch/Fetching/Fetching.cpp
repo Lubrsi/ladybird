@@ -1009,8 +1009,9 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
 
             // 2. If fetchParams’s process response end-of-body is non-null, then run fetchParams’s process response
             //    end-of-body given response.
-            if (fetch_params.algorithms()->process_response_end_of_body())
-                (fetch_params.algorithms()->process_response_end_of_body())(response_view);
+            auto algorithms = fetch_params.controller()->algorithms();
+            if (algorithms->process_response_end_of_body())
+                (algorithms->process_response_end_of_body())(response_view);
 
             // 3. If fetchParams’s request’s initiator type is non-null and fetchParams’s request’s client’s global
             //    object is fetchParams’s task destination, then run fetchParams’s controller’s report timing steps
@@ -1035,9 +1036,9 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
 
     // 4. If fetchParams’s process response is non-null, then queue a fetch task to run fetchParams’s process response
     //    given response, with fetchParams’s task destination.
-    if (fetch_params.algorithms()->process_response()) {
+    if (fetch_params.controller()->algorithms()->process_response()) {
         Infrastructure::queue_fetch_task(fetch_params.controller(), fetch_params.task_destination(), GC::create_function(GC::Heap::the(), [&fetch_params, response_view]() {
-            fetch_params.algorithms()->process_response()(response_view);
+            fetch_params.controller()->algorithms()->process_response()(response_view);
         }));
     }
 
@@ -1047,7 +1048,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     if (Core::StatsLog::the() && body_view)
         track_rendering_pending_stream(fetch_params.controller().ptr(), *body_view->stream());
 
-    auto algorithms = fetch_params.algorithms();
+    auto algorithms = fetch_params.controller()->algorithms();
 
     auto body_intent = fetch_params.body_intent();
 

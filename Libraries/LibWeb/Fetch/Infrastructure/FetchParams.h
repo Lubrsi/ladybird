@@ -38,9 +38,6 @@ public:
     [[nodiscard]] GC::Ref<FetchController> controller() const { return m_controller; }
     [[nodiscard]] NonnullRefPtr<FetchTimingInfo> timing_info() const { return m_timing_info; }
 
-    [[nodiscard]] GC::Ref<FetchAlgorithms const> algorithms() const { return m_algorithms; }
-    void set_algorithms(GC::Ref<FetchAlgorithms const> algorithms) { m_algorithms = algorithms; }
-
     [[nodiscard]] Engine::BodyIntent body_intent() const { return m_body_intent; }
     void set_body_intent(Engine::BodyIntent body_intent) { m_body_intent = body_intent; }
 
@@ -74,21 +71,6 @@ private:
     // request
     //     A request.
     NonnullRefPtr<Request> m_request;
-
-    // https://fetch.spec.whatwg.org/#fetch-params-process-request-body
-    // process request body chunk length (default null)
-    // https://fetch.spec.whatwg.org/#fetch-params-process-request-end-of-body
-    // process request end-of-body (default null)
-    // https://fetch.spec.whatwg.org/#fetch-params-process-early-hints-response
-    // process early hints response (default null)
-    // https://fetch.spec.whatwg.org/#fetch-params-process-response
-    // process response (default null)
-    // https://fetch.spec.whatwg.org/#fetch-params-process-response-end-of-body
-    // process response end-of-body (default null)
-    // https://fetch.spec.whatwg.org/#fetch-params-process-response-consume-body
-    // process response consume body (default null)
-    //     Null or an algorithm.
-    GC::Ref<FetchAlgorithms const> m_algorithms;
 
     Engine::BodyIntent m_body_intent;
 

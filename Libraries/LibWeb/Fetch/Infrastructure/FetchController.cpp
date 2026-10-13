@@ -41,9 +41,16 @@ void FetchController::visit_edges(JS::Cell::Visitor& visitor)
     visitor.visit(m_report_timing_steps);
     visitor.visit(m_next_manual_redirect_steps);
     visitor.visit(m_fetch_params);
+    visitor.visit(m_algorithms);
     visitor.visit(m_pending_preloaded_response);
     visitor.visit(m_stop_steps);
     visitor.visit(m_pending_responses);
+}
+
+GC::Ref<FetchAlgorithms const> FetchController::algorithms() const
+{
+    VERIFY(m_algorithms);
+    return *m_algorithms;
 }
 
 void FetchController::set_network_transport(Engine::NetworkTransportHandle& network_transport)
@@ -164,10 +171,8 @@ void FetchController::stop_fetch()
         });
     });
 
-    if (m_fetch_params) {
-        auto fetch_algorithms = FetchAlgorithms::create(FetchAlgorithms::Input { m_fetch_params->body_intent() });
-        m_fetch_params->set_algorithms(fetch_algorithms);
-    }
+    if (m_algorithms)
+        m_algorithms = FetchAlgorithms::create(FetchAlgorithms::Input { m_algorithms->body_intent() });
 
     stop_request();
 

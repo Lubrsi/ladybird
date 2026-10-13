@@ -15,17 +15,16 @@ GC_DEFINE_ALLOCATOR(FetchParams);
 
 FetchParams::FetchParams(NonnullRefPtr<Request> request, GC::Ref<FetchAlgorithms const> algorithms, GC::Ref<FetchController> controller, NonnullRefPtr<FetchTimingInfo> timing_info)
     : m_request(move(request))
-    , m_algorithms(algorithms)
     , m_body_intent(algorithms->body_intent())
     , m_controller(controller)
     , m_timing_info(move(timing_info))
 {
     m_controller->set_fetch_params({}, *this);
+    m_controller->set_algorithms({}, algorithms);
 }
 
 FetchParams::FetchParams(FetchParams const& params)
     : m_request(params.m_request)
-    , m_algorithms(params.m_algorithms)
     , m_body_intent(params.m_body_intent)
     , m_task_destination(params.m_task_destination)
     , m_cross_origin_isolated_capability(params.m_cross_origin_isolated_capability)
@@ -51,7 +50,6 @@ GC::Ref<FetchParams> FetchParams::copy(FetchParams const& params)
 void FetchParams::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_algorithms);
     visitor.visit(m_controller);
     visitor.visit(m_task_destination);
 }
