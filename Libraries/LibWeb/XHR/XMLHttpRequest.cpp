@@ -954,15 +954,14 @@ WebIDL::ExceptionOr<void> XMLHttpRequest::send(NullableDocumentOrXMLHttpRequestB
             }
 
             // 8. Let length be the result of extracting a length from this’s response’s header list.
-            auto length = m_response->header_list()->extract_length();
+            auto extracted_length = m_response->header_list()->extract_length();
 
             // 9. If length is not an integer, then set it to 0.
-            if (!length.has<u64>())
-                length = 0;
+            u64 length = extracted_length.has<u64>() ? extracted_length.get<u64>() : 0;
 
             // Pre-allocate received bytes buffer if Content-Length is known.
-            if (length.get<u64>() > 0)
-                m_received_bytes.ensure_capacity(length.get<u64>());
+            if (length > 0)
+                m_received_bytes.ensure_capacity(length);
 
             // 10. Let processBodyChunk given bytes be these steps:
             auto process_body_chunks = GC::create_function(GC::Heap::the(), [this, length](ByteBuffer byte_buffer) {
@@ -988,7 +987,7 @@ WebIDL::ExceptionOr<void> XMLHttpRequest::send(NullableDocumentOrXMLHttpRequestB
 
                 // 5. Fire a progress event named progress at this with this’s received bytes’s length and length.
                 fire_progress_event(associated_realm.global_object(), *this, EventNames::progress,
-                    m_received_bytes.size(), length.get<u64>());
+                    m_received_bytes.size(), length);
             });
 
             // 11. Let processEndOfBody be this step: run handle response end-of-body for this.
