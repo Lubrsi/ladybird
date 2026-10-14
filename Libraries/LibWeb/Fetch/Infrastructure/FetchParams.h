@@ -36,10 +36,8 @@ public:
     [[nodiscard]] NonnullRefPtr<Request> request() const { return m_request; }
     void set_request(NonnullRefPtr<Request> request) { m_request = move(request); }
     [[nodiscard]] GC::Ref<FetchController> controller() const { return m_controller; }
+    [[nodiscard]] FetchControlBlock& control_block() const { return *m_control_block; }
     [[nodiscard]] NonnullRefPtr<FetchTimingInfo> timing_info() const { return m_timing_info; }
-
-    [[nodiscard]] Engine::BodyIntent body_intent() const { return m_body_intent; }
-    void set_body_intent(Engine::BodyIntent body_intent) { m_body_intent = body_intent; }
 
     [[nodiscard]] HTML::CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability() const { return m_cross_origin_isolated_capability; }
     void set_cross_origin_isolated_capability(HTML::CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability) { m_cross_origin_isolated_capability = cross_origin_isolated_capability; }
@@ -81,8 +79,6 @@ private:
 
     // NB: The six algorithms and the task destination of a fetch params are kept on its controller.
 
-    Engine::BodyIntent m_body_intent;
-
     // https://fetch.spec.whatwg.org/#fetch-params-cross-origin-isolated-capability
     // cross-origin isolated capability (default false)
     //     A boolean.
@@ -92,6 +88,7 @@ private:
     // controller (default a new fetch controller)
     //     A fetch controller.
     GC::Ref<FetchController> m_controller;
+    NonnullRefPtr<FetchControlBlock> m_control_block;
 
     // https://fetch.spec.whatwg.org/#fetch-params-timing-info
     // timing info

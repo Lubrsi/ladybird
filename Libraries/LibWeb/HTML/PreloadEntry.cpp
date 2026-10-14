@@ -117,8 +117,7 @@ bool consume_a_preloaded_resource(
         //         and WebKit's sync load bypasses its cache and preloads (DocumentThreadableLoader::loadRequest).
         if (consumer_task_destination.has<NonnullRefPtr<ParallelQueue>>() && entry->controller) {
             entry->controller->set_task_destination(ParallelQueue::create());
-            if (auto fetch_params = entry->controller->fetch_params())
-                fetch_params->set_body_intent(Fetch::Engine::BodyIntent::SyncAccumulate);
+            entry->controller->control_block()->retarget_body_intent(Fetch::Engine::BodyIntent::SyncAccumulate);
         }
     }
     // 10. Otherwise, call onResponseAvailable with entry's response.

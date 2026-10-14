@@ -587,6 +587,7 @@ namespace Web::Fetch::Infrastructure {
 
 class Body;
 class FetchAlgorithms;
+class FetchControlBlock;
 class FetchController;
 class FetchControllerRegistry;
 class FetchControllerToken;

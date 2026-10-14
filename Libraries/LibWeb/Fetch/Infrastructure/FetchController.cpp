@@ -5,13 +5,11 @@
  */
 
 #include <LibGC/Heap.h>
-#include <LibGC/Weak.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Fetch/Engine/NetworkTransportHandle.h>
 #include <LibWeb/Fetch/Fetching/PendingResponse.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
-#include <LibWeb/Fetch/Infrastructure/FetchParams.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/WebIDL/DOMException.h>
@@ -23,6 +21,7 @@ GC_DEFINE_ALLOCATOR(FetchController);
 FetchController::FetchController(FetchControllerRegistry& registry)
     : m_registry(registry)
     , m_token(registry.add({}, *this))
+    , m_control_block(FetchControlBlock::create())
 {
 }
 
@@ -36,7 +35,6 @@ void FetchController::visit_edges(JS::Cell::Visitor& visitor)
     Base::visit_edges(visitor);
     visitor.visit(m_report_timing_steps);
     visitor.visit(m_next_manual_redirect_steps);
-    visitor.visit(m_fetch_params);
     visitor.visit(m_algorithms);
     visitor.visit(m_task_destination);
     visitor.visit(m_pending_preloaded_response);
@@ -50,6 +48,12 @@ void FetchController::finalize()
         m_registry->remove({}, m_token);
 }
 
+void FetchController::set_algorithms(Badge<FetchParams>, GC::Ref<FetchAlgorithms const> algorithms)
+{
+    m_algorithms = algorithms;
+    m_control_block->set_body_intent({}, algorithms->body_intent());
+}
+
 GC::Ref<FetchAlgorithms const> FetchController::algorithms() const
 {
     VERIFY(m_algorithms);
@@ -59,12 +63,8 @@ GC::Ref<FetchAlgorithms const> FetchController::algorithms() const
 void FetchController::set_network_transport(RefPtr<Engine::NetworkTransportHandle> const& network_transport)
 {
     m_network_transport = network_transport;
-    m_has_started_request |= !!network_transport;
-    if (network_transport && m_fetch_params && m_fetch_params->request()->destination() == Request::Destination::Font) {
-        network_transport->set_on_requires_network(GC::weak_callback(*this, [](auto& controller) {
-            controller.m_requires_network = true;
-        }));
-    }
+    if (network_transport)
+        m_control_block->set_has_started_request({});
 }
 
 void FetchController::set_report_timing_steps(Function<void(JS::Object&)> report_timing_steps)
@@ -101,24 +101,18 @@ void FetchController::process_next_manual_redirect() const
 NonnullRefPtr<FetchTimingInfo> FetchController::extract_full_timing_info() const
 {
     // 1. Assert: this’s full timing info is not null.
-    VERIFY(m_full_timing_info);
+    auto full_timing_info = m_control_block->full_timing_info();
+    VERIFY(full_timing_info);
 
     // 2. Return this’s full timing info.
-    return *m_full_timing_info;
-}
-
-RefPtr<FetchTimingInfo> FetchController::timing_info() const
-{
-    if (!m_fetch_params)
-        return nullptr;
-    return m_fetch_params->timing_info();
+    return full_timing_info.release_nonnull();
 }
 
 // https://fetch.spec.whatwg.org/#fetch-controller-abort
 void FetchController::abort(JS::Realm& realm, Optional<JS::Value> error)
 {
     // 1. Set controller’s state to "aborted".
-    m_state = State::Aborted;
+    m_control_block->set_state({}, State::Aborted);
 
     // 2. Let fallbackError be an "AbortError" DOMException.
     auto fallback_error = WebIDL::AbortError::create("Fetch was aborted"_utf16);
@@ -145,17 +139,17 @@ void FetchController::abort(JS::Realm& realm, Optional<JS::Value> error)
 void FetchController::terminate()
 {
     // To terminate a fetch controller controller, set controller’s state to "terminated".
-    m_state = State::Terminated;
+    m_control_block->set_state({}, State::Terminated);
 
     stop_request();
 }
 
 void FetchController::stop_fetch()
 {
-    if (m_state == State::Aborted || m_state == State::Terminated)
+    if (state() == State::Aborted || state() == State::Terminated)
         return;
 
-    m_state = State::Stopped;
+    m_control_block->set_state({}, State::Stopped);
 
     // AD-HOC: Some HTML elements need to stop an ongoing fetching process without causing any network error to be raised
     //         (which abort() and terminate() will both do). This is tricky because the fetch process runs across several
@@ -188,7 +182,7 @@ void FetchController::stop_fetch()
 // https://fetch.spec.whatwg.org/#concept-http-network-fetch
 void FetchController::stop_request()
 {
-    VERIFY(m_state != State::Ongoing);
+    VERIFY(state() != State::Ongoing);
     if (auto network_transport = m_network_transport.strong_ref()) {
         m_network_transport = nullptr;
         network_transport->stop();
