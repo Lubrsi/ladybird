@@ -15,6 +15,7 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Export.h>
+#include <LibWeb/Fetch/Infrastructure/FetchControllerRegistry.h>
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/Task.h>
 #include <LibWeb/Forward.h>
@@ -42,7 +43,9 @@ public:
         Stopped,
     };
 
-    [[nodiscard]] static GC::Ref<FetchController> create();
+    [[nodiscard]] static GC::Ref<FetchController> create(FetchControllerRegistry&);
+
+    [[nodiscard]] FetchControllerToken token() const { return m_token; }
 
     void set_full_timing_info(NonnullRefPtr<FetchTimingInfo> full_timing_info) { m_full_timing_info = move(full_timing_info); }
     void set_report_timing_steps(Function<void(JS::Object&)> report_timing_steps);
@@ -90,9 +93,13 @@ public:
     void fetch_task_complete(u64 fetch_task_id);
 
 private:
-    FetchController();
+    explicit FetchController(FetchControllerRegistry&);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
+    virtual void finalize() override;
+
+    WeakPtr<FetchControllerRegistry> m_registry;
+    FetchControllerToken m_token;
 
     // https://fetch.spec.whatwg.org/#fetch-controller-state
     // state (default "ongoing")

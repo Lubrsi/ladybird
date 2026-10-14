@@ -20,11 +20,15 @@ namespace Web::Fetch::Infrastructure {
 
 GC_DEFINE_ALLOCATOR(FetchController);
 
-FetchController::FetchController() = default;
-
-GC::Ref<FetchController> FetchController::create()
+FetchController::FetchController(FetchControllerRegistry& registry)
+    : m_registry(registry)
+    , m_token(registry.add({}, *this))
 {
-    return GC::Heap::the().allocate<FetchController>();
+}
+
+GC::Ref<FetchController> FetchController::create(FetchControllerRegistry& registry)
+{
+    return GC::Heap::the().allocate<FetchController>(registry);
 }
 
 void FetchController::visit_edges(JS::Cell::Visitor& visitor)
@@ -37,6 +41,13 @@ void FetchController::visit_edges(JS::Cell::Visitor& visitor)
     visitor.visit(m_task_destination);
     visitor.visit(m_pending_preloaded_response);
     visitor.visit(m_stop_steps);
+}
+
+void FetchController::finalize()
+{
+    Base::finalize();
+    if (m_registry)
+        m_registry->remove({}, m_token);
 }
 
 GC::Ref<FetchAlgorithms const> FetchController::algorithms() const

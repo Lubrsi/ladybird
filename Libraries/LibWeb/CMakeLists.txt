@@ -365,6 +365,7 @@ set(SOURCES
     Fetch/HeadersIterator.cpp
     Fetch/Infrastructure/FetchAlgorithms.cpp
     Fetch/Infrastructure/FetchController.cpp
+    Fetch/Infrastructure/FetchControllerRegistry.cpp
     Fetch/Infrastructure/FetchParams.cpp
     Fetch/Infrastructure/FetchRecord.cpp
     Fetch/Infrastructure/FetchTimingInfo.cpp
