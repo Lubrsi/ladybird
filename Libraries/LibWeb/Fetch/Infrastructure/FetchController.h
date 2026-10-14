@@ -16,6 +16,7 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Engine/FetchBodyDeliveryGate.h>
+#include <LibWeb/Fetch/Infrastructure/FetchControllerRegistry.h>
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
 #include <LibWeb/Fetch/Infrastructure/Task.h>
 #include <LibWeb/Forward.h>
@@ -43,7 +44,9 @@ public:
         Stopped,
     };
 
-    [[nodiscard]] static GC::Ref<FetchController> create();
+    [[nodiscard]] static GC::Ref<FetchController> create(FetchControllerRegistry&);
+
+    [[nodiscard]] FetchControllerToken token() const { return m_token; }
 
     void set_full_timing_info(NonnullRefPtr<FetchTimingInfo> full_timing_info) { m_full_timing_info = move(full_timing_info); }
     void set_report_timing_steps(Function<void(JS::Object&)> report_timing_steps);
@@ -62,7 +65,7 @@ public:
     void set_fetch_params(Badge<FetchParams>, GC::Ref<FetchParams> fetch_params) { m_fetch_params = fetch_params; }
     [[nodiscard]] GC::Ptr<FetchParams> fetch_params() const { return m_fetch_params; }
 
-    void set_algorithms(Badge<FetchParams>, GC::Ref<FetchAlgorithms const> algorithms) { m_algorithms = algorithms; }
+    void set_algorithms(Badge<FetchParams>, GC::Ref<FetchAlgorithms const>);
     [[nodiscard]] GC::Ref<FetchAlgorithms const> algorithms() const;
 
     [[nodiscard]] TaskDestination const& task_destination() const { return m_task_destination; }
@@ -97,10 +100,13 @@ public:
     void remove_pending_response(Badge<Fetching::PendingResponse>, GC::Ref<Fetching::PendingResponse>);
 
 private:
-    FetchController();
+    explicit FetchController(FetchControllerRegistry&);
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
     virtual void finalize() override;
+
+    WeakPtr<FetchControllerRegistry> m_registry;
+    FetchControllerToken m_token;
 
     // https://fetch.spec.whatwg.org/#fetch-controller-state
     // state (default "ongoing")

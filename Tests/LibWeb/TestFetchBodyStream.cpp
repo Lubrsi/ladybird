@@ -14,6 +14,7 @@
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchParams.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
+#include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/Streams/ReadableByteStreamController.h>
@@ -37,12 +38,12 @@ public:
     virtual void consumer_cancelled() override { }
 };
 
-GC::Ref<FetchParams> create_sync_xhr_fetch_params()
+GC::Ref<FetchParams> create_sync_xhr_fetch_params(Web::Fetch::Infrastructure::FetchController& controller)
 {
     auto algorithms = FetchAlgorithms::create(FetchAlgorithms::Input { Web::Fetch::Engine::BodyIntent::SyncAccumulate });
     auto request = Web::Fetch::Infrastructure::Request::create();
     auto timing_info = Web::Fetch::Infrastructure::FetchTimingInfo::create();
-    return FetchParams::create(move(request), algorithms, move(timing_info));
+    return FetchParams::create(controller, move(request), algorithms, move(timing_info));
 }
 
 struct BodyStreamHarness {
@@ -169,7 +170,8 @@ TEST_CASE(bytes_reach_a_stream_while_the_event_loop_is_paused)
     Core::EventLoop event_loop;
     install_font_plugin();
     BodyStreamHarness harness;
-    harness.fetch_params = create_sync_xhr_fetch_params();
+    auto& controller_registry = static_cast<Web::HTML::Agent&>(*harness.realm->vm().agent()).fetch_controller_registry;
+    harness.fetch_params = create_sync_xhr_fetch_params(Web::Fetch::Infrastructure::FetchController::create(controller_registry));
     auto pause = Web::HTML::main_thread_event_loop().pause(Web::HTML::EventLoop::UpdateTheRendering::No);
     harness.create_stream();
 
