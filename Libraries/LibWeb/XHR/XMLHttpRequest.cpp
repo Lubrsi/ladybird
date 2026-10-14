@@ -1126,7 +1126,9 @@ WebIDL::ExceptionOr<void> XMLHttpRequest::send(NullableDocumentOrXMLHttpRequestB
         }
 
         // 7. Report timing for this’s fetch controller given the current global object.
-        m_fetch_controller->report_timing(HTML::current_global_object());
+        // AD-HOC: A request that timed out before the end of its response has no timing to report.
+        if (!m_timed_out || m_fetch_controller->has_report_timing_steps())
+            m_fetch_controller->report_timing(HTML::current_global_object());
 
         // 8. Run handle response end-of-body for this.
         TRY(handle_response_end_of_body());
