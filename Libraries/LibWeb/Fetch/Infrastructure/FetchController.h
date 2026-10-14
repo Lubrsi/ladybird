@@ -16,6 +16,7 @@
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Infrastructure/FetchTimingInfo.h>
+#include <LibWeb/Fetch/Infrastructure/Task.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/EventLoop/Task.h>
 #include <LibWeb/HTML/StructuredSerializeTypes.h>
@@ -62,6 +63,9 @@ public:
 
     void set_algorithms(Badge<FetchParams>, GC::Ref<FetchAlgorithms const> algorithms) { m_algorithms = algorithms; }
     [[nodiscard]] GC::Ref<FetchAlgorithms const> algorithms() const;
+
+    [[nodiscard]] TaskDestination const& task_destination() const { return m_task_destination; }
+    void set_task_destination(TaskDestination task_destination) { m_task_destination = move(task_destination); }
 
     // AD-HOC: Whether this fetch's response has arrived: as headers from the network, or at main fetch. From then on,
     //         its body delivery is queued as event-loop tasks, and its response processing captures its task
@@ -132,6 +136,12 @@ private:
     //     Null or an algorithm.
     // NB: These are the algorithms of this controller's fetch params.
     GC::Ptr<FetchAlgorithms const> m_algorithms;
+
+    // https://fetch.spec.whatwg.org/#fetch-params-task-destination
+    // task destination (default null)
+    //     Null, a global object, or a parallel queue.
+    // NB: This is the task destination of this controller's fetch params.
+    TaskDestination m_task_destination;
 
     bool m_response_arrived { false };
     // NB: Assumes one waiting consumer for a pending preloaded response.

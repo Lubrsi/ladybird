@@ -41,10 +41,6 @@ public:
     [[nodiscard]] Engine::BodyIntent body_intent() const { return m_body_intent; }
     void set_body_intent(Engine::BodyIntent body_intent) { m_body_intent = body_intent; }
 
-    [[nodiscard]] TaskDestination& task_destination() { return m_task_destination; }
-    [[nodiscard]] TaskDestination const& task_destination() const { return m_task_destination; }
-    void set_task_destination(TaskDestination task_destination) { m_task_destination = move(task_destination); }
-
     [[nodiscard]] HTML::CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability() const { return m_cross_origin_isolated_capability; }
     void set_cross_origin_isolated_capability(HTML::CanUseCrossOriginIsolatedAPIs cross_origin_isolated_capability) { m_cross_origin_isolated_capability = cross_origin_isolated_capability; }
 
@@ -83,14 +79,9 @@ private:
     //     A request.
     NonnullRefPtr<Request> m_request;
 
-    // NB: The six algorithms of a fetch params are kept on its controller.
+    // NB: The six algorithms and the task destination of a fetch params are kept on its controller.
 
     Engine::BodyIntent m_body_intent;
-
-    // https://fetch.spec.whatwg.org/#fetch-params-task-destination
-    // task destination (default null)
-    //     Null, a global object, or a parallel queue.
-    TaskDestination m_task_destination;
 
     // https://fetch.spec.whatwg.org/#fetch-params-cross-origin-isolated-capability
     // cross-origin isolated capability (default false)
