@@ -117,8 +117,7 @@ bool consume_a_preloaded_resource(
         //         and preloads (DocumentThreadableLoader::loadRequest).
         if (consumer_body_intent == Fetch::Engine::BodyIntent::SyncAccumulate && entry->controller) {
             entry->controller->set_task_destination(ParallelQueue::create());
-            if (auto fetch_params = entry->controller->fetch_params())
-                fetch_params->set_body_intent(consumer_body_intent);
+            entry->controller->control_block().set_body_intent(consumer_body_intent);
         }
     }
     // 10. Otherwise, call onResponseAvailable with entry's response.

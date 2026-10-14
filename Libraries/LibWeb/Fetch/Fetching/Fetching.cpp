@@ -330,7 +330,7 @@ GC::Ref<Infrastructure::FetchController> fetch(JS::Realm& realm, Infrastructure:
             request.credentials_mode(),
             request.integrity_metadata(),
             on_preloaded_response_available,
-            fetch_params->body_intent());
+            fetch_params->control_block().body_intent());
 
         // 4. If foundPreloadedResource is true and fetchParams’s preloaded response candidate is null, then set
         //    fetchParams’s preloaded response candidate to "pending".
@@ -718,7 +718,7 @@ GC::Ptr<PendingResponse> main_fetch(JS::Realm& realm, Infrastructure::FetchParam
             //         (the fully-read in step 22, and fetch response handover's tasks, body pipe and body read). Record
             //         that the response has arrived (a network response was recorded as its headers came in) — so
             //         consume_a_preloaded_resource() re-targets an in-flight preload's fetch only til then.
-            fetch_params.controller()->set_response_arrived();
+            fetch_params.control_block().set_response_arrived();
 
             if (response_was_null)
                 response = resolved_response;
@@ -934,7 +934,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
     // 3. If fetchParams's request's destination is "document", then set fetchParams's controller's full timing info
     //    to fetchParams's timing info.
     if (fetch_params.request()->is_navigation_request())
-        fetch_params.controller()->set_full_timing_info(fetch_params.timing_info());
+        fetch_params.control_block().set_full_timing_info(fetch_params.timing_info());
 
     // AD-HOC: We extract steps 1-2 of processResponseEndOfBody into a separate lambda so we can also call it from
     //         the error path. The fetch spec only runs processResponseEndOfBody on successful body read (via the
@@ -1054,7 +1054,7 @@ void fetch_response_handover(JS::Realm& realm, Infrastructure::FetchParams const
 
     auto algorithms = fetch_params.controller()->algorithms();
 
-    auto body_intent = fetch_params.body_intent();
+    auto body_intent = fetch_params.control_block().body_intent();
 
     // AD-HOC: A fetch whose body intent is SyncAccumulate is a sync XHR send()
     //         (https://xhr.spec.whatwg.org/#the-send()-method, step 12) — or a preload fetch that "consume a preloaded
@@ -2165,7 +2165,7 @@ GC::Ref<PendingResponse> http_network_or_cache_fetch(JS::Realm& realm, Infrastru
     }
 
     // AD-HOC: If the controller is already in the non-spec Stopped state, we should cancel the network request immediately.
-    if (http_fetch_params->controller()->state() == Infrastructure::FetchController::State::Stopped)
+    if (http_fetch_params->control_block().state() == Infrastructure::FetchControlBlock::State::Stopped)
         http_fetch_params->controller()->stop_fetch();
 
     auto returned_pending_response = PendingResponse::create(fetch_params);
@@ -2582,7 +2582,7 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
 
         // AD-HOC: From here on, the response's body delivery is scheduled against the event loop (see
         //         BodyStreamPullSource::on_wake()); record that, for consume_a_preloaded_resource().
-        fetch_params.controller()->set_response_arrived();
+        fetch_params.control_block().set_response_arrived();
 
         auto response = Infrastructure::Response::create();
         response->set_status(status_code.value_or(200));
@@ -2698,6 +2698,11 @@ GC::Ref<PendingResponse> nonstandard_resource_loader_file_or_http_network_fetch(
         network_transport->set_on_teardown([delivery_gate, channel](Requests::Request::TeardownReason reason) {
             tear_down_network_body(*delivery_gate, *channel, reason);
         });
+        if (request->destination() == Infrastructure::Request::Destination::Font) {
+            network_transport->set_on_requires_network([control_block = NonnullRefPtr { fetch_params.control_block() }] {
+                control_block->set_requires_network();
+            });
+        }
         fetch_params.controller()->set_network_transport(*network_transport);
     } else {
         fetch_params.controller()->set_body_transport(whole_body_transport);
