@@ -7,35 +7,35 @@
 #include <LibGC/Heap.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Fetch/Fetching/PendingResponse.h>
-#include <LibWeb/Fetch/Infrastructure/FetchParams.h>
+#include <LibWeb/Fetch/Infrastructure/FetchController.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 
 namespace Web::Fetch::Fetching {
 
 GC_DEFINE_ALLOCATOR(PendingResponse);
 
-GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params)
+GC::Ref<PendingResponse> PendingResponse::create(GC::Ref<Infrastructure::FetchController> fetch_controller)
 {
-    return GC::Heap::the().allocate<PendingResponse>(fetch_params);
+    return GC::Heap::the().allocate<PendingResponse>(fetch_controller);
 }
 
-GC::Ref<PendingResponse> PendingResponse::create(Infrastructure::FetchParams const& fetch_params, NonnullRefPtr<Infrastructure::Response> response)
+GC::Ref<PendingResponse> PendingResponse::create(GC::Ref<Infrastructure::FetchController> fetch_controller, NonnullRefPtr<Infrastructure::Response> response)
 {
-    return GC::Heap::the().allocate<PendingResponse>(fetch_params, move(response));
+    return GC::Heap::the().allocate<PendingResponse>(fetch_controller, move(response));
 }
 
-PendingResponse::PendingResponse(Infrastructure::FetchParams const& fetch_params, RefPtr<Infrastructure::Response> response)
-    : m_fetch_params(fetch_params)
+PendingResponse::PendingResponse(GC::Ref<Infrastructure::FetchController> fetch_controller, RefPtr<Infrastructure::Response> response)
+    : m_fetch_controller(fetch_controller)
     , m_response(move(response))
 {
-    m_fetch_params->add_pending_response({}, *this);
+    m_fetch_controller->add_pending_response({}, *this);
 }
 
 void PendingResponse::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_callback);
-    visitor.visit(m_fetch_params);
+    visitor.visit(m_fetch_controller);
 }
 
 void PendingResponse::when_loaded(Callback callback)
@@ -67,7 +67,7 @@ void PendingResponse::run_callback()
         //     conservatively.
         auto callback = exchange(m_callback, nullptr);
         callback->function()(*m_response);
-        m_fetch_params->remove_pending_response({}, *this);
+        m_fetch_controller->remove_pending_response({}, *this);
     }));
 }
 

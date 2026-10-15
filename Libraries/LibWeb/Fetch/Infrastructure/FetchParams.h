@@ -7,9 +7,10 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <AK/RefCounted.h>
+#include <AK/WeakPtr.h>
 #include <LibGC/Ptr.h>
 #include <LibJS/Forward.h>
-#include <LibJS/Heap/Cell.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
 #include <LibWeb/Fetch/Infrastructure/FetchController.h>
@@ -22,20 +23,17 @@
 namespace Web::Fetch::Infrastructure {
 
 // https://fetch.spec.whatwg.org/#fetch-params
-class WEB_API FetchParams : public JS::Cell {
-    GC_CELL(FetchParams, JS::Cell);
-    GC_DECLARE_ALLOCATOR(FetchParams);
-
+class WEB_API FetchParams : public RefCounted<FetchParams> {
 public:
     struct PreloadedResponseCandidatePendingTag { };
     using PreloadedResponseCandidate = Variant<Empty, PreloadedResponseCandidatePendingTag, NonnullRefPtr<Response>>;
 
-    [[nodiscard]] static GC::Ref<FetchParams> create(FetchController&, NonnullRefPtr<Request>, GC::Ref<FetchAlgorithms const>, NonnullRefPtr<FetchTimingInfo>);
-    [[nodiscard]] static GC::Ref<FetchParams> copy(FetchParams const&);
+    [[nodiscard]] static NonnullRefPtr<FetchParams> create(FetchController&, NonnullRefPtr<Request>, GC::Ref<FetchAlgorithms const>, NonnullRefPtr<FetchTimingInfo>);
+    [[nodiscard]] static NonnullRefPtr<FetchParams> copy(FetchParams const&);
 
     [[nodiscard]] NonnullRefPtr<Request> request() const { return m_request; }
     void set_request(NonnullRefPtr<Request> request) { m_request = move(request); }
-    [[nodiscard]] GC::Ref<FetchController> controller() const { return m_controller; }
+    [[nodiscard]] GC::Ref<FetchController> controller() const;
     [[nodiscard]] FetchControlBlock& control_block() const { return *m_control_block; }
     [[nodiscard]] NonnullRefPtr<FetchTimingInfo> timing_info() const { return m_timing_info; }
 
@@ -55,22 +53,9 @@ public:
     [[nodiscard]] Optional<FileAPI::SerializedBlobURLEntry> const& blob_url_entry() const { return m_blob_url_entry; }
     void set_blob_url_entry(Optional<FileAPI::SerializedBlobURLEntry> blob_url_entry) { m_blob_url_entry = move(blob_url_entry); }
 
-    void add_pending_response(Badge<Fetching::PendingResponse>, GC::Ref<Fetching::PendingResponse> pending_response) const
-    {
-        VERIFY(!m_pending_responses.contains_slow(pending_response));
-        m_pending_responses.append(pending_response);
-    }
-
-    void remove_pending_response(Badge<Fetching::PendingResponse>, GC::Ref<Fetching::PendingResponse> pending_response) const
-    {
-        m_pending_responses.remove_first_matching([&](auto entry) { return entry == pending_response; });
-    }
-
 private:
-    FetchParams(NonnullRefPtr<Request>, GC::Ref<FetchAlgorithms const>, GC::Ref<FetchController>, NonnullRefPtr<FetchTimingInfo>);
+    FetchParams(NonnullRefPtr<Request>, GC::Ref<FetchAlgorithms const>, FetchController&, NonnullRefPtr<FetchTimingInfo>);
     FetchParams(FetchParams const&);
-
-    virtual void visit_edges(JS::Cell::Visitor&) override;
 
     // https://fetch.spec.whatwg.org/#fetch-params-request
     // request
@@ -87,7 +72,9 @@ private:
     // https://fetch.spec.whatwg.org/#fetch-params-controller
     // controller (default a new fetch controller)
     //     A fetch controller.
-    GC::Ref<FetchController> m_controller;
+    // NB: The controller is named by its token, in the registry that issued it.
+    FetchControllerToken m_controller_token;
+    WeakPtr<FetchControllerRegistry> m_controller_registry;
     NonnullRefPtr<FetchControlBlock> m_control_block;
 
     // https://fetch.spec.whatwg.org/#fetch-params-timing-info
@@ -105,9 +92,6 @@ private:
 
     // The blob URL entry of the request's URL, when that is a blob: URL, as it was when the fetch started.
     Optional<FileAPI::SerializedBlobURLEntry> m_blob_url_entry;
-
-    // The pending responses of this fetch whose callbacks have yet to run.
-    mutable Vector<GC::Ref<Fetching::PendingResponse>> m_pending_responses;
 };
 
 }

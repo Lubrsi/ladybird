@@ -45,7 +45,7 @@ class BodyStreamPullSource final : public JS::Cell {
     GC_DECLARE_ALLOCATOR(BodyStreamPullSource);
 
 public:
-    BodyStreamPullSource(GC::Ptr<Infrastructure::FetchParams const>, GC::Ref<Streams::ReadableStream>, NonnullRefPtr<Engine::FetchByteChannel>, BodyStreamWakeSink const&);
+    BodyStreamPullSource(RefPtr<Infrastructure::FetchParams const>, GC::Ref<Streams::ReadableStream>, NonnullRefPtr<Engine::FetchByteChannel>, BodyStreamWakeSink const&);
     virtual ~BodyStreamPullSource() override;
 
     GC::Ref<WebIDL::Promise> pull(JS::Realm&);
@@ -77,8 +77,9 @@ private:
     void run_pull_task();
     void drain_into_stream();
 
-    // Null for a navigation body adopted from another process.
-    GC::Ptr<Infrastructure::FetchParams const> m_fetch_params;
+    // Both null for a navigation body adopted from another process.
+    RefPtr<Infrastructure::FetchParams const> m_fetch_params;
+    GC::Ptr<Infrastructure::FetchController> m_fetch_controller;
     GC::Ref<Streams::ReadableStream> m_stream;
     NonnullRefPtr<Engine::FetchByteChannel> m_channel;
     BodyStreamWakeToken const m_registry_token { 0 };
@@ -96,6 +97,6 @@ private:
 };
 
 // A response body's view reading from channel, which becomes the channel's consumer.
-WEB_API GC::Ref<Infrastructure::Body> create_body_from_channel(JS::Realm&, GC::Ptr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>);
+WEB_API GC::Ref<Infrastructure::Body> create_body_from_channel(JS::Realm&, RefPtr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>);
 
 }

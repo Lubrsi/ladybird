@@ -37,13 +37,15 @@ public:
     void set_cached_response_body(Core::ImmutableBytes);
 
 private:
-    NetworkBodyPump(GC::Ptr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>, NonnullRefPtr<Engine::FetchBodyDeliveryGate>, RefPtr<HTTP::MemoryCache>);
+    NetworkBodyPump(RefPtr<Infrastructure::FetchParams const>, NonnullRefPtr<Engine::FetchByteChannel>, NonnullRefPtr<Engine::FetchBodyDeliveryGate>, RefPtr<HTTP::MemoryCache>);
 
     virtual void visit_edges(Visitor& visitor) override;
 
     void finalize_cache_entry();
 
-    GC::Ptr<Infrastructure::FetchParams const> m_fetch_params;
+    RefPtr<Infrastructure::FetchParams const> m_fetch_params;
+    // The controller of m_fetch_params, kept alive as long as they are.
+    GC::Ptr<Infrastructure::FetchController> m_fetch_controller;
     RefPtr<Fetch::Infrastructure::Response const> m_response;
 
     NonnullRefPtr<Engine::FetchByteChannel> m_channel;

@@ -24,22 +24,22 @@ class PendingResponse : public JS::Cell {
 public:
     using Callback = Function<void(NonnullRefPtr<Infrastructure::Response>)>;
 
-    [[nodiscard]] static GC::Ref<PendingResponse> create(Infrastructure::FetchParams const&);
-    [[nodiscard]] static GC::Ref<PendingResponse> create(Infrastructure::FetchParams const&, NonnullRefPtr<Infrastructure::Response>);
+    [[nodiscard]] static GC::Ref<PendingResponse> create(GC::Ref<Infrastructure::FetchController>);
+    [[nodiscard]] static GC::Ref<PendingResponse> create(GC::Ref<Infrastructure::FetchController>, NonnullRefPtr<Infrastructure::Response>);
 
     void when_loaded(Callback);
     void resolve(NonnullRefPtr<Infrastructure::Response>);
     bool is_resolved() const { return m_response != nullptr; }
 
 private:
-    PendingResponse(Infrastructure::FetchParams const&, RefPtr<Infrastructure::Response> = {});
+    PendingResponse(GC::Ref<Infrastructure::FetchController>, RefPtr<Infrastructure::Response> = {});
 
     virtual void visit_edges(JS::Cell::Visitor&) override;
 
     void run_callback();
 
     GC::Ptr<GC::Function<void(NonnullRefPtr<Infrastructure::Response>)>> m_callback;
-    GC::Ref<Infrastructure::FetchParams const> m_fetch_params;
+    GC::Ref<Infrastructure::FetchController> m_fetch_controller;
     RefPtr<Infrastructure::Response> m_response;
 };
 

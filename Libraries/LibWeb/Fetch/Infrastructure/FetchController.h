@@ -42,6 +42,7 @@ public:
     [[nodiscard]] static GC::Ref<FetchController> create(FetchControllerRegistry&);
 
     [[nodiscard]] FetchControllerToken token() const { return m_token; }
+    [[nodiscard]] WeakPtr<FetchControllerRegistry> const& registry() const { return m_registry; }
     [[nodiscard]] NonnullRefPtr<FetchControlBlock> const& control_block() const { return m_control_block; }
 
     void set_report_timing_steps(Function<void(JS::Object&)> report_timing_steps);
@@ -79,6 +80,9 @@ public:
     u64 next_fetch_task_id() { return m_next_fetch_task_id++; }
     void fetch_task_queued(u64 fetch_task_id, HTML::TaskID event_id);
     void fetch_task_complete(u64 fetch_task_id);
+
+    void add_pending_response(Badge<Fetching::PendingResponse>, GC::Ref<Fetching::PendingResponse>);
+    void remove_pending_response(Badge<Fetching::PendingResponse>, GC::Ref<Fetching::PendingResponse>);
 
 private:
     explicit FetchController(FetchControllerRegistry&);
@@ -140,6 +144,9 @@ private:
 
     // AD-HOC: Run when the fetch is stopped, for whatever was waiting on its response.
     GC::Ptr<GC::Function<void()>> m_stop_steps;
+
+    // The pending responses of this fetch whose callbacks have yet to run.
+    Vector<GC::Ref<Fetching::PendingResponse>> m_pending_responses;
 };
 
 class FetchControllerHolder : public JS::Cell {
