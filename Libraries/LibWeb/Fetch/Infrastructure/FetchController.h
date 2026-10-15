@@ -43,6 +43,7 @@ public:
     [[nodiscard]] static GC::Ref<FetchController> create(FetchControllerRegistry&);
 
     [[nodiscard]] FetchControllerToken token() const { return m_token; }
+    [[nodiscard]] WeakPtr<FetchControllerRegistry> const& registry() const { return m_registry; }
     [[nodiscard]] FetchControlBlock& control_block() const { return *m_control_block; }
 
     void set_report_timing_steps(Function<void(JS::Object&)> report_timing_steps);
