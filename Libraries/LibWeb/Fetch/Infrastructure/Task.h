@@ -23,6 +23,9 @@ struct WEB_API TaskDestination : public Variant<Empty, GC::Ref<JS::Object>, Nonn
 
     void visit_edges(GC::Cell::Visitor&) const;
 
+    // Whether tasks queued on this destination run for document.
+    [[nodiscard]] bool is_for_document(DOM::Document const&) const;
+
     GC::Ptr<DOM::Document> document_override;
 };
 

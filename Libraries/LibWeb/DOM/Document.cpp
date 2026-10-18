@@ -6612,6 +6612,17 @@ void Document::abort()
             controller->stop_fetch();
             canceled_fetch = true;
         }
+
+        // NB: A fetch without a fetch record, such as an object element's data, is found through the agent's registry.
+        for (auto& controller : HTML::relevant_agent(*this).fetch_controller_registry.controllers()) {
+            if (controller->state() != Fetch::Infrastructure::FetchController::State::Ongoing || !controller->task_destination().is_for_document(*this))
+                continue;
+            // AD-HOC: A keepalive fetch, such as a violation report, outlives the document.
+            if (controller->is_keepalive())
+                continue;
+            controller->stop_fetch();
+            canceled_fetch = true;
+        }
     }
 
     if (canceled_fetch)
