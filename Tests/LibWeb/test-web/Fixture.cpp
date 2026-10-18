@@ -9,6 +9,7 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/LexicalPath.h>
+#include <LibCore/Directory.h>
 #include <LibCore/File.h>
 #include <LibCore/Process.h>
 #include <LibCore/StandardPaths.h>
@@ -58,7 +59,12 @@ ErrorOr<void> HttpEchoServerFixture::setup(WebView::WebContentOptions& web_conte
     // Path where http-test-server.py writes the AIA test root CA. Must match the certificate trusted by
     // TestWeb::Application::create_platform_options.
     auto const ca_cert_path = LexicalPath::join(Core::StandardPaths::tempfile_directory(), ByteString::formatted("ladybird-aia-test-ca-{}.pem", Core::System::getpid())).string();
-    auto const arguments = Vector { script_path.string(), "--directory", Application::the().test_root_path, "--ca-cert-output", ca_cert_path, "--exit-when-stdin-closes" };
+
+    auto const downloads_directory = LexicalPath::join(Core::StandardPaths::tempfile_directory(), ByteString::formatted("ladybird-test-web-downloads-{}", Core::System::getpid())).string();
+    TRY(Core::Directory::create(downloads_directory, Core::Directory::CreateDirectories::Yes));
+    Application::the().downloads_directory = downloads_directory;
+
+    auto const arguments = Vector { script_path.string(), "--directory", Application::the().test_root_path, "--ca-cert-output", ca_cert_path, "--downloads-directory", downloads_directory, "--exit-when-stdin-closes" };
 
     // FIXME: Pick a more reasonable log path that is more observable
     auto const log_path = LexicalPath::join(Core::StandardPaths::tempfile_directory(), "http-test-server.log"sv).string();
@@ -117,6 +123,8 @@ void HttpEchoServerFixture::teardown_impl()
     m_stdout_file = nullptr;
     auto const ca_cert_path = LexicalPath::join(Core::StandardPaths::tempfile_directory(), ByteString::formatted("ladybird-aia-test-ca-{}.pem", Core::System::getpid())).string();
     (void)FileSystem::remove(ca_cert_path, FileSystem::RecursionMode::Disallowed);
+    if (auto downloads_directory = exchange(Application::the().downloads_directory, {}); downloads_directory.has_value())
+        (void)FileSystem::remove(*downloads_directory, FileSystem::RecursionMode::Allowed);
 }
 
 void Fixture::initialize_fixtures()
