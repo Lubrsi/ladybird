@@ -56,6 +56,12 @@ void WebContentTestClient::set_next_permission_prompt_outcome_for_testing(Web::P
         page->set_next_permission_prompt_outcome_for_testing(name, outcome, held);
 }
 
+void WebContentTestClient::set_system_microphone_authorization_for_testing(Web::PageId page_id, String authorization, String answer)
+{
+    if (auto* page = m_client.page(page_id))
+        page->set_system_microphone_authorization_for_testing(authorization, answer);
+}
+
 void WebContentTestClient::release_held_permission_prompt_for_testing(Web::PageId page_id, u32 waiters)
 {
     if (auto* page = m_client.page(page_id))

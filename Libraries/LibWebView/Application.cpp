@@ -61,6 +61,7 @@
 #include <LibWebView/HelperProcess.h>
 #include <LibWebView/HistoryStore.h>
 #include <LibWebView/Menu.h>
+#include <LibWebView/MicrophoneAuthorizer.h>
 #include <LibWebView/PermissionManager.h>
 #include <LibWebView/PictureInPictureWindow.h>
 #include <LibWebView/ProcessType.h>
@@ -3255,6 +3256,11 @@ void Application::toggle_bookmark_for_view(ViewImplementation& view)
 void Application::set_spell_checker(OwnPtr<SpellChecker> spell_checker)
 {
     m_spell_checker = move(spell_checker);
+}
+
+void Application::set_microphone_authorizer(OwnPtr<MicrophoneAuthorizer> microphone_authorizer)
+{
+    m_microphone_authorizer = move(microphone_authorizer);
 }
 
 ErrorOr<NonnullRawPtr<Core::GeolocationProvider>> Application::ensure_geolocation_provider()

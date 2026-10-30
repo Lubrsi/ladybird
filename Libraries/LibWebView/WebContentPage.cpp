@@ -29,6 +29,7 @@
 #include <LibWebView/CookieJar.h>
 #include <LibWebView/GamepadManager.h>
 #include <LibWebView/HistoryStore.h>
+#include <LibWebView/MicrophoneAuthorizer.h>
 #include <LibWebView/NavigationLoader.h>
 #include <LibWebView/PermissionManager.h>
 #include <LibWebView/PictureInPictureManager.h>
@@ -1747,9 +1748,25 @@ void WebContentPage::did_request_permission(u64 request_id, Web::HTML::CrossProc
         }
     }
 
+    // Allowing the site the microphone the system keeps from the browser would get it nothing, so the user hears why
+    // instead of being asked. Nothing is decided for the site, which may ask again once the system relents.
+    if (*permission_name == Web::Permissions::PermissionName::Microphone && view().microphone_authorization() == MicrophoneAuthorization::Denied) {
+        view().did_find_microphone_denied_by_system();
+        async_permission_request_completed(request_id, Web::Permissions::EffectiveState::Prompt);
+        return;
+    }
+
     auto generation_when_asked = manager.decision_generation(*permission_name, *top_level_origin);
-    // When the system hasn't yet let the browser find the user's location either, the prompt says the system will ask next.
-    auto show_os_hint = *permission_name == Web::Permissions::PermissionName::Geolocation && Application::the().geolocation_authorization() == Core::GeolocationAuthorization::NotDetermined;
+    // When the system hasn't yet let the browser use the feature either, the prompt says the system will ask next.
+    auto show_os_hint = false;
+    switch (*permission_name) {
+    case Web::Permissions::PermissionName::Geolocation:
+        show_os_hint = Application::the().geolocation_authorization() == Core::GeolocationAuthorization::NotDetermined;
+        break;
+    case Web::Permissions::PermissionName::Microphone:
+        show_os_hint = view().microphone_authorization() == MicrophoneAuthorization::NotDetermined;
+        break;
+    }
     PermissionPromptRequest request { *permission_name, *top_level_origin, is_file, show_os_hint };
 
     view().request_permission_prompt(move(request), [page = NonnullRefPtr(*this), request_id, document_id, permission_name = *permission_name, top_level_origin = *top_level_origin, is_file, generation_when_asked](Web::Permissions::PromptOutcome outcome) {
@@ -1781,10 +1798,22 @@ void WebContentPage::did_request_permission(u64 request_id, Web::HTML::CrossProc
         }
 
         // The AudioServer hears of the permission before the page does, so the page's first request finds it in place.
-        if (permission_name == Web::Permissions::PermissionName::Microphone)
+        auto is_microphone = permission_name == Web::Permissions::PermissionName::Microphone;
+        if (is_microphone)
             page->client().update_audio_capture_permission();
 
-        page->async_permission_request_completed(request_id, state);
+        if (!is_microphone || state != Web::Permissions::EffectiveState::Granted) {
+            page->async_permission_request_completed(request_id, state);
+            return;
+        }
+
+        // The system may only now ask the user for the microphone. If it keeps it from the browser, the site keeps the
+        // user's answer for when it relents, but this request gets nothing.
+        page->view().ensure_microphone_authorization([page, request_id](bool authorized) {
+            if (!page->is_open())
+                return;
+            page->async_permission_request_completed(request_id, authorized ? Web::Permissions::EffectiveState::Granted : Web::Permissions::EffectiveState::Prompt);
+        });
     });
 }
 
@@ -1828,6 +1857,25 @@ void WebContentPage::set_next_permission_prompt_outcome_for_testing(String const
         prompt_outcome = Web::Permissions::PromptOutcome::Ignored;
     if (prompt_outcome.has_value())
         view().set_next_permission_prompt_outcome_for_testing(*permission_name, *prompt_outcome, held);
+}
+
+static Optional<MicrophoneAuthorization> microphone_authorization_from_string(StringView string)
+{
+    if (string == "not-determined"sv)
+        return MicrophoneAuthorization::NotDetermined;
+    if (string == "authorized"sv)
+        return MicrophoneAuthorization::Authorized;
+    if (string == "denied"sv)
+        return MicrophoneAuthorization::Denied;
+    return {};
+}
+
+void WebContentPage::set_system_microphone_authorization_for_testing(String const& authorization, String const& answer)
+{
+    auto current = microphone_authorization_from_string(authorization);
+    auto answered = microphone_authorization_from_string(answer);
+    if (current.has_value() && answered.has_value())
+        view().set_microphone_authorization_for_testing(*current, *answered);
 }
 
 void WebContentPage::release_held_permission_prompt_for_testing(u32 waiters)

@@ -105,6 +105,8 @@ public:
 
     SpellChecker* spell_checker() { return m_spell_checker.ptr(); }
     void set_spell_checker(OwnPtr<SpellChecker>);
+    MicrophoneAuthorizer* microphone_authorizer() { return m_microphone_authorizer.ptr(); }
+    void set_microphone_authorizer(OwnPtr<MicrophoneAuthorizer>);
     static FontService& font_service() { return *the().m_font_service; }
     static FontServiceHost& font_service_host() { return *the().m_font_service_host; }
     JsonValue const& site_compatibility_data() const { return m_site_compatibility_data; }
@@ -691,6 +693,7 @@ private:
 
     OwnPtr<Core::GeolocationProvider> m_geolocation_provider;
     OwnPtr<SpellChecker> m_spell_checker;
+    OwnPtr<MicrophoneAuthorizer> m_microphone_authorizer;
     OwnPtr<Core::TimeZoneWatcher> m_time_zone_watcher;
 
     Core::EventLoop* m_event_loop { nullptr };

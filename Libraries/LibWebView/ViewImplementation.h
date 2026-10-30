@@ -76,6 +76,7 @@
 #include <LibWebView/ExternalURLHandler.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/HistoryVisitTransition.h>
+#include <LibWebView/MicrophoneAuthorizer.h>
 #include <LibWebView/PermissionManager.h>
 #include <LibWebView/SessionHistory.h>
 #include <LibWebView/SessionStore.h>
@@ -152,6 +153,14 @@ public:
     void set_site_permission(URL::Origin const&, Web::Permissions::PermissionName, Optional<PermissionDecision>);
     void reset_site_permissions(URL::Origin const&);
     void did_request_permission(Badge<WebContentPage>, Web::Permissions::PermissionName);
+
+    MicrophoneAuthorization microphone_authorization() const;
+    // Calls back with whether the system lets the browser use the microphone, once the system has asked the user if it
+    // never has. The user hears why when it doesn't.
+    void ensure_microphone_authorization(Function<void(bool authorized)>);
+    void did_find_microphone_denied_by_system();
+    // The system answers with answer when it's asked, which it is while authorization is NotDetermined.
+    void set_microphone_authorization_for_testing(MicrophoneAuthorization authorization, MicrophoneAuthorization answer);
 
     bool location_in_use() const { return m_location_in_use; }
 
@@ -626,6 +635,7 @@ public:
     Function<void(WebContentPage& requesting_page, u64 request_id)> on_stop_geolocation_position_watch;
     Function<void(PermissionPromptRequest const&, PermissionPromptCallback)> on_request_permission;
     Function<void(PermissionPromptRequest const&)> on_cancel_permission_prompt;
+    Function<void()> on_microphone_denied_by_system;
     Function<void(bool)> on_location_in_use_change;
     Function<void(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles)> on_request_file_picker;
     Function<void(Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items)> on_request_select_dropdown;
@@ -1173,6 +1183,9 @@ protected:
     Web::Permissions::PromptOutcome m_held_permission_prompt_outcome_for_testing { Web::Permissions::PromptOutcome::Cancelled };
     Optional<u32> m_held_permission_prompt_release_waiters_for_testing;
     void release_held_permission_prompt_if_ready_for_testing();
+
+    MicrophoneAuthorizer* microphone_authorizer() const;
+    OwnPtr<MicrophoneAuthorizer> m_microphone_authorizer_for_testing;
 
     Core::AnonymousBuffer m_document_cookie_version_buffer;
     HashMap<String, Core::SharedVersionIndex> m_document_cookie_version_indices;

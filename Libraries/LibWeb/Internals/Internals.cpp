@@ -2198,6 +2198,11 @@ void Internals::set_next_permission_prompt_outcome(Utf16String const& name, Utf1
     page().client().page_did_set_next_permission_prompt_outcome_for_testing(name.to_utf8(), outcome.to_utf8(), held);
 }
 
+void Internals::set_system_microphone_authorization(Utf16String const& authorization, Utf16String const& answer)
+{
+    page().client().page_did_set_system_microphone_authorization_for_testing(authorization.to_utf8(), answer.to_utf8());
+}
+
 void Internals::release_held_permission_prompt(WebIDL::UnsignedLong waiters)
 {
     page().client().page_did_release_held_permission_prompt_for_testing(waiters);

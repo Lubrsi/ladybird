@@ -85,7 +85,7 @@ PermissionPromptPopover::PermissionPromptPopover(QWidget* parent, WebView::Permi
     header->addWidget(title, 1);
     layout->addLayout(header);
 
-    auto* hint = new QLabel(QStringLiteral("macOS will then ask you to let Ladybird use your location."), &card());
+    auto* hint = new QLabel(QStringLiteral("Your system will then ask you to let Ladybird %1.").arg(feature_text(request.name)), &card());
     hint->setObjectName("LadybirdPermissionPromptHint");
     hint->setWordWrap(true);
     hint->setVisible(request.show_os_hint);

@@ -282,6 +282,7 @@ void ViewImplementation::reset_permission_prompts_for_testing()
     m_next_permission_prompt_outcomes_for_testing.clear();
     m_held_permission_prompt_for_testing.clear();
     m_held_permission_prompt_release_waiters_for_testing.clear();
+    m_microphone_authorizer_for_testing.clear();
     auto pending_prompts = move(m_pending_permission_prompts);
     for (auto& pending : pending_prompts) {
         for (auto& waiter : pending.waiters)
@@ -4413,6 +4414,70 @@ void ViewImplementation::did_request_permission(Badge<WebContentPage>, Web::Perm
 {
     if (!m_permissions_requested_by_page.contains_slow(name))
         m_permissions_requested_by_page.append(name);
+}
+
+class MicrophoneAuthorizerForTesting final : public MicrophoneAuthorizer {
+public:
+    MicrophoneAuthorizerForTesting(MicrophoneAuthorization authorization, MicrophoneAuthorization answer)
+        : m_authorization(authorization)
+        , m_answer(answer)
+    {
+    }
+
+    virtual MicrophoneAuthorization authorization() const override { return m_authorization; }
+
+    virtual void request_authorization(Function<void(MicrophoneAuthorization)> on_complete) override
+    {
+        m_authorization = m_answer;
+        on_complete(m_authorization);
+    }
+
+    virtual void open_system_settings() override { }
+
+private:
+    MicrophoneAuthorization m_authorization;
+    MicrophoneAuthorization m_answer;
+};
+
+MicrophoneAuthorizer* ViewImplementation::microphone_authorizer() const
+{
+    if (m_microphone_authorizer_for_testing)
+        return m_microphone_authorizer_for_testing.ptr();
+    return Application::the().microphone_authorizer();
+}
+
+MicrophoneAuthorization ViewImplementation::microphone_authorization() const
+{
+    auto* authorizer = microphone_authorizer();
+    return authorizer ? authorizer->authorization() : MicrophoneAuthorization::Authorized;
+}
+
+void ViewImplementation::ensure_microphone_authorization(Function<void(bool authorized)> on_complete)
+{
+    auto settle = [weak_this = make_weak_ptr(), on_complete = move(on_complete)](MicrophoneAuthorization authorization) {
+        auto authorized = authorization == MicrophoneAuthorization::Authorized;
+        if (auto* view = weak_this.ptr(); view && !authorized)
+            view->did_find_microphone_denied_by_system();
+        on_complete(authorized);
+    };
+
+    auto authorization = microphone_authorization();
+    if (authorization != MicrophoneAuthorization::NotDetermined) {
+        settle(authorization);
+        return;
+    }
+    microphone_authorizer()->request_authorization(move(settle));
+}
+
+void ViewImplementation::did_find_microphone_denied_by_system()
+{
+    if (on_microphone_denied_by_system)
+        on_microphone_denied_by_system();
+}
+
+void ViewImplementation::set_microphone_authorization_for_testing(MicrophoneAuthorization authorization, MicrophoneAuthorization answer)
+{
+    m_microphone_authorizer_for_testing = make<MicrophoneAuthorizerForTesting>(authorization, answer);
 }
 
 void ViewImplementation::update_location_in_use()

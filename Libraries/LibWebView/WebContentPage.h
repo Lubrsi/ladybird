@@ -126,6 +126,7 @@ public:
 
     Web::Permissions::PermissionSnapshot set_permission_for_testing(Web::HTML::CrossProcessId document_id, String const& name, String const& state);
     void set_next_permission_prompt_outcome_for_testing(String const& name, String const& outcome, bool held);
+    void set_system_microphone_authorization_for_testing(String const& authorization, String const& answer);
     void release_held_permission_prompt_for_testing(u32 waiters);
     Web::Permissions::PermissionSnapshot advance_permission_clock_for_testing(u64 milliseconds);
     void close();

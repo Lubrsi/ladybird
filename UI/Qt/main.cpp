@@ -29,6 +29,7 @@
 #    include <QSurfaceFormat>
 #    include <UI/Qt/ApplicationIcon.h>
 #    include <UI/Qt/MacWindow.h>
+#    include <UI/Qt/MicrophoneAuthorizerMac.h>
 #    include <UI/Qt/SpellCheckerMac.h>
 #endif
 
@@ -60,6 +61,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     Ladybird::ChromeStyle::install_application_style();
 #if defined(AK_OS_MACOS)
     app->set_spell_checker(Ladybird::create_platform_spell_checker());
+    app->set_microphone_authorizer(Ladybird::create_platform_microphone_authorizer());
 #endif
     if (app->should_exit_after_profile_coordination()) {
         outln("Opening in existing process");

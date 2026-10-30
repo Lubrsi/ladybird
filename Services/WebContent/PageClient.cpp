@@ -1336,6 +1336,12 @@ void PageClient::page_did_set_next_permission_prompt_outcome_for_testing(String 
         (void)test_connection->send_sync_but_allow_failure<Messages::WebContentTestClient::SetNextPermissionPromptOutcomeForTesting>(m_id, name, outcome, held);
 }
 
+void PageClient::page_did_set_system_microphone_authorization_for_testing(String const& authorization, String const& answer)
+{
+    if (auto* test_connection = client().test_connection())
+        (void)test_connection->send_sync_but_allow_failure<Messages::WebContentTestClient::SetSystemMicrophoneAuthorizationForTesting>(m_id, authorization, answer);
+}
+
 void PageClient::page_did_release_held_permission_prompt_for_testing(u32 waiters)
 {
     if (auto* test_connection = client().test_connection())

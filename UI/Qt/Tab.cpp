@@ -15,6 +15,7 @@
 #include <LibWebCommon/HTML/SelectedFile.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/DownloadPresentation.h>
+#include <LibWebView/MicrophoneAuthorizer.h>
 #include <LibWebView/URL.h>
 #include <LibWebView/Utilities.h>
 #include <LibWebView/WebContentClient.h>
@@ -603,6 +604,7 @@ static constexpr int toolbar_right_margin(bool has_custom_window_controls)
 static constexpr int DOWNLOADS_POPOVER_WIDTH = 380;
 static constexpr int DOWNLOADS_POPOVER_MAX_HEIGHT = 360;
 static constexpr int PRIVATE_SESSION_POPOVER_WIDTH = 320;
+static constexpr int MICROPHONE_DENIED_POPOVER_WIDTH = 352;
 
 class ElidedLabel final : public QLabel {
 public:
@@ -1635,6 +1637,10 @@ void Tab::initialize(Optional<WebView::CanonicalTraversable&> traversable)
 
     view().on_cancel_permission_prompt = [this](WebView::PermissionPromptRequest const& request) {
         m_permission_prompts.cancel(request);
+    };
+
+    view().on_microphone_denied_by_system = [this] {
+        show_microphone_denied_popover();
     };
 
     view().on_location_in_use_change = [this](bool in_use) {
@@ -2765,6 +2771,29 @@ void Tab::refresh_site_settings_popover()
         return;
     }
     m_site_settings_popover->set_permissions(view().site_permission_rows());
+}
+
+void Tab::show_microphone_denied_popover()
+{
+    if (!isVisible())
+        return;
+
+    if (!m_microphone_denied_popover) {
+        m_microphone_denied_popover = new MessagePopover(this, MICROPHONE_DENIED_POPOVER_WIDTH, "Ladybird can't use your microphone",
+            "Your system's privacy settings don't let Ladybird use the microphone.",
+            "Not now", "Open Settings", create_chrome_icon(ChromeIcon::Microphone, Theme::panel().link));
+        m_microphone_denied_popover->on_accept = [] {
+            if (auto* authorizer = Application::the().microphone_authorizer())
+                authorizer->open_system_settings();
+        };
+    }
+
+    auto& popover = *m_microphone_denied_popover;
+    popover.update_chrome_style(palette());
+    popover.adjustSize();
+    move_popover_below(popover, site_settings_anchor(), PopoverAlignment::Leading);
+    popover.show();
+    popover.raise();
 }
 
 void Tab::show_private_session_popover()

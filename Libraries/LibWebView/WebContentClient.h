@@ -266,7 +266,8 @@ private:
     ErrorOr<void> tell_audio_server_of_playback_authorization(Audio::PlaybackGroupId);
     void did_change_audio_playback_audibility(Audio::PlaybackGroupId, Audio::Audibility);
     static String audio_capture_permission_key(URL::URL const&);
-    bool audio_capture_permitted() const;
+    bool audio_capture_permitted() const { return page_permitting_audio_capture(); }
+    WebContentPage* page_permitting_audio_capture() const;
     bool page_may_capture_audio(WebContentPage const&) const;
     void decide_audio_capture_request(u64 request_id);
 

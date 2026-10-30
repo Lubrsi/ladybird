@@ -192,6 +192,7 @@ public:
     };
     void show_downloads_popover();
     void update_downloads_button();
+    void show_microphone_denied_popover();
     void show_private_session_popover();
     void show_site_settings_popover();
     void refresh_site_settings_popover();
@@ -271,6 +272,7 @@ private:
     qreal m_bookmarks_bar_hover_expand_progress { 0.0 };
 
     QPointer<DownloadsPopover> m_downloads_popover;
+    QPointer<MessagePopover> m_microphone_denied_popover;
     QPointer<MessagePopover> m_private_session_popover;
     QPointer<SiteSettingsPopover> m_site_settings_popover;
     // The site the open popover shows, which its changes apply to whatever the tab shows by then.

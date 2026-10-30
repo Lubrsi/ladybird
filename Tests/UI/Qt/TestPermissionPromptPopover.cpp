@@ -141,7 +141,10 @@ TEST_CASE(hint_shows_only_when_requested)
     PermissionPromptPopover with_hint(nullptr, request_for("https://maps.example.com/"sv, PermissionName::Geolocation, true));
     auto& hint = child<QLabel>(with_hint, "LadybirdPermissionPromptHint");
     EXPECT(!hint.isHidden());
-    EXPECT_EQ(hint.text(), QStringLiteral("macOS will then ask you to let Ladybird use your location."));
+    EXPECT_EQ(hint.text(), QStringLiteral("Your system will then ask you to let Ladybird know your location."));
+
+    PermissionPromptPopover microphone(nullptr, request_for("https://maps.example.com/"sv, PermissionName::Microphone, true));
+    EXPECT_EQ(child<QLabel>(microphone, "LadybirdPermissionPromptHint").text(), QStringLiteral("Your system will then ask you to let Ladybird use your microphone."));
 }
 
 TEST_CASE(suspending_hides_without_an_answer)
