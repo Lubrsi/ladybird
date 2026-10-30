@@ -7,6 +7,7 @@
  */
 
 #include <AK/SourceLocation.h>
+#include <LibAudio/RecordStream.h>
 #include <LibGC/Heap.h>
 #include <LibGC/HeapVector.h>
 #include <LibGfx/Bitmap.h>
@@ -2575,6 +2576,11 @@ NonnullOwnPtr<MediaClient::RemotePlaybackManager> PageClient::create_media_playb
 }
 
 void PageClient::rebind_media_playback_manager(MediaClient::RemotePlaybackManager&)
+{
+    VERIFY_NOT_REACHED();
+}
+
+NonnullRefPtr<Audio::RecordStream::CreatePromise> PageClient::create_audio_record_stream(StringView, Audio::RecordStream::RecordCallback)
 {
     VERIFY_NOT_REACHED();
 }

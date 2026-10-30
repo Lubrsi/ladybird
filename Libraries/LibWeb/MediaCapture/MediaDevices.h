@@ -40,6 +40,7 @@ public:
     void end_tracks_without_permission();
     void track_was_cloned(Badge<MediaStreamTrack>, MediaStreamTrack& clone);
     void track_source_ended(Badge<MediaStreamTrack>, MediaStreamTrack&);
+    HTML::Window& window() const { return m_window; }
 
     [[nodiscard]] static GC::Ref<MediaDevices> create(HTML::Window&);
 

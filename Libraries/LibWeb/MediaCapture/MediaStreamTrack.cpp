@@ -13,9 +13,11 @@
 #include <LibWeb/Crypto/Crypto.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/Window.h>
 #include <LibWeb/HighResolutionTime/TimeOrigin.h>
 #include <LibWeb/MediaCapture/MediaDevices.h>
 #include <LibWeb/MediaCapture/MediaStreamTrack.h>
+#include <LibWeb/Page/Page.h>
 #include <LibWeb/WebIDL/Promise.h>
 
 namespace Web::MediaCapture {
@@ -299,7 +301,10 @@ void MediaStreamTrack::start_audio_capture(GC::Ptr<GC::Function<void(ErrorOr<voi
     if (auto id = device_id(); id.has_value())
         device_id_string = id->to_byte_string();
 
-    auto stream_promise = Audio::RecordStream::create(device_id_string,
+    // A device-backed track is tied to the mediaDevices that made it, and captures for its window's page.
+    auto media_devices = m_media_devices.ptr();
+    VERIFY(media_devices);
+    auto stream_promise = media_devices->window().page().client().create_audio_record_stream(device_id_string,
         [fanout = m_audio_fanout](ReadonlyBytes data, Audio::SampleSpecification const& stream_specification) {
             // Runs on the audio backend's capture thread. Only the ref-counted fan-out is
             // captured here: the GC may reap the track while a callback is in flight, so the
