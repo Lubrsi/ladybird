@@ -20,4 +20,7 @@ enum class Audibility : u8 {
 // How long a group goes on counting as audible after its sound stops.
 static constexpr AK::Duration AUDIBILITY_LINGER = AK::Duration::from_seconds(3);
 
+// A tab shows that it captures for as long after its last capture stream as it shows that it plays after its sound.
+static constexpr AK::Duration CAPTURE_LINGER = AUDIBILITY_LINGER;
+
 }
