@@ -69,7 +69,6 @@
 #include <LibWebCommon/WebView/PageInfo.h>
 #include <LibWebCommon/WebView/StorageSetResult.h>
 #include <LibWebCommon/WebView/ZoomLevel.h>
-#include <LibWebView/AudibilityHold.h>
 #include <LibWebView/BookmarkStore.h>
 #include <LibWebView/BrowsingSession.h>
 #include <LibWebView/CanonicalTraversable.h>
@@ -77,6 +76,7 @@
 #include <LibWebView/ExternalURLHandler.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/HistoryVisitTransition.h>
+#include <LibWebView/IndicatorHold.h>
 #include <LibWebView/MicrophoneAuthorizer.h>
 #include <LibWebView/PermissionManager.h>
 #include <LibWebView/SessionHistory.h>
@@ -514,9 +514,13 @@ public:
     // while heard. A page lost along with its process doesn't leave.
     void update_audibility(Badge<WebContentPage>) { update_audibility(); }
     void did_release_page(Badge<CanonicalTraversable>, WebContentPage const& page) { page_left(page); }
-    void did_close_page(Badge<WebContentPage>, Web::PageId page_id) { m_audibility_hold.page_closed(page_id); }
+    void did_close_page(Badge<WebContentPage>, Web::PageId);
     Audio::Audibility audibility() const { return m_audibility; }
     u64 audibility_change_count() const { return m_audibility_change_count; }
+    // The tab uses the microphone while the AudioServer holds a capture stream for any page of it, and for a while
+    // after a page leaves it while capturing.
+    void update_microphone_in_use(Badge<WebContentPage>) { update_microphone_in_use(); }
+    bool microphone_in_use() const { return m_microphone_in_use; }
     void did_change_screen_wake_lock_state(Badge<WebContentPage>, Web::ScreenWakeLockState);
 
     void did_reset_state_for_testing(Badge<WebContentPage>, Web::HTML::SessionHistoryEntryDescriptor);
@@ -664,6 +668,7 @@ public:
     Function<void(WebContentPage& requesting_page, u64 request_id)> on_stop_geolocation_position_watch;
     Function<void(PermissionPromptRequest const&, PermissionPromptCallback)> on_request_permission;
     Function<void(PermissionPromptRequest const&)> on_cancel_permission_prompt;
+    Function<void(bool)> on_microphone_in_use_change;
     Function<void(bool)> on_location_in_use_change;
     Function<void(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles)> on_request_file_picker;
     Function<void(Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items)> on_request_select_dropdown;
@@ -823,6 +828,7 @@ protected:
     WebContentPage& focused_navigable_host() const;
     void reset_page_media_state();
     void update_audibility();
+    void update_microphone_in_use();
     void page_left(WebContentPage const&);
 
     // A navigation to make again on reload: one the user stopped before its document was activated, or one a crash cut
@@ -1113,9 +1119,12 @@ protected:
     Optional<Web::HTML::CrossProcessId> m_webdriver_current_parent_navigable_id;
 
     Audio::Audibility m_audibility { Audio::Audibility::Inaudible };
+    bool m_microphone_in_use { false };
     u64 m_audibility_change_count { 0 };
-    AudibilityHold m_audibility_hold;
+    IndicatorHold m_audibility_hold { Audio::AUDIBILITY_LINGER };
     RefPtr<Core::Timer> m_audibility_hold_timer;
+    IndicatorHold m_microphone_hold { Audio::CAPTURE_LINGER };
+    RefPtr<Core::Timer> m_microphone_hold_timer;
     Web::ScreenWakeLockState m_screen_wake_lock_state { Web::ScreenWakeLockState::Released };
 
     Web::HTML::MuteState m_mute_state { Web::HTML::MuteState::Unmuted };

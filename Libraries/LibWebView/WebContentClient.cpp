@@ -921,13 +921,19 @@ ErrorOr<void> WebContentClient::initialize_audio_server_controller()
         if (self && tab_id == self->m_audio_tab_id)
             self->decide_audio_capture_request(request_id, group);
     };
-    m_audio_server_audibility.watch(*m_audio_server_client, [weak_self = make_weak_ptr<WebContentClient>()](u64 tab_id, Audio::PlaybackGroupId group, Audio::Audibility audibility) {
-        auto self = weak_self.strong_ref();
-        if (!self || tab_id != self->m_audio_tab_id)
-            return false;
-        // A report of sound can trail the revocation of the page's authorization.
-        return audibility == Audio::Audibility::Inaudible || self->m_authorized_audio_playback_groups.contains(group);
-    });
+    m_audio_server_activity.watch(
+        *m_audio_server_client,
+        [weak_self = make_weak_ptr<WebContentClient>()](u64 tab_id, Audio::PlaybackGroupId group, Audio::Audibility audibility) {
+            auto self = weak_self.strong_ref();
+            if (!self || tab_id != self->m_audio_tab_id)
+                return false;
+            // A report of sound can trail the revocation of the page's authorization.
+            return audibility == Audio::Audibility::Inaudible || self->m_authorized_audio_playback_groups.contains(group);
+        },
+        [weak_self = make_weak_ptr<WebContentClient>()](u64 tab_id) {
+            auto self = weak_self.strong_ref();
+            return self && tab_id == self->m_audio_tab_id;
+        });
     if (m_audio_capture_permitted)
         TRY(tell_audio_server_of_capture_permission());
     // A muted group is never heard: the mutes land before the authorizations.
@@ -958,6 +964,9 @@ ErrorOr<void> WebContentClient::grant_audio_capture_to_file(URL::URL const& url)
 
 void WebContentClient::update_audio_capture_permission()
 {
+    // A page that comes to permit capture, or stops, can take over a stream labelled for no permitting page.
+    update_audio_capture_indicators();
+
     auto permitted = audio_capture_permitted();
     if (permitted == m_audio_capture_permitted)
         return;
@@ -1053,6 +1062,36 @@ void WebContentClient::decide_audio_capture_request(u64 request_id, Audio::Playb
     });
 }
 
+// The AudioServer counts every capture stream of the process, but the renderer labels them, so a label counts only for an
+// open page that permits capture, or that already shows it: Taking the permission away ends the stream, which the tab
+// goes on showing for the linger, as after any other end. A stream with any other label is shown on every such page, as
+// the process could be capturing for any of them.
+void WebContentClient::update_audio_capture_indicators()
+{
+    auto may_show_capture = [this](WebContentPage const& page) {
+        return page_permits_audio_capture(page) || (page.is_open() && page.is_capturing_audio());
+    };
+
+    HashTable<Web::PageId> labelled_pages;
+    auto shown_on_every_page_that_may = false;
+    for (auto group : m_audio_server_activity.capturing_groups()) {
+        if (auto* page = this->page(page_id_of_audio_playback_group(group)); page && may_show_capture(*page))
+            labelled_pages.set(page->id());
+        else
+            shown_on_every_page_that_may = true;
+    }
+
+    for (auto const& [page_id, page] : m_pages) {
+        auto capturing = labelled_pages.contains(page_id) || (shown_on_every_page_that_may && may_show_capture(*page));
+        page->set_capturing_audio(capturing);
+    }
+}
+
+void WebContentClient::report_audio_capture_of_unknown_page_for_testing(bool capturing)
+{
+    m_audio_server_activity.set_capturing_for_testing(Audio::PlaybackGroupId { NumericLimits<u64>::max() }, capturing);
+}
+
 ErrorOr<void> WebContentClient::tell_audio_server_of_capture_permission()
 {
     auto response = m_audio_server_client->send_sync_but_allow_failure<Messages::AudioServerControl::SetCapturePermission>(m_audio_tab_id, m_audio_capture_permitted);
@@ -1086,7 +1125,7 @@ void WebContentClient::revoke_audio_playback(Web::PageId page_id)
         return;
     if (m_audio_server_client && m_audio_server_client->is_open())
         m_audio_server_client->async_revoke_playback_group(m_audio_tab_id, group);
-    m_audio_server_audibility.forget(group);
+    m_audio_server_activity.forget_audibility(group);
 }
 
 void WebContentClient::set_audio_playback_mute_state(Web::PageId page_id, Web::HTML::MuteState mute_state)

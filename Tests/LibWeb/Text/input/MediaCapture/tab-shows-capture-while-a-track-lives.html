@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    const waitUntil = async predicate => {
+        while (!predicate()) await new Promise(resolve => setTimeout(resolve, 20));
+    };
+
+    asyncTest(async done => {
+        println(`before: ${internals.tabIsCapturingAudio()}`);
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        await waitUntil(() => internals.tabIsCapturingAudio());
+        println("capturing while the track lives, unconsumed");
+
+        // Once the linger after the original's stream has passed, only the clone's keeps the tab capturing.
+        const clone = stream.clone().getTracks()[0];
+        stream.getTracks()[0].stop();
+        await new Promise(resolve => setTimeout(resolve, 3500));
+        println(`after the original stops: ${internals.tabIsCapturingAudio()}`);
+
+        clone.stop();
+        println(`right after the clone stops: ${internals.tabIsCapturingAudio()}`);
+        await waitUntil(() => !internals.tabIsCapturingAudio());
+        println("not capturing once the linger is over");
+        done();
+    });
+</script>

@@ -57,7 +57,7 @@
 #include <LibWebCommon/Page/ViewportIsFullscreen.h>
 #include <LibWebCommon/StorageAPI/StorageEndpoint.h>
 #include <LibWebCommon/WebView/Debugger.h>
-#include <LibWebView/AudioServerAudibility.h>
+#include <LibWebView/AudioServerActivity.h>
 #include <LibWebView/BlobURLStore.h>
 #include <LibWebView/BrowsingSession.h>
 #include <LibWebView/ChildIdentity.h>
@@ -170,6 +170,8 @@ public:
     // The permission follows the origins the process's open pages show, so it goes with a navigation away.
     void update_audio_capture_permission();
     u64 audio_capture_decision_count() const { return m_audio_capture_decision_count; }
+    // Stands in for the AudioServer reporting a capture stream whose label names no page of the process.
+    void report_audio_capture_of_unknown_page_for_testing(bool capturing);
     // The process's AudioServer plays the page's sound while the page is authorized. It hears of an authorization
     // before this returns, so a document the page goes on to run is heard from its start.
     void authorize_audio_playback(Web::PageId);
@@ -273,6 +275,7 @@ private:
     bool page_permits_audio_capture(WebContentPage const&) const;
     bool page_may_capture_audio(WebContentPage const&) const;
     void decide_audio_capture_request(u64 request_id, Audio::PlaybackGroupId);
+    void update_audio_capture_indicators();
 
     // The controller connections to the MediaServer and AudioServer spawned for this process, from its first media use
     // until it exits. The AudioServer mixes for this process alone, so a compromised one hears only its own site.
@@ -289,7 +292,10 @@ private:
     // Likewise, the AudioServer is told again of the groups it may play, and of those the user has muted.
     HashTable<Audio::PlaybackGroupId> m_authorized_audio_playback_groups;
     HashTable<Audio::PlaybackGroupId> m_muted_audio_playback_groups;
-    AudioServerAudibility m_audio_server_audibility { [this](Audio::PlaybackGroupId group, Audio::Audibility audibility) { did_change_audio_playback_audibility(group, audibility); } };
+    AudioServerActivity m_audio_server_activity {
+        [this](Audio::PlaybackGroupId group, Audio::Audibility audibility) { did_change_audio_playback_audibility(group, audibility); },
+        [this] { update_audio_capture_indicators(); },
+    };
     RefPtr<Core::Timer> m_detached_page_close_timer;
 
     static HashTable<WebContentClient*>& clients();

@@ -2340,6 +2340,16 @@ bool Internals::tab_is_playing_audio()
     return window().associated_document().page().client().page_did_request_tab_is_playing_audio_for_testing();
 }
 
+bool Internals::tab_is_capturing_audio()
+{
+    return window().associated_document().page().client().page_did_request_tab_is_capturing_audio_for_testing();
+}
+
+void Internals::report_audio_capture_of_unknown_page(bool capturing)
+{
+    window().associated_document().page().client().page_did_report_audio_capture_of_unknown_page_for_testing(capturing);
+}
+
 WebIDL::UnsignedLongLong Internals::tab_audibility_change_count()
 {
     return window().associated_document().page().client().page_did_request_tab_audibility_change_count_for_testing();

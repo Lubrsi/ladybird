@@ -452,6 +452,9 @@ interface Internals {
     boolean documentIsPlayingAudio(Document document);
     // Whether the UI process shows this window's tab as playing audio, which the AudioServer decides by what it hears.
     boolean tabIsPlayingAudio();
+    boolean tabIsCapturingAudio();
+    // Has the UI process hear of a capture stream of this process whose label names none of its pages.
+    undefined reportAudioCaptureOfUnknownPage(boolean capturing);
     // How many times the UI process has changed whether this window's tab is shown as playing audio.
     unsigned long long tabAudibilityChangeCount();
     boolean mediaElementVideoSinkIsTicking(HTMLMediaElement element);

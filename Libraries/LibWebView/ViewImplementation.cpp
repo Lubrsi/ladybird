@@ -110,16 +110,25 @@ ViewImplementation::ViewImplementation(IsPrivate is_private)
         }
         update_audibility();
     });
+    m_microphone_hold_timer = Core::Timer::create_single_shot(AK::Duration::zero(), [this] {
+        auto now = MonotonicTime::now();
+        if (m_microphone_hold.is_held(now)) {
+            m_microphone_hold_timer->restart(*m_microphone_hold.held_until() - now);
+            return;
+        }
+        update_microphone_in_use();
+    });
 }
 
 ViewImplementation::~ViewImplementation()
 {
     // The frontend may be torn down already, so clearing the ongoing navigation must not report a URL change to it, nor
     // cancelling the view's location requests that the location is no longer in use, nor closing the view's page (which
-    // revokes its audio playback) that the tab went quiet.
+    // revokes its audio playback and capture) that the tab went quiet or stopped using the microphone.
     on_url_change = nullptr;
     on_location_in_use_change = nullptr;
     on_audibility_changed = nullptr;
+    on_microphone_in_use_change = nullptr;
     answer_pending_console_input_completions();
     TabPerformanceMonitor::forget_view(view_id());
     // Leave the views before the permission manager hears: a one-time grant that ends with this view has it revoke
@@ -2946,18 +2955,39 @@ void ViewImplementation::update_audibility()
         on_audibility_changed(m_audibility);
 }
 
+void ViewImplementation::update_microphone_in_use()
+{
+    auto in_use = m_microphone_hold.is_held(MonotonicTime::now());
+    traversable().for_each_hosting_page([&](WebContentPage& page) {
+        if (page.is_capturing_audio())
+            in_use = true;
+    });
+    if (m_microphone_in_use == in_use)
+        return;
+    m_microphone_in_use = in_use;
+    if (on_microphone_in_use_change)
+        on_microphone_in_use_change(in_use);
+}
+
 void ViewImplementation::page_left(WebContentPage const& page)
 {
-    if (page.audibility() != Audio::Audibility::Audible)
-        return;
     auto now = MonotonicTime::now();
-    if (m_audibility_hold.page_left(page.id(), now))
+    if (page.audibility() == Audio::Audibility::Audible && m_audibility_hold.page_left(page.id(), now))
         m_audibility_hold_timer->restart(*m_audibility_hold.held_until() - now);
+    if (page.is_capturing_audio() && m_microphone_hold.page_left(page.id(), now))
+        m_microphone_hold_timer->restart(*m_microphone_hold.held_until() - now);
+}
+
+void ViewImplementation::did_close_page(Badge<WebContentPage>, Web::PageId page_id)
+{
+    m_audibility_hold.page_closed(page_id);
+    m_microphone_hold.page_closed(page_id);
 }
 
 void ViewImplementation::reset_page_media_state()
 {
     update_audibility();
+    update_microphone_in_use();
 
     if (m_screen_wake_lock_state != Web::ScreenWakeLockState::Released) {
         m_screen_wake_lock_state = Web::ScreenWakeLockState::Released;
@@ -3523,6 +3553,7 @@ void ViewImplementation::prepare_page_for_navigable(WebContentPage& page)
     page.client().set_audio_playback_mute_state(page.id(), m_mute_state);
     page.client().authorize_audio_playback(page.id());
     m_audibility_hold.page_began_hosting(page.id());
+    m_microphone_hold.page_began_hosting(page.id());
     if (Application::browser_options().webdriver_browser_endpoint.has_value())
         Application::the().push_webdriver_session_config(page);
     Application::the().apply_view_options({}, *this, page);

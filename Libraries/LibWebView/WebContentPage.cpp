@@ -2110,6 +2110,17 @@ void WebContentPage::set_audibility(Audio::Audibility audibility)
     }
 }
 
+void WebContentPage::set_capturing_audio(bool capturing)
+{
+    if (m_capturing_audio == capturing)
+        return;
+    m_capturing_audio = capturing;
+    if (m_traversable) {
+        if (auto view = m_traversable->view(); view.has_value())
+            view->update_microphone_in_use({});
+    }
+}
+
 void WebContentPage::did_change_screen_wake_lock_state(Web::ScreenWakeLockState wake_lock_state)
 {
     if (displays_tab())
@@ -3368,6 +3379,17 @@ Messages::WebContentTestClient::DidRequestTabIsPlayingAudioForTestingResponse We
 {
     auto view = traversable().view();
     return view.has_value() && view->audibility() == Audio::Audibility::Audible;
+}
+
+Messages::WebContentTestClient::DidRequestTabIsCapturingAudioForTestingResponse WebContentPage::did_request_tab_is_capturing_audio_for_testing()
+{
+    auto view = traversable().view();
+    return view.has_value() && view->microphone_in_use();
+}
+
+void WebContentPage::report_audio_capture_of_unknown_page_for_testing(bool capturing)
+{
+    client().report_audio_capture_of_unknown_page_for_testing(capturing);
 }
 
 Messages::WebContentTestClient::DidRequestTabAudibilityChangeCountForTestingResponse WebContentPage::did_request_tab_audibility_change_count_for_testing()

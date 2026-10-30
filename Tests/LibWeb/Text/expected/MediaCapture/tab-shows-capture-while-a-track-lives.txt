@@ -1,0 +1,5 @@
+before: false
+capturing while the track lives, unconsumed
+after the original stops: true
+right after the clone stops: true
+not capturing once the linger is over
