@@ -270,6 +270,9 @@ interface Internals {
     Promise<DOMString> requestPermission(DOMString name);
     Promise<undefined> setPermission(DOMString name, DOMString state);
     undefined setNextPermissionPromptOutcome(DOMString name, DOMString outcome, optional boolean held = false);
+    undefined setSystemMicrophoneAuthorization(DOMString authorization, optional DOMString answer = "authorized", optional boolean held = false);
+    undefined releaseSystemMicrophoneAnswer();
+    DOMString microphoneState();
     undefined releaseHeldPermissionPrompt(optional unsigned long waiters = 1);
     Promise<undefined> advancePermissionClock(unsigned long long milliseconds);
     sequence<DOMString> permissionCacheOrigins();

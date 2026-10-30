@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    // A site the user allowed earlier asks the AudioServer to capture once something reads its track. While the system
+    // denies the browser the microphone, every such capture is refused, but the user is told only once, and the site's
+    // permission is left as it was.
+    asyncTest(async done => {
+        const state = () => JSON.parse(internals.microphoneState());
+        const captureDecided = async count => {
+            for (let attempt = 0; attempt < 200 && state().captureDecisions < count; ++attempt)
+                await new Promise(resolve => setTimeout(resolve, 10));
+        };
+
+        await internals.setPermission("microphone", "granted");
+        internals.setSystemMicrophoneAuthorization("denied");
+        internals.setNextPermissionPromptOutcome("microphone", "dismiss");
+
+        const context = new AudioContext();
+        for (let i = 1; i <= 2; ++i) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            context.createMediaStreamSource(stream);
+            await captureDecided(i);
+        }
+
+        const { captureDecisions, noticesShown, dismissals } = state();
+        println(`capture decisions: ${captureDecisions}`);
+        println(`notices shown: ${noticesShown}`);
+        println(`dismissals: ${dismissals}`);
+        println(`query: ${(await navigator.permissions.query({ name: "microphone" })).state}`);
+        println(`request: ${await internals.requestPermission("microphone")}`);
+        done();
+    });
+</script>
