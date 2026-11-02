@@ -189,6 +189,7 @@ signals:
     void title_changed(int id, QString const&);
     void favicon_changed(int id, QIcon const&);
     void audibility_changed(int id, Audio::Audibility);
+    void microphone_in_use_changed();
     void loading_changed();
     void performance_stats_changed();
     void loaded();

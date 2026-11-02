@@ -842,6 +842,11 @@ void Tab::initialize(Optional<WebView::CanonicalTraversable&> traversable)
         emit audibility_changed(tab_index(), audibility);
     };
 
+    view().on_microphone_in_use_change = [this](bool in_use) {
+        m_location_edit->set_microphone_in_use(in_use);
+        emit microphone_in_use_changed();
+    };
+
     view().on_screen_wake_lock_state_changed = [this](auto wake_lock_state) {
         set_screen_wake_lock_state(wake_lock_state);
     };
