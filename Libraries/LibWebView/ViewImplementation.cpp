@@ -114,8 +114,8 @@ ViewImplementation::ViewImplementation(IsPrivate is_private)
 ViewImplementation::~ViewImplementation()
 {
     // The frontend may be torn down already, so clearing the ongoing navigation must not report a URL change to it, nor
-    // cancelling the view's location requests or closing the view's page (which revokes its audio playback) a change
-    // in what the tab shows.
+    // cancelling the view's location requests or closing the view's page (which revokes its audio playback and capture)
+    // a change in what the tab shows.
     on_url_change = nullptr;
     on_tab_indicator_change = nullptr;
     answer_pending_console_input_completions();
@@ -2964,9 +2964,26 @@ void ViewImplementation::update_audibility()
     m_tab_indicators.set_active(TabIndicator::PlayingAudio, audible, MonotonicTime::now());
 }
 
+void ViewImplementation::update_microphone_capture()
+{
+    auto capturing = false;
+    traversable().for_each_hosting_page([&](WebContentPage& page) {
+        if (page.is_capturing_audio())
+            capturing = true;
+    });
+    m_tab_indicators.set_active(TabIndicator::UsingMicrophone, capturing, MonotonicTime::now());
+}
+
+void ViewImplementation::did_release_page(Badge<CanonicalTraversable>)
+{
+    update_audibility();
+    update_microphone_capture();
+}
+
 void ViewImplementation::reset_page_media_state()
 {
     update_audibility();
+    update_microphone_capture();
 
     if (m_screen_wake_lock_state != Web::ScreenWakeLockState::Released) {
         m_screen_wake_lock_state = Web::ScreenWakeLockState::Released;

@@ -511,8 +511,12 @@ public:
 
     // The tab plays audio while the AudioServer has recently heard any page of it.
     void update_audibility(Badge<WebContentPage>) { update_audibility(); }
-    void did_release_page(Badge<CanonicalTraversable>) { update_audibility(); }
+    void did_release_page(Badge<CanonicalTraversable>);
     bool is_playing_audio() const { return m_tab_indicators.is_active(TabIndicator::PlayingAudio); }
+
+    // The tab captures while the AudioServer holds a capture stream for any page of it.
+    void update_microphone_capture(Badge<WebContentPage>) { update_microphone_capture(); }
+    bool is_capturing_audio() const { return m_tab_indicators.is_active(TabIndicator::UsingMicrophone); }
 
     bool tab_indicator_visible(TabIndicator indicator) const { return m_tab_indicators.is_visible(indicator); }
     u64 playing_audio_indicator_change_count() const { return m_playing_audio_indicator_change_count; }
@@ -824,6 +828,7 @@ protected:
     WebContentPage& focused_navigable_host() const;
     void reset_page_media_state();
     void update_audibility();
+    void update_microphone_capture();
 
     // A navigation to make again on reload: one the user stopped before its document was activated, or one a crash cut
     // short. It's made again from the source it was first made from, when it has one (a javascript: URL has none).
