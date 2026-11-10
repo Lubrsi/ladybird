@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../include.js"></script>
+<script>
+    asyncTest(async done => {
+        const port = internals.getEchoServerPort();
+        const token = `buffered-amount-${Math.random()}`;
+        const ws = new WebSocket(`ws://localhost:${port}/?read_unblock_token=${token}`);
+        ws.binaryType = "arraybuffer";
+        await new Promise(resolve => (ws.onopen = resolve));
+
+        // Far more than the operating system buffers while the server reads nothing.
+        const size = 64 * 1024 * 1024;
+        ws.send(new Uint8Array(size));
+        println(`Buffered after send(): ${ws.bufferedAmount === size}`);
+
+        // A round trip to the server runs many tasks.
+        await fetch(`http://localhost:${port}/recorded-request-count/nothing`);
+        println(`Buffered while the server reads nothing: ${ws.bufferedAmount > 0}`);
+
+        ws.onmessage = event => {
+            println(`Echoed ${event.data.byteLength} bytes, bufferedAmount: ${ws.bufferedAmount}`);
+            done();
+        };
+        await fetch(`http://localhost:${port}/unblock/${token}`);
+    });
+</script>

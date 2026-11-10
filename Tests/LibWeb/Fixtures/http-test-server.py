@@ -40,7 +40,8 @@ Endpoints:
     - An echo response's body may contain $BODY, which the server replaces with the request's body.
     - GET <any path> with an "Upgrade: websocket" header: Performs a WebSocket handshake and then echoes
       every text/binary frame back to the client verbatim. With a "send-binary=<size>" query parameter, the
-      server first sends a binary frame of that many bytes: a 1, zeros, and then a 2.
+      server first sends a binary frame of that many bytes: a 1, zeros, and then a 2. With a
+      "read_unblock_token=<token>" query parameter, the server reads nothing until GET /unblock/<token>.
     - GET /reflect-websocket-cookie with an "Upgrade: websocket" header: As above, but first sends the
       handshake's Cookie header (or an empty string) as a text frame.
     - GET /recorded-request-count/<echo path>: Responds with the number of requests the server has seen at <echo path>,
@@ -803,6 +804,9 @@ class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             payload[-1] = 2
             self._send_websocket_frame(bytes(payload), opcode=0x2)
 
+        if "read_unblock_token" in query:
+            unblock_events.setdefault(query["read_unblock_token"][0], threading.Event()).wait()
+
         while True:
             frame = self._read_websocket_frame()
             if frame is None:
@@ -855,7 +859,9 @@ class TestHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         if payload is None:
             return None
         if is_masked:
-            payload = bytes(payload[i] ^ mask[i % 4] for i in range(length))
+            # One XOR over the whole payload as an integer keeps large messages quick to unmask.
+            repeated_mask = (mask * (length // 4 + 1))[:length]
+            payload = (int.from_bytes(payload, "big") ^ int.from_bytes(repeated_mask, "big")).to_bytes(length, "big")
         return opcode, payload
 
     def _build_ws_frame(self, data, opcode=0x1):
