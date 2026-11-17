@@ -5,10 +5,16 @@
  */
 
 #include <AK/NumericLimits.h>
+#include <AK/Random.h>
+#include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
+#include <LibCore/Directory.h>
+#include <LibCore/StandardPaths.h>
+#include <LibFileSystem/FileSystem.h>
 #include <LibTest/TestCase.h>
 #include <Libraries/LibDatabase/Database.h>
 #include <Libraries/LibDatabase/ResultRow.h>
+#include <sqlite3.h>
 
 using DB = Database::Database;
 
@@ -840,4 +846,30 @@ TEST_CASE(integral_binds_widen_to_64_bit)
 
     TRY_OR_FAIL(database->try_execute_statement(insert, {}, static_cast<i64>(3), NumericLimits<i64>::max()));
     EXPECT_EQ(stored_value(3), Optional<i64> { NumericLimits<i64>::max() });
+}
+
+TEST_CASE(failed_open_closes_its_connection)
+{
+    auto database_directory = ByteString::formatted(
+        "{}/ladybird-database-test-{}",
+        Core::StandardPaths::tempfile_directory(),
+        generate_random_uuid());
+
+    // A directory where the database file belongs makes the open fail.
+    TRY_OR_FAIL(Core::Directory::create(ByteString::formatted("{}/Blocked.db", database_directory), Core::Directory::CreateDirectories::Yes));
+
+    auto cleanup = ScopeGuard([&] {
+        MUST(FileSystem::remove(database_directory, FileSystem::RecursionMode::Allowed));
+    });
+
+    // SQLite counts the memory of every connection that is open.
+    auto memory_in_use = sqlite3_memory_used();
+    {
+        auto database = TRY_OR_FAIL(DB::create_memory_backed());
+        EXPECT(sqlite3_memory_used() > memory_in_use);
+    }
+    EXPECT_EQ(sqlite3_memory_used(), memory_in_use);
+
+    EXPECT(DB::create(database_directory, "Blocked"sv).is_error());
+    EXPECT_EQ(sqlite3_memory_used(), memory_in_use);
 }

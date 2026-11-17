@@ -62,10 +62,23 @@ static constexpr StringView sql_error(int error_code)
     __ENUMERATE_TYPE(Bytes)           \
     __ENUMERATE_TYPE(ReadonlyBytes)
 
-ErrorOr<NonnullRefPtr<Database>> Database::create_memory_backed(Options options)
+// https://www.sqlite.org/c3ref/open.html
+static ErrorOr<sqlite3*> open_connection(char const* filename)
 {
     sqlite3* sql_database { nullptr };
-    SQL_TRY(sqlite3_open(":memory:", &sql_database));
+
+    if (auto result = sqlite3_open(filename, &sql_database); result != SQLITE_OK) {
+        // SQLite usually returns a connection even when it fails to open the database.
+        sqlite3_close(sql_database);
+        return Error::from_string_view(sql_error(result));
+    }
+
+    return sql_database;
+}
+
+ErrorOr<NonnullRefPtr<Database>> Database::create_memory_backed(Options options)
+{
+    auto* sql_database = TRY(open_connection(":memory:"));
     return create(sql_database, options);
 }
 
@@ -73,8 +86,7 @@ ErrorOr<NonnullRefPtr<Database>> Database::create(ByteString const& directory, S
 {
     TRY(Core::Directory::create(directory, Core::Directory::CreateDirectories::Yes));
     LexicalPath database_path { ByteString::formatted("{}/{}.db", directory, name) };
-    sqlite3* sql_database { nullptr };
-    SQL_TRY(sqlite3_open(database_path.string().characters(), &sql_database));
+    auto* sql_database = TRY(open_connection(database_path.string().characters()));
     return create(sql_database, options, database_path);
 }
 
