@@ -85,10 +85,30 @@ static bool sqlite_has_in_memory_databases()
     return reports_compile_time_options && !sqlite3_compileoption_used("OMIT_MEMORYDB");
 }
 
+// https://www.sqlite.org/pragma.html#pragma_temp_store
+// SQLite accepts the pragma and still writes temporary files when it was built with SQLITE_TEMP_STORE=0 or without
+// in-memory databases. A setting it does not report counts as unsupported.
+static ErrorOr<void, Error> ensure_temp_store_is_supported(Database::TempStore temp_store)
+{
+    if (temp_store == Database::TempStore::Default)
+        return {};
+
+    bool temporary_files_can_be_in_memory = sqlite3_compileoption_used("TEMP_STORE=1")
+        || sqlite3_compileoption_used("TEMP_STORE=2")
+        || sqlite3_compileoption_used("TEMP_STORE=3");
+
+    if (!temporary_files_can_be_in_memory || !sqlite_has_in_memory_databases())
+        return Error::from_string_literal("This build of SQLite cannot keep temporary files in memory");
+
+    return {};
+}
+
 ErrorOr<NonnullRefPtr<Database>, Error> Database::create_memory_backed(Options options)
 {
     if (!sqlite_has_in_memory_databases())
         return Error::from_string_literal("This build of SQLite has no in-memory databases");
+
+    TRY(ensure_temp_store_is_supported(options.temp_store));
 
     auto* sql_database = TRY(open_connection(":memory:"));
     return create(sql_database, options);
@@ -96,6 +116,8 @@ ErrorOr<NonnullRefPtr<Database>, Error> Database::create_memory_backed(Options o
 
 ErrorOr<NonnullRefPtr<Database>, Error> Database::create(ByteString const& directory, StringView name, Options options)
 {
+    TRY(ensure_temp_store_is_supported(options.temp_store));
+
     TRY(Core::Directory::create(directory, Core::Directory::CreateDirectories::Yes));
     LexicalPath database_path { ByteString::formatted("{}/{}.db", directory, name) };
     auto* sql_database = TRY(open_connection(database_path.string().characters()));
@@ -109,6 +131,7 @@ ErrorOr<NonnullRefPtr<Database>, Error> Database::create(sqlite3* sql_database, 
     options.journal_mode = TRY(database->set_journal_mode_pragma(options.journal_mode));
     TRY(database->set_synchronous_pragma(options.synchronous));
     TRY(database->set_foreign_keys_pragma(options.foreign_keys));
+    TRY(database->set_temp_store_pragma(options.temp_store));
     database->m_options = options;
 
     return database;
@@ -822,6 +845,14 @@ ErrorOr<void, Error> Database::set_busy_timeout(i32 milliseconds)
 ErrorOr<void, Error> Database::set_foreign_keys_pragma(ForeignKeys foreign_keys)
 {
     TRY(execute_raw(foreign_keys == ForeignKeys::Yes ? "PRAGMA foreign_keys=ON;" : "PRAGMA foreign_keys=OFF;"));
+    return {};
+}
+
+ErrorOr<void, Error> Database::set_temp_store_pragma(TempStore temp_store)
+{
+    if (temp_store == TempStore::Memory)
+        TRY(execute_raw("PRAGMA temp_store=MEMORY;"));
+
     return {};
 }
 

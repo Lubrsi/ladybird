@@ -107,10 +107,17 @@ public:
         Yes,
     };
 
+    // https://www.sqlite.org/pragma.html#pragma_temp_store
+    enum class TempStore {
+        Default,
+        Memory,
+    };
+
     struct Options {
         JournalMode journal_mode { JournalMode::WriteAheadLog };
         Synchronous synchronous { Synchronous::Normal };
         ForeignKeys foreign_keys { ForeignKeys::No };
+        TempStore temp_store { TempStore::Default };
     };
 
     static ErrorOr<NonnullRefPtr<Database>, Error> create_memory_backed(Options);
@@ -315,6 +322,7 @@ private:
     ErrorOr<JournalMode, Error> set_journal_mode_pragma(JournalMode);
     ErrorOr<void, Error> set_synchronous_pragma(Synchronous);
     ErrorOr<void, Error> set_foreign_keys_pragma(ForeignKeys);
+    ErrorOr<void, Error> set_temp_store_pragma(TempStore);
 
     void execute_statement_internal(StatementID, OnResult);
     StatementExecutionOutcome execute_interruptible_statement_internal(StatementID, OnResult);

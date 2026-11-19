@@ -1468,3 +1468,90 @@ TEST_CASE(failed_open_reports_its_result_code_and_closes_its_connection)
     auto primary_result_code = blocked.error().result_code().value_or(SQLITE_OK) & 0xff;
     EXPECT_EQ(primary_result_code, SQLITE_CANTOPEN);
 }
+
+// https://www.sqlite.org/vfs.html
+// Counts the files that SQLite opens while it is alive, by standing in for SQLite's default VFS.
+class OpenedFileCounter {
+public:
+    OpenedFileCounter()
+        : m_default_vfs(sqlite3_vfs_find(nullptr))
+        , m_counting_vfs(*m_default_vfs)
+    {
+        VERIFY(!s_the);
+        s_the = this;
+
+        m_counting_vfs.zName = "counting";
+        m_counting_vfs.xOpen = [](sqlite3_vfs*, char const* name, sqlite3_file* file, int flags, int* out_flags) {
+            ++s_the->m_count;
+            return s_the->m_default_vfs->xOpen(s_the->m_default_vfs, name, file, flags, out_flags);
+        };
+        sqlite3_vfs_register(&m_counting_vfs, 1);
+    }
+
+    ~OpenedFileCounter()
+    {
+        sqlite3_vfs_register(m_default_vfs, 1);
+        sqlite3_vfs_unregister(&m_counting_vfs);
+        s_the = nullptr;
+    }
+
+    size_t count() const { return m_count; }
+
+private:
+    static inline OpenedFileCounter* s_the { nullptr };
+
+    sqlite3_vfs* m_default_vfs { nullptr };
+    sqlite3_vfs m_counting_vfs;
+    size_t m_count { 0 };
+};
+
+// The rows outgrow SQLite's page caches, so each statement needs temporary storage beyond them.
+static void run_statements_that_need_temporary_storage(DB& database)
+{
+    MUST(database.execute_raw(R"#(
+        PRAGMA temp.cache_size = 10;
+        CREATE TABLE t (id INTEGER PRIMARY KEY, k INTEGER, u INTEGER UNIQUE, v BLOB);
+        WITH RECURSIVE numbers(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM numbers WHERE i < 20000)
+        INSERT INTO t SELECT i, random(), i, randomblob(200) FROM numbers;
+
+        SELECT count(*) FROM (SELECT v FROM t ORDER BY k, v);
+        CREATE TEMP TABLE copy AS SELECT * FROM t;
+        SELECT count(*) FROM (SELECT DISTINCT v FROM t);
+        VACUUM;
+    )#"sv));
+}
+
+TEST_CASE(memory_temp_store_keeps_temporary_files_off_disk)
+{
+    OpenedFileCounter opened_files;
+
+    {
+        auto database = TRY_OR_FAIL(DB::create_memory_backed({ .temp_store = DB::TempStore::Memory }));
+        run_statements_that_need_temporary_storage(*database);
+
+        // https://www.sqlite.org/tempfiles.html#statement_journal_files
+        // The pragma does not cover the journal that undoes a statement which fails after it has changed rows.
+        auto transaction = TRY_OR_FAIL(database->begin_transaction());
+        TRY_OR_FAIL(database->execute_raw("UPDATE t SET k = k + 1; UPDATE t SET u = 119999 WHERE id = 20000;"sv));
+
+        auto failed_update = database->execute_raw("UPDATE t SET u = u + 100000 WHERE id < 20000;"sv);
+        EXPECT(failed_update.is_error());
+        EXPECT(failed_update.error().has_result_code(Database::ResultCode::ConstraintUnique));
+
+        i64 rows_as_before_the_update = 0;
+        auto count_rows_as_before = TRY_OR_FAIL(database->prepare_statement("SELECT count(*) FROM t WHERE u = id;"sv));
+        database->execute_statement(count_rows_as_before, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
+            rows_as_before_the_update = database->result_column<i64>(statement_id, 0);
+            return {};
+        });
+        EXPECT_EQ(rows_as_before_the_update, 19999);
+    }
+    EXPECT_EQ(opened_files.count(), 0uz);
+
+    {
+        auto database = TRY_OR_FAIL(DB::create_memory_backed());
+        TRY_OR_FAIL(database->execute_raw("PRAGMA temp_store = FILE;"sv));
+        run_statements_that_need_temporary_storage(*database);
+    }
+    EXPECT(opened_files.count() > 0);
+}
