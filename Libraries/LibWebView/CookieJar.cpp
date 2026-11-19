@@ -55,7 +55,7 @@ static Utf16String partition_key_for(URL::URL const& url, Optional<HTTP::Cookie:
     return context->top_level_site;
 }
 
-ErrorOr<Database::MigrationOutcome> CookieJar::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> CookieJar::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     // Shipped migration text is immutable, so the CHECK constraint hardcodes the largest
     // SameSite value instead of deriving it from the enum.
@@ -141,7 +141,7 @@ ErrorOr<Database::MigrationOutcome> CookieJar::migrate_schema(Database::Database
     return database.migrate("Cookies"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<CookieJar>> CookieJar::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<CookieJar>, Database::Error> CookieJar::create(Database::Database& database)
 {
     Statements statements {};
 
@@ -900,7 +900,7 @@ CookieJar::TransientStorage::Cookies CookieJar::PersistedStorage::select_all_coo
 
     database->execute_statement(
         statements.select_all_cookies,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto cookie = parse_cookie(database, statement_id);
 
             auto key = storage_key_for_cookie(cookie);

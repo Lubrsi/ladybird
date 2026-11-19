@@ -12,6 +12,7 @@
 #include <AK/String.h>
 #include <AK/Time.h>
 #include <AK/Vector.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibHTTP/Cookie/Cookie.h>
 #include <LibWebView/Export.h>
@@ -51,9 +52,9 @@ class WEBVIEW_API DownloadStore {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<DownloadStore>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<DownloadStore>, Database::Error> create(Database::Database&);
 
     static NonnullOwnPtr<DownloadStore> create_disabled();
 

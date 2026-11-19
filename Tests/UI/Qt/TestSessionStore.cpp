@@ -52,7 +52,7 @@ static i64 select_i64(Database::Database& database, String const& sql)
 {
     auto statement = MUST(database.prepare_statement(sql));
     i64 value = -1;
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         value = database.result_column<i64>(statement_id, 0);
         return {};
     });

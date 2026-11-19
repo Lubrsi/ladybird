@@ -12,6 +12,7 @@
 #include <AK/Time.h>
 #include <AK/Traits.h>
 #include <AK/Utf16String.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibRequests/CacheSizes.h>
 #include <LibWebCommon/StorageAPI/StorageEndpoint.h>
@@ -68,9 +69,9 @@ class WEBVIEW_API StorageJar {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<StorageJar>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<StorageJar>, Database::Error> create(Database::Database&);
     static NonnullOwnPtr<StorageJar> create();
 
     ~StorageJar();

@@ -1,5 +1,6 @@
 set(SOURCES
     Database.cpp
+    Error.cpp
 )
 
 ladybird_lib(LibDatabase database EXPLICIT_SYMBOL_EXPORT)

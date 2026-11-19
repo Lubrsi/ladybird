@@ -112,7 +112,7 @@ static void log_orphaned_disk_cache_entries(Database::Database& database)
         }
 
         bool has_entry = false;
-        auto result = database.try_execute_statement(check_entry, [&](auto) -> ErrorOr<void> { has_entry = true; return {}; }, encode_cache_key_for_database(cache_header.value().cache_key), encode_cache_key_for_database(cache_header.value().vary_key));
+        auto result = database.try_execute_statement(check_entry, [&](auto) -> ErrorOr<void, Database::Error> { has_entry = true; return {}; }, encode_cache_key_for_database(cache_header.value().cache_key), encode_cache_key_for_database(cache_header.value().vary_key));
 
         if (!result.is_error() && !has_entry)
             dbgln("Cache file missing from cache index: {}", cache_entry);
@@ -127,7 +127,7 @@ static void log_orphaned_disk_cache_entries(Database::Database& database)
 // append a migration that deletes the index rows referencing the now-unreadable entries.
 static_assert(CACHE_VERSION == 1, "Bumping CACHE_VERSION requires appending a CacheIndex migration that deletes the index rows referencing the old entry format");
 
-ErrorOr<Database::MigrationOutcome> CacheIndex::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> CacheIndex::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -152,7 +152,7 @@ ErrorOr<Database::MigrationOutcome> CacheIndex::migrate_schema(Database::Databas
     return database.migrate("CacheIndex"sv, migrations, mode);
 }
 
-ErrorOr<CacheIndex> CacheIndex::create(Database::Database& database, LexicalPath const& cache_directory)
+ErrorOr<CacheIndex, Database::Error> CacheIndex::create(Database::Database& database, LexicalPath const& cache_directory)
 {
 #if HTTP_DISK_CACHE_DEBUG
     log_orphaned_disk_cache_entries(database);
@@ -241,7 +241,7 @@ ErrorOr<CacheIndex> CacheIndex::create(Database::Database& database, LexicalPath
 
     if (auto result = database.try_execute_statement(
             remove_malformed_entries,
-            [&](auto statement_id) -> ErrorOr<void> {
+            [&](auto statement_id) -> ErrorOr<void, Database::Error> {
                 auto cache_key = decode_cache_key_from_database(database.result_column<ByteBuffer>(statement_id, 0));
                 auto vary_key = decode_cache_key_from_database(database.result_column<ByteBuffer>(statement_id, 1));
                 if (!cache_key.has_value() || !vary_key.has_value())
@@ -258,7 +258,7 @@ ErrorOr<CacheIndex> CacheIndex::create(Database::Database& database, LexicalPath
     i64 total_estimated_size { 0 };
     if (auto result = database.try_execute_statement(
             statements.select_total_estimated_size,
-            [&](auto statement_id) -> ErrorOr<void> { total_estimated_size = database.result_column<i64>(statement_id, 0); return {}; });
+            [&](auto statement_id) -> ErrorOr<void, Database::Error> { total_estimated_size = database.result_column<i64>(statement_id, 0); return {}; });
         result.is_error()) {
         dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[31;1mUnable to compute cache size:\033[0m {}", result.error());
         total_estimated_size = NumericLimits<i64>::max();
@@ -275,7 +275,7 @@ CacheIndex::CacheIndex(Database::Database& database, Statements statements, Limi
 {
 }
 
-ErrorOr<void> CacheIndex::create_entry(CacheDigest const& cache_key, CacheDigest const& vary_key, String url, NonnullRefPtr<HeaderList> request_headers, NonnullRefPtr<HeaderList> response_headers, u64 data_size, UnixDateTime request_time, UnixDateTime response_time)
+ErrorOr<void, Database::Error> CacheIndex::create_entry(CacheDigest const& cache_key, CacheDigest const& vary_key, String url, NonnullRefPtr<HeaderList> request_headers, NonnullRefPtr<HeaderList> response_headers, u64 data_size, UnixDateTime request_time, UnixDateTime response_time)
 {
     auto now = UnixDateTime::now();
 
@@ -313,7 +313,7 @@ ErrorOr<void> CacheIndex::create_entry(CacheDigest const& cache_key, CacheDigest
 
     TRY(m_database->try_execute_statement(
         m_statements.remove_entry,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto removed_size = m_database->result_column<i64>(statement_id, 0);
             adjust_total_estimated_size(-removed_size);
             return {};
@@ -346,7 +346,7 @@ void CacheIndex::remove_entry(CacheDigest const& cache_key, CacheDigest const& v
 {
     auto result = m_database->try_execute_statement(
         m_statements.remove_entry,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto removed_size = m_database->result_column<i64>(statement_id, 0);
             adjust_total_estimated_size(-removed_size);
             return {};
@@ -366,7 +366,7 @@ void CacheIndex::remove_entries_exceeding_cache_limit(OnEntryRemoved on_entry_re
 
     auto result = m_database->try_execute_statement(
         m_statements.remove_entries_exceeding_cache_limit,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto cache_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 0));
             auto vary_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 1));
             auto removed_size = m_database->result_column<i64>(statement_id, 2);
@@ -413,7 +413,7 @@ void CacheIndex::remove_entries_accessed_since(UnixDateTime since, OnEntryRemove
     if (since == UnixDateTime::earliest()) {
         auto result = m_database->try_execute_statement(
             m_statements.remove_all_entries,
-            [&](auto statement_id) -> ErrorOr<void> {
+            [&](auto statement_id) -> ErrorOr<void, Database::Error> {
                 auto cache_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 0));
                 auto vary_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 1));
                 if (!cache_key.has_value() || !vary_key.has_value())
@@ -438,7 +438,7 @@ void CacheIndex::remove_entries_accessed_since(UnixDateTime since, OnEntryRemove
 
     auto result = m_database->try_execute_statement(
         m_statements.remove_entries_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto cache_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 0));
             auto vary_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 1));
             auto removed_size = m_database->result_column<i64>(statement_id, 2);
@@ -460,7 +460,7 @@ void CacheIndex::remove_entries_accessed_before(UnixDateTime before, OnEntryRemo
 {
     auto result = m_database->try_execute_statement(
         m_statements.remove_entries_accessed_before,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto cache_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 0));
             auto vary_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, 1));
             auto removed_size = m_database->result_column<i64>(statement_id, 2);
@@ -492,7 +492,7 @@ void CacheIndex::remove_entries_for_cache_key(CacheDigest const& cache_key, OnEn
     }
 }
 
-ErrorOr<void> CacheIndex::update_response_headers(CacheDigest const& cache_key, CacheDigest const& vary_key, NonnullRefPtr<HeaderList> response_headers, UnixDateTime request_time, UnixDateTime response_time)
+ErrorOr<void, Database::Error> CacheIndex::update_response_headers(CacheDigest const& cache_key, CacheDigest const& vary_key, NonnullRefPtr<HeaderList> response_headers, UnixDateTime request_time, UnixDateTime response_time)
 {
     auto entry = get_entry(cache_key, vary_key);
     if (!entry.has_value())
@@ -566,7 +566,7 @@ Vector<CacheIndex::Entry>& CacheIndex::entries_for_cache_key(CacheDigest const& 
 
         auto result = m_database->try_execute_statement(
             m_statements.select_entries,
-            [&](auto statement_id) -> ErrorOr<void> {
+            [&](auto statement_id) -> ErrorOr<void, Database::Error> {
                 int column = 0;
 
                 auto vary_key = decode_cache_key_from_database(m_database->result_column<ByteBuffer>(statement_id, column++));
@@ -637,12 +637,12 @@ Requests::CacheSizes CacheIndex::estimate_cache_size_accessed_since(UnixDateTime
 
     (void)m_database->try_execute_statement(
         m_statements.estimate_cache_size_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> { sizes.since_requested_time = static_cast<u64>(m_database->result_column<i64>(statement_id, 0)); return {}; },
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> { sizes.since_requested_time = static_cast<u64>(m_database->result_column<i64>(statement_id, 0)); return {}; },
         since);
 
     (void)m_database->try_execute_statement(
         m_statements.estimate_cache_size_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> { sizes.total = static_cast<u64>(m_database->result_column<i64>(statement_id, 0)); return {}; },
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> { sizes.total = static_cast<u64>(m_database->result_column<i64>(statement_id, 0)); return {}; },
         UnixDateTime::earliest());
 
     return sizes;
@@ -654,7 +654,7 @@ Vector<Requests::CacheAccessBucket> CacheIndex::access_profile(AK::Duration gran
 
     auto result = m_database->try_execute_statement(
         m_statements.select_access_profile,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             buckets.append({
                 .last_access_time = m_database->result_column<UnixDateTime>(statement_id, 0),
                 .size = static_cast<u64>(max<i64>(m_database->result_column<i64>(statement_id, 1), 0)),

@@ -31,7 +31,7 @@ public:
         // response headers will include some status on how the request was handled.
         Testing,
     };
-    static ErrorOr<Optional<DiskCache>> create(Mode, LexicalPath const& cache_root);
+    static ErrorOr<Optional<DiskCache>, Database::Error> create(Mode, LexicalPath const& cache_root);
     static void remove(Mode, LexicalPath const& cache_root);
 
     DiskCache(DiskCache&&);

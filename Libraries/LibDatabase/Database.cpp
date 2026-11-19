@@ -17,28 +17,24 @@
 
 namespace Database {
 
-static constexpr StringView sql_error(int error_code)
-{
-    char const* _sql_error = sqlite3_errstr(error_code);
-    return { _sql_error, __builtin_strlen(_sql_error) };
-}
-
-#define SQL_TRY(expression)                                                \
-    ({                                                                     \
-        /* Ignore -Wshadow to allow nesting the macro. */                  \
-        AK_IGNORE_DIAGNOSTIC("-Wshadow", auto _sql_result = (expression)); \
-        if (_sql_result != SQLITE_OK) [[unlikely]]                         \
-            return Error::from_string_view(sql_error(_sql_result));        \
+// https://www.sqlite.org/c3ref/errcode.html
+// The call's own result is only the primary code, as the connection leaves extended result codes off.
+#define SQL_TRY(expression)                                                       \
+    ({                                                                            \
+        /* Ignore -Wshadow to allow nesting the macro. */                         \
+        AK_IGNORE_DIAGNOSTIC("-Wshadow", auto _sql_result = (expression));        \
+        if (_sql_result != SQLITE_OK) [[unlikely]]                                \
+            return Error::from_result_code(sqlite3_extended_errcode(m_database)); \
     })
 
-#define SQL_MUST(expression)                                                                                       \
-    ({                                                                                                             \
-        /* Ignore -Wshadow to allow nesting the macro. */                                                          \
-        AK_IGNORE_DIAGNOSTIC("-Wshadow", auto _sql_result = (expression));                                         \
-        if (_sql_result != SQLITE_OK) [[unlikely]] {                                                               \
-            warnln("\033[31;1mDatabase error\033[0m: {}: {}", sql_error(_sql_result), sqlite3_errmsg(m_database)); \
-            VERIFY_NOT_REACHED();                                                                                  \
-        }                                                                                                          \
+#define SQL_MUST(expression)                                                                                                     \
+    ({                                                                                                                           \
+        /* Ignore -Wshadow to allow nesting the macro. */                                                                        \
+        AK_IGNORE_DIAGNOSTIC("-Wshadow", auto _sql_result = (expression));                                                       \
+        if (_sql_result != SQLITE_OK) [[unlikely]] {                                                                             \
+            warnln("\033[31;1mDatabase error\033[0m: {}: {}", Error::from_result_code(_sql_result), sqlite3_errmsg(m_database)); \
+            VERIFY_NOT_REACHED();                                                                                                \
+        }                                                                                                                        \
     })
 
 #define ENUMERATE_SQL_TYPES        \
@@ -63,26 +59,30 @@ static constexpr StringView sql_error(int error_code)
     __ENUMERATE_TYPE(ReadonlyBytes)
 
 // https://www.sqlite.org/c3ref/open.html
-static ErrorOr<sqlite3*> open_connection(char const* filename)
+static ErrorOr<sqlite3*, Error> open_connection(char const* filename)
 {
     sqlite3* sql_database { nullptr };
 
     if (auto result = sqlite3_open(filename, &sql_database); result != SQLITE_OK) {
         // SQLite usually returns a connection even when it fails to open the database.
-        sqlite3_close(sql_database);
-        return Error::from_string_view(sql_error(result));
+        if (sql_database) {
+            result = sqlite3_extended_errcode(sql_database);
+            sqlite3_close(sql_database);
+        }
+
+        return Error::from_result_code(result);
     }
 
     return sql_database;
 }
 
-ErrorOr<NonnullRefPtr<Database>> Database::create_memory_backed(Options options)
+ErrorOr<NonnullRefPtr<Database>, Error> Database::create_memory_backed(Options options)
 {
     auto* sql_database = TRY(open_connection(":memory:"));
     return create(sql_database, options);
 }
 
-ErrorOr<NonnullRefPtr<Database>> Database::create(ByteString const& directory, StringView name, Options options)
+ErrorOr<NonnullRefPtr<Database>, Error> Database::create(ByteString const& directory, StringView name, Options options)
 {
     TRY(Core::Directory::create(directory, Core::Directory::CreateDirectories::Yes));
     LexicalPath database_path { ByteString::formatted("{}/{}.db", directory, name) };
@@ -90,7 +90,7 @@ ErrorOr<NonnullRefPtr<Database>> Database::create(ByteString const& directory, S
     return create(sql_database, options, database_path);
 }
 
-ErrorOr<NonnullRefPtr<Database>> Database::create(sqlite3* sql_database, Options options, Optional<LexicalPath> database_path)
+ErrorOr<NonnullRefPtr<Database>, Error> Database::create(sqlite3* sql_database, Options options, Optional<LexicalPath> database_path)
 {
     auto database = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) Database(sql_database, move(database_path))));
 
@@ -117,7 +117,7 @@ Database::~Database()
     sqlite3_close(m_database);
 }
 
-ErrorOr<StatementID> Database::prepare_statement(StringView statement)
+ErrorOr<StatementID, Error> Database::prepare_statement(StringView statement)
 {
     sqlite3_stmt* prepared_statement { nullptr };
     SQL_TRY(sqlite3_prepare_v2(m_database, statement.characters_without_null_termination(), static_cast<int>(statement.length()), &prepared_statement, nullptr));
@@ -175,7 +175,7 @@ Database::StatementExecutionOutcome Database::execute_interruptible_statement_in
 
         default:
             sqlite3_reset(statement);
-            warnln("\033[31;1mDatabase error\033[0m: {}: {}", sql_error(result), sqlite3_errmsg(m_database));
+            warnln("\033[31;1mDatabase error\033[0m: {}: {}", Error::from_result_code(result), sqlite3_errmsg(m_database));
             VERIFY_NOT_REACHED();
         }
     }
@@ -186,7 +186,7 @@ void Database::interrupt()
     sqlite3_interrupt(m_database);
 }
 
-ErrorOr<void> Database::try_execute_statement_internal(StatementID statement_id, OnResult on_result)
+ErrorOr<void, Error> Database::try_execute_statement_internal(StatementID statement_id, OnResult on_result)
 {
     auto* statement = prepared_statement(statement_id).statement;
 
@@ -229,16 +229,15 @@ ENUMERATE_SQL_TYPES
 ENUMERATE_SQL_BIND_ONLY_TYPES
 #undef __ENUMERATE_TYPE
 
-static ErrorOr<void> bind_blob_bytes(sqlite3_stmt* statement, int index, ReadonlyBytes bytes)
+static int bind_blob_bytes(sqlite3_stmt* statement, int index, ReadonlyBytes bytes)
 {
     // SQLite binds a null pointer as NULL, so empty blobs need a non-null sentinel.
     static constexpr u8 empty_blob {};
-    SQL_TRY(sqlite3_bind_blob64(statement, index, bytes.is_empty() ? &empty_blob : bytes.data(), bytes.size(), SQLITE_TRANSIENT));
-    return {};
+    return sqlite3_bind_blob64(statement, index, bytes.is_empty() ? &empty_blob : bytes.data(), bytes.size(), SQLITE_TRANSIENT);
 }
 
 template<typename ValueType>
-ErrorOr<void> Database::try_apply_placeholder(StatementID statement_id, int index, ValueType const& value)
+ErrorOr<void, Error> Database::try_apply_placeholder(StatementID statement_id, int index, ValueType const& value)
 {
     auto* statement = prepared_statement(statement_id).statement;
 
@@ -255,9 +254,9 @@ ErrorOr<void> Database::try_apply_placeholder(StatementID statement_id, int inde
         // Stored as WTF-8 TEXT; SQLite's own UTF-16 interface would replace lonely surrogates with U+FFFD.
         TRY(try_apply_placeholder(statement_id, index, value.to_utf8()));
     } else if constexpr (IsSame<ValueType, ByteString>) {
-        TRY(bind_blob_bytes(statement, index, value.bytes()));
+        SQL_TRY(bind_blob_bytes(statement, index, value.bytes()));
     } else if constexpr (IsOneOf<ValueType, ByteBuffer, Bytes, ReadonlyBytes>) {
-        TRY(bind_blob_bytes(statement, index, value));
+        SQL_TRY(bind_blob_bytes(statement, index, value));
     } else if constexpr (IsSame<ValueType, UnixDateTime>) {
         TRY(try_apply_placeholder(statement_id, index, value.milliseconds_since_epoch()));
     } else if constexpr (IsSame<ValueType, double>) {
@@ -273,9 +272,9 @@ ErrorOr<void> Database::try_apply_placeholder(StatementID statement_id, int inde
     return {};
 }
 
-#define __ENUMERATE_TYPE(type)                                                                          \
-    template DATABASE_API ErrorOr<void> Database::try_apply_placeholder(StatementID, int, type const&); \
-    template DATABASE_API ErrorOr<void> Database::try_apply_placeholder(StatementID, int, Optional<type> const&);
+#define __ENUMERATE_TYPE(type)                                                                                 \
+    template DATABASE_API ErrorOr<void, Error> Database::try_apply_placeholder(StatementID, int, type const&); \
+    template DATABASE_API ErrorOr<void, Error> Database::try_apply_placeholder(StatementID, int, Optional<type> const&);
 ENUMERATE_SQL_TYPES
 ENUMERATE_SQL_BIND_ONLY_TYPES
 #undef __ENUMERATE_TYPE
@@ -356,7 +355,7 @@ ErrorOr<ReadonlyBytes, Database::ColumnReadError> Database::result_blob_column_b
 }
 
 template<typename ValueType>
-ErrorOr<void> Database::bind_parameter(StatementID statement_id, StringView name, ValueType const& value)
+ErrorOr<void, Error> Database::bind_parameter(StatementID statement_id, StringView name, ValueType const& value)
 {
     auto& prepared = prepared_statement(statement_id);
 
@@ -375,14 +374,14 @@ ErrorOr<void> Database::bind_parameter(StatementID statement_id, StringView name
     return {};
 }
 
-#define __ENUMERATE_TYPE(type)                                                                          \
-    template DATABASE_API ErrorOr<void> Database::bind_parameter(StatementID, StringView, type const&); \
-    template DATABASE_API ErrorOr<void> Database::bind_parameter(StatementID, StringView, Optional<type> const&);
+#define __ENUMERATE_TYPE(type)                                                                                 \
+    template DATABASE_API ErrorOr<void, Error> Database::bind_parameter(StatementID, StringView, type const&); \
+    template DATABASE_API ErrorOr<void, Error> Database::bind_parameter(StatementID, StringView, Optional<type> const&);
 ENUMERATE_SQL_TYPES
 ENUMERATE_SQL_BIND_ONLY_TYPES
 #undef __ENUMERATE_TYPE
 
-ErrorOr<void> Database::try_step_bound_statement(StatementID statement_id, OnResultRow on_result)
+ErrorOr<void, Error> Database::try_step_bound_statement(StatementID statement_id, OnResultRow on_result)
 {
     auto& prepared = prepared_statement(statement_id);
 
@@ -401,7 +400,7 @@ ErrorOr<void> Database::try_step_bound_statement(StatementID statement_id, OnRes
     return try_execute_statement_internal(statement_id, [&](StatementID) { return on_result(row); });
 }
 
-ErrorOr<int> Database::result_column_index(StatementID statement_id, StringView name)
+ErrorOr<int, Error> Database::result_column_index(StatementID statement_id, StringView name)
 {
     auto& prepared = prepared_statement(statement_id);
 
@@ -440,13 +439,13 @@ void Database::clear_bound_parameters(StatementID statement_id)
         prepared.bound_parameters.fill(false);
 }
 
-ErrorOr<void> Database::execute_raw(ByteString const& sql)
+ErrorOr<void, Error> Database::execute_raw(ByteString const& sql)
 {
     SQL_TRY(sqlite3_exec(m_database, sql.characters(), nullptr, nullptr, nullptr));
     return {};
 }
 
-ErrorOr<void> Database::Transaction::begin()
+ErrorOr<void, Error> Database::Transaction::begin()
 {
     TRY(m_database.execute_raw("BEGIN IMMEDIATE;"));
     m_active = true;
@@ -461,7 +460,7 @@ Database::Transaction::~Transaction()
         warnln("\033[31;1mDatabase error\033[0m: Unable to roll back transaction: {}", result.error());
 }
 
-ErrorOr<void> Database::Transaction::commit()
+ErrorOr<void, Error> Database::Transaction::commit()
 {
     VERIFY(m_active);
     TRY(m_database.execute_raw("COMMIT;"));
@@ -469,7 +468,7 @@ ErrorOr<void> Database::Transaction::commit()
     return {};
 }
 
-ErrorOr<void> Database::transaction(Function<ErrorOr<void>()> callback)
+ErrorOr<void, Error> Database::transaction(Function<ErrorOr<void, Error>()> callback)
 {
     Transaction transaction { *this };
     TRY(transaction.begin());
@@ -478,7 +477,7 @@ ErrorOr<void> Database::transaction(Function<ErrorOr<void>()> callback)
     return {};
 }
 
-ErrorOr<MigrationOutcome> Database::migrate(StringView store_name, ReadonlySpan<Migration> migrations, MigrationMode mode)
+ErrorOr<MigrationOutcome, Error> Database::migrate(StringView store_name, ReadonlySpan<Migration> migrations, MigrationMode mode)
 {
     VERIFY(!migrations.is_empty());
     VERIFY(migrations.first().version >= 1);
@@ -539,7 +538,7 @@ ErrorOr<MigrationOutcome> Database::migrate(StringView store_name, ReadonlySpan<
     return MigrationOutcome::Success;
 }
 
-ErrorOr<bool> Database::table_exists(StringView table)
+ErrorOr<bool, Error> Database::table_exists(StringView table)
 {
     if (!m_table_exists_statement.has_value())
         m_table_exists_statement = TRY(prepare_statement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?;"sv));
@@ -547,7 +546,7 @@ ErrorOr<bool> Database::table_exists(StringView table)
     bool exists = false;
     TRY(try_execute_statement(
         *m_table_exists_statement,
-        [&](auto) -> ErrorOr<void> {
+        [&](auto) -> ErrorOr<void, Error> {
             exists = true;
             return {};
         },
@@ -555,7 +554,7 @@ ErrorOr<bool> Database::table_exists(StringView table)
     return exists;
 }
 
-ErrorOr<Optional<u32>> Database::schema_version(StringView store)
+ErrorOr<Optional<u32>, Error> Database::schema_version(StringView store)
 {
     if (!TRY(table_exists("SchemaVersions"sv)))
         return OptionalNone {};
@@ -566,7 +565,7 @@ ErrorOr<Optional<u32>> Database::schema_version(StringView store)
     Optional<u32> version;
     TRY(try_execute_statement(
         *m_schema_version_statement,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Error> {
             version = result_column<u32>(statement_id, 0);
             return {};
         },
@@ -574,7 +573,7 @@ ErrorOr<Optional<u32>> Database::schema_version(StringView store)
     return version;
 }
 
-ErrorOr<Database::JournalMode> Database::set_journal_mode_pragma(JournalMode journal_mode)
+ErrorOr<Database::JournalMode, Error> Database::set_journal_mode_pragma(JournalMode journal_mode)
 {
     auto journal_mode_string = [&]() {
         switch (journal_mode) {
@@ -597,7 +596,7 @@ ErrorOr<Database::JournalMode> Database::set_journal_mode_pragma(JournalMode jou
     auto pragma = ByteString::formatted("PRAGMA journal_mode={};", journal_mode_string);
     auto statement_id = TRY(prepare_statement(pragma));
     Optional<JournalMode> applied_journal_mode;
-    TRY(try_execute_statement(statement_id, [&](auto result_statement_id) -> ErrorOr<void> {
+    TRY(try_execute_statement(statement_id, [&](auto result_statement_id) -> ErrorOr<void, Error> {
         auto applied_mode = result_column<String>(result_statement_id, 0);
         if (applied_mode.equals_ignoring_ascii_case("delete"sv))
             applied_journal_mode = JournalMode::Delete;
@@ -621,7 +620,7 @@ ErrorOr<Database::JournalMode> Database::set_journal_mode_pragma(JournalMode jou
     return *applied_journal_mode;
 }
 
-ErrorOr<void> Database::set_synchronous_pragma(Synchronous synchronous)
+ErrorOr<void, Error> Database::set_synchronous_pragma(Synchronous synchronous)
 {
     auto synchronous_string = [&]() {
         switch (synchronous) {
@@ -643,7 +642,7 @@ ErrorOr<void> Database::set_synchronous_pragma(Synchronous synchronous)
     return {};
 }
 
-ErrorOr<void> Database::set_busy_timeout(i32 milliseconds)
+ErrorOr<void, Error> Database::set_busy_timeout(i32 milliseconds)
 {
     if (milliseconds < 0)
         return Error::from_string_literal("Database busy timeout must not be negative");
@@ -651,7 +650,7 @@ ErrorOr<void> Database::set_busy_timeout(i32 milliseconds)
     return {};
 }
 
-ErrorOr<void> Database::set_foreign_keys_pragma(ForeignKeys foreign_keys)
+ErrorOr<void, Error> Database::set_foreign_keys_pragma(ForeignKeys foreign_keys)
 {
     TRY(execute_raw(foreign_keys == ForeignKeys::Yes ? "PRAGMA foreign_keys=ON;" : "PRAGMA foreign_keys=OFF;"));
     return {};

@@ -29,7 +29,7 @@ class DATABASE_API ResultRow {
 public:
     template<Integral T>
     requires(!IsSame<T, bool>)
-    ErrorOr<T> read_integer(StringView column)
+    ErrorOr<T, Error> read_integer(StringView column)
     {
         auto index = TRY(m_database.result_column_index(m_statement_id, column));
         auto value = m_database.result_i64_checked(m_statement_id, index);
@@ -42,20 +42,20 @@ public:
 
     template<Integral T>
     requires(!IsSame<T, bool>)
-    ErrorOr<Optional<T>> read_optional_integer(StringView column)
+    ErrorOr<Optional<T>, Error> read_optional_integer(StringView column)
     {
         if (TRY(is_null(column)))
             return Optional<T> {};
         return Optional<T> { TRY(read_integer<T>(column)) };
     }
 
-    ErrorOr<bool> is_null(StringView column)
+    ErrorOr<bool, Error> is_null(StringView column)
     {
         auto index = TRY(m_database.result_column_index(m_statement_id, column));
         return m_database.result_column_is_null({}, m_statement_id, index);
     }
 
-    ErrorOr<bool> read_bool(StringView column)
+    ErrorOr<bool, Error> read_bool(StringView column)
     {
         auto value = TRY(read_integer<i64>(column));
         if (value != 0 && value != 1)
@@ -63,7 +63,7 @@ public:
         return value == 1;
     }
 
-    ErrorOr<String> read_text(StringView column, size_t max_bytes)
+    ErrorOr<String, Error> read_text(StringView column, size_t max_bytes)
     {
         auto index = TRY(m_database.result_column_index(m_statement_id, column));
         auto value = m_database.result_text_column_bounded({}, m_statement_id, index, max_bytes);
@@ -72,17 +72,17 @@ public:
                 return Error::from_string_literal("Column is not text");
             return Error::from_string_literal("Text column exceeds the size limit");
         }
-        return String::from_utf8(value.release_value());
+        return TRY(String::from_utf8(value.release_value()));
     }
 
-    ErrorOr<Optional<String>> read_optional_text(StringView column, size_t max_bytes)
+    ErrorOr<Optional<String>, Error> read_optional_text(StringView column, size_t max_bytes)
     {
         if (TRY(is_null(column)))
             return Optional<String> {};
         return Optional<String> { TRY(read_text(column, max_bytes)) };
     }
 
-    ErrorOr<Utf16String> read_utf16_text(StringView column, size_t max_bytes)
+    ErrorOr<Utf16String, Error> read_utf16_text(StringView column, size_t max_bytes)
     {
         auto index = TRY(m_database.result_column_index(m_statement_id, column));
         auto value = m_database.result_text_column_bounded({}, m_statement_id, index, max_bytes);
@@ -91,17 +91,17 @@ public:
                 return Error::from_string_literal("Column is not text");
             return Error::from_string_literal("Text column exceeds the size limit");
         }
-        return Utf16String::try_from_utf8(value.release_value());
+        return TRY(Utf16String::try_from_utf8(value.release_value()));
     }
 
-    ErrorOr<Optional<Utf16String>> read_optional_utf16_text(StringView column, size_t max_bytes)
+    ErrorOr<Optional<Utf16String>, Error> read_optional_utf16_text(StringView column, size_t max_bytes)
     {
         if (TRY(is_null(column)))
             return Optional<Utf16String> {};
         return Optional<Utf16String> { TRY(read_utf16_text(column, max_bytes)) };
     }
 
-    ErrorOr<ByteBuffer> read_blob(StringView column, size_t max_bytes)
+    ErrorOr<ByteBuffer, Error> read_blob(StringView column, size_t max_bytes)
     {
         auto index = TRY(m_database.result_column_index(m_statement_id, column));
         auto value = m_database.result_blob_column_bounded({}, m_statement_id, index, max_bytes);
@@ -110,10 +110,10 @@ public:
                 return Error::from_string_literal("Column is not a blob");
             return Error::from_string_literal("Blob column exceeds the size limit");
         }
-        return ByteBuffer::copy(value.release_value());
+        return TRY(ByteBuffer::copy(value.release_value()));
     }
 
-    ErrorOr<Optional<ByteBuffer>> read_optional_blob(StringView column, size_t max_bytes)
+    ErrorOr<Optional<ByteBuffer>, Error> read_optional_blob(StringView column, size_t max_bytes)
     {
         if (TRY(is_null(column)))
             return Optional<ByteBuffer> {};

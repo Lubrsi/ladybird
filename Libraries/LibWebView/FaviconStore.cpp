@@ -18,7 +18,7 @@ static constexpr auto FAVICONS_SCHEMA_BASELINE_VERSION = 1u;
 static constexpr auto FAVICON_DATABASE_BUSY_TIMEOUT_MS = 250;
 static constexpr auto SHA256_HEX_DIGEST_LENGTH = 64uz;
 
-ErrorOr<Database::MigrationOutcome> FaviconStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> FaviconStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -35,7 +35,7 @@ ErrorOr<Database::MigrationOutcome> FaviconStore::migrate_schema(Database::Datab
     return database.migrate("Favicons"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<FaviconStore>> FaviconStore::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<FaviconStore>, Database::Error> FaviconStore::create(Database::Database& database)
 {
     TRY(database.set_busy_timeout(FAVICON_DATABASE_BUSY_TIMEOUT_MS));
 
@@ -126,7 +126,7 @@ bool FaviconStore::PersistedStorage::add_favicon(String const& hash, ByteBuffer 
 {
     auto result = m_database->try_execute_bound_statement(
         m_statements.insert_favicon,
-        [&](auto& bind) -> ErrorOr<void> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("hash"sv, hash));
             TRY(bind("png_data"sv, favicon_png));
             return {};
@@ -144,10 +144,10 @@ Optional<ByteBuffer> FaviconStore::PersistedStorage::favicon_png(StringView hash
 
     auto result = m_database->try_execute_bound_statement(
         m_statements.select_favicon,
-        [&](auto& bind) -> ErrorOr<void> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("hash"sv, hash_string.value());
         },
-        [&](Database::ResultRow& row) -> ErrorOr<void> {
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             favicon_png = TRY(row.read_blob("png_data"sv, MAXIMUM_FAVICON_BYTE_COUNT));
             return {};
         });
@@ -159,12 +159,12 @@ Optional<ByteBuffer> FaviconStore::PersistedStorage::favicon_png(StringView hash
 
 void FaviconStore::PersistedStorage::remove_unreferenced_favicons(HashTable<String> const& referenced_hashes)
 {
-    auto result = m_database->transaction([&]() -> ErrorOr<void> {
+    auto result = m_database->transaction([&]() -> ErrorOr<void, Database::Error> {
         Vector<String> hashes;
         TRY(m_database->try_execute_bound_statement(
             m_statements.select_hashes,
-            [](auto&) -> ErrorOr<void> { return {}; },
-            [&](Database::ResultRow& row) -> ErrorOr<void> {
+            [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+            [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
                 hashes.append(TRY(row.read_text("hash"sv, SHA256_HEX_DIGEST_LENGTH)));
                 return {};
             }));
@@ -172,7 +172,7 @@ void FaviconStore::PersistedStorage::remove_unreferenced_favicons(HashTable<Stri
         for (auto const& hash : hashes) {
             if (referenced_hashes.contains(hash))
                 continue;
-            TRY(m_database->try_execute_bound_statement(m_statements.delete_favicon, [&](auto& bind) -> ErrorOr<void> {
+            TRY(m_database->try_execute_bound_statement(m_statements.delete_favicon, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("hash"sv, hash);
             }));
         }

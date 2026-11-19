@@ -1899,7 +1899,8 @@ ErrorOr<void> Application::launch_services()
         m_tab_discarder = make<TabDiscarder>();
 
     if (m_browser_options.disable_sql_database == DisableSQLDatabase::No) {
-        TRY(create_stores_from_browsing_database());
+        if (auto result = create_stores_from_browsing_database(); result.is_error())
+            return Error::copy(result.error().error());
 
         // A headless run, a browser that WebDriver drives, and one that logs process statistics never join a browser
         // already running on their profile. Yet startup recovery would still rewrite the saved session, reset the
@@ -1967,7 +1968,7 @@ ErrorOr<void> Application::launch_services()
     return {};
 }
 
-ErrorOr<void> Application::create_stores_from_browsing_database()
+ErrorOr<void, Database::Error> Application::create_stores_from_browsing_database()
 {
     auto database_path = profile().paths().data;
     auto database = TRY(Database::Database::create(database_path, "Ladybird"sv));

@@ -12,6 +12,7 @@
 #include <AK/NonnullOwnPtr.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibWebView/Export.h>
 
@@ -26,9 +27,9 @@ public:
 
     static constexpr size_t MAXIMUM_FAVICON_BYTE_COUNT = 1uz * MiB;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<FaviconStore>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<FaviconStore>, Database::Error> create(Database::Database&);
     static NonnullOwnPtr<FaviconStore> create();
 
     ~FaviconStore();

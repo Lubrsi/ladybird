@@ -363,7 +363,7 @@ static i32 count_tab_rows(Database::Database& database, StringView table, i64 ta
     i32 count = -1;
     database.execute_statement(
         statement,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             count = database.result_column<i32>(statement_id, 0);
             return {};
         },
@@ -375,7 +375,7 @@ static i32 count_rows(Database::Database& database, StringView table)
 {
     auto statement = MUST(database.prepare_statement(MUST(String::formatted("SELECT COUNT(*) FROM {};", table))));
     i32 count = -1;
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         count = database.result_column<i32>(statement_id, 0);
         return {};
     });
@@ -386,7 +386,7 @@ static i64 select_i64(Database::Database& database, StringView sql)
 {
     auto statement = MUST(database.prepare_statement(sql));
     i64 value = 0;
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         value = database.result_column<i64>(statement_id, 0);
         return {};
     });
@@ -399,7 +399,7 @@ static i32 count_history_owned_rows(Database::Database& database, StringView tab
     i32 count = -1;
     database.execute_statement(
         statement,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             count = database.result_column<i32>(statement_id, 0);
             return {};
         },
@@ -1027,7 +1027,7 @@ TEST_CASE(snapshot_store_rolls_back_with_the_caller_transaction)
 
     insert_tab_row(*database, 9);
 
-    auto result = database->transaction([&]() -> ErrorOr<void> {
+    auto result = database->transaction([&]() -> ErrorOr<void, Database::Error> {
         TRY(store_session_history_snapshot(*database, statements, 9, snapshot));
         return Error::from_string_literal("caller aborted the undo unit");
     });

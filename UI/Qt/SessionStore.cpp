@@ -53,7 +53,7 @@ static Optional<size_t> index_as_size(i64 index)
 }
 
 // A row whose geometry is missing, or isn't a usable size, has none.
-static ErrorOr<Optional<SessionWindowGeometry>> read_window_geometry(Database::ResultRow& row)
+static ErrorOr<Optional<SessionWindowGeometry>, Database::Error> read_window_geometry(Database::ResultRow& row)
 {
     auto x = TRY(row.read_optional_integer<i32>("x"sv));
     auto y = TRY(row.read_optional_integer<i32>("y"sv));
@@ -70,7 +70,7 @@ static ErrorOr<Optional<SessionWindowGeometry>> read_window_geometry(Database::R
     } };
 }
 
-ErrorOr<Database::MigrationOutcome> SessionStore::PersistedStorage::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> SessionStore::PersistedStorage::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -319,12 +319,12 @@ ErrorOr<Database::MigrationOutcome> SessionStore::PersistedStorage::migrate_sche
     return database.migrate("Sessions"sv, migrations, mode);
 }
 
-ErrorOr<Database::MigrationOutcome> SessionStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> SessionStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     return PersistedStorage::migrate_schema(database, mode);
 }
 
-ErrorOr<SessionStore::PersistedStorage> SessionStore::PersistedStorage::create(Database::Database& database)
+ErrorOr<SessionStore::PersistedStorage, Database::Error> SessionStore::PersistedStorage::create(Database::Database& database)
 {
     if (database.options().foreign_keys != Database::Database::ForeignKeys::Yes)
         return Error::from_string_literal("Session storage relies on cascading deletes; open the connection with foreign keys enabled");
@@ -368,7 +368,7 @@ ErrorOr<SessionStore::PersistedStorage> SessionStore::PersistedStorage::create(D
     return PersistedStorage { database, move(statements) };
 }
 
-ErrorOr<NonnullOwnPtr<SessionStore>> SessionStore::create(Database::Database& database, SessionLaunchPolicy policy)
+ErrorOr<NonnullOwnPtr<SessionStore>, Database::Error> SessionStore::create(Database::Database& database, SessionLaunchPolicy policy)
 {
     auto persisted_storage = TRY(PersistedStorage::create(database));
     auto store = adopt_own(*new SessionStore(move(persisted_storage)));
@@ -671,7 +671,7 @@ static String persistable_active_url(URL::URL const& url)
     return URL::about_blank().serialize();
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::apply_tab_row_write(TabWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::apply_tab_row_write(TabWrite const& write)
 {
     switch (write.snapshot_disposition) {
     case SnapshotDisposition::Preserve:
@@ -685,7 +685,7 @@ ErrorOr<void> SessionStore::PersistedStorage::apply_tab_row_write(TabWrite const
         break;
     }
 
-    TRY(database->try_execute_bound_statement(statements.update_tab_row, [&](auto& bind) -> ErrorOr<void> {
+    TRY(database->try_execute_bound_statement(statements.update_tab_row, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("active_url"sv, persistable_active_url(write.url)));
         TRY(bind("current_used_step_index"sv, write.current_used_step_index));
         TRY(bind("pinned"sv, i64 { write.pinned ? 1 : 0 }));
@@ -695,11 +695,11 @@ ErrorOr<void> SessionStore::PersistedStorage::apply_tab_row_write(TabWrite const
     return {};
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::apply_window_metadata(WindowMetadataWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::apply_window_metadata(WindowMetadataWrite const& write)
 {
     i64 tab_ordinal = 0;
     for (auto tab_id : write.tabs_in_order) {
-        TRY(database->try_execute_bound_statement(statements.update_tab_placement, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.update_tab_placement, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("session_id"sv, write.id));
             TRY(bind("tab_ordinal"sv, tab_ordinal));
             TRY(bind("pinned"sv, i64 { write.pinned_tabs.contains(tab_id) ? 1 : 0 }));
@@ -716,9 +716,9 @@ ErrorOr<void> SessionStore::PersistedStorage::apply_window_metadata(WindowMetada
     return {};
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::insert_closed_unit_row(ClosedUnitWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::insert_closed_unit_row(ClosedUnitWrite const& write)
 {
-    return database->try_execute_bound_statement(statements.insert_session, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.insert_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("id"sv, write.id));
         TRY(bind("kind"sv, to_underlying(write.kind)));
         TRY(bind("closed_time"sv, write.closed_at));
@@ -731,16 +731,16 @@ ErrorOr<void> SessionStore::PersistedStorage::insert_closed_unit_row(ClosedUnitW
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::delete_tab_rows(SessionTabId tab_id)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::delete_tab_rows(SessionTabId tab_id)
 {
-    return database->try_execute_bound_statement(statements.delete_tab, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.delete_tab, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("id"sv, tab_id);
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::insert_open_window(SessionWindowId window_id)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::insert_open_window(SessionWindowId window_id)
 {
-    return database->try_execute_bound_statement(statements.insert_session, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.insert_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("id"sv, window_id));
         TRY(bind("kind"sv, to_underlying(UnitKind::OpenWindow)));
         TRY(bind("closed_time"sv, 0));
@@ -753,10 +753,10 @@ ErrorOr<void> SessionStore::PersistedStorage::insert_open_window(SessionWindowId
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::open_tab(OpenTabWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::open_tab(OpenTabWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
-        TRY(database->try_execute_bound_statement(statements.insert_tab, [&](auto& bind) -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
+        TRY(database->try_execute_bound_statement(statements.insert_tab, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("id"sv, write.tab.id));
             TRY(bind("session_id"sv, write.tab.window_id));
             TRY(bind("tab_ordinal"sv, write.tab.tab_ordinal));
@@ -768,28 +768,28 @@ ErrorOr<void> SessionStore::PersistedStorage::open_tab(OpenTabWrite const& write
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::flush_tab(TabWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::flush_tab(TabWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         return apply_tab_row_write(write);
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::write_windows_metadata(Vector<WindowMetadataWrite> const& writes)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::write_windows_metadata(Vector<WindowMetadataWrite> const& writes)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         for (auto const& write : writes)
             TRY(apply_window_metadata(write));
         return {};
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::close_tab(ClosedTabWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::close_tab(ClosedTabWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         TRY(insert_closed_unit_row(write.unit));
         // Retried closes may no longer have their original tab row.
-        TRY(database->try_execute_bound_statement(statements.insert_tab_if_missing, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.insert_tab_if_missing, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("id"sv, write.tab.id));
             TRY(bind("session_id"sv, write.unit.id));
             TRY(bind("tab_ordinal"sv, 0));
@@ -797,7 +797,7 @@ ErrorOr<void> SessionStore::PersistedStorage::close_tab(ClosedTabWrite const& wr
             TRY(bind("current_used_step_index"sv, write.tab.current_used_step_index));
             return {};
         }));
-        TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("session_id"sv, write.unit.id));
             TRY(bind("tab_ordinal"sv, 0));
             TRY(bind("id"sv, write.tab.id));
@@ -810,13 +810,13 @@ ErrorOr<void> SessionStore::PersistedStorage::close_tab(ClosedTabWrite const& wr
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::close_window(ClosedWindowWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::close_window(ClosedWindowWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         i64 tab_ordinal = 0;
         for (auto const& member : write.members) {
             TRY(apply_tab_row_write(member));
-            TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void> {
+            TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 TRY(bind("session_id"sv, write.unit.id));
                 TRY(bind("tab_ordinal"sv, tab_ordinal));
                 TRY(bind("id"sv, member.id));
@@ -824,7 +824,7 @@ ErrorOr<void> SessionStore::PersistedStorage::close_window(ClosedWindowWrite con
             }));
             ++tab_ordinal;
         }
-        TRY(database->try_execute_bound_statement(statements.update_session_closed, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.update_session_closed, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("kind"sv, to_underlying(write.unit.kind)));
             TRY(bind("closed_time"sv, write.unit.closed_at));
             TRY(bind("close_sequence"sv, write.unit.close_sequence));
@@ -840,9 +840,9 @@ ErrorOr<void> SessionStore::PersistedStorage::close_window(ClosedWindowWrite con
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::discard_tab(DiscardTabWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::discard_tab(DiscardTabWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         TRY(delete_tab_rows(write.id));
         if (write.remaining_window.has_value())
             TRY(apply_window_metadata(*write.remaining_window));
@@ -850,11 +850,11 @@ ErrorOr<void> SessionStore::PersistedStorage::discard_tab(DiscardTabWrite const&
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::clear_closed_units(ClearClosedUnitsWrite const& write)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::clear_closed_units(ClearClosedUnitsWrite const& write)
 {
-    return database->transaction([&]() -> ErrorOr<void> {
+    return database->transaction([&]() -> ErrorOr<void, Database::Error> {
         for (auto closed_unit : write.closed_units) {
-            TRY(database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void> {
+            TRY(database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("id"sv, closed_unit);
             }));
         }
@@ -864,7 +864,7 @@ ErrorOr<void> SessionStore::PersistedStorage::clear_closed_units(ClearClosedUnit
                 TRY(apply_window_metadata(*pending_tab.remaining_window));
         }
         for (auto pending_window : write.pending_windows) {
-            TRY(database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void> {
+            TRY(database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("id"sv, pending_window);
             }));
         }
@@ -872,9 +872,9 @@ ErrorOr<void> SessionStore::PersistedStorage::clear_closed_units(ClearClosedUnit
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::write_session_metadata(SessionWindowId window_id, i64 active_tab_index, i64 activation_sequence)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::write_session_metadata(SessionWindowId window_id, i64 active_tab_index, i64 activation_sequence)
 {
-    return database->try_execute_bound_statement(statements.update_session_metadata, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.update_session_metadata, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("active_tab_index"sv, active_tab_index));
         TRY(bind("activation_sequence"sv, activation_sequence));
         TRY(bind("id"sv, window_id));
@@ -882,9 +882,9 @@ ErrorOr<void> SessionStore::PersistedStorage::write_session_metadata(SessionWind
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::write_session_geometry(SessionWindowId window_id, SessionWindowGeometry const& geometry)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::write_session_geometry(SessionWindowId window_id, SessionWindowGeometry const& geometry)
 {
-    return database->try_execute_bound_statement(statements.update_session_geometry, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.update_session_geometry, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("x"sv, i64 { geometry.x }));
         TRY(bind("y"sv, i64 { geometry.y }));
         TRY(bind("width"sv, i64 { geometry.width }));
@@ -895,24 +895,24 @@ ErrorOr<void> SessionStore::PersistedStorage::write_session_geometry(SessionWind
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::clear_restore_at_launch()
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::clear_restore_at_launch()
 {
-    return database->try_execute_bound_statement(statements.clear_restore_at_launch, [](auto&) -> ErrorOr<void> { return {}; });
+    return database->try_execute_bound_statement(statements.clear_restore_at_launch, [](auto&) -> ErrorOr<void, Database::Error> { return {}; });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::clear_startup_recovery_origin()
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::clear_startup_recovery_origin()
 {
-    return database->try_execute_bound_statement(statements.clear_startup_recovery_origin, [](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.clear_startup_recovery_origin, [](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("close_action_origin"sv, to_underlying(ClosedSessionUnit::Origin::CloseAction)));
         TRY(bind("startup_recovery_origin"sv, to_underlying(ClosedSessionUnit::Origin::StartupRecovery)));
         return {};
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::demote_to_startup_recovery_unit(SessionWindowId window_id, UnixDateTime recovered_at, IdAllocator& close_sequence_allocator)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::demote_to_startup_recovery_unit(SessionWindowId window_id, UnixDateTime recovered_at, IdAllocator& close_sequence_allocator)
 {
     auto close_sequence = TRY(close_sequence_allocator.allocate());
-    return database->try_execute_bound_statement(statements.recover_open_session, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.recover_open_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("closed_window_kind"sv, to_underlying(UnitKind::ClosedWindow)));
         TRY(bind("closed_time"sv, recovered_at));
         TRY(bind("close_sequence"sv, close_sequence));
@@ -922,9 +922,9 @@ ErrorOr<void> SessionStore::PersistedStorage::demote_to_startup_recovery_unit(Se
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::reopen_session(SessionWindowId window_id)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::reopen_session(SessionWindowId window_id)
 {
-    return database->try_execute_bound_statement(statements.reopen_closed_session, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.reopen_closed_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("open_window_kind"sv, to_underlying(UnitKind::OpenWindow)));
         TRY(bind("origin"sv, to_underlying(ClosedSessionUnit::Origin::CloseAction)));
         TRY(bind("id"sv, window_id));
@@ -933,20 +933,20 @@ ErrorOr<void> SessionStore::PersistedStorage::reopen_session(SessionWindowId win
 }
 
 // A row that fails validation is deleted, so the window keeps only tabs it can restore.
-ErrorOr<Vector<SessionStore::RecoveredTab>> SessionStore::PersistedStorage::read_recovered_tabs(SessionWindowId window_id)
+ErrorOr<Vector<SessionStore::RecoveredTab>, Database::Error> SessionStore::PersistedStorage::read_recovered_tabs(SessionWindowId window_id)
 {
     Vector<RecoveredTab> tabs;
     Vector<SessionTabId> corrupt_tabs;
     TRY(database->try_execute_bound_statement(
         statements.select_session_tabs,
-        [&](auto& bind) -> ErrorOr<void> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("session_id"sv, window_id);
         },
-        [&](Database::ResultRow& row) -> ErrorOr<void> {
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             auto tab_id = row.read_integer<SessionTabId>("id"sv);
             if (tab_id.is_error())
                 return {};
-            auto tab = [&]() -> ErrorOr<RecoveredTab> {
+            auto tab = [&]() -> ErrorOr<RecoveredTab, Database::Error> {
                 auto url = URL::Parser::basic_parse(TRY(row.read_text("active_url"sv, MAX_ACTIVE_URL_BYTES)));
                 if (!url.has_value())
                     return Error::from_string_literal("Session tab has an unparseable active url");
@@ -971,11 +971,11 @@ ErrorOr<Vector<SessionStore::RecoveredTab>> SessionStore::PersistedStorage::read
     return tabs;
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::reparent_tabs(SessionWindowId window_id, Vector<RecoveredTab> const& tabs)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::reparent_tabs(SessionWindowId window_id, Vector<RecoveredTab> const& tabs)
 {
     i64 tab_ordinal = 0;
     for (auto const& tab : tabs) {
-        TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.update_tab_parent, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("session_id"sv, window_id));
             TRY(bind("tab_ordinal"sv, tab_ordinal));
             TRY(bind("id"sv, tab.id));
@@ -986,10 +986,10 @@ ErrorOr<void> SessionStore::PersistedStorage::reparent_tabs(SessionWindowId wind
     return {};
 }
 
-ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_open_windows(RecoveryWrite const& write, IdAllocator& session_id_allocator, IdAllocator& close_sequence_allocator)
+ErrorOr<SessionStore::RecoveryResult, Database::Error> SessionStore::PersistedStorage::recover_open_windows(RecoveryWrite const& write, IdAllocator& session_id_allocator, IdAllocator& close_sequence_allocator)
 {
     RecoveryResult result;
-    TRY(database->transaction([&]() -> ErrorOr<void> {
+    TRY(database->transaction([&]() -> ErrorOr<void, Database::Error> {
         auto run_start = TRY(record_run_start());
         result.consecutive_unclean_exits = run_start.consecutive_unclean_exits;
         result.follows_restart = run_start.follows_restart;
@@ -1001,7 +1001,7 @@ ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_op
         // offered back, so they are ordinary closed windows now.
         TRY(clear_startup_recovery_origin());
 
-        TRY(database->try_execute_bound_statement(statements.delete_empty_open_sessions, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database->try_execute_bound_statement(statements.delete_empty_open_sessions, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("open_window_kind"sv, to_underlying(UnitKind::OpenWindow));
         }));
 
@@ -1013,7 +1013,7 @@ ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_op
             Optional<SessionWindowGeometry> geometry;
         };
         Vector<Candidate> candidates;
-        auto read_candidate = [&](Database::ResultRow& row, bool was_open) -> ErrorOr<void> {
+        auto read_candidate = [&](Database::ResultRow& row, bool was_open) -> ErrorOr<void, Database::Error> {
             auto geometry = read_window_geometry(row);
             candidates.append({
                 .id = TRY(row.read_integer<SessionWindowId>("id"sv)),
@@ -1026,7 +1026,7 @@ ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_op
         };
         TRY(database->try_execute_bound_statement(
             statements.select_open_sessions,
-            [&](auto& bind) -> ErrorOr<void> {
+            [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("open_window_kind"sv, to_underlying(UnitKind::OpenWindow));
             },
             [&](Database::ResultRow& row) { return read_candidate(row, true); }));
@@ -1035,7 +1035,7 @@ ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_op
         if (candidates.is_empty() && policy != SessionLaunchPolicy::None) {
             TRY(database->try_execute_bound_statement(
                 statements.select_restore_at_launch_session,
-                [&](auto& bind) -> ErrorOr<void> {
+                [&](auto& bind) -> ErrorOr<void, Database::Error> {
                     return bind("closed_window_kind"sv, to_underlying(UnitKind::ClosedWindow));
                 },
                 [&](Database::ResultRow& row) { return read_candidate(row, false); }));
@@ -1116,16 +1116,16 @@ ErrorOr<SessionStore::RecoveryResult> SessionStore::PersistedStorage::recover_op
     return result;
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::delete_session_rows(SessionWindowId window_id)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::delete_session_rows(SessionWindowId window_id)
 {
-    return database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("id"sv, window_id);
     });
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::write_lifecycle(bool clean_exit, u32 consecutive_unclean_exits, bool restart)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::write_lifecycle(bool clean_exit, u32 consecutive_unclean_exits, bool restart)
 {
-    return database->try_execute_bound_statement(statements.write_lifecycle, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.write_lifecycle, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("clean_exit"sv, i64 { clean_exit ? 1 : 0 }));
         TRY(bind("consecutive_unclean_exits"sv, i64 { consecutive_unclean_exits }));
         TRY(bind("restart"sv, i64 { restart ? 1 : 0 }));
@@ -1135,14 +1135,14 @@ ErrorOr<void> SessionStore::PersistedStorage::write_lifecycle(bool clean_exit, u
 
 // Only the windows that the next launch brings back stay: those left open, and the last window closed, which counts as
 // left open. Their unpinned tabs, and every tab and window closed before, go with all of their history.
-ErrorOr<void> SessionStore::PersistedStorage::forget_all_but_pinned_tabs()
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::forget_all_but_pinned_tabs()
 {
-    TRY(database->transaction([&]() -> ErrorOr<void> {
-        TRY(database->try_execute_bound_statement(statements.delete_closed_units_left_closed, [&](auto& bind) -> ErrorOr<void> {
+    TRY(database->transaction([&]() -> ErrorOr<void, Database::Error> {
+        TRY(database->try_execute_bound_statement(statements.delete_closed_units_left_closed, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("open_window_kind"sv, to_underlying(UnitKind::OpenWindow));
         }));
-        TRY(database->try_execute_bound_statement(statements.delete_unpinned_tabs, [](auto&) -> ErrorOr<void> { return {}; }));
-        TRY(database->try_execute_bound_statement(statements.delete_empty_sessions, [](auto&) -> ErrorOr<void> { return {}; }));
+        TRY(database->try_execute_bound_statement(statements.delete_unpinned_tabs, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }));
+        TRY(database->try_execute_bound_statement(statements.delete_empty_sessions, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }));
         return {};
     }));
 
@@ -1154,7 +1154,7 @@ ErrorOr<void> SessionStore::PersistedStorage::forget_all_but_pinned_tabs()
 }
 
 // Runs inside the recovery transaction, so it opens none of its own.
-ErrorOr<SessionStore::PersistedStorage::RunStart> SessionStore::PersistedStorage::record_run_start()
+ErrorOr<SessionStore::PersistedStorage::RunStart, Database::Error> SessionStore::PersistedStorage::record_run_start()
 {
     // A first run has no row yet, and counts as following a clean exit.
     bool last_run_exited_cleanly = true;
@@ -1162,8 +1162,8 @@ ErrorOr<SessionStore::PersistedStorage::RunStart> SessionStore::PersistedStorage
     u32 consecutive_unclean_exits = 0;
     TRY(database->try_execute_bound_statement(
         statements.select_lifecycle,
-        [](auto&) -> ErrorOr<void> { return {}; },
-        [&](Database::ResultRow& row) -> ErrorOr<void> {
+        [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             // A row that fails to read (a value that isn't an integer, or a count outside u32) counts the same way as a
             // first run, so the write below repairs it. Failing recovery instead would leave every later launch with a
             // transient store, since nothing else ever rewrites the row.
@@ -1189,21 +1189,21 @@ ErrorOr<SessionStore::PersistedStorage::RunStart> SessionStore::PersistedStorage
     return RunStart { .consecutive_unclean_exits = consecutive_unclean_exits, .follows_restart = last_run_exited_cleanly && last_run_restarts };
 }
 
-ErrorOr<void> SessionStore::PersistedStorage::prune_closed_units(UnitKind kind, u32 max_units)
+ErrorOr<void, Database::Error> SessionStore::PersistedStorage::prune_closed_units(UnitKind kind, u32 max_units)
 {
-    return database->try_execute_bound_statement(statements.prune_closed, [&](auto& bind) -> ErrorOr<void> {
+    return database->try_execute_bound_statement(statements.prune_closed, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("kind"sv, to_underlying(kind)));
         TRY(bind("max_units"sv, max_units));
         return {};
     });
 }
 
-ErrorOr<SessionStore::IdAllocator> SessionStore::IdAllocator::create_from_maximum(Database::Database& database, Database::StatementID statement_id)
+ErrorOr<SessionStore::IdAllocator, Database::Error> SessionStore::IdAllocator::create_from_maximum(Database::Database& database, Database::StatementID statement_id)
 {
     auto maximum = TRY(database.try_execute_bound_statement_one<Optional<i64>>(
         statement_id,
-        [](auto&) -> ErrorOr<void> { return {}; },
-        [](Database::ResultRow& row) -> ErrorOr<Optional<i64>> {
+        [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+        [](Database::ResultRow& row) -> ErrorOr<Optional<i64>, Database::Error> {
             return row.read_optional_integer<i64>("maximum_id"sv);
         }));
     return IdAllocator { maximum.value_or(0) };
@@ -1219,7 +1219,7 @@ ErrorOr<i64> SessionStore::IdAllocator::allocate()
     return m_last_used;
 }
 
-ErrorOr<SessionStore::IdAllocators> SessionStore::PersistedStorage::create_id_allocators()
+ErrorOr<SessionStore::IdAllocators, Database::Error> SessionStore::PersistedStorage::create_id_allocators()
 {
     return IdAllocators {
         .session_ids = TRY(IdAllocator::create_from_maximum(database, statements.select_max_session_id)),
@@ -1229,12 +1229,12 @@ ErrorOr<SessionStore::IdAllocators> SessionStore::PersistedStorage::create_id_al
     };
 }
 
-ErrorOr<WebView::SessionHistorySnapshot> SessionStore::PersistedStorage::load_tab_snapshot(SessionTabId tab_id, size_t current_used_step_index)
+ErrorOr<WebView::SessionHistorySnapshot, Database::Error> SessionStore::PersistedStorage::load_tab_snapshot(SessionTabId tab_id, size_t current_used_step_index)
 {
     return load_session_history_snapshot(database, statements.snapshot_statements, tab_id, current_used_step_index);
 }
 
-ErrorOr<Vector<SessionStore::ClosedUnit>> SessionStore::PersistedStorage::load_closed_units()
+ErrorOr<Vector<SessionStore::ClosedUnit>, Database::Error> SessionStore::PersistedStorage::load_closed_units()
 {
     // Buffered so the invalid-unit deletes below never run while this select is still stepping.
     struct SessionRow {
@@ -1254,12 +1254,12 @@ ErrorOr<Vector<SessionStore::ClosedUnit>> SessionStore::PersistedStorage::load_c
         Vector<SessionRow> session_rows;
         TRY(database->try_execute_bound_statement(
             statements.select_closed_sessions,
-            [&](auto& bind) -> ErrorOr<void> {
+            [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 TRY(bind("kind"sv, to_underlying(kind)));
                 TRY(bind("max_units"sv, kind == UnitKind::ClosedTab ? MAX_CLOSED_TABS : MAX_CLOSED_WINDOWS));
                 return {};
             },
-            [&](Database::ResultRow& row) -> ErrorOr<void> {
+            [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
                 auto active_tab_index = row.read_integer<i64>("active_tab_index"sv);
                 auto close_sequence = row.read_integer<SessionCloseSequence>("close_sequence"sv);
                 auto source_window_id = row.read_optional_integer<SessionWindowId>("source_window_id"sv);
@@ -1298,11 +1298,11 @@ ErrorOr<Vector<SessionStore::ClosedUnit>> SessionStore::PersistedStorage::load_c
             bool unit_invalid = false;
             auto tabs_result = database->try_execute_bound_statement(
                 statements.select_session_tabs,
-                [&](auto& bind) -> ErrorOr<void> {
+                [&](auto& bind) -> ErrorOr<void, Database::Error> {
                     return bind("session_id"sv, *session_row.session_id);
                 },
-                [&](Database::ResultRow& row) -> ErrorOr<void> {
-                    auto row_result = [&]() -> ErrorOr<void> {
+                [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
+                    auto row_result = [&]() -> ErrorOr<void, Database::Error> {
                         if (TRY(row.read_integer<size_t>("tab_ordinal"sv)) != tabs.size())
                             return Error::from_string_literal("Closed session tab ordinals are not contiguous");
                         auto current_used_step_index = TRY(row.read_integer<size_t>("current_used_step_index"sv));
@@ -1330,7 +1330,7 @@ ErrorOr<Vector<SessionStore::ClosedUnit>> SessionStore::PersistedStorage::load_c
 
             if (unit_invalid || tabs.is_empty() || !session_row.closed_time.has_value() || !session_row.close_sequence.has_value() || !session_row.origin.has_value() || !session_row.active_tab_index.has_value()) {
                 // Cleanup is best-effort after the invalid unit leaves the mirror.
-                (void)database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void> {
+                (void)database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                     return bind("id"sv, *session_row.session_id);
                 });
                 continue;
@@ -1362,10 +1362,10 @@ ErrorOr<Vector<SessionStore::ClosedUnit>> SessionStore::PersistedStorage::load_c
     return units;
 }
 
-ErrorOr<Vector<ClosedSessionTab>> SessionStore::PersistedStorage::take_closed_unit(SessionWindowId unit_id)
+ErrorOr<Vector<ClosedSessionTab>, Database::Error> SessionStore::PersistedStorage::take_closed_unit(SessionWindowId unit_id)
 {
     Vector<ClosedSessionTab> tabs;
-    TRY(database->transaction([&]() -> ErrorOr<void> {
+    TRY(database->transaction([&]() -> ErrorOr<void, Database::Error> {
         struct TabRow {
             SessionTabId tab_id { 0 };
             URL::URL active_url;
@@ -1375,11 +1375,11 @@ ErrorOr<Vector<ClosedSessionTab>> SessionStore::PersistedStorage::take_closed_un
         Vector<TabRow> tab_rows;
         TRY(database->try_execute_bound_statement(
             statements.select_session_tabs,
-            [&](auto& bind) -> ErrorOr<void> {
+            [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("session_id"sv, unit_id);
             },
-            [&](Database::ResultRow& row) -> ErrorOr<void> {
-                auto validated_row = [&]() -> ErrorOr<TabRow> {
+            [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
+                auto validated_row = [&]() -> ErrorOr<TabRow, Database::Error> {
                     auto tab_id = TRY(row.read_integer<i64>("id"sv));
                     auto current_used_step_index = TRY(row.read_integer<size_t>("current_used_step_index"sv));
                     auto url = URL::Parser::basic_parse(TRY(row.read_text("active_url"sv, MAX_ACTIVE_URL_BYTES)));
@@ -1406,7 +1406,7 @@ ErrorOr<Vector<ClosedSessionTab>> SessionStore::PersistedStorage::take_closed_un
                 .pinned = tab_row.pinned,
             });
         }
-        return database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void> {
+        return database->try_execute_bound_statement(statements.delete_session, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("id"sv, unit_id);
         });
     }));
@@ -1570,7 +1570,7 @@ u32 SessionStore::max_closed_units(UnitKind kind)
     return kind == UnitKind::ClosedTab ? MAX_CLOSED_TABS : MAX_CLOSED_WINDOWS;
 }
 
-ErrorOr<void> SessionStore::run_startup_recovery(UnixDateTime recovered_at, SessionLaunchPolicy policy)
+ErrorOr<void, Database::Error> SessionStore::run_startup_recovery(UnixDateTime recovered_at, SessionLaunchPolicy policy)
 {
     auto allocators = TRY(m_persisted_storage->create_id_allocators());
     m_session_id_allocator = allocators.session_ids;
@@ -1699,7 +1699,7 @@ bool SessionStore::window_has_pending_tab_closes(SessionWindowId window_id) cons
     return false;
 }
 
-ErrorOr<void> SessionStore::drain_window_metadata()
+ErrorOr<void, Database::Error> SessionStore::drain_window_metadata()
 {
     if (!m_persisted_storage.has_value())
         return {};
@@ -1724,7 +1724,7 @@ ErrorOr<void> SessionStore::drain_window_metadata()
     return {};
 }
 
-ErrorOr<SessionWindowId> SessionStore::window_opened()
+ErrorOr<SessionWindowId, Database::Error> SessionStore::window_opened()
 {
     auto window_id = TRY(m_session_id_allocator.allocate());
     if (m_persisted_storage.has_value()) {
@@ -1751,7 +1751,7 @@ void SessionStore::window_detached(SessionWindowId window_id)
         return;
     }
 
-    ErrorOr<void> result;
+    ErrorOr<void, Database::Error> result;
     bool queue_detach = window_has_pending_tab_closes(window_id);
     if (!queue_detach) {
         result = drain_window_metadata();
@@ -1774,7 +1774,7 @@ void SessionStore::window_detached(SessionWindowId window_id)
     m_transient_storage.remove_window(window_id);
 }
 
-ErrorOr<SessionWindowId> SessionStore::default_window()
+ErrorOr<SessionWindowId, Database::Error> SessionStore::default_window()
 {
     if (!m_transient_storage.default_window.has_value())
         m_transient_storage.default_window = TRY(window_opened());
@@ -1796,7 +1796,7 @@ void SessionStore::window_activated(SessionWindowId window_id)
     m_transient_storage.set_activation_sequence(window_id, activation_sequence.value());
 }
 
-ErrorOr<SessionTabId> SessionStore::tab_opened(TabOpened opened)
+ErrorOr<SessionTabId, Database::Error> SessionStore::tab_opened(TabOpened opened)
 {
     // A crash before the tab's first flush must not leave an unparseable URL that
     // startup recovery would treat as row corruption.
@@ -1872,7 +1872,7 @@ void SessionStore::tab_order_changed(TabOrderChanged changed)
     m_transient_storage.set_tab_order(changed.window_id, changed.ordered_tabs);
 }
 
-ErrorOr<void> SessionStore::tab_pinned_changed(SessionTabId tab_id, bool pinned)
+ErrorOr<void, Database::Error> SessionStore::tab_pinned_changed(SessionTabId tab_id, bool pinned)
 {
     if (!m_transient_storage.set_tab_pinned(tab_id, pinned))
         return {};
@@ -1893,7 +1893,7 @@ void SessionStore::tab_moved(TabMoved moved)
     (void)drain_window_metadata();
 }
 
-ErrorOr<void> SessionStore::flush_tab(SessionTabId tab_id, OpenTab const& tab)
+ErrorOr<void, Database::Error> SessionStore::flush_tab(SessionTabId tab_id, OpenTab const& tab)
 {
     auto write = tab_write_for(tab_id, tab, 0);
     TRY(m_persisted_storage->flush_tab(write));
@@ -1960,7 +1960,7 @@ void SessionStore::append_closed_window_unit(PendingWindowClose const& pending)
     m_transient_storage.append_closed_unit(move(unit));
 }
 
-ErrorOr<void> SessionStore::finish_tab_close(PendingTabClose const& pending)
+ErrorOr<void, Database::Error> SessionStore::finish_tab_close(PendingTabClose const& pending)
 {
     if (!is_tab_worth_keeping(pending.tab.url)) {
         if (m_persisted_storage.has_value()) {
@@ -1994,7 +1994,7 @@ ErrorOr<void> SessionStore::finish_tab_close(PendingTabClose const& pending)
     return {};
 }
 
-ErrorOr<void> SessionStore::finish_window_close(PendingWindowClose const& pending)
+ErrorOr<void, Database::Error> SessionStore::finish_window_close(PendingWindowClose const& pending)
 {
     bool any_tab_worth_keeping = false;
     for (auto const& member : pending.members)
@@ -2031,14 +2031,14 @@ ErrorOr<void> SessionStore::finish_window_close(PendingWindowClose const& pendin
     return {};
 }
 
-ErrorOr<void> SessionStore::tab_closed(TabClosed closed)
+ErrorOr<void, Database::Error> SessionStore::tab_closed(TabClosed closed)
 {
     auto const* tab = m_transient_storage.find_tab(closed.tab_id);
     if (!tab)
         return {};
 
     if (m_quitting) {
-        ErrorOr<void> result;
+        ErrorOr<void, Database::Error> result;
         if (m_persisted_storage.has_value() && tab->dirty)
             result = flush_tab(closed.tab_id, *tab);
         m_transient_storage.remove_tab(closed.tab_id);
@@ -2050,7 +2050,7 @@ ErrorOr<void> SessionStore::tab_closed(TabClosed closed)
         source_tab_index = index_as_i64(*index);
     }
 
-    auto discard_without_undo = [&]() -> ErrorOr<void> {
+    auto discard_without_undo = [&]() -> ErrorOr<void, Database::Error> {
         if (!m_persisted_storage.has_value()) {
             m_transient_storage.remove_tab(closed.tab_id);
             return {};
@@ -2163,7 +2163,7 @@ void SessionStore::tab_detached(SessionTabId tab_id)
         m_transient_storage.mark_window_metadata_clean(window_id);
 }
 
-ErrorOr<void> SessionStore::window_closing(WindowClosing closing)
+ErrorOr<void, Database::Error> SessionStore::window_closing(WindowClosing closing)
 {
     auto const* window = m_transient_storage.find_window(closing.window_id);
     if (!window)
@@ -2210,7 +2210,7 @@ ErrorOr<void> SessionStore::window_closing(WindowClosing closing)
     auto close_sequence = m_close_sequence_allocator.allocate();
     if (close_sequence.is_error()) {
         auto close = make_pending_close(0, true);
-        ErrorOr<void> result;
+        ErrorOr<void, Database::Error> result;
         if (m_persisted_storage.has_value())
             result = m_persisted_storage->delete_session_rows(closing.window_id);
         if (result.is_error() && m_persisted_storage.has_value()) {
@@ -2235,7 +2235,7 @@ ErrorOr<void> SessionStore::window_closing(WindowClosing closing)
                     ++i;
                     continue;
                 }
-                ErrorOr<void> result;
+                ErrorOr<void, Database::Error> result;
                 if (pending.discard)
                     result = m_persisted_storage->discard_tab({ .id = pending.tab_id, .remaining_window = remaining_window_write(closing.window_id, pending.tab_id) });
                 else
@@ -2250,7 +2250,7 @@ ErrorOr<void> SessionStore::window_closing(WindowClosing closing)
 
     auto close = make_pending_close(close_sequence.value(), false);
 
-    ErrorOr<void> result;
+    ErrorOr<void, Database::Error> result;
     bool queue_close = m_persisted_storage.has_value() && (!topology_is_current || window_has_pending_tab_closes(closing.window_id));
     if (!queue_close) {
         result = finish_window_close(close);
@@ -2300,7 +2300,7 @@ void SessionStore::mark_clean_exit(AfterExit after_exit)
 // and would write it back once it is tried again. Nothing closed is kept, so such a close removes its rows instead. Only
 // the window that the next launch brings back is written as it was closed, since its pending close alone holds the latest
 // state of its tabs, unless deleting browsing data took it.
-ErrorOr<void> SessionStore::discard_pending_closes()
+ErrorOr<void, Database::Error> SessionStore::discard_pending_closes()
 {
     for (auto const& pending : m_pending_tab_closes)
         TRY(m_persisted_storage->discard_tab({ .id = pending.tab_id, .remaining_window = remaining_window_write(pending.tab.window_id, pending.tab_id) }));
@@ -2343,7 +2343,7 @@ Optional<WebView::SessionHistorySnapshot> SessionStore::load_tab_history(Session
     return snapshot.release_value();
 }
 
-ErrorOr<Optional<ClosedSessionUnit>> SessionStore::take_most_recently_closed()
+ErrorOr<Optional<ClosedSessionUnit>, Database::Error> SessionStore::take_most_recently_closed()
 {
     auto const& closed_units = m_transient_storage.closed_units();
     if (closed_units.is_empty())
@@ -2372,7 +2372,7 @@ Vector<RecentlyClosedSessionUnit> SessionStore::recently_closed_units(size_t lim
     return units;
 }
 
-ErrorOr<Optional<ClosedSessionUnit>> SessionStore::take_closed_unit(SessionWindowId unit_id)
+ErrorOr<Optional<ClosedSessionUnit>, Database::Error> SessionStore::take_closed_unit(SessionWindowId unit_id)
 {
     auto unit = m_transient_storage.closed_units().first_matching([&](auto const& unit) { return unit.session_id == unit_id; });
     if (!unit.has_value())
@@ -2403,7 +2403,7 @@ ErrorOr<Optional<ClosedSessionUnit>> SessionStore::take_closed_unit(SessionWindo
     return Optional<ClosedSessionUnit> { move(result) };
 }
 
-ErrorOr<void> SessionStore::remove_entries_accessed_since(UnixDateTime since)
+ErrorOr<void, Database::Error> SessionStore::remove_entries_accessed_since(UnixDateTime since)
 {
     auto closed_units = m_transient_storage.remove_closed_units_since(since);
 
@@ -2440,7 +2440,7 @@ ErrorOr<void> SessionStore::remove_entries_accessed_since(UnixDateTime since)
     return retry_pending_clear_closed_units();
 }
 
-ErrorOr<void> SessionStore::retry_pending_clear_closed_units()
+ErrorOr<void, Database::Error> SessionStore::retry_pending_clear_closed_units()
 {
     VERIFY(m_persisted_storage.has_value());
     VERIFY(m_pending_clear_closed_units.has_value());
@@ -2478,7 +2478,7 @@ void SessionStore::flush_dirty_state()
     if (!drain_window_metadata().is_error()) {
         for (size_t i = 0; i < m_pending_tab_closes.size();) {
             auto const& pending = m_pending_tab_closes[i];
-            ErrorOr<void> result;
+            ErrorOr<void, Database::Error> result;
             if (pending.discard) {
                 result = m_persisted_storage->discard_tab({ .id = pending.tab_id, .remaining_window = remaining_window_write(pending.tab.window_id, pending.tab_id) });
             } else {
@@ -2499,7 +2499,7 @@ void SessionStore::flush_dirty_state()
                 ++i;
                 continue;
             }
-            ErrorOr<void> result;
+            ErrorOr<void, Database::Error> result;
             if (pending.discard) {
                 result = m_persisted_storage->delete_session_rows(pending.window_id);
             } else {

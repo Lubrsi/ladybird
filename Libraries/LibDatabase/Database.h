@@ -22,6 +22,7 @@
 #include <AK/Span.h>
 #include <AK/StringView.h>
 #include <AK/Vector.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 
 struct sqlite3;
@@ -37,7 +38,7 @@ struct Migration {
 
     // Optional, runs after `sql`. Use this to bind placeholder values. Use
     // try_execute_statement to allow a failure to roll the migration transaction back.
-    Function<ErrorOr<void>(Database&)> backfill {};
+    Function<ErrorOr<void, Error>(Database&)> backfill {};
 };
 
 namespace Detail {
@@ -60,6 +61,19 @@ consteval void assert_supported_placeholder()
 {
     static_assert(!is_unsupported_unsigned_sql_integer<ValueType>,
         "SQLite INTEGER is signed; bind a validated u32/i64 or an explicitly encoded value");
+}
+
+template<typename ResultType>
+constexpr bool is_result_with_database_error = false;
+
+template<typename ValueType>
+constexpr bool is_result_with_database_error<ErrorOr<ValueType, Error>> = true;
+
+template<typename ResultType>
+consteval void assert_callback_returns_database_error()
+{
+    static_assert(is_result_with_database_error<RemoveCVReference<ResultType>>,
+        "A callback passed to Database must return ErrorOr<T, Database::Error>");
 }
 
 }
@@ -98,14 +112,14 @@ public:
         ForeignKeys foreign_keys { ForeignKeys::No };
     };
 
-    static ErrorOr<NonnullRefPtr<Database>> create_memory_backed(Options);
-    static ErrorOr<NonnullRefPtr<Database>> create_memory_backed() { return create_memory_backed(Options {}); }
-    static ErrorOr<NonnullRefPtr<Database>> create(ByteString const& directory, StringView name, Options);
-    static ErrorOr<NonnullRefPtr<Database>> create(ByteString const& directory, StringView name) { return create(directory, name, Options {}); }
+    static ErrorOr<NonnullRefPtr<Database>, Error> create_memory_backed(Options);
+    static ErrorOr<NonnullRefPtr<Database>, Error> create_memory_backed() { return create_memory_backed(Options {}); }
+    static ErrorOr<NonnullRefPtr<Database>, Error> create(ByteString const& directory, StringView name, Options);
+    static ErrorOr<NonnullRefPtr<Database>, Error> create(ByteString const& directory, StringView name) { return create(directory, name, Options {}); }
     ~Database();
 
-    using OnResult = Function<ErrorOr<void>(StatementID)>;
-    using OnResultRow = Function<ErrorOr<void>(ResultRow&)>;
+    using OnResult = Function<ErrorOr<void, Error>(StatementID)>;
+    using OnResultRow = Function<ErrorOr<void, Error>(ResultRow&)>;
 
     enum class StatementExecutionOutcome {
         Completed,
@@ -116,7 +130,7 @@ public:
 
     Options const& options() const { return m_options; }
 
-    ErrorOr<StatementID> prepare_statement(StringView statement);
+    ErrorOr<StatementID, Error> prepare_statement(StringView statement);
 
     void execute_statement(StatementID statement_id, OnResult on_result)
     {
@@ -171,24 +185,26 @@ public:
     bool result_column_is_null(Badge<ResultRow>, StatementID, int column);
 
     template<typename BindCallback>
-    ErrorOr<void> try_execute_bound_statement(StatementID statement_id, BindCallback&& bind_all, OnResultRow on_result = {})
+    ErrorOr<void, Error> try_execute_bound_statement(StatementID statement_id, BindCallback&& bind_all, OnResultRow on_result = {})
     {
         ScopeGuard clear_on_exit = [&] { clear_bound_parameters(statement_id); };
-        auto bind = [&](StringView name, auto const& value) -> ErrorOr<void> {
+        auto bind = [&](StringView name, auto const& value) -> ErrorOr<void, Error> {
             Detail::assert_supported_placeholder<decltype(value)>();
             return bind_parameter(statement_id, name, value);
         };
+        Detail::assert_callback_returns_database_error<decltype(bind_all(bind))>();
         TRY(bind_all(bind));
         return try_step_bound_statement(statement_id, move(on_result));
     }
 
     template<typename T, typename BindCallback, typename ReadCallback>
-    ErrorOr<T> try_execute_bound_statement_one(StatementID statement_id, BindCallback&& bind_all, ReadCallback&& read_row)
+    ErrorOr<T, Error> try_execute_bound_statement_one(StatementID statement_id, BindCallback&& bind_all, ReadCallback&& read_row)
     {
         Optional<T> result;
-        TRY(try_execute_bound_statement(statement_id, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void> {
+        TRY(try_execute_bound_statement(statement_id, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void, Error> {
             if (result.has_value())
                 return Error::from_string_literal("Statement returned more than one row");
+            Detail::assert_callback_returns_database_error<decltype(read_row(row))>();
             result = TRY(read_row(row));
             return {};
         }));
@@ -201,10 +217,10 @@ public:
     // DML RETURNING performs every change and buffers all output during the first step,
     // so a result-row budget cannot bound its work.
     template<typename BindCallback>
-    ErrorOr<void> try_execute_bound_statement(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, OnResultRow on_result)
+    ErrorOr<void, Error> try_execute_bound_statement(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, OnResultRow on_result)
     {
         size_t row_count = 0;
-        return try_execute_bound_statement(statement_id, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void> {
+        return try_execute_bound_statement(statement_id, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void, Error> {
             if (row_count == maximum_rows)
                 return Error::from_string_literal("Statement returned more rows than the caller allowed");
             ++row_count;
@@ -213,10 +229,11 @@ public:
     }
 
     template<typename T, typename BindCallback, typename ReadCallback>
-    ErrorOr<Vector<T>> try_collect_bound_statement(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, ReadCallback&& read_row)
+    ErrorOr<Vector<T>, Error> try_collect_bound_statement(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, ReadCallback&& read_row)
     {
         Vector<T> rows;
-        TRY(try_execute_bound_statement(statement_id, maximum_rows, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void> {
+        TRY(try_execute_bound_statement(statement_id, maximum_rows, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void, Error> {
+            Detail::assert_callback_returns_database_error<decltype(read_row(row))>();
             TRY(rows.try_append(TRY(read_row(row))));
             return {};
         }));
@@ -225,27 +242,28 @@ public:
 
     // The budget counts result rows, not distinct values.
     template<typename T, typename BindCallback, typename ReadCallback>
-    ErrorOr<HashTable<T>> try_collect_bound_statement_set(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, ReadCallback&& read_row)
+    ErrorOr<HashTable<T>, Error> try_collect_bound_statement_set(StatementID statement_id, size_t maximum_rows, BindCallback&& bind_all, ReadCallback&& read_row)
     {
         HashTable<T> values;
-        TRY(try_execute_bound_statement(statement_id, maximum_rows, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void> {
+        TRY(try_execute_bound_statement(statement_id, maximum_rows, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void, Error> {
+            Detail::assert_callback_returns_database_error<decltype(read_row(row))>();
             TRY(values.try_set(TRY(read_row(row))));
             return {};
         }));
         return values;
     }
 
-    ErrorOr<int> result_column_index(StatementID, StringView name);
+    ErrorOr<int, Error> result_column_index(StatementID, StringView name);
 
-    ErrorOr<void> execute_raw(ByteString const& sql);
+    ErrorOr<void, Error> execute_raw(ByteString const& sql);
 
-    ErrorOr<void> transaction(Function<ErrorOr<void>()> callback);
+    ErrorOr<void, Error> transaction(Function<ErrorOr<void, Error>()> callback);
 
     // Error-returning sibling of execute_statement, for callers that must handle failures
     // (e.g. migration backfills, which roll the migration transaction back) instead of
     // aborting the process.
     template<typename... PlaceholderValues>
-    ErrorOr<void> try_execute_statement(StatementID statement_id, OnResult on_result, PlaceholderValues&&... placeholder_values)
+    ErrorOr<void, Error> try_execute_statement(StatementID statement_id, OnResult on_result, PlaceholderValues&&... placeholder_values)
     {
         (Detail::assert_supported_placeholder<PlaceholderValues>(), ...);
         if constexpr (sizeof...(PlaceholderValues) > 0) {
@@ -273,27 +291,27 @@ public:
     // migration text is immutable; schema changes append a new version. Baseline (first)
     // migrations use CREATE ... IF NOT EXISTS so pre-versioning databases adopt them as a
     // no-op; later migrations must not.
-    ErrorOr<MigrationOutcome> migrate(StringView store_name, ReadonlySpan<Migration> migrations, MigrationMode = MigrationMode::Apply);
+    ErrorOr<MigrationOutcome, Error> migrate(StringView store_name, ReadonlySpan<Migration> migrations, MigrationMode = MigrationMode::Apply);
 
-    ErrorOr<bool> table_exists(StringView table);
+    ErrorOr<bool, Error> table_exists(StringView table);
 
     // The version recorded for the store in SchemaVersions, or empty if it has none yet.
-    ErrorOr<Optional<u32>> schema_version(StringView store);
+    ErrorOr<Optional<u32>, Error> schema_version(StringView store);
 
     // https://www.sqlite.org/c3ref/busy_timeout.html
-    ErrorOr<void> set_busy_timeout(i32 milliseconds);
+    ErrorOr<void, Error> set_busy_timeout(i32 milliseconds);
 
 private:
-    static ErrorOr<NonnullRefPtr<Database>> create(sqlite3*, Options, Optional<LexicalPath> database_path = {});
+    static ErrorOr<NonnullRefPtr<Database>, Error> create(sqlite3*, Options, Optional<LexicalPath> database_path = {});
     Database(sqlite3*, Optional<LexicalPath> database_path);
 
-    ErrorOr<JournalMode> set_journal_mode_pragma(JournalMode);
-    ErrorOr<void> set_synchronous_pragma(Synchronous);
-    ErrorOr<void> set_foreign_keys_pragma(ForeignKeys);
+    ErrorOr<JournalMode, Error> set_journal_mode_pragma(JournalMode);
+    ErrorOr<void, Error> set_synchronous_pragma(Synchronous);
+    ErrorOr<void, Error> set_foreign_keys_pragma(ForeignKeys);
 
     void execute_statement_internal(StatementID, OnResult);
     StatementExecutionOutcome execute_interruptible_statement_internal(StatementID, OnResult);
-    ErrorOr<void> try_execute_statement_internal(StatementID, OnResult);
+    ErrorOr<void, Error> try_execute_statement_internal(StatementID, OnResult);
 
     int bound_parameter_count(StatementID);
 
@@ -301,11 +319,11 @@ private:
     void apply_placeholder(StatementID statement_id, int index, ValueType const& value);
 
     template<typename ValueType>
-    ErrorOr<void> try_apply_placeholder(StatementID statement_id, int index, ValueType const& value);
+    ErrorOr<void, Error> try_apply_placeholder(StatementID statement_id, int index, ValueType const& value);
 
     template<typename ValueType>
-    ErrorOr<void> bind_parameter(StatementID statement_id, StringView name, ValueType const& value);
-    ErrorOr<void> try_step_bound_statement(StatementID, OnResultRow);
+    ErrorOr<void, Error> bind_parameter(StatementID statement_id, StringView name, ValueType const& value);
+    ErrorOr<void, Error> try_step_bound_statement(StatementID, OnResultRow);
     void clear_bound_parameters(StatementID statement_id);
 
     class Transaction {
@@ -321,8 +339,8 @@ private:
         Transaction& operator=(Transaction&&) = delete;
         Transaction& operator=(Transaction const&) = delete;
 
-        ErrorOr<void> begin();
-        ErrorOr<void> commit();
+        ErrorOr<void, Error> begin();
+        ErrorOr<void, Error> commit();
 
     private:
         Database& m_database;

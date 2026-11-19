@@ -29,7 +29,7 @@ static constexpr StringView cache_directory_for_mode(DiskCache::Mode mode)
     VERIFY_NOT_REACHED();
 }
 
-ErrorOr<Optional<DiskCache>> DiskCache::create(Mode mode, LexicalPath const& cache_root)
+ErrorOr<Optional<DiskCache>, Database::Error> DiskCache::create(Mode mode, LexicalPath const& cache_root)
 {
     auto cache_directory = cache_root.append(cache_directory_for_mode(mode));
 

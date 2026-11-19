@@ -42,13 +42,13 @@ class CacheIndex {
     };
 
 public:
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<CacheIndex> create(Database::Database&, LexicalPath const& cache_directory);
+    static ErrorOr<CacheIndex, Database::Error> create(Database::Database&, LexicalPath const& cache_directory);
 
     using OnEntryRemoved = Function<void(CacheDigest const& cache_key, CacheDigest const& vary_key)>;
 
-    ErrorOr<void> create_entry(CacheDigest const& cache_key, CacheDigest const& vary_key, String url, NonnullRefPtr<HeaderList> request_headers, NonnullRefPtr<HeaderList> response_headers, u64 data_size, UnixDateTime request_time, UnixDateTime response_time);
+    ErrorOr<void, Database::Error> create_entry(CacheDigest const& cache_key, CacheDigest const& vary_key, String url, NonnullRefPtr<HeaderList> request_headers, NonnullRefPtr<HeaderList> response_headers, u64 data_size, UnixDateTime request_time, UnixDateTime response_time);
     void remove_entry(CacheDigest const& cache_key, CacheDigest const& vary_key);
     void remove_entries_exceeding_cache_limit(OnEntryRemoved on_entry_removed);
     void remove_variants_exceeding_limit(CacheDigest const& cache_key, CacheDigest const& vary_key_to_keep, OnEntryRemoved on_entry_removed);
@@ -59,7 +59,7 @@ public:
     Optional<Entry const&> find_entry(CacheDigest const& cache_key, HeaderList const& request_headers);
     bool has_entry(CacheDigest const& cache_key, CacheDigest const& vary_key);
 
-    ErrorOr<void> update_response_headers(CacheDigest const& cache_key, CacheDigest const& vary_key, NonnullRefPtr<HeaderList>, UnixDateTime request_time, UnixDateTime response_time);
+    ErrorOr<void, Database::Error> update_response_headers(CacheDigest const& cache_key, CacheDigest const& vary_key, NonnullRefPtr<HeaderList>, UnixDateTime request_time, UnixDateTime response_time);
     void update_last_access_time(CacheDigest const& cache_key, CacheDigest const& vary_key);
 
     Requests::CacheSizes estimate_cache_size_accessed_since(UnixDateTime since);

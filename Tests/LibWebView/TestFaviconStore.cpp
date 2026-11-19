@@ -57,7 +57,7 @@ TEST_CASE(persisted_favicons_round_trip_and_deduplicate)
 
     auto row_count_statement = TRY_OR_FAIL(database->prepare_statement("SELECT COUNT(*) FROM Favicons;"sv));
     i64 row_count = 0;
-    database->execute_statement(row_count_statement, [&](auto statement_id) -> ErrorOr<void> {
+    database->execute_statement(row_count_statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         row_count = database->result_column<i64>(statement_id, 0);
         return {};
     });

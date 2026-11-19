@@ -184,7 +184,7 @@ TEST_CASE(unversioned_cookie_table_is_stamped_and_preserved)
 
     Optional<u32> version;
     auto statement = TRY_OR_FAIL(database->prepare_statement("SELECT version FROM SchemaVersions WHERE store = 'Cookies';"sv));
-    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> { version = database->result_column<u32>(statement_id, 0); return {}; });
+    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> { version = database->result_column<u32>(statement_id, 0); return {}; });
     EXPECT_EQ(version, Optional<u32> { 3u });
 
     auto jar = TRY_OR_FAIL(WebView::CookieJar::create(*database));

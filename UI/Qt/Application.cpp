@@ -1546,7 +1546,7 @@ SessionLaunchPolicy Application::launch_restore_policy() const
 
 void Application::create_session_store(ByteString const& data_directory, bool persists_sessions)
 {
-    auto session_store = [&]() -> ErrorOr<NonnullOwnPtr<SessionStore>> {
+    auto session_store = [&]() -> ErrorOr<NonnullOwnPtr<SessionStore>, Database::Error> {
         if (!persists_sessions)
             return SessionStore::create();
 
@@ -1594,7 +1594,7 @@ void Application::create_history_store(ByteString const& data_directory, bool us
         return;
     }
 
-    auto created = [&]() -> ErrorOr<bool> {
+    auto created = [&]() -> ErrorOr<bool, Database::Error> {
         // The History database is shared by the favicon and history stores. Preflight both before applying either
         // migration so a database that is too new remains untouched.
         auto database = TRY(Database::Database::create(data_directory, "History"sv));

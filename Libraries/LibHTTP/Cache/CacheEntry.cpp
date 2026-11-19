@@ -216,19 +216,19 @@ ErrorOr<void> CacheEntryWriter::write_data(ReadonlyBytes data)
     return {};
 }
 
-ErrorOr<void> CacheEntryWriter::flush(NonnullRefPtr<HeaderList> request_headers)
+ErrorOr<void, Database::Error> CacheEntryWriter::flush(NonnullRefPtr<HeaderList> request_headers)
 {
     return flush_impl(move(request_headers), nullptr);
 }
 
-ErrorOr<CacheEntryBodyFile> CacheEntryWriter::flush_and_take_body_file(NonnullRefPtr<HeaderList> request_headers)
+ErrorOr<CacheEntryBodyFile, Database::Error> CacheEntryWriter::flush_and_take_body_file(NonnullRefPtr<HeaderList> request_headers)
 {
     CacheEntryBodyFile body_file;
     TRY(flush_impl(move(request_headers), &body_file));
     return body_file;
 }
 
-ErrorOr<void> CacheEntryWriter::flush_impl(NonnullRefPtr<HeaderList> request_headers, CacheEntryBodyFile* body_file)
+ErrorOr<void, Database::Error> CacheEntryWriter::flush_impl(NonnullRefPtr<HeaderList> request_headers, CacheEntryBodyFile* body_file)
 {
     ScopeGuard guard { [&]() { close_and_destroy_cache_entry(); } };
 

@@ -16,7 +16,7 @@ static constexpr auto DATABASE_SYNCHRONIZATION_TIMER = AK::Duration::from_second
 
 static constexpr u32 HSTS_SCHEMA_BASELINE_VERSION = 1u;
 
-ErrorOr<Database::MigrationOutcome> HSTSStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> HSTSStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -35,7 +35,7 @@ ErrorOr<Database::MigrationOutcome> HSTSStore::migrate_schema(Database::Database
     return database.migrate("HSTSPolicies"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<HSTSStore>> HSTSStore::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<HSTSStore>, Database::Error> HSTSStore::create(Database::Database& database)
 {
     Statements statements {};
 
@@ -220,7 +220,7 @@ HSTSStore::TransientStorage::Policies HSTSStore::PersistedStorage::select_all_po
 {
     TransientStorage::Policies policies;
 
-    database->execute_statement(statements.select_all_policies, [&](auto row) -> ErrorOr<void> {
+    database->execute_statement(statements.select_all_policies, [&](auto row) -> ErrorOr<void, Database::Error> {
         auto domain = database->result_column<String>(row, 0);
         StoredPolicy stored_policy {
             .expiry = database->result_column<UnixDateTime>(row, 1),

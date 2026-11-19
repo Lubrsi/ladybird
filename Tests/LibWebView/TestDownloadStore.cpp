@@ -102,7 +102,7 @@ TEST_CASE(negative_records_are_not_saved)
 
     auto count = MUST(database->prepare_statement("SELECT COUNT(*) FROM Downloads;"sv));
     i64 stored_records = -1;
-    database->execute_statement(count, [&](auto statement_id) -> ErrorOr<void> {
+    database->execute_statement(count, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         stored_records = database->result_column<i64>(statement_id, 0);
         return {};
     });

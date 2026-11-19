@@ -38,7 +38,7 @@ TEST_CASE(string_can_contain_null_bytes)
         Optional<String> result;
         database->execute_statement(
             get_item_statement,
-            [&](auto statement_id) -> ErrorOr<void> {
+            [&](auto statement_id) -> ErrorOr<void, Database::Error> {
                 result = database->result_column<String>(statement_id, 0);
                 return {};
             },
@@ -78,7 +78,7 @@ TEST_CASE(double_values_can_be_bound_and_read)
     double result = 0;
     database->execute_statement(
         statement,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             result = database->result_column<double>(statement_id, 0);
             return {};
         },
@@ -97,7 +97,7 @@ TEST_CASE(interrupted_statement_can_be_reused)
     )#"sv));
 
     size_t row_count = 0;
-    auto outcome = database->execute_interruptible_statement(statement, [&](auto) -> ErrorOr<void> {
+    auto outcome = database->execute_interruptible_statement(statement, [&](auto) -> ErrorOr<void, Database::Error> {
         ++row_count;
         database->interrupt();
         return {};
@@ -106,7 +106,7 @@ TEST_CASE(interrupted_statement_can_be_reused)
     EXPECT_EQ(row_count, 1u);
 
     row_count = 0;
-    outcome = database->execute_interruptible_statement(statement, [&](auto) -> ErrorOr<void> {
+    outcome = database->execute_interruptible_statement(statement, [&](auto) -> ErrorOr<void, Database::Error> {
         ++row_count;
         return {};
     });
@@ -121,7 +121,7 @@ TEST_CASE(busy_timeout_can_be_configured)
 
     auto statement = TRY_OR_FAIL(database->prepare_statement("PRAGMA busy_timeout;"sv));
     i32 busy_timeout = 0;
-    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         busy_timeout = database->result_column<i32>(statement_id, 0);
         return {};
     });
@@ -132,7 +132,7 @@ static i32 read_foreign_keys_pragma(DB& database)
 {
     auto statement = MUST(database.prepare_statement("PRAGMA foreign_keys;"sv));
     i32 value = -1;
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> { value = database.result_column<i32>(statement_id, 0); return {}; });
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> { value = database.result_column<i32>(statement_id, 0); return {}; });
     return value;
 }
 
@@ -163,7 +163,7 @@ static i32 count_rows(DB& database, StringView table)
 {
     auto statement = MUST(database.prepare_statement(MUST(String::formatted("SELECT COUNT(*) FROM {};", table))));
     i32 count = -1;
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> { count = database.result_column<i32>(statement_id, 0); return {}; });
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> { count = database.result_column<i32>(statement_id, 0); return {}; });
     return count;
 }
 
@@ -192,13 +192,13 @@ TEST_CASE(transaction_commits_on_success_and_rolls_back_on_error)
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE t (v INTEGER);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v) VALUES (?);"sv));
 
-    TRY_OR_FAIL(database->transaction([&]() -> ErrorOr<void> {
+    TRY_OR_FAIL(database->transaction([&]() -> ErrorOr<void, Database::Error> {
         TRY(database->try_execute_statement(insert, {}, 1));
         return {};
     }));
     EXPECT_EQ(count_rows(*database, "t"sv), 1);
 
-    auto rolled_back = database->transaction([&]() -> ErrorOr<void> {
+    auto rolled_back = database->transaction([&]() -> ErrorOr<void, Database::Error> {
         TRY(database->try_execute_statement(insert, {}, 2));
         return Error::from_string_literal("deliberate failure");
     });
@@ -230,8 +230,8 @@ TEST_CASE(checked_reads_reject_wrong_storage_class)
     auto with_value = [&](i32 key, auto fn) {
         TRY_OR_FAIL(database->try_execute_bound_statement(
             select,
-            [&](auto& bind) -> ErrorOr<void> { return bind("i"sv, key); },
-            [&](Database::ResultRow& row) -> ErrorOr<void> { fn(row); return {}; }));
+            [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("i"sv, key); },
+            [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> { fn(row); return {}; }));
     };
 
     with_value(1, [&](Database::ResultRow& row) {
@@ -278,8 +278,8 @@ TEST_CASE(bounded_reads_reject_oversized_cells)
     auto with_value = [&](i32 key, auto fn) {
         TRY_OR_FAIL(database->try_execute_bound_statement(
             select,
-            [&](auto& bind) -> ErrorOr<void> { return bind("i"sv, key); },
-            [&](Database::ResultRow& row) -> ErrorOr<void> { fn(row); return {}; }));
+            [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("i"sv, key); },
+            [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> { fn(row); return {}; }));
     };
 
     with_value(1, [&](Database::ResultRow& row) {
@@ -302,7 +302,7 @@ TEST_CASE(named_binding_is_order_independent)
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE named (a INTEGER NOT NULL, b TEXT NOT NULL, c INTEGER NOT NULL);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO named (a, b, c) VALUES (:a, :b, :c);"sv));
 
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("c"sv, static_cast<i64>(30)));
         TRY(bind("b"sv, "two"_string));
         TRY(bind("a"sv, static_cast<i64>(10)));
@@ -317,8 +317,8 @@ TEST_CASE(named_binding_is_order_independent)
     bool read = false;
     TRY_OR_FAIL(database->try_execute_bound_statement(
         select,
-        [](auto&) -> ErrorOr<void> { return {}; },
-        [&](Database::ResultRow& row) -> ErrorOr<void> {
+        [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             read = true;
             EXPECT_EQ(TRY(row.read_integer<i64>("a"sv)), 10);
             EXPECT_EQ(TRY(row.read_text("b"sv, 1024)), "two"_string);
@@ -334,7 +334,7 @@ TEST_CASE(bind_rejects_unknown_and_nul_names)
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE named (a INTEGER NOT NULL);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO named (a) VALUES (:a);"sv));
 
-    auto unknown = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    auto unknown = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("missing"sv, static_cast<i64>(1));
     });
     EXPECT(unknown.is_error());
@@ -342,7 +342,7 @@ TEST_CASE(bind_rejects_unknown_and_nul_names)
 
     // The name up to the NUL ("a") is a real parameter, but the supplied name is not, so it must be
     // rejected rather than silently bound as ":a".
-    auto embedded_nul = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    auto embedded_nul = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind(StringView { "a\0b", 3 }, static_cast<i64>(1));
     });
     EXPECT(embedded_nul.is_error());
@@ -354,19 +354,19 @@ TEST_CASE(bound_execute_requires_every_parameter)
     auto database = TRY_OR_FAIL(DB::create_memory_backed());
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE t (owner_id INTEGER NOT NULL, v INTEGER NOT NULL);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (owner_id, v) VALUES (:owner_id, :v);"sv));
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("owner_id"sv, static_cast<i64>(1)));
         TRY(bind("v"sv, static_cast<i64>(42)));
         return {};
     }));
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t WHERE owner_id = :owner_id;"sv));
-    auto missing = database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void> { return {}; });
+    auto missing = database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void, Database::Error> { return {}; });
     EXPECT(missing.is_error());
     EXPECT_EQ(missing.error().string_literal(), "Statement executed with an unbound parameter"sv);
 
     bool matched = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, [&](auto& bind) -> ErrorOr<void> { return bind("owner_id"sv, static_cast<i64>(1)); }, [&](Database::ResultRow&) -> ErrorOr<void> { matched = true; return {}; }));
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("owner_id"sv, static_cast<i64>(1)); }, [&](Database::ResultRow&) -> ErrorOr<void, Database::Error> { matched = true; return {}; }));
     EXPECT(matched);
 }
 
@@ -376,23 +376,23 @@ TEST_CASE(bound_execute_clears_state_between_cycles)
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE t (a INTEGER NOT NULL, b INTEGER NOT NULL);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (a, b) VALUES (:a, :b);"sv));
 
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("a"sv, static_cast<i64>(1)));
         TRY(bind("b"sv, static_cast<i64>(2)));
         return {};
     }));
 
-    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                        return bind("a"sv, static_cast<i64>(3));
                    })
             .is_error());
 
-    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                        TRY(bind("a"sv, static_cast<i64>(4)));
                        return bind("missing"sv, static_cast<i64>(0));
                    })
             .is_error());
-    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    EXPECT(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                        return bind("b"sv, static_cast<i64>(5));
                    })
             .is_error());
@@ -408,7 +408,7 @@ TEST_CASE(result_column_index_rejects_ambiguous_and_missing_names)
 
     auto duplicate = TRY_OR_FAIL(database->prepare_statement("SELECT a AS id, b AS id FROM t;"sv));
     bool checked = false;
-    database->execute_statement(duplicate, [&](auto) -> ErrorOr<void> {
+    database->execute_statement(duplicate, [&](auto) -> ErrorOr<void, Database::Error> {
         checked = true;
         auto ambiguous = database->result_column_index(duplicate, "id"sv);
         EXPECT(ambiguous.is_error());
@@ -429,7 +429,7 @@ TEST_CASE(bound_execute_handles_a_zero_parameter_statement)
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t;"sv));
     bool ran = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void> { return {}; }, [&](Database::ResultRow&) -> ErrorOr<void> { ran = true; return {}; }));
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }, [&](Database::ResultRow&) -> ErrorOr<void, Database::Error> { ran = true; return {}; }));
     EXPECT(ran);
 }
 
@@ -442,13 +442,13 @@ TEST_CASE(utf16_text_round_trips_lonely_surrogates)
     auto text = Utf16String::from_utf16(Utf16View { code_units, 3 });
 
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (s) VALUES (:s);"sv));
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("s"sv, text);
     }));
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT s FROM t;"sv));
     bool read = false;
-    database->execute_statement(select, [&](auto statement_id) -> ErrorOr<void> {
+    database->execute_statement(select, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         read = true;
         EXPECT_EQ(database->result_column<Utf16String>(statement_id, 0), text);
         return {};
@@ -456,7 +456,7 @@ TEST_CASE(utf16_text_round_trips_lonely_surrogates)
     EXPECT(read);
 
     bool row_read = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void> { return {}; }, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         row_read = true;
         EXPECT_EQ(TRY(row.read_utf16_text("s"sv, 1024)), text);
         return {}; }));
@@ -471,7 +471,7 @@ TEST_CASE(utf16_text_read_rejects_malformed_bytes)
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT s FROM t;"sv));
     bool read = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void> { return {}; }, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         read = true;
         EXPECT(row.read_utf16_text("s"sv, 1024).is_error());
         return {}; }));
@@ -492,13 +492,13 @@ TEST_CASE(named_binding_supports_more_than_64_parameters)
     auto statement = TRY_OR_FAIL(database->prepare_statement(builder.string_view()));
 
     bool ran = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(statement, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(statement, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         for (int i = 0; i < 70; ++i)
             TRY(bind(ByteString::formatted("p{}", i), static_cast<i64>(i)));
-        return {}; }, [&](Database::ResultRow&) -> ErrorOr<void> { ran = true; return {}; }));
+        return {}; }, [&](Database::ResultRow&) -> ErrorOr<void, Database::Error> { ran = true; return {}; }));
     EXPECT(ran);
 
-    EXPECT(database->try_execute_bound_statement(statement, [&](auto& bind) -> ErrorOr<void> {
+    EXPECT(database->try_execute_bound_statement(statement, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                        for (int i = 0; i < 69; ++i)
                            TRY(bind(ByteString::formatted("p{}", i), static_cast<i64>(i)));
                        return {};
@@ -511,7 +511,7 @@ TEST_CASE(result_row_reads_columns_by_name)
     auto database = TRY_OR_FAIL(DB::create_memory_backed());
     database->execute_statement(TRY_OR_FAIL(database->prepare_statement("CREATE TABLE t (n INTEGER NOT NULL, s TEXT NOT NULL, b BLOB NOT NULL);"sv)), {});
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (n, s, b) VALUES (:n, :s, :b);"sv));
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("n"sv, static_cast<i64>(7)));
         TRY(bind("s"sv, "hi"_string));
         TRY(bind("b"sv, ByteString { "\x01\x02", 2 }));
@@ -519,9 +519,9 @@ TEST_CASE(result_row_reads_columns_by_name)
     }));
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT b, s, n FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
     bool read = false;
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         read = true;
         EXPECT_EQ(TRY(row.read_integer<i64>("n"sv)), 7);
         EXPECT_EQ(TRY(row.read_text("s"sv, 1024)), "hi"_string);
@@ -530,7 +530,7 @@ TEST_CASE(result_row_reads_columns_by_name)
     }));
     EXPECT(read);
 
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT(row.read_integer<i64>("nope"sv).is_error());
         EXPECT(row.read_integer<i64>("s"sv).is_error());
         return {};
@@ -544,11 +544,11 @@ TEST_CASE(typed_integer_reads_check_range_and_storage_class)
 
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v, s) VALUES (:v, :s);"sv));
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT v, s FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
 
     auto store = [&](i64 value) {
         TRY_OR_FAIL(database->execute_raw("DELETE FROM t;"sv));
-        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("v"sv, value));
             TRY(bind("s"sv, "text"_string));
             return {};
@@ -556,7 +556,7 @@ TEST_CASE(typed_integer_reads_check_range_and_storage_class)
     };
 
     store(static_cast<i64>(NumericLimits<i32>::max()) + 1);
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT(row.read_integer<i32>("v"sv).is_error());
         EXPECT_EQ(TRY(row.read_integer<u32>("v"sv)), static_cast<u32>(NumericLimits<i32>::max()) + 1);
         EXPECT_EQ(TRY(row.read_integer<i64>("v"sv)), static_cast<i64>(NumericLimits<i32>::max()) + 1);
@@ -564,13 +564,13 @@ TEST_CASE(typed_integer_reads_check_range_and_storage_class)
     }));
 
     store(static_cast<i64>(NumericLimits<u32>::max()) + 1);
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT(row.read_integer<u32>("v"sv).is_error());
         return {};
     }));
 
     store(-1);
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT(row.read_integer<u32>("v"sv).is_error());
         EXPECT(row.read_integer<u64>("v"sv).is_error());
         EXPECT_EQ(TRY(row.read_integer<i32>("v"sv)), -1);
@@ -578,7 +578,7 @@ TEST_CASE(typed_integer_reads_check_range_and_storage_class)
     }));
 
     store(0);
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT(row.read_integer<i64>("s"sv).is_error());
         EXPECT(row.read_optional_integer<i64>("s"sv).is_error());
         EXPECT_EQ(TRY(row.is_null("v"sv)), false);
@@ -587,7 +587,7 @@ TEST_CASE(typed_integer_reads_check_range_and_storage_class)
     }));
 
     auto select_max = TRY_OR_FAIL(database->prepare_statement("SELECT MAX(v) AS maximum FROM t WHERE v > 100;"sv));
-    TRY_OR_FAIL(database->try_execute_bound_statement(select_max, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select_max, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.is_null("maximum"sv)), true);
         EXPECT_EQ(TRY(row.read_optional_integer<i64>("maximum"sv)), Optional<i64> {});
         EXPECT(row.read_integer<i64>("maximum"sv).is_error());
@@ -602,13 +602,13 @@ TEST_CASE(borrowed_bytes_bind_as_blobs)
 
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (b) VALUES (:b);"sv));
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT b, typeof(b) AS kind, b IS NULL AS absent FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
 
     auto payload = MUST(ByteBuffer::copy("\x01\x02\x03"sv.bytes()));
-    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("b"sv, payload.bytes());
     }));
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.read_text("kind"sv, 16)), "blob"_string);
         EXPECT_EQ(TRY(row.read_bool("absent"sv)), false);
         EXPECT_EQ(TRY(row.read_blob("b"sv, 1024)), payload);
@@ -617,7 +617,7 @@ TEST_CASE(borrowed_bytes_bind_as_blobs)
 
     auto store = [&](ReadonlyBytes bytes) {
         TRY_OR_FAIL(database->execute_raw("DELETE FROM t;"sv));
-        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("b"sv, bytes);
         }));
     };
@@ -625,7 +625,7 @@ TEST_CASE(borrowed_bytes_bind_as_blobs)
     ByteBuffer const empty_buffer {};
     for (auto bytes : { ReadonlyBytes {}, empty_buffer.bytes() }) {
         store(bytes);
-        TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+        TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             EXPECT_EQ(TRY(row.read_text("kind"sv, 16)), "blob"_string);
             EXPECT_EQ(TRY(row.read_bool("absent"sv)), false);
             EXPECT(TRY(row.read_blob("b"sv, 1024)).is_empty());
@@ -641,11 +641,11 @@ TEST_CASE(optional_placeholders_bind_null_when_empty)
 
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v, s) VALUES (:v, :s);"sv));
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT v, s FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
 
     auto store = [&](Optional<u32> value, Optional<String> text) {
         TRY_OR_FAIL(database->execute_raw("DELETE FROM t;"sv));
-        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void> {
+        TRY_OR_FAIL(database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("v"sv, value));
             TRY(bind("s"sv, text));
             return {};
@@ -653,7 +653,7 @@ TEST_CASE(optional_placeholders_bind_null_when_empty)
     };
 
     store(7u, "text"_string);
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.is_null("v"sv)), false);
         EXPECT_EQ(TRY(row.read_optional_integer<u32>("v"sv)), Optional<u32> { 7 });
         EXPECT_EQ(TRY(row.read_optional_text("s"sv, 64)), Optional<String> { "text"_string });
@@ -661,7 +661,7 @@ TEST_CASE(optional_placeholders_bind_null_when_empty)
     }));
 
     store({}, {});
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.is_null("v"sv)), true);
         EXPECT_EQ(TRY(row.read_optional_integer<u32>("v"sv)), Optional<u32> {});
         EXPECT_EQ(TRY(row.read_optional_text("s"sv, 64)), Optional<String> {});
@@ -669,7 +669,7 @@ TEST_CASE(optional_placeholders_bind_null_when_empty)
     }));
 
     store(0u, String {});
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.is_null("v"sv)), false);
         EXPECT_EQ(TRY(row.read_optional_integer<u32>("v"sv)), Optional<u32> { 0 });
         EXPECT_EQ(TRY(row.read_optional_text("s"sv, 64)), Optional<String> { String {} });
@@ -684,15 +684,15 @@ TEST_CASE(column_name_cache_survives_a_reprepare)
     TRY_OR_FAIL(database->execute_raw("INSERT INTO t (a) VALUES (7);"sv));
 
     auto select = TRY_OR_FAIL(database->prepare_statement("SELECT * FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
 
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.read_integer<i64>("a"sv)), 7);
         return {};
     }));
 
     TRY_OR_FAIL(database->execute_raw("ALTER TABLE t RENAME COLUMN a TO b;"sv));
-    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void> {
+    TRY_OR_FAIL(database->try_execute_bound_statement(select, no_binds, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
         EXPECT_EQ(TRY(row.read_integer<i64>("b"sv)), 7);
         EXPECT(row.read_integer<i64>("a"sv).is_error());
         return {};
@@ -706,23 +706,23 @@ TEST_CASE(one_row_execution_maps_the_single_row)
     TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, v) VALUES (1, 10), (2, 20);"sv));
 
     auto select_by_id = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t WHERE id = :id;"sv));
-    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64> {
+    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
         return row.read_integer<i64>("v"sv);
     };
 
-    auto value = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void> { return bind("id"sv, static_cast<i64>(2)); }, read_v);
+    auto value = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(2)); }, read_v);
     EXPECT_EQ(TRY_OR_FAIL(move(value)), 20);
 
-    auto none = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void> { return bind("id"sv, static_cast<i64>(99)); }, read_v);
+    auto none = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(99)); }, read_v);
     EXPECT(none.is_error());
     EXPECT_EQ(none.error().string_literal(), "Statement returned no rows"sv);
 
     auto select_all = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t;"sv));
-    auto many = database->try_execute_bound_statement_one<i64>(select_all, [](auto&) -> ErrorOr<void> { return {}; }, read_v);
+    auto many = database->try_execute_bound_statement_one<i64>(select_all, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }, read_v);
     EXPECT(many.is_error());
     EXPECT_EQ(many.error().string_literal(), "Statement returned more than one row"sv);
 
-    auto again = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void> { return bind("id"sv, static_cast<i64>(1)); }, read_v);
+    auto again = database->try_execute_bound_statement_one<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(1)); }, read_v);
     EXPECT_EQ(TRY_OR_FAIL(move(again)), 10);
 }
 
@@ -732,14 +732,14 @@ TEST_CASE(one_row_execution_reads_a_returning_clause)
     TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);"sv));
 
     auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v) VALUES (:v) RETURNING id;"sv));
-    auto read_id = [](Database::ResultRow& row) -> ErrorOr<i64> {
+    auto read_id = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
         return row.read_integer<i64>("id"sv);
     };
 
-    auto first = database->try_execute_bound_statement_one<i64>(insert, [](auto& bind) -> ErrorOr<void> { return bind("v"sv, static_cast<i64>(10)); }, read_id);
+    auto first = database->try_execute_bound_statement_one<i64>(insert, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("v"sv, static_cast<i64>(10)); }, read_id);
     EXPECT_EQ(TRY_OR_FAIL(move(first)), 1);
 
-    auto second = database->try_execute_bound_statement_one<i64>(insert, [](auto& bind) -> ErrorOr<void> { return bind("v"sv, static_cast<i64>(20)); }, read_id);
+    auto second = database->try_execute_bound_statement_one<i64>(insert, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("v"sv, static_cast<i64>(20)); }, read_id);
     EXPECT_EQ(TRY_OR_FAIL(move(second)), 2);
 }
 
@@ -754,8 +754,8 @@ TEST_CASE(bounded_execution_stops_before_the_callback_past_the_budget)
     auto result = database->try_execute_bound_statement(
         select_all,
         2uz,
-        [](auto&) -> ErrorOr<void> { return {}; },
-        [&](Database::ResultRow&) -> ErrorOr<void> {
+        [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+        [&](Database::ResultRow&) -> ErrorOr<void, Database::Error> {
             ++callback_invocations;
             return {};
         });
@@ -770,8 +770,8 @@ TEST_CASE(collect_bounded_statement_maps_rows_under_the_budget)
     TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);"sv));
 
     auto select_all = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
-    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64> {
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
+    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
         return row.read_integer<i64>("v"sv);
     };
 
@@ -793,7 +793,7 @@ TEST_CASE(collect_bounded_statement_maps_rows_under_the_budget)
     EXPECT_EQ(past_limit.error().string_literal(), "Statement returned more rows than the caller allowed"sv);
 
     auto mapper_failure = database->try_collect_bound_statement<i64>(select_all, 2uz, no_binds,
-        [](Database::ResultRow&) -> ErrorOr<i64> { return Error::from_string_literal("mapper failed"); });
+        [](Database::ResultRow&) -> ErrorOr<i64, Database::Error> { return Error::from_string_literal("mapper failed"); });
     EXPECT(mapper_failure.is_error());
     EXPECT_EQ(mapper_failure.error().string_literal(), "mapper failed"sv);
 
@@ -808,8 +808,8 @@ TEST_CASE(collect_set_deduplicates_but_budget_counts_rows)
     TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, v) VALUES (1, 5), (2, 5), (3, 7);"sv));
 
     auto select_all = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t;"sv));
-    auto no_binds = [](auto&) -> ErrorOr<void> { return {}; };
-    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64> {
+    auto no_binds = [](auto&) -> ErrorOr<void, Database::Error> { return {}; };
+    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
         return row.read_integer<i64>("v"sv);
     };
 
@@ -832,7 +832,7 @@ TEST_CASE(integral_binds_widen_to_64_bit)
     auto select_by_id = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t WHERE id = ?;"sv));
     auto stored_value = [&](i64 id) {
         Optional<i64> value;
-        database->execute_statement(select_by_id, [&](auto statement_id) -> ErrorOr<void> {
+        database->execute_statement(select_by_id, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             value = database->result_column<i64>(statement_id, 0);
             return {}; }, id);
         return value;
@@ -848,7 +848,82 @@ TEST_CASE(integral_binds_widen_to_64_bit)
     EXPECT_EQ(stored_value(3), Optional<i64> { NumericLimits<i64>::max() });
 }
 
-TEST_CASE(failed_open_closes_its_connection)
+TEST_CASE(constraint_violations_carry_their_extended_result_code)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE);"sv));
+    auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (id, name) VALUES (:id, :name);"sv));
+
+    auto insert_row = [&](i64 id, String const& name) {
+        return database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(bind("id"sv, id));
+            TRY(bind("name"sv, name));
+            return {};
+        });
+    };
+    TRY_OR_FAIL(insert_row(1, "a"_string));
+
+    auto duplicate_name = insert_row(2, "a"_string);
+    EXPECT(duplicate_name.is_error());
+    EXPECT(duplicate_name.error().has_result_code(Database::ResultCode::ConstraintUnique));
+
+    auto duplicate_id = insert_row(1, "b"_string);
+    EXPECT(duplicate_id.is_error());
+    EXPECT(duplicate_id.error().has_result_code(Database::ResultCode::ConstraintPrimaryKey));
+}
+
+TEST_CASE(full_database_carries_its_result_code)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (v BLOB);"sv));
+    TRY_OR_FAIL(database->execute_raw("PRAGMA max_page_count = 8;"sv));
+    auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v) VALUES (:v);"sv));
+
+    // Eight pages hold less than this at any page size.
+    auto value = TRY_OR_FAIL(ByteBuffer::create_zeroed(MiB));
+
+    auto result = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
+        return bind("v"sv, value);
+    });
+    EXPECT(result.is_error());
+    EXPECT(result.error().has_result_code(Database::ResultCode::Full));
+}
+
+TEST_CASE(value_over_the_length_limit_fails_at_the_bind)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (v BLOB);"sv));
+    auto insert = TRY_OR_FAIL(database->prepare_statement("INSERT INTO t (v) VALUES (:v);"sv));
+
+    // https://www.sqlite.org/limits.html
+    // No build of SQLite takes a value this long. SQLite refuses it before reading it, so no page is touched.
+    auto value = TRY_OR_FAIL(ByteBuffer::create_uninitialized(static_cast<size_t>(NumericLimits<i32>::max()) + 1));
+
+    bool bind_failed = false;
+    auto result = database->try_execute_bound_statement(insert, [&](auto& bind) -> ErrorOr<void, Database::Error> {
+        auto bound = bind("v"sv, value);
+        bind_failed = bound.is_error();
+        return bound;
+    });
+    EXPECT(bind_failed);
+    EXPECT(result.is_error());
+    EXPECT(result.error().has_result_code(Database::ResultCode::TooBig));
+}
+
+TEST_CASE(failure_in_a_row_callback_carries_no_result_code)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    auto select = TRY_OR_FAIL(database->prepare_statement("SELECT 1;"sv));
+
+    auto result = database->try_execute_statement(select, [](auto) -> ErrorOr<void, Database::Error> {
+        return Error::from_string_literal("deliberate failure");
+    });
+    EXPECT(result.is_error());
+    EXPECT_EQ(result.error().string_literal(), "deliberate failure"sv);
+    EXPECT(!result.error().result_code().has_value());
+}
+
+TEST_CASE(failed_open_reports_its_result_code_and_closes_its_connection)
 {
     auto database_directory = ByteString::formatted(
         "{}/ladybird-database-test-{}",
@@ -870,6 +945,11 @@ TEST_CASE(failed_open_closes_its_connection)
     }
     EXPECT_EQ(sqlite3_memory_used(), memory_in_use);
 
-    EXPECT(DB::create(database_directory, "Blocked"sv).is_error());
+    auto blocked = DB::create(database_directory, "Blocked"sv);
+    EXPECT(blocked.is_error());
     EXPECT_EQ(sqlite3_memory_used(), memory_in_use);
+
+    // A file system may report an extended code that names the cause.
+    auto primary_result_code = blocked.error().result_code().value_or(SQLITE_OK) & 0xff;
+    EXPECT_EQ(primary_result_code, SQLITE_CANTOPEN);
 }

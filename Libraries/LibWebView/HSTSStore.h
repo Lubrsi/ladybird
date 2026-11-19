@@ -10,6 +10,7 @@
 #include <AK/String.h>
 #include <AK/Time.h>
 #include <LibCore/Timer.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibHTTP/HSTS/ParsedHSTSPolicy.h>
 #include <LibWebView/Forward.h>
@@ -20,9 +21,9 @@ class WEBVIEW_API HSTSStore {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<HSTSStore>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<HSTSStore>, Database::Error> create(Database::Database&);
     static NonnullOwnPtr<HSTSStore> create();
 
     ~HSTSStore();

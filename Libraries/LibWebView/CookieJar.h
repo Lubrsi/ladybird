@@ -13,6 +13,7 @@
 #include <AK/StringView.h>
 #include <AK/Traits.h>
 #include <LibCore/Timer.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibHTTP/Cookie/Cookie.h>
 #include <LibRequests/CacheSizes.h>
@@ -37,9 +38,9 @@ class WEBVIEW_API CookieJar {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<CookieJar>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<CookieJar>, Database::Error> create(Database::Database&);
     static NonnullOwnPtr<CookieJar> create(IsPrivate = IsPrivate::No);
 
     ~CookieJar();

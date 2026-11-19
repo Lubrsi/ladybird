@@ -13,6 +13,7 @@
 #include <AK/String.h>
 #include <AK/Time.h>
 #include <AK/Vector.h>
+#include <LibDatabase/Error.h>
 #include <LibDatabase/Forward.h>
 #include <LibURL/URL.h>
 #include <LibWebView/Export.h>
@@ -48,9 +49,9 @@ class WEBVIEW_API HistoryStore {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<HistoryStore>> create(Database::Database&);
+    static ErrorOr<NonnullOwnPtr<HistoryStore>, Database::Error> create(Database::Database&);
     static NonnullOwnPtr<HistoryStore> create(Optional<FaviconStore&> favicon_store = {});
     static NonnullOwnPtr<HistoryStore> create_disabled();
 

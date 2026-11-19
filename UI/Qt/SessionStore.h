@@ -148,21 +148,21 @@ public:
         UnixDateTime closed_at;
     };
 
-    static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
+    static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode = Database::MigrationMode::Apply);
 
-    static ErrorOr<NonnullOwnPtr<SessionStore>> create(Database::Database&, SessionLaunchPolicy = SessionLaunchPolicy::None);
+    static ErrorOr<NonnullOwnPtr<SessionStore>, Database::Error> create(Database::Database&, SessionLaunchPolicy = SessionLaunchPolicy::None);
     static NonnullOwnPtr<SessionStore> create();
 
     ~SessionStore();
 
-    ErrorOr<SessionWindowId> window_opened();
-    ErrorOr<void> window_closing(WindowClosing);
+    ErrorOr<SessionWindowId, Database::Error> window_opened();
+    ErrorOr<void, Database::Error> window_closing(WindowClosing);
     void window_detached(SessionWindowId);
     void window_activated(SessionWindowId);
     void window_geometry_changed(SessionWindowId, SessionWindowGeometry);
-    ErrorOr<SessionTabId> tab_opened(TabOpened);
+    ErrorOr<SessionTabId, Database::Error> tab_opened(TabOpened);
     void update_tab_state(TabStateUpdate);
-    ErrorOr<void> tab_closed(TabClosed);
+    ErrorOr<void, Database::Error> tab_closed(TabClosed);
     void tab_detached(SessionTabId);
     void tab_moved(TabMoved);
     void tab_order_changed(TabOrderChanged);
@@ -170,7 +170,7 @@ public:
     // A pin moves the tab into or out of the pinned tabs at the start of its window, so it's written at once, together
     // with the window's tab order: Launch restore depends on both. And a write that fails leaves the window's metadata
     // dirty, for the next flush to retry.
-    ErrorOr<void> tab_pinned_changed(SessionTabId, bool pinned);
+    ErrorOr<void, Database::Error> tab_pinned_changed(SessionTabId, bool pinned);
     void active_tab_changed(SessionTabId);
     void application_quitting();
     void application_quit_aborted();
@@ -190,11 +190,11 @@ public:
     bool is_persistent() const { return m_persisted_storage.has_value(); }
 
     bool has_closed_units() const;
-    ErrorOr<Optional<ClosedSessionUnit>> take_most_recently_closed();
+    ErrorOr<Optional<ClosedSessionUnit>, Database::Error> take_most_recently_closed();
     // The closed units, most recently closed first.
     Vector<RecentlyClosedSessionUnit> recently_closed_units(size_t limit) const;
-    ErrorOr<Optional<ClosedSessionUnit>> take_closed_unit(SessionWindowId);
-    ErrorOr<void> remove_entries_accessed_since(UnixDateTime);
+    ErrorOr<Optional<ClosedSessionUnit>, Database::Error> take_closed_unit(SessionWindowId);
+    ErrorOr<void, Database::Error> remove_entries_accessed_since(UnixDateTime);
 
     // The windows startup recovery kept open, in activation order with the frontmost last. It's handed over once.
     Vector<RestoredSessionWindow> take_launch_plan();
@@ -218,7 +218,7 @@ private:
 
         // The statement must yield one row whose first column is the INTEGER maximum id in use, or
         // NULL when no rows exist.
-        static ErrorOr<IdAllocator> create_from_maximum(Database::Database&, Database::StatementID);
+        static ErrorOr<IdAllocator, Database::Error> create_from_maximum(Database::Database&, Database::StatementID);
 
         ErrorOr<i64> allocate();
 
@@ -422,29 +422,29 @@ private:
 
     // Applies mutations atomically while preserving persisted row invariants.
     struct PersistedStorage {
-        static ErrorOr<Database::MigrationOutcome> migrate_schema(Database::Database&, Database::MigrationMode);
-        static ErrorOr<PersistedStorage> create(Database::Database&);
+        static ErrorOr<Database::MigrationOutcome, Database::Error> migrate_schema(Database::Database&, Database::MigrationMode);
+        static ErrorOr<PersistedStorage, Database::Error> create(Database::Database&);
 
-        ErrorOr<void> insert_open_window(SessionWindowId);
-        ErrorOr<void> open_tab(OpenTabWrite const&);
-        ErrorOr<void> flush_tab(TabWrite const&);
-        ErrorOr<void> write_windows_metadata(Vector<WindowMetadataWrite> const&);
-        ErrorOr<void> close_tab(ClosedTabWrite const&);
-        ErrorOr<void> close_window(ClosedWindowWrite const&);
-        ErrorOr<void> discard_tab(DiscardTabWrite const&);
-        ErrorOr<void> clear_closed_units(ClearClosedUnitsWrite const&);
-        ErrorOr<RecoveryResult> recover_open_windows(RecoveryWrite const&, IdAllocator& session_id_allocator, IdAllocator& close_sequence_allocator);
-        ErrorOr<void> clear_restore_at_launch();
-        ErrorOr<void> clear_startup_recovery_origin();
-        ErrorOr<void> delete_session_rows(SessionWindowId);
-        ErrorOr<void> prune_closed_units(UnitKind, u32 max_units);
-        ErrorOr<void> write_lifecycle(bool clean_exit, u32 consecutive_unclean_exits, bool restart = false);
-        ErrorOr<void> forget_all_but_pinned_tabs();
+        ErrorOr<void, Database::Error> insert_open_window(SessionWindowId);
+        ErrorOr<void, Database::Error> open_tab(OpenTabWrite const&);
+        ErrorOr<void, Database::Error> flush_tab(TabWrite const&);
+        ErrorOr<void, Database::Error> write_windows_metadata(Vector<WindowMetadataWrite> const&);
+        ErrorOr<void, Database::Error> close_tab(ClosedTabWrite const&);
+        ErrorOr<void, Database::Error> close_window(ClosedWindowWrite const&);
+        ErrorOr<void, Database::Error> discard_tab(DiscardTabWrite const&);
+        ErrorOr<void, Database::Error> clear_closed_units(ClearClosedUnitsWrite const&);
+        ErrorOr<RecoveryResult, Database::Error> recover_open_windows(RecoveryWrite const&, IdAllocator& session_id_allocator, IdAllocator& close_sequence_allocator);
+        ErrorOr<void, Database::Error> clear_restore_at_launch();
+        ErrorOr<void, Database::Error> clear_startup_recovery_origin();
+        ErrorOr<void, Database::Error> delete_session_rows(SessionWindowId);
+        ErrorOr<void, Database::Error> prune_closed_units(UnitKind, u32 max_units);
+        ErrorOr<void, Database::Error> write_lifecycle(bool clean_exit, u32 consecutive_unclean_exits, bool restart = false);
+        ErrorOr<void, Database::Error> forget_all_but_pinned_tabs();
 
-        ErrorOr<IdAllocators> create_id_allocators();
-        ErrorOr<WebView::SessionHistorySnapshot> load_tab_snapshot(SessionTabId, size_t current_used_step_index);
-        ErrorOr<Vector<ClosedUnit>> load_closed_units();
-        ErrorOr<Vector<ClosedSessionTab>> take_closed_unit(SessionWindowId);
+        ErrorOr<IdAllocators, Database::Error> create_id_allocators();
+        ErrorOr<WebView::SessionHistorySnapshot, Database::Error> load_tab_snapshot(SessionTabId, size_t current_used_step_index);
+        ErrorOr<Vector<ClosedUnit>, Database::Error> load_closed_units();
+        ErrorOr<Vector<ClosedSessionTab>, Database::Error> take_closed_unit(SessionWindowId);
 
         NonnullRefPtr<Database::Database> database;
         Statements statements;
@@ -454,17 +454,17 @@ private:
             u32 consecutive_unclean_exits { 0 };
             bool follows_restart { false };
         };
-        ErrorOr<RunStart> record_run_start();
-        ErrorOr<void> apply_tab_row_write(TabWrite const&);
-        ErrorOr<void> apply_window_metadata(WindowMetadataWrite const&);
-        ErrorOr<void> insert_closed_unit_row(ClosedUnitWrite const&);
-        ErrorOr<void> delete_tab_rows(SessionTabId);
-        ErrorOr<Vector<RecoveredTab>> read_recovered_tabs(SessionWindowId);
-        ErrorOr<void> reparent_tabs(SessionWindowId, Vector<RecoveredTab> const&);
-        ErrorOr<void> write_session_metadata(SessionWindowId, i64 active_tab_index, i64 activation_sequence);
-        ErrorOr<void> write_session_geometry(SessionWindowId, SessionWindowGeometry const&);
-        ErrorOr<void> demote_to_startup_recovery_unit(SessionWindowId, UnixDateTime recovered_at, IdAllocator& close_sequence_allocator);
-        ErrorOr<void> reopen_session(SessionWindowId);
+        ErrorOr<RunStart, Database::Error> record_run_start();
+        ErrorOr<void, Database::Error> apply_tab_row_write(TabWrite const&);
+        ErrorOr<void, Database::Error> apply_window_metadata(WindowMetadataWrite const&);
+        ErrorOr<void, Database::Error> insert_closed_unit_row(ClosedUnitWrite const&);
+        ErrorOr<void, Database::Error> delete_tab_rows(SessionTabId);
+        ErrorOr<Vector<RecoveredTab>, Database::Error> read_recovered_tabs(SessionWindowId);
+        ErrorOr<void, Database::Error> reparent_tabs(SessionWindowId, Vector<RecoveredTab> const&);
+        ErrorOr<void, Database::Error> write_session_metadata(SessionWindowId, i64 active_tab_index, i64 activation_sequence);
+        ErrorOr<void, Database::Error> write_session_geometry(SessionWindowId, SessionWindowGeometry const&);
+        ErrorOr<void, Database::Error> demote_to_startup_recovery_unit(SessionWindowId, UnixDateTime recovered_at, IdAllocator& close_sequence_allocator);
+        ErrorOr<void, Database::Error> reopen_session(SessionWindowId);
     };
 
     // A close whose database write failed; the frontend tab or window is already gone, so the
@@ -547,20 +547,20 @@ private:
 
     explicit SessionStore(Optional<PersistedStorage>);
 
-    ErrorOr<void> run_startup_recovery(UnixDateTime recovered_at, SessionLaunchPolicy);
-    ErrorOr<void> flush_tab(SessionTabId, OpenTab const&);
-    ErrorOr<void> drain_window_metadata();
+    ErrorOr<void, Database::Error> run_startup_recovery(UnixDateTime recovered_at, SessionLaunchPolicy);
+    ErrorOr<void, Database::Error> flush_tab(SessionTabId, OpenTab const&);
+    ErrorOr<void, Database::Error> drain_window_metadata();
     WindowMetadataWrite window_metadata_write(SessionWindowId, OpenWindow const&) const;
     Optional<WindowMetadataWrite> remaining_window_write(SessionWindowId, SessionTabId closing_tab) const;
     TabWrite tab_write_for(SessionTabId, OpenTab const&, i64 tab_ordinal) const;
     bool window_has_pending_tab_closes(SessionWindowId) const;
-    ErrorOr<void> discard_pending_closes();
-    ErrorOr<void> finish_tab_close(PendingTabClose const&);
-    ErrorOr<void> finish_window_close(PendingWindowClose const&);
-    ErrorOr<void> retry_pending_clear_closed_units();
+    ErrorOr<void, Database::Error> discard_pending_closes();
+    ErrorOr<void, Database::Error> finish_tab_close(PendingTabClose const&);
+    ErrorOr<void, Database::Error> finish_window_close(PendingWindowClose const&);
+    ErrorOr<void, Database::Error> retry_pending_clear_closed_units();
     void append_closed_tab_unit(PendingTabClose const&);
     void append_closed_window_unit(PendingWindowClose const&);
-    ErrorOr<SessionWindowId> default_window();
+    ErrorOr<SessionWindowId, Database::Error> default_window();
     static bool is_tab_worth_keeping(URL::URL const&);
     static u32 max_closed_units(UnitKind);
 

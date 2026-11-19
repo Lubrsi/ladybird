@@ -71,7 +71,7 @@ static Optional<Vector<DownloadSegmentRecord>> deserialize_segments(StringView s
     return segments;
 }
 
-ErrorOr<Database::MigrationOutcome> DownloadStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> DownloadStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -117,7 +117,7 @@ ErrorOr<Database::MigrationOutcome> DownloadStore::migrate_schema(Database::Data
     return database.migrate("Downloads"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<DownloadStore>> DownloadStore::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<DownloadStore>, Database::Error> DownloadStore::create(Database::Database& database)
 {
     Statements statements {};
 
@@ -235,7 +235,7 @@ Vector<DownloadRecord> DownloadStore::resumable_downloads()
 
     m_database->execute_statement(
         m_statements.list_downloads,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto id = m_database->result_i64_checked(statement_id, 0);
             auto total_size = m_database->result_i64_checked(statement_id, 5);
             if (id.is_error() || total_size.is_error() || id.value() < 0 || total_size.value() < 0)
@@ -283,7 +283,7 @@ i64 DownloadStore::maximum_download_id()
 
     m_database->execute_statement(
         m_statements.maximum_download_id,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto id = m_database->result_i64_checked(statement_id, 0);
             if (!id.is_error() && id.value() >= 0)
                 maximum_id = id.value();

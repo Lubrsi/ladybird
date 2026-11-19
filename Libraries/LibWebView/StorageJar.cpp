@@ -18,7 +18,7 @@ namespace WebView {
 
 static constexpr u32 WEB_STORAGE_SCHEMA_BASELINE_VERSION = 2u;
 
-ErrorOr<Database::MigrationOutcome> StorageJar::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> StorageJar::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -39,7 +39,7 @@ ErrorOr<Database::MigrationOutcome> StorageJar::migrate_schema(Database::Databas
     return database.migrate("WebStorage"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<StorageJar>> StorageJar::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<StorageJar>, Database::Error> StorageJar::create(Database::Database& database)
 {
     Statements statements {};
 
@@ -317,7 +317,7 @@ Optional<Utf16String> StorageJar::PersistedStorage::get_item(StorageLocation con
 
     database->execute_statement(
         statements.get_item,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             result = database->result_column<Utf16String>(statement_id, 0);
             return {};
         },
@@ -334,7 +334,7 @@ Vector<StorageItem> StorageJar::PersistedStorage::get_items(StorageEndpointType 
 
     database->execute_statement(
         statements.get_items,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             items.append({ database->result_column<Utf16String>(statement_id, 0), database->result_column<Utf16String>(statement_id, 1) });
             return {};
         },
@@ -351,7 +351,7 @@ StorageSetResult StorageJar::PersistedStorage::set_item(StorageLocation const& k
     size_t current_size = 0;
     database->execute_statement(
         statements.calculate_size_excluding_bottle_key,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             current_size = database->result_column<i64>(statement_id, 0);
             return {};
         },
@@ -391,7 +391,7 @@ Vector<StorageBottleLocation> StorageJar::PersistedStorage::delete_items_accesse
 
     database->execute_statement(
         statements.bottles_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             affected_bottles.append({ static_cast<StorageEndpointType>(database->result_column<i64>(statement_id, 0)), database->result_column<String>(statement_id, 1) });
             return {};
         },
@@ -416,7 +416,7 @@ u64 StorageJar::PersistedStorage::bottle_usage(StorageEndpointType storage_endpo
     u64 current_size_in_bytes = 0;
     database->execute_statement(
         statements.calculate_bottle_size,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             current_size_in_bytes = static_cast<u64>(database->result_column<i64>(statement_id, 0));
             return {};
         },
@@ -440,7 +440,7 @@ Vector<Utf16String> StorageJar::PersistedStorage::get_keys(StorageEndpointType s
 
     database->execute_statement(
         statements.get_keys,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             keys.append(database->result_column<Utf16String>(statement_id, 0));
             return {};
         },
@@ -455,7 +455,7 @@ u64 StorageJar::PersistedStorage::usage(String const& storage_key)
     u64 current_size_in_bytes = 0;
     database->execute_statement(
         statements.calculate_size,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             current_size_in_bytes = static_cast<u64>(database->result_column<i64>(statement_id, 0));
             return {};
         },
@@ -469,12 +469,12 @@ Requests::CacheSizes StorageJar::PersistedStorage::estimate_storage_size_accesse
 
     database->execute_statement(
         statements.estimate_storage_size_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> { sizes.since_requested_time = static_cast<u64>(database->result_column<i64>(statement_id, 0)); return {}; },
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> { sizes.since_requested_time = static_cast<u64>(database->result_column<i64>(statement_id, 0)); return {}; },
         since);
 
     database->execute_statement(
         statements.estimate_storage_size_accessed_since,
-        [&](auto statement_id) -> ErrorOr<void> { sizes.total = static_cast<u64>(database->result_column<i64>(statement_id, 0)); return {}; },
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> { sizes.total = static_cast<u64>(database->result_column<i64>(statement_id, 0)); return {}; },
         UnixDateTime::earliest());
 
     return sizes;

@@ -96,13 +96,13 @@ struct SessionHistorySnapshotStatements {
     Database::StatementID delete_used_steps;
 };
 
-ErrorOr<SessionHistorySnapshotStatements> prepare_session_history_snapshot_statements(Database::Database&);
+ErrorOr<SessionHistorySnapshotStatements, Database::Error> prepare_session_history_snapshot_statements(Database::Database&);
 
 ErrorOr<void> validate_session_history_snapshot_storable(WebView::SessionHistorySnapshot const&);
 
 // Validates before writing; the caller owns the transaction.
-ErrorOr<void> store_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id, WebView::SessionHistorySnapshot const&);
-ErrorOr<WebView::SessionHistorySnapshot> load_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id, size_t current_used_step_index);
-ErrorOr<void> delete_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id);
+ErrorOr<void, Database::Error> store_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id, WebView::SessionHistorySnapshot const&);
+ErrorOr<WebView::SessionHistorySnapshot, Database::Error> load_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id, size_t current_used_step_index);
+ErrorOr<void, Database::Error> delete_session_history_snapshot(Database::Database&, SessionHistorySnapshotStatements const&, i64 tab_id);
 
 }

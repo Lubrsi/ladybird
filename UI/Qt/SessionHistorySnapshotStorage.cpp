@@ -581,7 +581,7 @@ static ErrorOr<void> validate_entry_within_column_caps(Web::HTML::SessionHistory
     return {};
 }
 
-ErrorOr<SessionHistorySnapshotStatements> prepare_session_history_snapshot_statements(Database::Database& database)
+ErrorOr<SessionHistorySnapshotStatements, Database::Error> prepare_session_history_snapshot_statements(Database::Database& database)
 {
     return SessionHistorySnapshotStatements {
         .insert_history = TRY(database.prepare_statement(
@@ -727,27 +727,27 @@ ErrorOr<SessionHistorySnapshotStatements> prepare_session_history_snapshot_state
     };
 }
 
-ErrorOr<void> delete_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id)
+ErrorOr<void, Database::Error> delete_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id)
 {
-    TRY(database.try_execute_bound_statement(statements.delete_histories, [&](auto& bind) -> ErrorOr<void> {
+    TRY(database.try_execute_bound_statement(statements.delete_histories, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("tab_id"sv, tab_id);
     }));
-    TRY(database.try_execute_bound_statement(statements.delete_used_steps, [&](auto& bind) -> ErrorOr<void> {
+    TRY(database.try_execute_bound_statement(statements.delete_used_steps, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("tab_id"sv, tab_id);
     }));
     return {};
 }
 
-static ErrorOr<i64> insert_row_returning_id(Database::Database& database, Database::StatementID statement_id, auto&& bind_all)
+static ErrorOr<i64, Database::Error> insert_row_returning_id(Database::Database& database, Database::StatementID statement_id, auto&& bind_all)
 {
-    return database.try_execute_bound_statement_one<i64>(statement_id, forward<decltype(bind_all)>(bind_all), [](Database::ResultRow& result_row) -> ErrorOr<i64> {
+    return database.try_execute_bound_statement_one<i64>(statement_id, forward<decltype(bind_all)>(bind_all), [](Database::ResultRow& result_row) -> ErrorOr<i64, Database::Error> {
         return result_row.read_integer<i64>("id"sv);
     });
 }
 
-static ErrorOr<void> store_policy_container(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 history_id, i64 entry_ordinal, Web::HTML::SerializedPolicyContainer const& container)
+static ErrorOr<void, Database::Error> store_policy_container(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 history_id, i64 entry_ordinal, Web::HTML::SerializedPolicyContainer const& container)
 {
-    auto container_id = TRY(insert_row_returning_id(database, statements.insert_policy_container, [&](auto& bind) -> ErrorOr<void> {
+    auto container_id = TRY(insert_row_returning_id(database, statements.insert_policy_container, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("history_id"sv, history_id));
         TRY(bind("entry_ordinal"sv, entry_ordinal));
         TRY(bind("referrer_policy"sv, encode_referrer_policy(container.referrer_policy)));
@@ -762,7 +762,7 @@ static ErrorOr<void> store_policy_container(Database::Database& database, Sessio
 
     i64 tuple_ordinal = 0;
     for (auto const& tuple : container.upgrade_insecure_navigations_set.tuples()) {
-        TRY(database.try_execute_bound_statement(statements.insert_upgrade_insecure_navigation, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database.try_execute_bound_statement(statements.insert_upgrade_insecure_navigation, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("container_id"sv, container_id));
             TRY(bind("tuple_ordinal"sv, tuple_ordinal));
             TRY(bind("host"sv, tuple.host.serialize()));
@@ -775,7 +775,7 @@ static ErrorOr<void> store_policy_container(Database::Database& database, Sessio
     i64 policy_ordinal = 0;
     for (auto const& policy : container.csp_list) {
         auto self_origin = encode_origin(policy.self_origin);
-        auto policy_id = TRY(insert_row_returning_id(database, statements.insert_csp_policy, [&](auto& bind) -> ErrorOr<void> {
+        auto policy_id = TRY(insert_row_returning_id(database, statements.insert_csp_policy, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("container_id"sv, container_id));
             TRY(bind("policy_ordinal"sv, policy_ordinal));
             TRY(bind("disposition"sv, encode_csp_disposition(policy.disposition)));
@@ -792,7 +792,7 @@ static ErrorOr<void> store_policy_container(Database::Database& database, Sessio
 
         i64 directive_ordinal = 0;
         for (auto const& directive : policy.directives) {
-            auto directive_id = TRY(insert_row_returning_id(database, statements.insert_csp_directive, [&](auto& bind) -> ErrorOr<void> {
+            auto directive_id = TRY(insert_row_returning_id(database, statements.insert_csp_directive, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 TRY(bind("policy_id"sv, policy_id));
                 TRY(bind("directive_ordinal"sv, directive_ordinal));
                 TRY(bind("name"sv, directive.name.to_utf16_string()));
@@ -801,7 +801,7 @@ static ErrorOr<void> store_policy_container(Database::Database& database, Sessio
 
             i64 value_ordinal = 0;
             for (auto const& value : directive.value) {
-                TRY(database.try_execute_bound_statement(statements.insert_csp_directive_value, [&](auto& bind) -> ErrorOr<void> {
+                TRY(database.try_execute_bound_statement(statements.insert_csp_directive_value, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                     TRY(bind("directive_id"sv, directive_id));
                     TRY(bind("value_ordinal"sv, value_ordinal));
                     TRY(bind("value"sv, value));
@@ -865,7 +865,7 @@ ErrorOr<void> validate_session_history_snapshot_storable(WebView::SessionHistory
     return WebView::validate_snapshot_is_restorable(snapshot.entries, snapshot.used_steps, snapshot.current_used_step_index);
 }
 
-static ErrorOr<void> store_history_entries(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, i64 history_id, Vector<Web::HTML::SessionHistoryEntryDescriptor> const& entries, LocalFileRootsByDocumentState const& local_file_roots)
+static ErrorOr<void, Database::Error> store_history_entries(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, i64 history_id, Vector<Web::HTML::SessionHistoryEntryDescriptor> const& entries, LocalFileRootsByDocumentState const& local_file_roots)
 {
     i64 entry_ordinal = 0;
     for (auto const& entry : entries) {
@@ -881,7 +881,7 @@ static ErrorOr<void> store_history_entries(Database::Database& database, Session
         if (local_file_root_path.has_value())
             local_file_root_scope = to_underlying(local_file_roots.get(document_state.id)->scope);
 
-        TRY(database.try_execute_bound_statement(statements.insert_entry, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database.try_execute_bound_statement(statements.insert_entry, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("history_id"sv, history_id));
             TRY(bind("entry_ordinal"sv, entry_ordinal));
             TRY(bind("step"sv, entry.step));
@@ -935,10 +935,10 @@ static ErrorOr<void> store_history_entries(Database::Database& database, Session
 
         i64 nested_ordinal = 0;
         for (auto const& nested_history : document_state.nested_histories) {
-            auto child_history_id = TRY(insert_row_returning_id(database, statements.insert_history, [&](auto& bind) -> ErrorOr<void> {
+            auto child_history_id = TRY(insert_row_returning_id(database, statements.insert_history, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 return bind("tab_id"sv, tab_id);
             }));
-            TRY(database.try_execute_bound_statement(statements.insert_nested_history_link, [&](auto& bind) -> ErrorOr<void> {
+            TRY(database.try_execute_bound_statement(statements.insert_nested_history_link, [&](auto& bind) -> ErrorOr<void, Database::Error> {
                 TRY(bind("parent_history_id"sv, history_id));
                 TRY(bind("parent_entry_ordinal"sv, entry_ordinal));
                 TRY(bind("nested_ordinal"sv, nested_ordinal));
@@ -956,13 +956,13 @@ static ErrorOr<void> store_history_entries(Database::Database& database, Session
     return {};
 }
 
-ErrorOr<void> store_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, WebView::SessionHistorySnapshot const& snapshot)
+ErrorOr<void, Database::Error> store_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, WebView::SessionHistorySnapshot const& snapshot)
 {
     TRY(validate_session_history_snapshot_storable(snapshot));
 
     i64 step_ordinal = 0;
     for (auto step : snapshot.used_steps) {
-        TRY(database.try_execute_bound_statement(statements.insert_used_step, [&](auto& bind) -> ErrorOr<void> {
+        TRY(database.try_execute_bound_statement(statements.insert_used_step, [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("tab_id"sv, tab_id));
             TRY(bind("step_ordinal"sv, step_ordinal));
             TRY(bind("step"sv, step));
@@ -971,7 +971,7 @@ ErrorOr<void> store_session_history_snapshot(Database::Database& database, Sessi
         ++step_ordinal;
     }
 
-    auto root_history_id = TRY(insert_row_returning_id(database, statements.insert_history, [&](auto& bind) -> ErrorOr<void> {
+    auto root_history_id = TRY(insert_row_returning_id(database, statements.insert_history, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         return bind("tab_id"sv, tab_id);
     }));
     TRY(store_history_entries(database, statements, tab_id, root_history_id, snapshot.entries, local_file_roots_by_document_state(snapshot)));
@@ -1070,41 +1070,41 @@ struct NestedHistoryLinkRow {
 
 }
 
-static ErrorOr<String> read_snapshot_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
+static ErrorOr<String, Database::Error> read_snapshot_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
 {
     auto value = TRY(result_row.read_text(column, MAX_TEXT_COLUMN_BYTES));
     TRY(add_snapshot_bytes(totals, value.bytes().size()));
     return value;
 }
 
-static ErrorOr<Optional<String>> read_optional_snapshot_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
+static ErrorOr<Optional<String>, Database::Error> read_optional_snapshot_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
 {
     if (TRY(result_row.is_null(column)))
         return Optional<String> {};
     return Optional<String> { TRY(read_snapshot_text(result_row, column, totals)) };
 }
 
-static ErrorOr<Utf16String> read_snapshot_utf16_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
+static ErrorOr<Utf16String, Database::Error> read_snapshot_utf16_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
 {
     auto value = TRY(read_snapshot_text(result_row, column, totals));
-    return Utf16String::try_from_utf8(value.bytes_as_string_view());
+    return TRY(Utf16String::try_from_utf8(value.bytes_as_string_view()));
 }
 
-static ErrorOr<Optional<Utf16String>> read_optional_snapshot_utf16_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
+static ErrorOr<Optional<Utf16String>, Database::Error> read_optional_snapshot_utf16_text(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
 {
     if (TRY(result_row.is_null(column)))
         return Optional<Utf16String> {};
     return Optional<Utf16String> { TRY(read_snapshot_utf16_text(result_row, column, totals)) };
 }
 
-static ErrorOr<ByteBuffer> read_snapshot_blob(Database::ResultRow& result_row, StringView column, size_t max_bytes, SnapshotRowTotals& totals)
+static ErrorOr<ByteBuffer, Database::Error> read_snapshot_blob(Database::ResultRow& result_row, StringView column, size_t max_bytes, SnapshotRowTotals& totals)
 {
     auto value = TRY(result_row.read_blob(column, max_bytes));
     TRY(add_snapshot_bytes(totals, value.size()));
     return value;
 }
 
-static ErrorOr<Optional<URL::Origin::OpaqueData::Nonce>> read_nonce_column(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
+static ErrorOr<Optional<URL::Origin::OpaqueData::Nonce>, Database::Error> read_nonce_column(Database::ResultRow& result_row, StringView column, SnapshotRowTotals& totals)
 {
     if (TRY(result_row.is_null(column)))
         return Optional<URL::Origin::OpaqueData::Nonce> {};
@@ -1171,13 +1171,13 @@ static ErrorOr<Web::HTML::SerializedPolicyContainer> build_policy_container(Poli
     };
 }
 
-static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>> load_policy_containers(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, SnapshotRowTotals& totals)
+static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>, Database::Error> load_policy_containers(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, SnapshotRowTotals& totals)
 {
     auto container_rows = TRY(database.try_collect_bound_statement<PolicyContainerRow>(
         statements.select_policy_containers,
         MAX_SNAPSHOT_ENTRIES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<PolicyContainerRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<PolicyContainerRow, Database::Error> {
             PolicyContainerRow row;
             row.id = TRY(result_row.read_integer<i64>("id"sv));
             row.history_id = TRY(result_row.read_integer<i64>("history_id"sv));
@@ -1195,8 +1195,8 @@ static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>>
     auto upgrade_insecure_navigation_rows = TRY(database.try_collect_bound_statement<UpgradeInsecureNavigationRow>(
         statements.select_upgrade_insecure_navigations,
         MAX_SNAPSHOT_UPGRADE_INSECURE_NAVIGATIONS,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<UpgradeInsecureNavigationRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<UpgradeInsecureNavigationRow, Database::Error> {
             UpgradeInsecureNavigationRow row;
             row.container_id = TRY(result_row.read_integer<i64>("container_id"sv));
             row.tuple_ordinal = TRY(result_row.read_integer<i64>("tuple_ordinal"sv));
@@ -1208,8 +1208,8 @@ static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>>
     auto policy_rows = TRY(database.try_collect_bound_statement<CspPolicyRow>(
         statements.select_csp_policies,
         MAX_SNAPSHOT_CSP_POLICIES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<CspPolicyRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<CspPolicyRow, Database::Error> {
             CspPolicyRow row;
             row.id = TRY(result_row.read_integer<i64>("id"sv));
             row.container_id = TRY(result_row.read_integer<i64>("container_id"sv));
@@ -1231,8 +1231,8 @@ static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>>
     auto directive_rows = TRY(database.try_collect_bound_statement<CspDirectiveRow>(
         statements.select_csp_directives,
         MAX_SNAPSHOT_CSP_DIRECTIVES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<CspDirectiveRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<CspDirectiveRow, Database::Error> {
             CspDirectiveRow row;
             row.id = TRY(result_row.read_integer<i64>("id"sv));
             row.policy_id = TRY(result_row.read_integer<i64>("policy_id"sv));
@@ -1244,8 +1244,8 @@ static ErrorOr<HashMap<i64, HashMap<i64, Web::HTML::SerializedPolicyContainer>>>
     auto value_rows = TRY(database.try_collect_bound_statement<CspDirectiveValueRow>(
         statements.select_csp_directive_values,
         MAX_SNAPSHOT_CSP_DIRECTIVE_VALUES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<CspDirectiveValueRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<CspDirectiveValueRow, Database::Error> {
             CspDirectiveValueRow row;
             row.directive_id = TRY(result_row.read_integer<i64>("directive_id"sv));
             row.value_ordinal = TRY(result_row.read_integer<i64>("value_ordinal"sv));
@@ -1416,14 +1416,14 @@ static ErrorOr<Vector<Web::HTML::SessionHistoryEntryDescriptor>> load_history_en
     return entries;
 }
 
-ErrorOr<WebView::SessionHistorySnapshot> load_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, size_t current_used_step_index)
+ErrorOr<WebView::SessionHistorySnapshot, Database::Error> load_session_history_snapshot(Database::Database& database, SessionHistorySnapshotStatements const& statements, i64 tab_id, size_t current_used_step_index)
 {
     SnapshotRowTotals totals;
     auto used_step_rows = TRY(database.try_collect_bound_statement<UsedStepRow>(
         statements.select_used_steps,
         MAX_SNAPSHOT_ENTRIES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<UsedStepRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<UsedStepRow, Database::Error> {
             return UsedStepRow {
                 .step_ordinal = TRY(result_row.read_integer<i64>("step_ordinal"sv)),
                 .step = TRY(result_row.read_integer<i32>("step"sv)),
@@ -1445,8 +1445,8 @@ ErrorOr<WebView::SessionHistorySnapshot> load_session_history_snapshot(Database:
     auto entry_rows = TRY(database.try_collect_bound_statement<EntryRow>(
         statements.select_entries,
         MAX_SNAPSHOT_ENTRIES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<EntryRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<EntryRow, Database::Error> {
             EntryRow row;
             row.history_id = TRY(result_row.read_integer<i64>("history_id"sv));
             row.entry_ordinal = TRY(result_row.read_integer<i64>("entry_ordinal"sv));
@@ -1507,8 +1507,8 @@ ErrorOr<WebView::SessionHistorySnapshot> load_session_history_snapshot(Database:
     auto history_ids = TRY(database.try_collect_bound_statement_set<i64>(
         statements.select_histories,
         MAX_SNAPSHOT_HISTORIES,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<i64> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<i64, Database::Error> {
             return result_row.read_integer<i64>("id"sv);
         }));
 
@@ -1516,8 +1516,8 @@ ErrorOr<WebView::SessionHistorySnapshot> load_session_history_snapshot(Database:
     auto link_rows = TRY(database.try_collect_bound_statement<NestedHistoryLinkRow>(
         statements.select_nested_history_links,
         MAX_SNAPSHOT_HISTORIES - 1,
-        [&](auto& bind) -> ErrorOr<void> { return bind("tab_id"sv, tab_id); },
-        [&](Database::ResultRow& result_row) -> ErrorOr<NestedHistoryLinkRow> {
+        [&](auto& bind) -> ErrorOr<void, Database::Error> { return bind("tab_id"sv, tab_id); },
+        [&](Database::ResultRow& result_row) -> ErrorOr<NestedHistoryLinkRow, Database::Error> {
             NestedHistoryLinkRow row;
             row.parent_history_id = TRY(result_row.read_integer<i64>("parent_history_id"sv));
             row.parent_entry_ordinal = TRY(result_row.read_integer<size_t>("parent_entry_ordinal"sv));

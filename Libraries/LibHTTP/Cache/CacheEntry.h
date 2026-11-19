@@ -14,6 +14,7 @@
 #include <AK/Types.h>
 #include <LibCore/File.h>
 #include <LibCore/Notifier.h>
+#include <LibDatabase/Error.h>
 #include <LibHTTP/Cache/CacheKey.h>
 #include <LibHTTP/Cache/Version.h>
 #include <LibHTTP/Forward.h>
@@ -102,14 +103,14 @@ public:
 
     ErrorOr<void> write_status_and_reason(u32 status_code, Optional<String> reason_phrase, HeaderList const& request_headers, HeaderList const& response_headers);
     ErrorOr<void> write_data(ReadonlyBytes);
-    ErrorOr<void> flush(NonnullRefPtr<HeaderList> request_headers);
-    ErrorOr<CacheEntryBodyFile> flush_and_take_body_file(NonnullRefPtr<HeaderList> request_headers);
+    ErrorOr<void, Database::Error> flush(NonnullRefPtr<HeaderList> request_headers);
+    ErrorOr<CacheEntryBodyFile, Database::Error> flush_and_take_body_file(NonnullRefPtr<HeaderList> request_headers);
     void remove_incomplete_entry();
 
 private:
     CacheEntryWriter(DiskCache&, CacheIndex&, CacheDigest const& cache_key, String url, CacheHeader, UnixDateTime request_time, AK::Duration current_time_offset_for_testing);
 
-    ErrorOr<void> flush_impl(NonnullRefPtr<HeaderList> request_headers, CacheEntryBodyFile*);
+    ErrorOr<void, Database::Error> flush_impl(NonnullRefPtr<HeaderList> request_headers, CacheEntryBodyFile*);
     void remove_incomplete_temporary_file();
 
     OwnPtr<Core::OutputBufferedFile> m_file;

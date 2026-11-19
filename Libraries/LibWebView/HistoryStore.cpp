@@ -141,7 +141,7 @@ static void sort_matching_entries(Vector<HistoryEntry const*>& matches, StringVi
     return history_log_suggestions(suggestions);
 }
 
-ErrorOr<Database::MigrationOutcome> HistoryStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
+ErrorOr<Database::MigrationOutcome, Database::Error> HistoryStore::migrate_schema(Database::Database& database, Database::MigrationMode mode)
 {
     auto migrations = to_array<Database::Migration>({
         {
@@ -205,7 +205,7 @@ ErrorOr<Database::MigrationOutcome> HistoryStore::migrate_schema(Database::Datab
     return database.migrate("History"sv, migrations, mode);
 }
 
-ErrorOr<NonnullOwnPtr<HistoryStore>> HistoryStore::create(Database::Database& database)
+ErrorOr<NonnullOwnPtr<HistoryStore>, Database::Error> HistoryStore::create(Database::Database& database)
 {
     TRY(database.set_busy_timeout(HISTORY_DATABASE_BUSY_TIMEOUT_MS));
 
@@ -1030,7 +1030,7 @@ Optional<HistoryEntry> HistoryStore::PersistedStorage::entry_for_url(String cons
 
     m_database->execute_statement(
         m_statements.get_entry,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto title = m_database->result_column<String>(statement_id, 0);
             auto visit_count = m_database->result_column<i64>(statement_id, 1);
             auto favicon_png = m_database->result_column<ByteBuffer>(statement_id, 3);
@@ -1068,7 +1068,7 @@ Vector<HistoryEntry> HistoryStore::PersistedStorage::autocomplete_entries(String
 
     auto outcome = m_database->execute_interruptible_statement(
         m_statements.search_entries,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto title = m_database->result_column<String>(statement_id, 1);
             auto visit_count = m_database->result_column<i64>(statement_id, 2);
             auto favicon_png = m_database->result_column<ByteBuffer>(statement_id, 4);
@@ -1111,7 +1111,7 @@ Vector<HistoryEntry> HistoryStore::PersistedStorage::list_entries(StringView tit
 
     m_database->execute_statement(
         m_statements.list_entries,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto title = m_database->result_column<String>(statement_id, 1);
             auto visit_count = m_database->result_column<i64>(statement_id, 2);
             auto favicon_png = m_database->result_column<ByteBuffer>(statement_id, 4);
@@ -1147,7 +1147,7 @@ Vector<String> HistoryStore::PersistedStorage::referenced_favicon_hashes()
     Vector<String> hashes;
     m_database->execute_statement(
         m_statements.referenced_favicon_hashes,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             if (auto hash = m_database->result_column<String>(statement_id, 0); !hash.is_empty())
                 hashes.append(move(hash));
             return {};
@@ -1179,7 +1179,7 @@ Vector<StoredOmniboxEngagement> HistoryStore::PersistedStorage::omnibox_engageme
     Vector<StoredOmniboxEngagement> results;
     auto outcome = m_database->execute_interruptible_statement(
         m_statements.search_omnibox_engagements,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto explicit_use_count = m_database->result_column<i64>(statement_id, 3);
             auto default_use_count = m_database->result_column<i64>(statement_id, 4);
             if (explicit_use_count < 0 || default_use_count < 0)
@@ -1216,7 +1216,7 @@ void HistoryStore::PersistedStorage::remove_entries_for_same_site(StringView sit
 
     m_database->execute_statement(
         m_statements.all_urls,
-        [&](auto statement_id) -> ErrorOr<void> {
+        [&](auto statement_id) -> ErrorOr<void, Database::Error> {
             auto url = m_database->result_column<String>(statement_id, 0);
             if (history_entry_matches_site_key(url.bytes_as_string_view(), site_key))
                 urls_to_remove.append(move(url));

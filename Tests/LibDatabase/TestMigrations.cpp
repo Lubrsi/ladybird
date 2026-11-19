@@ -19,7 +19,7 @@ static bool column_exists(Database::Database& database, String const& table, Str
     auto statement = MUST(database.prepare_statement("SELECT 1 FROM pragma_table_info(?) WHERE name = ?;"sv));
     database.execute_statement(
         statement,
-        [&](auto) -> ErrorOr<void> {
+        [&](auto) -> ErrorOr<void, Database::Error> {
             exists = true;
             return {};
         },
@@ -31,7 +31,7 @@ static u32 count_rows(Database::Database& database, StringView table)
 {
     u32 count = 0;
     auto statement = MUST(database.prepare_statement(MUST(String::formatted("SELECT COUNT(*) FROM {};", table))));
-    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database.execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         count = database.result_column<u32>(statement_id, 0);
         return {};
     });
@@ -99,7 +99,7 @@ TEST_CASE(backfill_callback_can_bind_placeholders)
         {
             .version = 2,
             .sql = "ALTER TABLE Events ADD COLUMN time INTEGER;"sv,
-            .backfill = [](Database::Database& database) -> ErrorOr<void> {
+            .backfill = [](Database::Database& database) -> ErrorOr<void, Database::Error> {
                 auto statement = TRY(database.prepare_statement("UPDATE Events SET time = ?;"sv));
                 TRY(database.try_execute_statement(statement, {}, UnixDateTime::from_seconds_since_epoch(123)));
                 return {};
@@ -111,7 +111,7 @@ TEST_CASE(backfill_callback_can_bind_placeholders)
 
     Optional<UnixDateTime> time;
     auto statement = TRY_OR_FAIL(database->prepare_statement("SELECT time FROM Events WHERE name = 'launch';"sv));
-    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void> {
+    database->execute_statement(statement, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
         time = database->result_column<UnixDateTime>(statement_id, 0);
         return {};
     });
@@ -158,7 +158,7 @@ TEST_CASE(failed_migration_rolls_back_entire_transaction)
         {
             .version = 2,
             .sql = "ALTER TABLE Pets ADD COLUMN species TEXT;"sv,
-            .backfill = [](Database::Database&) -> ErrorOr<void> {
+            .backfill = [](Database::Database&) -> ErrorOr<void, Database::Error> {
                 return Error::from_string_literal("Backfill failed");
             },
         },

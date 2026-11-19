@@ -175,7 +175,7 @@ TEST_CASE(keys_of_the_wrong_length_are_skipped_after_startup)
 // b-trees with different page layouts. Point the table's rootpage at the index's b-tree, then reload the schema with
 // writable_schema = RESET. Statements still prepare, but every statement that reads or writes the table reports
 // SQLITE_CORRUPT.
-static ErrorOr<void> corrupt_cache_index_table(Database::Database& database)
+static ErrorOr<void, Database::Error> corrupt_cache_index_table(Database::Database& database)
 {
     return database.execute_raw(R"#(
         PRAGMA writable_schema = ON;
