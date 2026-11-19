@@ -206,6 +206,521 @@ TEST_CASE(transaction_commits_on_success_and_rolls_back_on_error)
     EXPECT_EQ(count_rows(*database, "t"sv), 1);
 }
 
+static NonnullRefPtr<DB> create_database_with_an_id_table()
+{
+    auto database = MUST(DB::create_memory_backed());
+    MUST(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v BLOB);"sv));
+    return database;
+}
+
+static Vector<i64> stored_ids(DB& database)
+{
+    Vector<i64> ids;
+    auto select = MUST(database.prepare_statement("SELECT id FROM t ORDER BY id;"sv));
+
+    database.execute_statement(select, [&](auto statement_id) -> ErrorOr<void, Database::Error> {
+        ids.append(database.result_column<i64>(statement_id, 0));
+        return {};
+    });
+
+    return ids;
+}
+
+TEST_CASE(open_transaction_commits_its_changes)
+{
+    auto database = create_database_with_an_id_table();
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    EXPECT(transaction.is_open());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    TRY_OR_FAIL(transaction.commit());
+    EXPECT(!transaction.is_open());
+
+    // A connection sees its own uncommitted rows, so only rolling a later transaction back shows that this one committed.
+    auto later_transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(later_transaction.rollback());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1 }));
+}
+
+TEST_CASE(open_transaction_rolls_back_when_asked_or_dropped)
+{
+    auto database = create_database_with_an_id_table();
+
+    {
+        auto transaction = TRY_OR_FAIL(database->begin_transaction());
+        TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+        TRY_OR_FAIL(transaction.rollback());
+        EXPECT(!transaction.is_open());
+        EXPECT(stored_ids(*database).is_empty());
+    }
+
+    {
+        auto transaction = TRY_OR_FAIL(database->begin_transaction());
+        TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+    }
+    EXPECT(stored_ids(*database).is_empty());
+
+    auto later_transaction = TRY_OR_FAIL(database->begin_transaction());
+    EXPECT(later_transaction.is_open());
+}
+
+TEST_CASE(second_transaction_is_refused_while_one_is_open)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+
+    auto second_transaction = database->begin_transaction();
+    EXPECT(second_transaction.is_error());
+    EXPECT(!second_transaction.error().result_code().has_value());
+
+    auto callback_transaction = database->transaction([]() -> ErrorOr<void, Database::Error> { return {}; });
+    EXPECT(callback_transaction.is_error());
+    EXPECT(!callback_transaction.error().result_code().has_value());
+
+    EXPECT(transaction.is_open());
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(savepoint_rollback_undoes_only_its_own_changes)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+
+    auto duplicate = database->execute_raw("INSERT INTO t (id) VALUES (1);"sv);
+    EXPECT(duplicate.is_error());
+    EXPECT(duplicate.error().has_result_code(Database::ResultCode::ConstraintPrimaryKey));
+    EXPECT(transaction.is_open());
+
+    TRY_OR_FAIL(savepoint.rollback());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1 }));
+
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(savepoint_rolls_back_when_dropped)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    {
+        auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+        TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+    }
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1 }));
+
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(savepoint_release_keeps_its_changes)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+    TRY_OR_FAIL(savepoint.release());
+
+    auto second_release = savepoint.release();
+    EXPECT(second_release.is_error());
+    EXPECT(!second_release.error().result_code().has_value());
+
+    TRY_OR_FAIL(savepoint.rollback());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1, 2 }));
+
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(transaction_has_one_savepoint_at_a_time)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+
+    auto second_savepoint = transaction.savepoint();
+    EXPECT(second_savepoint.is_error());
+    EXPECT(!second_savepoint.error().result_code().has_value());
+
+    auto commit_with_a_savepoint = transaction.commit();
+    EXPECT(commit_with_a_savepoint.is_error());
+    EXPECT(!commit_with_a_savepoint.error().result_code().has_value());
+    EXPECT(transaction.is_open());
+
+    TRY_OR_FAIL(savepoint.release());
+
+    auto later_savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(later_savepoint.release());
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(transaction_rollback_closes_its_savepoint)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    TRY_OR_FAIL(transaction.rollback());
+    EXPECT(stored_ids(*database).is_empty());
+
+    auto release = savepoint.release();
+    EXPECT(release.is_error());
+    EXPECT(!release.error().result_code().has_value());
+
+    TRY_OR_FAIL(savepoint.rollback());
+}
+
+TEST_CASE(failed_commit_can_leave_the_transaction_open)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed({ .foreign_keys = DB::ForeignKeys::Yes }));
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE parent (id INTEGER PRIMARY KEY);"sv));
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);"sv));
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, parent_id) VALUES (1, 5);"sv));
+
+    // https://www.sqlite.org/foreignkeys.html#fk_deferred
+    // A deferred foreign key is checked at the commit, and a commit that fails the check leaves the transaction open.
+    auto failed_commit = transaction.commit();
+    EXPECT(failed_commit.is_error());
+    EXPECT_EQ(failed_commit.error().result_code(), Optional<int> { SQLITE_CONSTRAINT_FOREIGNKEY });
+    EXPECT(transaction.is_open());
+
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO parent (id) VALUES (5);"sv));
+    TRY_OR_FAIL(transaction.commit());
+    EXPECT(!transaction.is_open());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1 }));
+}
+
+TEST_CASE(full_database_can_lose_the_whole_transaction)
+{
+    auto database = create_database_with_an_id_table();
+    TRY_OR_FAIL(database->execute_raw("PRAGMA max_page_count = 8;"sv));
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+
+    // Eight pages hold less than this at any page size.
+    auto full = database->execute_raw("INSERT INTO t (id, v) VALUES (2, zeroblob(1000000));"sv);
+    EXPECT(full.is_error());
+    EXPECT(full.error().has_result_code(Database::ResultCode::Full));
+
+    // https://www.sqlite.org/lang_transaction.html
+    // SQLite rolled the whole transaction back, so the row from before the savepoint is gone as well.
+    EXPECT(!transaction.is_open());
+    EXPECT(stored_ids(*database).is_empty());
+
+    auto release = savepoint.release();
+    EXPECT(release.is_error());
+    EXPECT(!release.error().result_code().has_value());
+
+    auto later_savepoint = transaction.savepoint();
+    EXPECT(later_savepoint.is_error());
+    EXPECT(!later_savepoint.error().result_code().has_value());
+
+    auto commit = transaction.commit();
+    EXPECT(commit.is_error());
+    EXPECT(!commit.error().result_code().has_value());
+
+    TRY_OR_FAIL(savepoint.rollback());
+    TRY_OR_FAIL(transaction.rollback());
+
+    auto later_transaction = TRY_OR_FAIL(database->begin_transaction());
+    EXPECT(later_transaction.is_open());
+}
+
+TEST_CASE(full_database_can_keep_the_transaction)
+{
+    auto database = create_database_with_an_id_table();
+    TRY_OR_FAIL(database->execute_raw("PRAGMA max_page_count = 40;"sv));
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+
+    // Forty pages hold less than these rows at any page size. SQLite undoes one statement that inserts them all.
+    auto full = database->execute_raw(R"#(
+        WITH RECURSIVE numbers(i) AS (SELECT 10 UNION ALL SELECT i + 1 FROM numbers WHERE i < 10000)
+        INSERT INTO t (id, v) SELECT i, zeroblob(500) FROM numbers;
+    )#"sv);
+    EXPECT(full.is_error());
+    EXPECT(full.error().has_result_code(Database::ResultCode::Full));
+
+    EXPECT(transaction.is_open());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1, 2 }));
+
+    TRY_OR_FAIL(savepoint.rollback());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 1 }));
+
+    TRY_OR_FAIL(transaction.commit());
+}
+
+TEST_CASE(stale_handles_leave_the_next_transaction_alone)
+{
+    auto database = create_database_with_an_id_table();
+
+    Optional<DB::Transaction> stale_transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+    Optional<DB::Savepoint> stale_savepoint = TRY_OR_FAIL(stale_transaction->savepoint());
+
+    // https://www.sqlite.org/lang_conflict.html
+    // This conflict clause rolls the whole transaction back.
+    auto conflict = database->execute_raw("INSERT OR ROLLBACK INTO t (id) VALUES (1);"sv);
+    EXPECT(conflict.is_error());
+    EXPECT(conflict.error().has_result_code(Database::ResultCode::ConstraintPrimaryKey));
+    EXPECT(!stale_transaction->is_open());
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (20);"sv));
+
+    auto stale_release = stale_savepoint->release();
+    EXPECT(stale_release.is_error());
+    EXPECT(!stale_release.error().result_code().has_value());
+
+    TRY_OR_FAIL(stale_savepoint->rollback());
+    stale_savepoint.clear();
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 20 }));
+
+    TRY_OR_FAIL(savepoint.release());
+
+    auto stale_commit = stale_transaction->commit();
+    EXPECT(stale_commit.is_error());
+    EXPECT(!stale_commit.error().result_code().has_value());
+
+    auto stale_later_savepoint = stale_transaction->savepoint();
+    EXPECT(stale_later_savepoint.is_error());
+    EXPECT(!stale_later_savepoint.error().result_code().has_value());
+
+    TRY_OR_FAIL(stale_transaction->rollback());
+    stale_transaction.clear();
+
+    EXPECT(transaction.is_open());
+    EXPECT_EQ(stored_ids(*database), (Vector<i64> { 20 }));
+
+    // Had a stale handle committed for this transaction, the row would outlast this rollback.
+    TRY_OR_FAIL(transaction.rollback());
+    EXPECT(stored_ids(*database).is_empty());
+}
+
+TEST_CASE(lost_transaction_takes_no_savepoint_and_no_commit)
+{
+    auto database = create_database_with_an_id_table();
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    // https://www.sqlite.org/lang_conflict.html
+    // This conflict clause rolls the whole transaction back.
+    auto conflict = database->execute_raw("INSERT OR ROLLBACK INTO t (id) VALUES (1);"sv);
+    EXPECT(conflict.is_error());
+
+    // https://www.sqlite.org/lang_savepoint.html
+    // Sent to SQLite, a savepoint would begin a transaction of its own here.
+    auto savepoint = transaction.savepoint();
+    EXPECT(savepoint.is_error());
+    EXPECT(!savepoint.error().result_code().has_value());
+
+    auto commit = transaction.commit();
+    EXPECT(commit.is_error());
+    EXPECT(!commit.error().result_code().has_value());
+
+    EXPECT(!transaction.is_open());
+    TRY_OR_FAIL(transaction.rollback());
+}
+
+// https://www.sqlite.org/c3ref/hard_heap_limit64.html
+// Setting the hard limit lowers the soft limit with it, so both are put back.
+template<typename Callback>
+static auto with_no_memory_left_for_sqlite(Callback callback)
+{
+    auto hard_limit = sqlite3_hard_heap_limit64(-1);
+    auto soft_limit = sqlite3_soft_heap_limit64(-1);
+    ScopeGuard restore_the_limits = [&] {
+        sqlite3_hard_heap_limit64(hard_limit);
+        sqlite3_soft_heap_limit64(soft_limit);
+    };
+
+    sqlite3_hard_heap_limit64(sqlite3_memory_used() + 1);
+    return callback();
+}
+
+// https://www.sqlite.org/malloc.html#lookaside
+// A connection takes its small allocations out of a pool that it already has, which the heap limit does not cover.
+// Prepared statements keep what they took from it, so enough of them leave the pool empty.
+static void use_up_the_lookaside_pool(DB& database)
+{
+    for (size_t i = 0; i < 500; ++i)
+        MUST(database.prepare_statement("SELECT 1;"sv));
+}
+
+TEST_CASE(transaction_whose_rollback_failed_stays_open_and_only_rolls_back)
+{
+    auto database = create_database_with_an_id_table();
+    use_up_the_lookaside_pool(*database);
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    auto failed_rollback = with_no_memory_left_for_sqlite([&] { return transaction.rollback(); });
+    EXPECT(failed_rollback.is_error());
+    EXPECT_EQ(failed_rollback.error().result_code(), Optional<int> { SQLITE_NOMEM });
+    EXPECT(transaction.is_open());
+
+    auto savepoint = transaction.savepoint();
+    EXPECT(savepoint.is_error());
+    EXPECT(!savepoint.error().result_code().has_value());
+
+    auto commit = transaction.commit();
+    EXPECT(commit.is_error());
+    EXPECT(!commit.error().result_code().has_value());
+    EXPECT(transaction.is_open());
+
+    TRY_OR_FAIL(transaction.rollback());
+    EXPECT(!transaction.is_open());
+    EXPECT(stored_ids(*database).is_empty());
+}
+
+TEST_CASE(savepoint_goes_with_a_transaction_whose_rollback_failed)
+{
+    auto database = create_database_with_an_id_table();
+    use_up_the_lookaside_pool(*database);
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+    auto savepoint = TRY_OR_FAIL(transaction.savepoint());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+
+    auto failed_rollback = with_no_memory_left_for_sqlite([&] { return transaction.rollback(); });
+    EXPECT(failed_rollback.is_error());
+
+    auto release = savepoint.release();
+    EXPECT(release.is_error());
+    EXPECT(!release.error().result_code().has_value());
+
+    // Rolling the savepoint back is another try at rolling back the transaction.
+    TRY_OR_FAIL(savepoint.rollback());
+    EXPECT(!transaction.is_open());
+    EXPECT(stored_ids(*database).is_empty());
+}
+
+// Leaves the connection with a transaction that nothing holds any more and that could not be rolled back.
+static void drop_a_transaction_whose_rollback_fails(DB& database, StringView sql_inside_the_transaction)
+{
+    use_up_the_lookaside_pool(database);
+
+    // A transaction that is dropped does not say whether its rollback failed, so one that is rolled back goes first.
+    {
+        auto transaction = MUST(database.begin_transaction());
+        MUST(database.execute_raw(sql_inside_the_transaction));
+
+        auto failed_rollback = with_no_memory_left_for_sqlite([&] { return transaction.rollback(); });
+        EXPECT(failed_rollback.is_error());
+        MUST(transaction.rollback());
+    }
+
+    Optional<DB::Transaction> transaction = MUST(database.begin_transaction());
+    MUST(database.execute_raw(sql_inside_the_transaction));
+
+    with_no_memory_left_for_sqlite([&] { transaction.clear(); });
+}
+
+TEST_CASE(dropped_transaction_whose_rollback_failed_is_rolled_back_before_the_next_sql)
+{
+    auto ids_read_by = [](DB& database, auto execute) {
+        Vector<i64> ids;
+        execute([&](auto statement_id) -> ErrorOr<void, Database::Error> {
+            ids.append(database.result_column<i64>(statement_id, 0));
+            return {};
+        });
+        return ids;
+    };
+
+    {
+        auto database = create_database_with_an_id_table();
+        auto select = TRY_OR_FAIL(database->prepare_statement("SELECT id FROM t;"sv));
+        drop_a_transaction_whose_rollback_fails(*database, "INSERT INTO t (id) VALUES (1);"sv);
+
+        auto ids = ids_read_by(*database, [&](auto on_result) { database->execute_statement(select, move(on_result)); });
+        EXPECT(ids.is_empty());
+    }
+
+    {
+        auto database = create_database_with_an_id_table();
+        auto select = TRY_OR_FAIL(database->prepare_statement("SELECT id FROM t;"sv));
+        drop_a_transaction_whose_rollback_fails(*database, "INSERT INTO t (id) VALUES (1);"sv);
+
+        auto ids = ids_read_by(*database, [&](auto on_result) {
+            EXPECT_EQ(database->execute_interruptible_statement(select, move(on_result)), DB::StatementExecutionOutcome::Completed);
+        });
+        EXPECT(ids.is_empty());
+    }
+
+    {
+        auto database = create_database_with_an_id_table();
+        drop_a_transaction_whose_rollback_fails(*database, "INSERT INTO t (id) VALUES (1);"sv);
+
+        // Run inside the dropped transaction, this row would go with it.
+        TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+        EXPECT_EQ(stored_ids(*database), (Vector<i64> { 2 }));
+    }
+
+    {
+        auto database = create_database_with_an_id_table();
+        drop_a_transaction_whose_rollback_fails(*database, "INSERT INTO t (id) VALUES (1);"sv);
+
+        auto transaction = TRY_OR_FAIL(database->begin_transaction());
+        TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (2);"sv));
+        TRY_OR_FAIL(transaction.commit());
+        EXPECT_EQ(stored_ids(*database), (Vector<i64> { 2 }));
+    }
+
+    {
+        auto database = create_database_with_an_id_table();
+        drop_a_transaction_whose_rollback_fails(*database, "DROP TABLE t;"sv);
+
+        // The table is gone for as long as the dropped transaction is open.
+        auto select = database->prepare_statement("SELECT id FROM t;"sv);
+        EXPECT(!select.is_error());
+    }
+}
+
+TEST_CASE(statement_fails_while_a_dropped_transaction_cannot_be_rolled_back)
+{
+    auto database = create_database_with_an_id_table();
+    use_up_the_lookaside_pool(*database);
+
+    // Running this statement takes no memory, so it only fails for the rollback that it waits for.
+    auto select_a_constant = TRY_OR_FAIL(database->prepare_statement("SELECT 1;"sv));
+
+    Optional<DB::Transaction> transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id) VALUES (1);"sv));
+
+    size_t rows_read = 0;
+    auto read = with_no_memory_left_for_sqlite([&] {
+        transaction.clear();
+
+        return database->try_execute_statement(select_a_constant, [&](auto) -> ErrorOr<void, Database::Error> {
+            ++rows_read;
+            return {};
+        });
+    });
+
+    EXPECT(read.is_error());
+    EXPECT_EQ(read.error().result_code(), Optional<int> { SQLITE_NOMEM });
+    EXPECT_EQ(rows_read, 0u);
+
+    EXPECT(stored_ids(*database).is_empty());
+}
+
 // A column with no declared type has NONE affinity, so each bound value keeps its storage class.
 static Database::StatementID prepare_untyped_value_table(DB& database)
 {

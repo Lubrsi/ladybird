@@ -119,6 +119,9 @@ Database::~Database()
 
 ErrorOr<StatementID, Error> Database::prepare_statement(StringView statement)
 {
+    // A statement is prepared against the schema as the open transaction has it.
+    TRY(roll_back_waiting_transaction());
+
     sqlite3_stmt* prepared_statement { nullptr };
     SQL_TRY(sqlite3_prepare_v2(m_database, statement.characters_without_null_termination(), static_cast<int>(statement.length()), &prepared_statement, nullptr));
 
@@ -152,6 +155,11 @@ void Database::execute_statement_internal(StatementID statement_id, OnResult on_
 
 Database::StatementExecutionOutcome Database::execute_interruptible_statement_internal(StatementID statement_id, OnResult on_result)
 {
+    if (auto result = roll_back_waiting_transaction(); result.is_error()) [[unlikely]] {
+        warnln("\033[31;1mDatabase error\033[0m: {}: {}", result.error(), sqlite3_errmsg(m_database));
+        VERIFY_NOT_REACHED();
+    }
+
     auto* statement = prepared_statement(statement_id).statement;
 
     while (true) {
@@ -188,6 +196,8 @@ void Database::interrupt()
 
 ErrorOr<void, Error> Database::try_execute_statement_internal(StatementID statement_id, OnResult on_result)
 {
+    TRY(roll_back_waiting_transaction());
+
     auto* statement = prepared_statement(statement_id).statement;
 
     Optional<Error> row_error;
@@ -441,37 +451,185 @@ void Database::clear_bound_parameters(StatementID statement_id)
 
 ErrorOr<void, Error> Database::execute_raw(ByteString const& sql)
 {
+    TRY(roll_back_waiting_transaction());
+    return execute_raw_internal(sql);
+}
+
+ErrorOr<void, Error> Database::execute_raw_internal(ByteString const& sql)
+{
     SQL_TRY(sqlite3_exec(m_database, sql.characters(), nullptr, nullptr, nullptr));
     return {};
 }
 
-ErrorOr<void, Error> Database::Transaction::begin()
+ErrorOr<Database::Transaction, Error> Database::begin_transaction()
 {
-    TRY(m_database.execute_raw("BEGIN IMMEDIATE;"));
-    m_active = true;
+    TRY(roll_back_waiting_transaction());
+
+    if (has_open_transaction())
+        return Error::from_string_literal("A transaction is already open");
+
+    TRY(execute_raw_internal("BEGIN IMMEDIATE;"));
+
+    m_open_transaction = OpenTransaction { .id = ++m_last_transaction_id };
+    return Transaction { *this, m_open_transaction->id };
+}
+
+bool Database::has_open_transaction()
+{
+    // https://www.sqlite.org/c3ref/get_autocommit.html
+    // After some errors SQLite rolls the whole transaction back, which shows only as autocommit mode being back on.
+    if (m_open_transaction.has_value() && sqlite3_get_autocommit(m_database) != 0)
+        m_open_transaction.clear();
+
+    return m_open_transaction.has_value();
+}
+
+ErrorOr<void, Error> Database::roll_back_waiting_transaction()
+{
+    if (!has_open_transaction() || !m_open_transaction->is_waiting_for_rollback)
+        return {};
+
+    return rollback_transaction(m_open_transaction->id);
+}
+
+bool Database::is_transaction_open(u64 transaction_id)
+{
+    return has_open_transaction() && m_open_transaction->id == transaction_id;
+}
+
+ErrorOr<Database::Savepoint, Error> Database::begin_savepoint(u64 transaction_id)
+{
+    if (!is_transaction_open(transaction_id))
+        return Error::from_string_literal("The transaction is no longer open");
+    if (m_open_transaction->is_waiting_for_rollback)
+        return Error::from_string_literal("The transaction is waiting to be rolled back");
+    if (m_open_transaction->savepoint_id.has_value())
+        return Error::from_string_literal("The transaction already has an open savepoint");
+
+    // A name of its own keeps the SQL sent for one savepoint from matching a later one.
+    auto savepoint_id = ++m_last_savepoint_id;
+    TRY(execute_raw_internal(ByteString::formatted("SAVEPOINT savepoint_{};", savepoint_id)));
+
+    m_open_transaction->savepoint_id = savepoint_id;
+    return Savepoint { *this, savepoint_id };
+}
+
+ErrorOr<void, Error> Database::commit_transaction(u64 transaction_id)
+{
+    if (!is_transaction_open(transaction_id))
+        return Error::from_string_literal("The transaction is no longer open");
+    if (m_open_transaction->is_waiting_for_rollback)
+        return Error::from_string_literal("The transaction is waiting to be rolled back");
+
+    // https://www.sqlite.org/lang_savepoint.html
+    // COMMIT would release the savepoint and keep its changes.
+    if (m_open_transaction->savepoint_id.has_value())
+        return Error::from_string_literal("The transaction has an open savepoint");
+
+    TRY(execute_raw_internal("COMMIT;"));
+
+    m_open_transaction.clear();
+    return {};
+}
+
+ErrorOr<void, Error> Database::rollback_transaction(u64 transaction_id)
+{
+    if (!is_transaction_open(transaction_id))
+        return {};
+
+    auto rolled_back = execute_raw_internal("ROLLBACK;");
+    if (rolled_back.is_error()) {
+        // Whoever asked for the rollback takes the transaction to be over, and may be gone before it can ask again.
+        // Nothing else runs inside the transaction from here on: the next SQL on the connection rolls it back first.
+        if (has_open_transaction())
+            m_open_transaction->is_waiting_for_rollback = true;
+        return rolled_back;
+    }
+
+    m_open_transaction.clear();
+    return {};
+}
+
+bool Database::is_savepoint_open(u64 savepoint_id)
+{
+    return has_open_transaction() && m_open_transaction->savepoint_id == savepoint_id;
+}
+
+ErrorOr<void, Error> Database::release_savepoint(u64 savepoint_id)
+{
+    if (!is_savepoint_open(savepoint_id))
+        return Error::from_string_literal("The savepoint is no longer open");
+    if (m_open_transaction->is_waiting_for_rollback)
+        return Error::from_string_literal("The transaction is waiting to be rolled back");
+
+    TRY(execute_raw_internal(ByteString::formatted("RELEASE savepoint_{};", savepoint_id)));
+
+    m_open_transaction->savepoint_id.clear();
+    return {};
+}
+
+ErrorOr<void, Error> Database::rollback_savepoint(u64 savepoint_id)
+{
+    if (!is_savepoint_open(savepoint_id))
+        return {};
+
+    // The savepoint goes with its transaction.
+    if (m_open_transaction->is_waiting_for_rollback)
+        return rollback_transaction(m_open_transaction->id);
+
+    // https://www.sqlite.org/lang_savepoint.html
+    // ROLLBACK TO leaves the savepoint in place.
+    TRY(execute_raw_internal(ByteString::formatted("ROLLBACK TO savepoint_{0}; RELEASE savepoint_{0};", savepoint_id)));
+
+    m_open_transaction->savepoint_id.clear();
     return {};
 }
 
 Database::Transaction::~Transaction()
 {
-    if (!m_active)
-        return;
-    if (auto result = m_database.execute_raw("ROLLBACK;"); result.is_error())
+    if (auto result = rollback(); result.is_error())
         warnln("\033[31;1mDatabase error\033[0m: Unable to roll back transaction: {}", result.error());
+}
+
+bool Database::Transaction::is_open() const
+{
+    return m_database->is_transaction_open(m_id);
+}
+
+ErrorOr<Database::Savepoint, Error> Database::Transaction::savepoint()
+{
+    return m_database->begin_savepoint(m_id);
 }
 
 ErrorOr<void, Error> Database::Transaction::commit()
 {
-    VERIFY(m_active);
-    TRY(m_database.execute_raw("COMMIT;"));
-    m_active = false;
-    return {};
+    return m_database->commit_transaction(m_id);
+}
+
+ErrorOr<void, Error> Database::Transaction::rollback()
+{
+    return m_database->rollback_transaction(m_id);
+}
+
+Database::Savepoint::~Savepoint()
+{
+    if (auto result = rollback(); result.is_error())
+        warnln("\033[31;1mDatabase error\033[0m: Unable to roll back savepoint: {}", result.error());
+}
+
+ErrorOr<void, Error> Database::Savepoint::release()
+{
+    return m_database->release_savepoint(m_id);
+}
+
+ErrorOr<void, Error> Database::Savepoint::rollback()
+{
+    return m_database->rollback_savepoint(m_id);
 }
 
 ErrorOr<void, Error> Database::transaction(Function<ErrorOr<void, Error>()> callback)
 {
-    Transaction transaction { *this };
-    TRY(transaction.begin());
+    auto transaction = TRY(begin_transaction());
     TRY(callback());
     TRY(transaction.commit());
     return {};
@@ -495,8 +653,7 @@ ErrorOr<MigrationOutcome, Error> Database::migrate(StringView store_name, Readon
             return MigrationOutcome::Success;
     }
 
-    Transaction transaction { *this };
-    TRY(transaction.begin());
+    auto transaction = TRY(begin_transaction());
 
     TRY(execute_raw("CREATE TABLE IF NOT EXISTS SchemaVersions (store TEXT PRIMARY KEY, version INTEGER NOT NULL);"));
 

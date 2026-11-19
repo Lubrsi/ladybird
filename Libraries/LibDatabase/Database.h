@@ -15,6 +15,7 @@
 #include <AK/HashMap.h>
 #include <AK/HashTable.h>
 #include <AK/LexicalPath.h>
+#include <AK/Noncopyable.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Optional.h>
 #include <AK/RefCounted.h>
@@ -257,6 +258,12 @@ public:
 
     ErrorOr<void, Error> execute_raw(ByteString const& sql);
 
+    class Savepoint;
+    class Transaction;
+
+    // While a transaction is open, transaction control goes through its handles, never through raw SQL.
+    ErrorOr<Transaction, Error> begin_transaction();
+
     ErrorOr<void, Error> transaction(Function<ErrorOr<void, Error>()> callback);
 
     // Error-returning sibling of execute_statement, for callers that must handle failures
@@ -326,25 +333,24 @@ private:
     ErrorOr<void, Error> try_step_bound_statement(StatementID, OnResultRow);
     void clear_bound_parameters(StatementID statement_id);
 
-    class Transaction {
-    public:
-        explicit Transaction(Database& database)
-            : m_database(database)
-        {
-        }
-        ~Transaction();
+    ErrorOr<void, Error> execute_raw_internal(ByteString const& sql);
 
-        Transaction(Transaction&&) = delete;
-        Transaction(Transaction const&) = delete;
-        Transaction& operator=(Transaction&&) = delete;
-        Transaction& operator=(Transaction const&) = delete;
+    bool has_open_transaction();
+    ErrorOr<void, Error> roll_back_waiting_transaction();
 
-        ErrorOr<void, Error> begin();
-        ErrorOr<void, Error> commit();
+    bool is_transaction_open(u64 transaction_id);
+    ErrorOr<Savepoint, Error> begin_savepoint(u64 transaction_id);
+    ErrorOr<void, Error> commit_transaction(u64 transaction_id);
+    ErrorOr<void, Error> rollback_transaction(u64 transaction_id);
 
-    private:
-        Database& m_database;
-        bool m_active { false };
+    bool is_savepoint_open(u64 savepoint_id);
+    ErrorOr<void, Error> release_savepoint(u64 savepoint_id);
+    ErrorOr<void, Error> rollback_savepoint(u64 savepoint_id);
+
+    struct OpenTransaction {
+        u64 id { 0 };
+        Optional<u64> savepoint_id {};
+        bool is_waiting_for_rollback { false };
     };
 
     struct PreparedStatement {
@@ -367,6 +373,70 @@ private:
     Vector<PreparedStatement> m_prepared_statements;
     Optional<StatementID> m_table_exists_statement;
     Optional<StatementID> m_schema_version_statement;
+
+    Optional<OpenTransaction> m_open_transaction;
+    u64 m_last_transaction_id { 0 };
+    u64 m_last_savepoint_id { 0 };
+};
+
+class DATABASE_API Database::Transaction {
+    AK_MAKE_NONCOPYABLE(Transaction);
+
+public:
+    // The source's destructor still runs, so it keeps its reference and gives up only its id.
+    Transaction(Transaction&& other)
+        : m_database(other.m_database)
+        , m_id(exchange(other.m_id, 0))
+    {
+    }
+    Transaction& operator=(Transaction&&) = delete;
+    ~Transaction();
+
+    bool is_open() const;
+
+    ErrorOr<Savepoint, Error> savepoint();
+    ErrorOr<void, Error> commit();
+    ErrorOr<void, Error> rollback();
+
+private:
+    friend class Database;
+
+    Transaction(Database& database, u64 id)
+        : m_database(database)
+        , m_id(id)
+    {
+    }
+
+    NonnullRefPtr<Database> m_database;
+    u64 m_id { 0 };
+};
+
+class DATABASE_API Database::Savepoint {
+    AK_MAKE_NONCOPYABLE(Savepoint);
+
+public:
+    Savepoint(Savepoint&& other)
+        : m_database(other.m_database)
+        , m_id(exchange(other.m_id, 0))
+    {
+    }
+    Savepoint& operator=(Savepoint&&) = delete;
+    ~Savepoint();
+
+    ErrorOr<void, Error> release();
+    ErrorOr<void, Error> rollback();
+
+private:
+    friend class Database;
+
+    Savepoint(Database& database, u64 id)
+        : m_database(database)
+        , m_id(id)
+    {
+    }
+
+    NonnullRefPtr<Database> m_database;
+    u64 m_id { 0 };
 };
 
 }
