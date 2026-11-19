@@ -1899,63 +1899,7 @@ ErrorOr<void> Application::launch_services()
         m_tab_discarder = make<TabDiscarder>();
 
     if (m_browser_options.disable_sql_database == DisableSQLDatabase::No) {
-        auto database_path = profile().paths().data;
-        auto database = TRY(Database::Database::create(database_path, "Ladybird"sv));
-
-        // The browsing database is shared by several stores, so the decision to fall back is
-        // made for the file as a whole: if any store's schema is too new, none of them may
-        // modify the file. The check-only preflight never writes, so the file is untouched
-        // if any store then has to veto.
-        auto cookies_outcome = TRY(CookieJar::migrate_schema(database, Database::MigrationMode::CheckOnly));
-        auto hsts_outcome = TRY(HSTSStore::migrate_schema(database, Database::MigrationMode::CheckOnly));
-        auto storage_outcome = TRY(StorageJar::migrate_schema(database, Database::MigrationMode::CheckOnly));
-        auto downloads_outcome = TRY(DownloadStore::migrate_schema(database, Database::MigrationMode::CheckOnly));
-
-        if (cookies_outcome == Database::MigrationOutcome::Success && hsts_outcome == Database::MigrationOutcome::Success && storage_outcome == Database::MigrationOutcome::Success && downloads_outcome == Database::MigrationOutcome::Success) {
-            // Apply in order, stopping at the first store that finds the database too new
-            // (a concurrent process may have migrated it since the preflight).
-            cookies_outcome = TRY(CookieJar::migrate_schema(database));
-            hsts_outcome = cookies_outcome == Database::MigrationOutcome::Success
-                ? TRY(HSTSStore::migrate_schema(database))
-                : Database::MigrationOutcome::DatabaseTooNew;
-            storage_outcome = hsts_outcome == Database::MigrationOutcome::Success
-                ? TRY(StorageJar::migrate_schema(database))
-                : Database::MigrationOutcome::DatabaseTooNew;
-            downloads_outcome = storage_outcome == Database::MigrationOutcome::Success
-                ? TRY(DownloadStore::migrate_schema(database))
-                : Database::MigrationOutcome::DatabaseTooNew;
-        }
-
-        // If any store finds the shared file too new, including a concurrent process migrating it
-        // between the preflight and an apply above, none of them may persist this session, even if
-        // an earlier store already migrated. Otherwise, we would keep writing to a vetoed database.
-        if (cookies_outcome != Database::MigrationOutcome::Success || hsts_outcome != Database::MigrationOutcome::Success || storage_outcome != Database::MigrationOutcome::Success || downloads_outcome != Database::MigrationOutcome::Success) {
-            warnln("Browsing database was created by a newer Ladybird version; cookies, web storage, HSTS policies and unfinished downloads will not be persisted this session");
-            cookies_outcome = Database::MigrationOutcome::DatabaseTooNew;
-            hsts_outcome = Database::MigrationOutcome::DatabaseTooNew;
-            storage_outcome = Database::MigrationOutcome::DatabaseTooNew;
-            downloads_outcome = Database::MigrationOutcome::DatabaseTooNew;
-        }
-
-        if (cookies_outcome == Database::MigrationOutcome::Success)
-            m_default_session->cookie_jar = TRY(CookieJar::create(database));
-        else
-            m_default_session->cookie_jar = CookieJar::create();
-
-        if (hsts_outcome == Database::MigrationOutcome::Success)
-            m_default_session->hsts_store = TRY(HSTSStore::create(database));
-        else
-            m_default_session->hsts_store = HSTSStore::create();
-
-        if (storage_outcome == Database::MigrationOutcome::Success)
-            m_default_session->storage_jar = TRY(StorageJar::create(database));
-        else
-            m_default_session->storage_jar = StorageJar::create();
-
-        if (downloads_outcome == Database::MigrationOutcome::Success)
-            m_download_store = TRY(DownloadStore::create(database));
-        else
-            m_download_store = DownloadStore::create_disabled();
+        TRY(create_stores_from_browsing_database());
 
         // A headless run, a browser that WebDriver drives, and one that logs process statistics never join a browser
         // already running on their profile. Yet startup recovery would still rewrite the saved session, reset the
@@ -2019,6 +1963,69 @@ ErrorOr<void> Application::launch_services()
                 warnln("Unable to launch devtools server: {}", result.error());
         });
     }
+
+    return {};
+}
+
+ErrorOr<void> Application::create_stores_from_browsing_database()
+{
+    auto database_path = profile().paths().data;
+    auto database = TRY(Database::Database::create(database_path, "Ladybird"sv));
+
+    // The browsing database is shared by several stores, so the decision to fall back is
+    // made for the file as a whole: if any store's schema is too new, none of them may
+    // modify the file. The check-only preflight never writes, so the file is untouched
+    // if any store then has to veto.
+    auto cookies_outcome = TRY(CookieJar::migrate_schema(database, Database::MigrationMode::CheckOnly));
+    auto hsts_outcome = TRY(HSTSStore::migrate_schema(database, Database::MigrationMode::CheckOnly));
+    auto storage_outcome = TRY(StorageJar::migrate_schema(database, Database::MigrationMode::CheckOnly));
+    auto downloads_outcome = TRY(DownloadStore::migrate_schema(database, Database::MigrationMode::CheckOnly));
+
+    if (cookies_outcome == Database::MigrationOutcome::Success && hsts_outcome == Database::MigrationOutcome::Success && storage_outcome == Database::MigrationOutcome::Success && downloads_outcome == Database::MigrationOutcome::Success) {
+        // Apply in order, stopping at the first store that finds the database too new
+        // (a concurrent process may have migrated it since the preflight).
+        cookies_outcome = TRY(CookieJar::migrate_schema(database));
+        hsts_outcome = cookies_outcome == Database::MigrationOutcome::Success
+            ? TRY(HSTSStore::migrate_schema(database))
+            : Database::MigrationOutcome::DatabaseTooNew;
+        storage_outcome = hsts_outcome == Database::MigrationOutcome::Success
+            ? TRY(StorageJar::migrate_schema(database))
+            : Database::MigrationOutcome::DatabaseTooNew;
+        downloads_outcome = storage_outcome == Database::MigrationOutcome::Success
+            ? TRY(DownloadStore::migrate_schema(database))
+            : Database::MigrationOutcome::DatabaseTooNew;
+    }
+
+    // If any store finds the shared file too new, including a concurrent process migrating it
+    // between the preflight and an apply above, none of them may persist this session, even if
+    // an earlier store already migrated. Otherwise, we would keep writing to a vetoed database.
+    if (cookies_outcome != Database::MigrationOutcome::Success || hsts_outcome != Database::MigrationOutcome::Success || storage_outcome != Database::MigrationOutcome::Success || downloads_outcome != Database::MigrationOutcome::Success) {
+        warnln("Browsing database was created by a newer Ladybird version; cookies, web storage, HSTS policies and unfinished downloads will not be persisted this session");
+        cookies_outcome = Database::MigrationOutcome::DatabaseTooNew;
+        hsts_outcome = Database::MigrationOutcome::DatabaseTooNew;
+        storage_outcome = Database::MigrationOutcome::DatabaseTooNew;
+        downloads_outcome = Database::MigrationOutcome::DatabaseTooNew;
+    }
+
+    if (cookies_outcome == Database::MigrationOutcome::Success)
+        m_default_session->cookie_jar = TRY(CookieJar::create(database));
+    else
+        m_default_session->cookie_jar = CookieJar::create();
+
+    if (hsts_outcome == Database::MigrationOutcome::Success)
+        m_default_session->hsts_store = TRY(HSTSStore::create(database));
+    else
+        m_default_session->hsts_store = HSTSStore::create();
+
+    if (storage_outcome == Database::MigrationOutcome::Success)
+        m_default_session->storage_jar = TRY(StorageJar::create(database));
+    else
+        m_default_session->storage_jar = StorageJar::create();
+
+    if (downloads_outcome == Database::MigrationOutcome::Success)
+        m_download_store = TRY(DownloadStore::create(database));
+    else
+        m_download_store = DownloadStore::create_disabled();
 
     return {};
 }

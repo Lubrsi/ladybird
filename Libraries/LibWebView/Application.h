@@ -483,6 +483,7 @@ private:
     ErrorOr<NonnullRefPtr<WebContentClient>> create_web_content_client(BrowsingSession&, Web::PageId initial_page_id, Optional<Web::HTML::CrossProcessId> navigable_to_adopt = {}, Optional<Web::HTML::CrossProcessId> initial_document_state_id = {}, Vector<Web::HTML::RemoteNavigableDescriptor> remote_navigables = {}, Optional<Web::HTML::SessionHistoryEntryDescriptor> canonical_initial_history_entry = {}, Web::HTML::VisibilityState system_visibility_state = Web::HTML::VisibilityState::Hidden);
 
     ErrorOr<void> launch_services();
+    ErrorOr<void> create_stores_from_browsing_database();
     void launch_spare_web_content_process();
     enum class CompositorLaunch {
         Now,
