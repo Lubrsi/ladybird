@@ -76,8 +76,20 @@ static ErrorOr<sqlite3*, Error> open_connection(char const* filename)
     return sql_database;
 }
 
+// https://www.sqlite.org/compile.html#omit_memorydb
+// SQLite built without in-memory databases opens a file named ":memory:" instead. Only its compile-time options
+// tell, so a build that reports none of them counts as one without.
+static bool sqlite_has_in_memory_databases()
+{
+    bool reports_compile_time_options = sqlite3_compileoption_get(0) != nullptr;
+    return reports_compile_time_options && !sqlite3_compileoption_used("OMIT_MEMORYDB");
+}
+
 ErrorOr<NonnullRefPtr<Database>, Error> Database::create_memory_backed(Options options)
 {
+    if (!sqlite_has_in_memory_databases())
+        return Error::from_string_literal("This build of SQLite has no in-memory databases");
+
     auto* sql_database = TRY(open_connection(":memory:"));
     return create(sql_database, options);
 }
