@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<script src="include.js"></script>
+<script>
+    function resultOf(request) {
+        return new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // An iframe's document is unloaded some time after remove() returns, and its connections are closed after the
+    // unload listeners have run, in what is left of that task. So this goes on from a task of the page's.
+    function removeAndWaitForUnloadingCleanup(iframe) {
+        return new Promise(resolve => {
+            iframe.contentWindow.addEventListener("unload", () => setTimeout(resolve, 0));
+            iframe.remove();
+        });
+    }
+
+    // transaction() looks at the close pending flag before it looks for the object store.
+    function isClosing(connection) {
+        try {
+            connection.transaction("no such object store");
+        } catch (exception) {
+            return exception.name === "InvalidStateError";
+        }
+        return false;
+    }
+
+    function valueReadThrough(connection) {
+        return resultOf(connection.transaction("store").objectStore("store").get("key"));
+    }
+
+    promiseTest(async () => {
+        const suffix = Math.random();
+        const nameOfSharedDatabase = "removed-iframe-closes-its-connections-shared-" + suffix;
+        const nameOfFirstIframeDatabase = "removed-iframe-closes-its-connections-first-" + suffix;
+
+        const opening = indexedDB.open(nameOfSharedDatabase, 1);
+        opening.onupgradeneeded = () => opening.result.createObjectStore("store").put("value", "key");
+        const connectionOfPage = await resultOf(opening);
+
+        const firstIframe = document.body.appendChild(document.createElement("iframe"));
+        const secondIframe = document.body.appendChild(document.createElement("iframe"));
+        const connectionOfSecondIframe = await resultOf(
+            secondIframe.contentWindow.indexedDB.open(nameOfSharedDatabase, 1)
+        );
+
+        // Enough connections for the engine to prune its list of them while they are open.
+        const openingInFirstIframe = [];
+        for (let i = 0; i < 200; ++i)
+            openingInFirstIframe.push(
+                resultOf(firstIframe.contentWindow.indexedDB.open(nameOfFirstIframeDatabase, 1))
+            );
+        const connectionsOfFirstIframe = await Promise.all(openingInFirstIframe);
+
+        // The page still holds the iframes' connections, so a garbage collection can't be what closes them.
+        // An upgrade or a deletion waits for every connection to finish closing, so one that is still open ends the
+        // test here, where it can say so.
+        await removeAndWaitForUnloadingCleanup(firstIframe);
+        const firstIframeIsClosing = connectionsOfFirstIframe.every(isClosing);
+        println(`The first iframe's connections are closing: ${firstIframeIsClosing}`);
+        if (!firstIframeIsClosing)
+            throw new Error("A connection of the removed first iframe is still open.");
+        println(`The second iframe's connection reads: ${await valueReadThrough(connectionOfSecondIframe)}`);
+
+        const upgraded = await resultOf(indexedDB.open(nameOfFirstIframeDatabase, 2));
+        println(`The first iframe's database is at version ${upgraded.version}.`);
+        upgraded.close();
+
+        await removeAndWaitForUnloadingCleanup(secondIframe);
+        const secondIframeIsClosing = isClosing(connectionOfSecondIframe);
+        println(`The second iframe's connection is closing: ${secondIframeIsClosing}`);
+        if (!secondIframeIsClosing)
+            throw new Error("The removed second iframe's connection is still open.");
+        println(`The page's connection reads: ${await valueReadThrough(connectionOfPage)}`);
+        connectionOfPage.close();
+
+        await resultOf(indexedDB.deleteDatabase(nameOfFirstIframeDatabase));
+        await resultOf(indexedDB.deleteDatabase(nameOfSharedDatabase));
+    });
+</script>

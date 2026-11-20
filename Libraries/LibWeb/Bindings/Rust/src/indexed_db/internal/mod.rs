@@ -6,6 +6,7 @@
 
 //! The constructs that script does not see: databases, object stores, indexes, keys, and their algorithms.
 
+pub(crate) mod agent;
 pub(crate) mod algorithms;
 pub(crate) mod database;
 pub(crate) mod function;

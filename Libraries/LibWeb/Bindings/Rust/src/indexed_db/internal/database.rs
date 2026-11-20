@@ -175,14 +175,6 @@ impl Database {
         storage(vm).remove_database(vm, key, name);
     }
 
-    pub(crate) fn for_each_database(vm: &Vm, mut visitor: impl FnMut(DatabaseRef)) {
-        let databases = MarkedVec::new(vm);
-        storage(vm).for_each_database(|database| databases.push(database));
-        for database in databases.values().iter() {
-            visitor(*database);
-        }
-    }
-
     pub(crate) fn wait_for_connections_to_close(&self, vm: &Vm, connections: &[Ref<IDBDatabase>], after_all: Function) {
         let all_closed = connections.iter().all(|entry| entry.state() == ConnectionState::Closed);
 

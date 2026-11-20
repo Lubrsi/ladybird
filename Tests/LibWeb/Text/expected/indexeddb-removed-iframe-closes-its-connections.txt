@@ -1,0 +1,5 @@
+The first iframe's connections are closing: true
+The second iframe's connection reads: value
+The first iframe's database is at version 2.
+The second iframe's connection is closing: true
+The page's connection reads: value

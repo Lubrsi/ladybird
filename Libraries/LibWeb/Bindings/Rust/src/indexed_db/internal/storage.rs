@@ -95,14 +95,6 @@ pub(crate) fn shut_down_storage() {
 }
 
 impl Storage {
-    pub(crate) fn for_each_database(&self, mut visitor: impl FnMut(DatabaseRef)) {
-        for databases_of_key in self.databases.borrow().iter() {
-            for (_, database) in &databases_of_key.databases {
-                visitor(*database);
-            }
-        }
-    }
-
     pub(crate) fn for_each_database_of_key(&self, key: &StorageKey, mut visitor: impl FnMut(DatabaseRef)) {
         for databases_of_key in self.databases.borrow().iter() {
             if databases_of_key.storage_key != *key {

@@ -24,6 +24,7 @@ use crate::indexed_db::idb_object_store::{
     IDBObjectStore, constraint_error, invalid_state_error, not_found_error, transaction_inactive_error,
 };
 use crate::indexed_db::idb_transaction::{IDBTransaction, IDBTransactionMode, TransactionState};
+use crate::indexed_db::internal::agent::Agent;
 use crate::indexed_db::internal::algorithms::{
     KeyPath, close_a_database_connection, commit_a_transaction, create_a_sorted_name_list, is_valid_key_path,
     queue_a_database_task,
@@ -134,6 +135,7 @@ impl IDBDatabase {
         });
         connection.event_target.set_owner(connection);
         db.associate(vm, connection);
+        Agent::add_connection(vm, connection);
         connection
     }
 
@@ -444,6 +446,7 @@ impl IDBDatabase {
 
         // 8. Set transaction’s cleanup event loop to the current event loop.
         transaction.set_cleanup_event_loop(vm, Some(current_event_loop()));
+        Agent::add_transaction_awaiting_cleanup(vm, transaction);
 
         Self::block_on_conflicting_transactions(*this, vm, transaction);
 

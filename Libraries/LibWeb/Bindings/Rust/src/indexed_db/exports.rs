@@ -17,6 +17,7 @@ use crate::bindings::interface::{cell_into_abi, realm_arguments};
 use crate::indexed_db::cpp::json_value_of_key;
 use crate::indexed_db::idb_factory::IDBFactory;
 use crate::indexed_db::idb_key_range::IDBKeyRange;
+use crate::indexed_db::internal::agent::Agent;
 use crate::indexed_db::internal::algorithms::{
     KeyPath, cleanup_indexed_database_transactions, clear_an_object_store, close_a_database_connection,
     delete_records_from_an_object_store,
@@ -88,16 +89,9 @@ pub unsafe extern "C" fn web_rust_indexed_db_cleanup_indexed_database_transactio
 pub unsafe extern "C" fn web_rust_indexed_db_close_all_connections(vm: *mut c_void, realm: *mut c_void) {
     // SAFETY: The caller passes the live VM and a live realm.
     let (vm, realm) = unsafe { realm_arguments(vm, realm) };
-    Database::for_each_database(vm, |database| {
-        for connection in database.associated_connections(vm).values().iter() {
-            if connection.close_pending() {
-                continue;
-            }
-            if connection.realm() == realm {
-                close_a_database_connection(vm, *connection, None, false);
-            }
-        }
-    });
+    for connection in Agent::take_connections_of_realm_to_close(vm, realm).values().iter() {
+        close_a_database_connection(vm, *connection, None, false);
+    }
 }
 
 /// A key path as the inspection callbacks receive it: none, a string, or a list of strings.

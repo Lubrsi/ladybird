@@ -475,6 +475,7 @@ pub unsafe extern "C" fn web_rust_shut_down_agent(vm: *mut c_void) {
     crate::html::event_source::forget_event_sources_of_agent();
     crate::web_gl::context_loss::forget_contexts_of_agent();
     crate::web_assembly::Agent::shut_down();
+    crate::indexed_db::internal::agent::Agent::shut_down();
     crate::indexed_db::internal::storage::shut_down_storage();
     crate::permissions_api::permission_store::forget_statuses_of_this_agent();
 }

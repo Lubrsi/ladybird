@@ -41,6 +41,7 @@ use crate::indexed_db::idb_record::{IDBRecord, IndexRecord, ObjectStoreRecord, S
 use crate::indexed_db::idb_request::{AnyIDBRequest, IDBRequest, IDBRequestSource};
 use crate::indexed_db::idb_transaction::{IDBTransaction, IDBTransactionMode, TransactionState};
 use crate::indexed_db::idb_version_change_event::{IDBVersionChangeEvent, IDBVersionChangeEventInit};
+use crate::indexed_db::internal::agent::Agent;
 use crate::indexed_db::internal::database::Database;
 use crate::indexed_db::internal::function::{
     Function, FunctionWith, NoCells, Operation, create_function, create_operation, perform_operation,
@@ -2677,43 +2678,39 @@ pub(crate) fn queue_a_database_task(vm: &Vm, steps: Function) {
 
 // https://w3c.github.io/IndexedDB/#cleanup-indexed-database-transactions
 pub(crate) fn cleanup_indexed_database_transactions(vm: &Vm, event_loop: &CppCell) -> bool {
-    let mut has_matching_event_loop = false;
-
-    Database::for_each_database(vm, |database| {
-        for connection in database.associated_connections(vm).values().iter() {
-            for transaction in connection.transactions(vm).values().iter() {
-                let transaction = *transaction;
-
-                // 2. For each transaction transaction with cleanup event loop matching the current event loop:
-                if transaction.cleanup_event_loop() == Some(event_loop.as_ptr()) {
-                    has_matching_event_loop = true;
-
-                    // 1. Set transaction’s state to inactive.
-                    assert!(transaction.state() == TransactionState::Active);
-                    transaction.set_state(TransactionState::Inactive);
-
-                    // https://w3c.github.io/IndexedDB/#transaction-commit
-                    // The implementation must attempt to commit an inactive transaction when all requests placed
-                    // against the transaction have completed and their returned results handled, no new requests have
-                    // been placed against the transaction, and the transaction has not been aborted
-
-                    // FIXME: We skip committing if the transaction is waiting for prior writes.
-                    //        Update the steps here text if this becomes explicit in the spec:
-                    //         https://github.com/w3c/IndexedDB/issues/489#issuecomment-3994928473
-                    if !transaction.request_list().execution_is_blocked() && transaction.request_list().is_empty() {
-                        commit_a_transaction(vm, transaction);
-                    }
-
-                    // 2. Clear transaction’s cleanup event loop.
-                    transaction.set_cleanup_event_loop(vm, None);
-                }
-            }
-        }
-    });
+    let transactions = Agent::take_transactions_awaiting_cleanup(vm, event_loop);
 
     // 1. If there are no transactions with cleanup event loop matching the current event loop, return false.
+    if transactions.is_empty() {
+        return false;
+    }
+
+    // 2. For each transaction transaction with cleanup event loop matching the current event loop:
+    for transaction in transactions.values().iter() {
+        let transaction = *transaction;
+
+        // 1. Set transaction’s state to inactive.
+        assert!(transaction.state() == TransactionState::Active);
+        transaction.set_state(TransactionState::Inactive);
+
+        // https://w3c.github.io/IndexedDB/#transaction-commit
+        // The implementation must attempt to commit an inactive transaction when all requests placed
+        // against the transaction have completed and their returned results handled, no new requests have
+        // been placed against the transaction, and the transaction has not been aborted
+
+        // FIXME: We skip committing if the transaction is waiting for prior writes.
+        //        Update the steps here text if this becomes explicit in the spec:
+        //         https://github.com/w3c/IndexedDB/issues/489#issuecomment-3994928473
+        if !transaction.request_list().execution_is_blocked() && transaction.request_list().is_empty() {
+            commit_a_transaction(vm, transaction);
+        }
+
+        // 2. Clear transaction’s cleanup event loop.
+        transaction.set_cleanup_event_loop(vm, None);
+    }
+
     // 3. Return true.
-    has_matching_event_loop
+    true
 }
 
 // https://w3c.github.io/IndexedDB/#is-a-potentially-valid-key-range
