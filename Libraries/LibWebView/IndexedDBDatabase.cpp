@@ -5,6 +5,7 @@
  */
 
 #include <AK/AllOf.h>
+#include <AK/HashTable.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonArraySerializer.h>
 #include <AK/JsonValue.h>
@@ -22,10 +23,11 @@ namespace WebView {
 static constexpr i64 LARGEST_GENERATED_KEY = 1LL << 53;
 
 struct IndexedDBDatabase::CheckedKeyRange {
+    // The source is the object store or the index whose records are looked at.
     template<typename Bind>
-    ErrorOr<void, Database::Error> bind_with_object_store(Bind& bind, i64 object_store_id) const
+    ErrorOr<void, Database::Error> bind_with_source(Bind& bind, i64 source_id) const
     {
-        TRY(bind("store"sv, object_store_id));
+        TRY(bind("source"sv, source_id));
         if (lower_bound.has_value())
             TRY(bind("lower_bound"sv, *lower_bound));
         if (upper_bound.has_value())
@@ -59,28 +61,29 @@ static IndexedDBError out_of_memory()
     return { .kind = IndexedDBError::Kind::OutOfMemory };
 }
 
-static ErrorOr<Web::IndexedDB::CheckedKey, IndexedDBError> check_key(ReadonlyBytes bytes)
+static ErrorOr<Web::IndexedDB::CheckedKey, IndexedDBError> check_key(ReadonlyBytes bytes, Optional<u64> injected_generated_key = {})
 {
-    auto checked_key = Web::IndexedDB::check_received_key(bytes);
+    auto checked_key = Web::IndexedDB::check_received_key(bytes, injected_generated_key);
     if (checked_key.is_error())
         return checked_key.error() == Web::IndexedDB::KeyCheckError::InvalidKey ? invalid_claim() : out_of_memory();
     return checked_key.release_value();
 }
 
 // A key path is stored as JSON: a string, or an array of strings.
-static ErrorOr<Optional<String>, IndexedDBError> serialize_key_path(Optional<IndexedDBKeyPath> const& key_path)
+// https://w3c.github.io/IndexedDB/#valid-key-path
+// NB: Of what makes a key path valid, this checks that a sequence is not empty and that no string has an unpaired
+//     surrogate. The rest of what makes a key path valid is not checked.
+static bool can_store_key_path(IndexedDBKeyPath const& key_path)
 {
-    if (!key_path.has_value())
-        return Optional<String> {};
-
-    // No valid key path has an unpaired surrogate.
     auto is_well_formed = [](Utf16String const& string) { return string.utf16_view().validate(); };
-    bool is_all_well_formed = key_path->visit(
+    return key_path.visit(
         [&](Utf16String const& string) { return is_well_formed(string); },
-        [&](Vector<Utf16String> const& strings) { return all_of(strings, is_well_formed); });
-    if (!is_all_well_formed)
-        return invalid_claim();
+        [&](Vector<Utf16String> const& strings) { return !strings.is_empty() && all_of(strings, is_well_formed); });
+}
 
+// The key path is one that can_store_key_path() takes.
+static ErrorOr<String, IndexedDBError> serialize_key_path(IndexedDBKeyPath const& key_path)
+{
     auto with_utf8_of = [](Utf16String const& string, auto use) -> ErrorOr<void> {
         auto view = string.utf16_view();
 
@@ -95,7 +98,7 @@ static ErrorOr<Optional<String>, IndexedDBError> serialize_key_path(Optional<Ind
 
     auto serialize = [&]() -> ErrorOr<String> {
         StringBuilder json;
-        TRY(key_path->visit(
+        TRY(key_path.visit(
             [&](Utf16String const& string) {
                 return with_utf8_of(string, [&](StringView utf8) -> ErrorOr<void> {
                     TRY(json.try_append('"'));
@@ -115,7 +118,7 @@ static ErrorOr<Optional<String>, IndexedDBError> serialize_key_path(Optional<Ind
     auto serialized = serialize();
     if (serialized.is_error())
         return out_of_memory();
-    return Optional<String> { serialized.release_value() };
+    return serialized.release_value();
 }
 
 static ErrorOr<Optional<IndexedDBKeyPath>, Database::Error> parse_key_path(Optional<String> const& json)
@@ -167,6 +170,28 @@ static ErrorOr<void, Database::Error> migrate_schema(Database::Database& databas
                     value BLOB,
                     UNIQUE (object_store_id, key)
                 );
+
+                CREATE TABLE Indexes (
+                    id INTEGER PRIMARY KEY,
+                    object_store_id INTEGER NOT NULL REFERENCES ObjectStores(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    key_path TEXT NOT NULL,
+                    is_unique INTEGER NOT NULL,
+                    is_multi_entry INTEGER NOT NULL,
+                    UNIQUE (object_store_id, name)
+                );
+
+                CREATE TABLE IndexRecords (
+                    index_id INTEGER NOT NULL REFERENCES Indexes(id) ON DELETE CASCADE,
+                    key BLOB NOT NULL,
+                    primary_key BLOB NOT NULL,
+                    exact_key BLOB,
+                    exact_primary_key BLOB,
+                    record_id INTEGER NOT NULL REFERENCES Records(id) ON DELETE CASCADE,
+                    PRIMARY KEY (index_id, key, primary_key)
+                ) WITHOUT ROWID;
+
+                CREATE INDEX IndexRecordsByRecord ON IndexRecords(record_id);
             )#"sv,
             // The one row of Metadata is there from the migration's own transaction on.
             .backfill = [&](Database::Database&) -> ErrorOr<void, Database::Error> {
@@ -208,9 +233,23 @@ ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::cre
         statements.rename_object_store = TRY(database->prepare_statement("UPDATE ObjectStores SET name = :name WHERE id = :store RETURNING id;"sv));
         statements.delete_object_store = TRY(database->prepare_statement("DELETE FROM ObjectStores WHERE id = :store RETURNING id;"sv));
         statements.set_key_generator = TRY(database->prepare_statement("UPDATE ObjectStores SET key_generator = :current_number WHERE id = :store;"sv));
-        statements.get_record_id = TRY(database->prepare_statement("SELECT id FROM Records WHERE object_store_id = :store AND key = :key;"sv));
+        statements.get_record = TRY(database->prepare_statement("SELECT id, exact_key FROM Records WHERE object_store_id = :store AND key = :key;"sv));
         statements.delete_record = TRY(database->prepare_statement("DELETE FROM Records WHERE id = :record;"sv));
-        statements.insert_record = TRY(database->prepare_statement("INSERT INTO Records (object_store_id, key, exact_key, value) VALUES (:store, :key, :exact_key, :value);"sv));
+        statements.insert_record = TRY(database->prepare_statement("INSERT INTO Records (object_store_id, key, exact_key, value) VALUES (:store, :key, :exact_key, :value) RETURNING id;"sv));
+        statements.get_indexes = TRY(database->prepare_statement("SELECT id, object_store_id, name, key_path, is_unique, is_multi_entry FROM Indexes ORDER BY object_store_id, id;"sv));
+        statements.get_index = TRY(database->prepare_statement("SELECT object_store_id, is_unique, is_multi_entry FROM Indexes WHERE id = :index;"sv));
+        statements.create_index = TRY(database->prepare_statement("INSERT INTO Indexes (object_store_id, name, key_path, is_unique, is_multi_entry) VALUES (:store, :name, :key_path, :is_unique, :is_multi_entry) RETURNING id;"sv));
+        statements.rename_index = TRY(database->prepare_statement("UPDATE Indexes SET name = :name WHERE id = :index RETURNING id;"sv));
+        statements.delete_index = TRY(database->prepare_statement("DELETE FROM Indexes WHERE id = :index RETURNING id;"sv));
+        statements.get_whether_index_has_key = TRY(database->prepare_statement("SELECT EXISTS (SELECT 1 FROM IndexRecords WHERE index_id = :index AND key = :key) AS has_key;"sv));
+
+        // https://www.sqlite.org/lang_upsert.html
+        // Only a record's own keys can meet in the primary key, and of the equal ones the first is kept.
+        statements.insert_index_record = TRY(database->prepare_statement(R"#(
+            INSERT INTO IndexRecords (index_id, key, primary_key, exact_key, exact_primary_key, record_id)
+            VALUES (:index, :key, :primary_key, :exact_key, :exact_primary_key, :record)
+            ON CONFLICT DO NOTHING;
+        )#"sv));
 
         return TRY(adopt_nonnull_ref_or_enomem(new (nothrow) IndexedDBDatabase(move(database), statements)));
     };
@@ -245,7 +284,7 @@ IndexedDBError IndexedDBDatabase::failure(Database::Error&& cause)
 }
 
 // A renderer throws for a name that is taken before it sends anything.
-IndexedDBError IndexedDBDatabase::failure_to_name_an_object_store(Database::Error&& cause)
+IndexedDBError IndexedDBDatabase::failure_to_give_a_name(Database::Error&& cause)
 {
     bool name_is_taken = cause.has_result_code(Database::ResultCode::ConstraintUnique);
 
@@ -322,8 +361,36 @@ ErrorOr<Vector<IndexedDBObjectStoreDescription>, IndexedDBError> IndexedDBDataba
                 .name = TRY(row.read_utf16_text("name"sv, MAXIMUM_CELL_SIZE)),
                 .key_path = TRY(parse_key_path(TRY(row.read_optional_text("key_path"sv, MAXIMUM_CELL_SIZE)))),
                 .has_key_generator = TRY(row.read_bool("has_key_generator"sv)),
+                .indexes = {},
             };
             TRY(object_stores.try_append(move(object_store)));
+            return {};
+        });
+    if (result.is_error())
+        return failure(result.release_error());
+
+    // Both lists are in the order of the object stores' ids, so each index belongs to the object store that the walk
+    // has reached or to a later one.
+    size_t position = 0;
+    result = m_sqlite_database->try_execute_bound_statement(
+        m_statements.get_indexes,
+        [](auto&) -> ErrorOr<void, Database::Error> { return {}; },
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
+            auto object_store_id = TRY(row.read_integer<i64>("object_store_id"sv));
+            while (position < object_stores.size() && object_stores[position].id < object_store_id)
+                ++position;
+            if (position == object_stores.size() || object_stores[position].id != object_store_id)
+                return Database::Error::from_string_literal("A stored index is of an object store that does not exist");
+
+            auto key_path = TRY(parse_key_path(TRY(row.read_text("key_path"sv, MAXIMUM_CELL_SIZE))));
+            IndexedDBIndexDescription index {
+                .id = TRY(row.read_integer<i64>("id"sv)),
+                .name = TRY(row.read_utf16_text("name"sv, MAXIMUM_CELL_SIZE)),
+                .key_path = key_path.release_value(),
+                .is_unique = TRY(row.read_bool("is_unique"sv)),
+                .is_multi_entry = TRY(row.read_bool("is_multi_entry"sv)),
+            };
+            TRY(object_stores[position].indexes.try_append(move(index)));
             return {};
         });
     if (result.is_error())
@@ -350,7 +417,7 @@ ErrorOr<IndexedDBDatabase::CheckedKeyRange, IndexedDBError> IndexedDBDatabase::c
     return checked_range;
 }
 
-ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statement(RangeStatement statement, CheckedKeyRange const& range, Direction direction)
+ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statement(RangeSource source, RangeStatement statement, CheckedKeyRange const& range, Direction direction, RecordsOfEachKey records_of_each_key)
 {
     auto kind_of_bound = [](Optional<ByteBuffer> const& bound, bool is_open) {
         if (!bound.has_value())
@@ -361,46 +428,79 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
     auto upper_bound = kind_of_bound(range.upper_bound, range.upper_bound_is_open);
 
     bool is_read = statement == RangeStatement::ReadKeys || statement == RangeStatement::ReadKeysAndValues;
+    bool is_of_an_index = source == RangeSource::Index;
     bool is_descending = is_read && direction == Direction::Descending;
 
+    // An object store has one record for each key.
+    bool has_the_first_record_of_each_key = is_read && is_of_an_index && records_of_each_key == RecordsOfEachKey::First;
+
     RangeStatementShape shape {
+        .source = source,
         .statement = statement,
         .lower_bound = lower_bound,
         .upper_bound = upper_bound,
         .is_descending = is_descending,
+        .has_the_first_record_of_each_key = has_the_first_record_of_each_key,
     };
     if (auto prepared = m_range_statements.get(shape); prepared.has_value())
         return *prepared;
 
     StringBuilder sql;
-    switch (statement) {
-    case RangeStatement::Count:
-        sql.append("SELECT COUNT(*) AS count FROM Records"sv);
-        break;
-    case RangeStatement::ReadKeys:
-        sql.append("SELECT COALESCE(exact_key, key) AS record_key FROM Records"sv);
-        break;
-    case RangeStatement::ReadKeysAndValues:
-        sql.append("SELECT COALESCE(exact_key, key) AS record_key, value AS record_value FROM Records"sv);
-        break;
-    case RangeStatement::Delete:
-        sql.append("DELETE FROM Records"sv);
-        break;
+    if (is_of_an_index) {
+        switch (statement) {
+        case RangeStatement::Count:
+            sql.append("SELECT COUNT(*) AS count FROM IndexRecords"sv);
+            break;
+        case RangeStatement::ReadKeys:
+            sql.append("SELECT COALESCE(IndexRecords.exact_key, IndexRecords.key) AS index_key, COALESCE(exact_primary_key, primary_key) AS record_key FROM IndexRecords"sv);
+            break;
+        case RangeStatement::ReadKeysAndValues:
+            sql.append("SELECT COALESCE(IndexRecords.exact_key, IndexRecords.key) AS index_key, COALESCE(exact_primary_key, primary_key) AS record_key, Records.value AS record_value FROM IndexRecords JOIN Records ON Records.id = IndexRecords.record_id"sv);
+            break;
+        case RangeStatement::Delete:
+            VERIFY_NOT_REACHED();
+        }
+        sql.append(" WHERE IndexRecords.index_id = :source"sv);
+    } else {
+        switch (statement) {
+        case RangeStatement::Count:
+            sql.append("SELECT COUNT(*) AS count FROM Records"sv);
+            break;
+        case RangeStatement::ReadKeys:
+            sql.append("SELECT COALESCE(exact_key, key) AS record_key FROM Records"sv);
+            break;
+        case RangeStatement::ReadKeysAndValues:
+            sql.append("SELECT COALESCE(exact_key, key) AS record_key, value AS record_value FROM Records"sv);
+            break;
+        case RangeStatement::Delete:
+            sql.append("DELETE FROM Records"sv);
+            break;
+        }
+        sql.append(" WHERE Records.object_store_id = :source"sv);
     }
-    sql.append(" WHERE object_store_id = :store"sv);
+    auto key = is_of_an_index ? "IndexRecords.key"sv : "Records.key"sv;
 
     if (lower_bound == RangeBound::Closed)
-        sql.append(" AND key >= :lower_bound"sv);
+        sql.appendff(" AND {} >= :lower_bound", key);
     else if (lower_bound == RangeBound::Open)
-        sql.append(" AND key > :lower_bound"sv);
+        sql.appendff(" AND {} > :lower_bound", key);
 
     if (upper_bound == RangeBound::Closed)
-        sql.append(" AND key <= :upper_bound"sv);
+        sql.appendff(" AND {} <= :upper_bound", key);
     else if (upper_bound == RangeBound::Open)
-        sql.append(" AND key < :upper_bound"sv);
+        sql.appendff(" AND {} < :upper_bound", key);
 
-    if (is_read)
-        sql.append(is_descending ? " ORDER BY key DESC LIMIT :limit"sv : " ORDER BY key ASC LIMIT :limit"sv);
+    // An index sorts the records of one key by the keys of the records that they refer to.
+    if (has_the_first_record_of_each_key)
+        sql.append(" AND NOT EXISTS (SELECT 1 FROM IndexRecords AS Earlier WHERE Earlier.index_id = IndexRecords.index_id AND Earlier.key = IndexRecords.key AND Earlier.primary_key < IndexRecords.primary_key)"sv);
+
+    if (is_read) {
+        auto order = is_descending ? "DESC"sv : "ASC"sv;
+        sql.appendff(" ORDER BY {} {}", key, order);
+        if (is_of_an_index)
+            sql.appendff(", IndexRecords.primary_key {}", order);
+        sql.append(" LIMIT :limit"sv);
+    }
     sql.append(';');
 
     auto prepared = m_sqlite_database->prepare_statement(sql.string_view());
@@ -412,16 +512,26 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
     return prepared.release_value();
 }
 
-// https://w3c.github.io/IndexedDB/#count-the-records-in-a-range
 ErrorOr<u64, IndexedDBError> IndexedDBDatabase::count(i64 object_store_id, IndexedDBKeyRange const& key_range)
 {
+    return count_the_records_in_a_range(RangeSource::ObjectStore, object_store_id, key_range);
+}
+
+ErrorOr<u64, IndexedDBError> IndexedDBDatabase::count_index_records(i64 index_id, IndexedDBKeyRange const& key_range)
+{
+    return count_the_records_in_a_range(RangeSource::Index, index_id, key_range);
+}
+
+// https://w3c.github.io/IndexedDB/#count-the-records-in-a-range
+ErrorOr<u64, IndexedDBError> IndexedDBDatabase::count_the_records_in_a_range(RangeSource source, i64 source_id, IndexedDBKeyRange const& key_range)
+{
     auto range = TRY(check_key_range(key_range));
-    auto statement = TRY(range_statement(RangeStatement::Count, range, Direction::Ascending));
+    auto statement = TRY(range_statement(source, RangeStatement::Count, range, Direction::Ascending, RecordsOfEachKey::All));
 
     // 1. Let count be the number of records, if any, in source's list of records with key in range.
     auto count = m_sqlite_database->try_execute_bound_statement_one<u64>(
         statement,
-        [&](auto& bind) { return range.bind_with_object_store(bind, object_store_id); },
+        [&](auto& bind) { return range.bind_with_source(bind, source_id); },
         [](Database::ResultRow& row) { return row.read_integer<u64>("count"sv); });
     if (count.is_error())
         return failure(count.release_error());
@@ -435,7 +545,7 @@ ErrorOr<Vector<IndexedDBRecord>, IndexedDBError> IndexedDBDatabase::read_records
 {
     auto range = TRY(check_key_range(key_range));
     auto kind_of_statement = with_values == WithValues::Yes ? RangeStatement::ReadKeysAndValues : RangeStatement::ReadKeys;
-    auto statement = TRY(range_statement(kind_of_statement, range, direction));
+    auto statement = TRY(range_statement(RangeSource::ObjectStore, kind_of_statement, range, direction, RecordsOfEachKey::All));
 
     // 1. If count is not given or is 0 (zero), let count be infinity.
     // https://www.sqlite.org/lang_select.html#the_limit_clause
@@ -452,11 +562,58 @@ ErrorOr<Vector<IndexedDBRecord>, IndexedDBError> IndexedDBDatabase::read_records
     auto result = m_sqlite_database->try_execute_bound_statement(
         statement,
         [&](auto& bind) -> ErrorOr<void, Database::Error> {
-            TRY(range.bind_with_object_store(bind, object_store_id));
+            TRY(range.bind_with_source(bind, object_store_id));
             return bind("limit"sv, limit);
         },
         [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
             IndexedDBRecord record { .key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)), .value = {} };
+            if (with_values == WithValues::Yes)
+                record.value = TRY(row.read_blob("record_value"sv, MAXIMUM_CELL_SIZE));
+            TRY(records.try_append(move(record)));
+            return {};
+        });
+    if (result.is_error())
+        return failure(result.release_error());
+
+    return records;
+}
+
+// https://w3c.github.io/IndexedDB/#retrieve-multiple-items-from-an-index
+ErrorOr<Vector<IndexedDBIndexRecord>, IndexedDBError> IndexedDBDatabase::read_index_records(i64 index_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, Optional<u32> count, WithValues with_values)
+{
+    auto range = TRY(check_key_range(key_range));
+    auto kind_of_statement = with_values == WithValues::Yes ? RangeStatement::ReadKeysAndValues : RangeStatement::ReadKeys;
+    auto statement = TRY(range_statement(RangeSource::Index, kind_of_statement, range, direction, records_of_each_key));
+
+    // 1. If count is not given or is 0 (zero), let count be infinity.
+    // https://www.sqlite.org/lang_select.html#the_limit_clause
+    // NB: A negative limit is no limit.
+    i64 limit = count.has_value() && *count != 0 ? static_cast<i64>(*count) : -1;
+
+    // 2. Let records be an empty list of records.
+    Vector<IndexedDBIndexRecord> records;
+
+    // 3. Switching on direction:
+    //    "next"
+    //    1. Set records to the first count of index's list of records whose key is in range.
+    //    "prev"
+    //    1. Set records to the last count of index's list of records whose key is in range.
+    // AD-HOC: For "nextunique" and "prevunique" this reads the first record of each key in range, in the direction's
+    //         order, and then takes the count, as a cursor iterates them and as web-platform-tests expects. The
+    //         steps leave out the first record in range, and for "prevunique" a count takes the first keys in range,
+    //         where a cursor starts from the last. See: https://github.com/w3c/IndexedDB/issues/480
+    auto result = m_sqlite_database->try_execute_bound_statement(
+        statement,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(range.bind_with_source(bind, index_id));
+            return bind("limit"sv, limit);
+        },
+        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
+            IndexedDBIndexRecord record {
+                .key = TRY(row.read_blob("index_key"sv, MAXIMUM_CELL_SIZE)),
+                .primary_key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)),
+                .value = {},
+            };
             if (with_values == WithValues::Yes)
                 record.value = TRY(row.read_blob("record_value"sv, MAXIMUM_CELL_SIZE));
             TRY(records.try_append(move(record)));
@@ -543,7 +700,7 @@ ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_object_store(Utf16String con
         },
         [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
     if (object_store_id.is_error())
-        return failure_to_name_an_object_store(object_store_id.release_error());
+        return failure_to_give_a_name(object_store_id.release_error());
 
     return object_store_id.release_value();
 }
@@ -558,7 +715,7 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::set_name_of_object_store(i64 ob
         },
         [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
     if (renamed_object_store.is_error())
-        return failure_to_name_an_object_store(renamed_object_store.release_error());
+        return failure_to_give_a_name(renamed_object_store.release_error());
     if (!renamed_object_store.value().has_value())
         return invalid_claim();
 
@@ -653,32 +810,41 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::possibly_update_the_key_generat
     return {};
 }
 
-ErrorOr<Optional<i64>, IndexedDBError> IndexedDBDatabase::id_of_record(i64 object_store_id, ReadonlyBytes sort_form_of_key)
+ErrorOr<Optional<IndexedDBDatabase::FoundRecord>, IndexedDBError> IndexedDBDatabase::find_record(i64 object_store_id, ReadonlyBytes sort_form_of_key)
 {
-    auto record_id = m_sqlite_database->try_execute_bound_statement_optional<i64>(
-        m_statements.get_record_id,
+    auto record = m_sqlite_database->try_execute_bound_statement_optional<FoundRecord>(
+        m_statements.get_record,
         [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("store"sv, object_store_id));
             return bind("key"sv, sort_form_of_key);
+        },
+        [](Database::ResultRow& row) -> ErrorOr<FoundRecord, Database::Error> {
+            return FoundRecord {
+                .id = TRY(row.read_integer<i64>("id"sv)),
+                .exact_form_of_key = TRY(row.read_optional_blob("exact_key"sv, MAXIMUM_CELL_SIZE)),
+            };
+        });
+    if (record.is_error())
+        return failure(record.release_error());
+
+    return record.release_value();
+}
+
+ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_record(i64 object_store_id, Web::IndexedDB::CheckedKey const& key, ReadonlyBytes value)
+{
+    auto record_id = m_sqlite_database->try_execute_bound_statement_one<i64>(
+        m_statements.insert_record,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(bind("store"sv, object_store_id));
+            TRY(bind("key"sv, key.sort_form));
+            TRY(bind("exact_key"sv, key.exact_form));
+            return bind("value"sv, value);
         },
         [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
     if (record_id.is_error())
         return failure(record_id.release_error());
 
     return record_id.release_value();
-}
-
-ErrorOr<void, IndexedDBError> IndexedDBDatabase::add_record(i64 object_store_id, ReadonlyBytes sort_form_of_key, Optional<ByteBuffer> const& exact_form_of_key, ReadonlyBytes value)
-{
-    auto result = m_sqlite_database->try_execute_bound_statement(m_statements.insert_record, [&](auto& bind) -> ErrorOr<void, Database::Error> {
-        TRY(bind("store"sv, object_store_id));
-        TRY(bind("key"sv, sort_form_of_key));
-        TRY(bind("exact_key"sv, exact_form_of_key));
-        return bind("value"sv, value);
-    });
-    if (result.is_error())
-        return failure(result.release_error());
-    return {};
 }
 
 ErrorOr<void, IndexedDBError> IndexedDBDatabase::remove_record(i64 record_id)
@@ -693,13 +859,154 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::remove_record(i64 record_id)
 
 ErrorOr<void, IndexedDBError> IndexedDBDatabase::remove_records(i64 object_store_id, CheckedKeyRange const& range)
 {
-    auto statement = TRY(range_statement(RangeStatement::Delete, range, Direction::Ascending));
+    auto statement = TRY(range_statement(RangeSource::ObjectStore, RangeStatement::Delete, range, Direction::Ascending, RecordsOfEachKey::All));
 
     auto result = m_sqlite_database->try_execute_bound_statement(statement, [&](auto& bind) {
-        return range.bind_with_object_store(bind, object_store_id);
+        return range.bind_with_source(bind, object_store_id);
     });
     if (result.is_error())
         return failure(result.release_error());
+    return {};
+}
+
+ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_index(i64 object_store_id, Utf16String const& name, String const& serialized_key_path, Unique unique, MultiEntry multi_entry)
+{
+    auto index_id = m_sqlite_database->try_execute_bound_statement_one<i64>(
+        m_statements.create_index,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(bind("store"sv, object_store_id));
+            TRY(bind("name"sv, name));
+            TRY(bind("key_path"sv, serialized_key_path));
+            TRY(bind("is_unique"sv, unique == Unique::Yes));
+            return bind("is_multi_entry"sv, multi_entry == MultiEntry::Yes);
+        },
+        [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
+    if (index_id.is_error())
+        return failure_to_give_a_name(index_id.release_error());
+
+    return index_id.release_value();
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::set_name_of_index(i64 index_id, Utf16String const& name)
+{
+    auto renamed_index = m_sqlite_database->try_execute_bound_statement_optional<i64>(
+        m_statements.rename_index,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(bind("name"sv, name));
+            return bind("index"sv, index_id);
+        },
+        [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
+    if (renamed_index.is_error())
+        return failure_to_give_a_name(renamed_index.release_error());
+    if (!renamed_index.value().has_value())
+        return invalid_claim();
+
+    return {};
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::remove_index(i64 index_id)
+{
+    auto removed_index = m_sqlite_database->try_execute_bound_statement_optional<i64>(
+        m_statements.delete_index,
+        [&](auto& bind) { return bind("index"sv, index_id); },
+        [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
+    if (removed_index.is_error())
+        return failure(removed_index.release_error());
+    if (!removed_index.value().has_value())
+        return invalid_claim();
+
+    return {};
+}
+
+ErrorOr<IndexedDBDatabase::Index, IndexedDBError> IndexedDBDatabase::index(i64 index_id)
+{
+    auto index = m_sqlite_database->try_execute_bound_statement_optional<Index>(
+        m_statements.get_index,
+        [&](auto& bind) { return bind("index"sv, index_id); },
+        [&](Database::ResultRow& row) -> ErrorOr<Index, Database::Error> {
+            return Index {
+                .id = index_id,
+                .object_store_id = TRY(row.read_integer<i64>("object_store_id"sv)),
+                .is_unique = TRY(row.read_bool("is_unique"sv)),
+                .is_multi_entry = TRY(row.read_bool("is_multi_entry"sv)),
+            };
+        });
+    if (index.is_error())
+        return failure(index.release_error());
+    if (!index.value().has_value())
+        return invalid_claim();
+
+    return index.release_value().release_value();
+}
+
+ErrorOr<bool, IndexedDBError> IndexedDBDatabase::index_has_key(i64 index_id, ReadonlyBytes sort_form_of_key)
+{
+    auto has_key = m_sqlite_database->try_execute_bound_statement_one<bool>(
+        m_statements.get_whether_index_has_key,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(bind("index"sv, index_id));
+            return bind("key"sv, sort_form_of_key);
+        },
+        [](Database::ResultRow& row) { return row.read_bool("has_key"sv); });
+    if (has_key.is_error())
+        return failure(has_key.release_error());
+
+    return has_key.release_value();
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::add_index_record(i64 index_id, Web::IndexedDB::CheckedKey const& index_key, i64 record_id, Web::IndexedDB::CheckedKey const& key_of_record)
+{
+    auto result = m_sqlite_database->try_execute_bound_statement(m_statements.insert_index_record, [&](auto& bind) -> ErrorOr<void, Database::Error> {
+        TRY(bind("index"sv, index_id));
+        TRY(bind("key"sv, index_key.sort_form));
+        TRY(bind("primary_key"sv, key_of_record.sort_form));
+        TRY(bind("exact_key"sv, index_key.exact_form));
+        TRY(bind("exact_primary_key"sv, key_of_record.exact_form));
+        return bind("record"sv, record_id);
+    });
+    if (result.is_error())
+        return failure(result.release_error());
+    return {};
+}
+
+// https://w3c.github.io/IndexedDB/#store-a-record-into-an-object-store
+// What step 5 does for one index once it has the index key. A renderer extracts that key from the value. It sends the
+// key by itself, or its subkeys where the index has the multiEntry flag and the key is an array key.
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::add_index_records(Index const& index, ReadonlySpan<ReadonlyBytes> keys, Optional<u64> injected_generated_key, i64 record_id, Web::IndexedDB::CheckedKey const& key_of_record)
+{
+    if (!index.is_multi_entry && keys.size() > 1)
+        return invalid_claim();
+
+    Vector<Web::IndexedDB::CheckedKey> checked_keys;
+    if (checked_keys.try_ensure_capacity(keys.size()).is_error())
+        return out_of_memory();
+    for (auto key : keys)
+        checked_keys.unchecked_append(TRY(check_key(key, injected_generated_key)));
+
+    // 3. If index's multiEntry flag is false, or if index key is not an array key, and if index already contains a
+    //    record with key equal to index key, and index's unique flag is true, then this operation failed with a
+    //    "ConstraintError" DOMException. Abort this algorithm without taking any further steps.
+    // 4. If index's multiEntry flag is true and index key is an array key, and if index already contains a record with
+    //    key equal to any of the subkeys of index key, and index's unique flag is true, then this operation failed
+    //    with a "ConstraintError" DOMException. Abort this algorithm without taking any further steps.
+    if (index.is_unique) {
+        for (auto const& key : checked_keys) {
+            if (TRY(index_has_key(index.id, key.sort_form)))
+                return IndexedDBError { .kind = IndexedDBError::Kind::Constraint };
+        }
+    }
+
+    // 5. If index's multiEntry flag is false, or if index key is not an array key then store a record in index
+    //    containing index key as its key and key as its value. The record is stored in index's list of records such
+    //    that the list is sorted primarily on the records keys, and secondarily on the records values, in ascending
+    //    order.
+    // 6. If index's multiEntry flag is true and index key is an array key, then for each subkey of the subkeys of
+    //    index key store a record in index containing subkey as its key and key as its value. The records are stored
+    //    in index's list of records such that the list is sorted primarily on the records keys, and secondarily on the
+    //    records values, in ascending order.
+    for (auto const& key : checked_keys)
+        TRY(add_index_record(index.id, key, record_id, key_of_record));
+
     return {};
 }
 
@@ -792,11 +1099,7 @@ static bool can_be_the_key_path_of_an_object_store(Optional<IndexedDBKeyPath> co
         return true;
 
     // 5. If keyPath is not null and is not a valid key path, throw a "SyntaxError" DOMException.
-    // https://w3c.github.io/IndexedDB/#valid-key-path
-    // NB: This step rejects an empty sequence. Serializing the key path also rejects unpaired surrogates. The rest of
-    //     what makes a key path valid is not checked.
-    bool is_an_empty_sequence = key_path->has<Vector<Utf16String>>() && key_path->get<Vector<Utf16String>>().is_empty();
-    if (is_an_empty_sequence)
+    if (!can_store_key_path(*key_path))
         return false;
 
     // 8. If autoIncrement is true and keyPath is an empty string or any sequence (empty or otherwise), throw an
@@ -817,7 +1120,10 @@ ErrorOr<i64, IndexedDBError> IndexedDBDatabase::Writer::create_object_store(Utf1
         if (!can_be_the_key_path_of_an_object_store(key_path, key_generator))
             return invalid_claim();
 
-        auto serialized_key_path = TRY(serialize_key_path(key_path));
+        Optional<String> serialized_key_path;
+        if (key_path.has_value())
+            serialized_key_path = TRY(serialize_key_path(*key_path));
+
         return m_database->add_object_store(name, serialized_key_path, key_generator);
     });
 }
@@ -832,8 +1138,67 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::delete_object_store(i64
     return run_schema_change([&] { return m_database->remove_object_store(object_store_id); });
 }
 
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+static bool can_be_the_key_path_of_an_index(IndexedDBKeyPath const& key_path, IndexedDBDatabase::MultiEntry multi_entry)
+{
+    // 7. If keyPath is not a valid key path, throw a "SyntaxError" DOMException.
+    if (!can_store_key_path(key_path))
+        return false;
+
+    // 10. If keyPath is a sequence and multiEntry is true, throw an "InvalidAccessError" DOMException.
+    if (key_path.has<Vector<Utf16String>>() && multi_entry == IndexedDBDatabase::MultiEntry::Yes)
+        return false;
+
+    return true;
+}
+
+ErrorOr<i64, IndexedDBError> IndexedDBDatabase::Writer::create_index(i64 object_store_id, Utf16String const& name, IndexedDBKeyPath const& key_path, Unique unique, MultiEntry multi_entry)
+{
+    return run_schema_change([&]() -> ErrorOr<i64, IndexedDBError> {
+        // NB: A renderer throws for a key path like this, and for an object store that is gone, before it sends
+        //     anything.
+        if (!can_be_the_key_path_of_an_index(key_path, multi_entry))
+            return invalid_claim();
+        TRY(m_database->keys_of_object_store(object_store_id));
+
+        auto serialized_key_path = TRY(serialize_key_path(key_path));
+        return m_database->add_index(object_store_id, name, serialized_key_path, unique, multi_entry);
+    });
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::rename_index(i64 index_id, Utf16String const& name)
+{
+    return run_schema_change([&] { return m_database->set_name_of_index(index_id, name); });
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::delete_index(i64 index_id)
+{
+    return run_schema_change([&] { return m_database->remove_index(index_id); });
+}
+
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+// NB: A record that breaks the unique flag of the index fails as a change to the object stores does, which aborts the
+//     upgrade as createIndex() asks for.
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::fill_index(i64 index_id, ReadonlyBytes key_of_record, ReadonlySpan<ReadonlyBytes> keys)
+{
+    return run_schema_change([&]() -> ErrorOr<void, IndexedDBError> {
+        auto index = TRY(m_database->index(index_id));
+
+        auto checked_key = TRY(check_key(key_of_record));
+        auto record = TRY(m_database->find_record(index.object_store_id, checked_key.sort_form));
+        if (!record.has_value())
+            return invalid_claim();
+
+        // The record's key is read back as the record has it, whichever of its forms was named.
+        checked_key.exact_form = move(record->exact_form_of_key);
+
+        // No key is generated for a record that is there already, so its index keys hold no marker.
+        return m_database->add_index_records(index, keys, {}, record->id, checked_key);
+    });
+}
+
 // https://w3c.github.io/IndexedDB/#store-a-record-into-an-object-store
-ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDatabase::Writer::store_record(i64 object_store_id, Optional<ReadonlyBytes> key, IndexedDBValue const& value, NoOverwrite no_overwrite)
+ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDatabase::Writer::store_record(i64 object_store_id, Optional<ReadonlyBytes> key, IndexedDBValue const& value, NoOverwrite no_overwrite, ReadonlySpan<IndexedDBIndexKeys> index_keys)
 {
     return run_request([&]() -> ErrorOr<StoredRecord, IndexedDBError> {
         auto keys = TRY(m_database->keys_of_object_store(object_store_id));
@@ -846,14 +1211,10 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
             return invalid_claim();
 
         Optional<u64> generated_key;
-        ByteBuffer sort_form_of_key;
-        Optional<ByteBuffer> exact_form_of_key;
+        Web::IndexedDB::CheckedKey key_of_record;
 
-        if (key.has_value()) {
-            auto checked_key = TRY(check_key(*key));
-            sort_form_of_key = move(checked_key.sort_form);
-            exact_form_of_key = move(checked_key.exact_form);
-        }
+        if (key.has_value())
+            key_of_record = TRY(check_key(*key));
 
         // 1. If store uses a key generator, then:
         if (keys.generator_current_number.has_value()) {
@@ -866,7 +1227,7 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
 
                 auto encoded_key = Web::IndexedDB::encoded_generated_key(*generated_key);
                 VERIFY(encoded_key.has_value());
-                if (sort_form_of_key.try_append(encoded_key->span()).is_error())
+                if (key_of_record.sort_form.try_append(encoded_key->span()).is_error())
                     return out_of_memory();
 
                 // 3. If store also uses in-line keys, then run inject a key into a value using a key path with
@@ -875,13 +1236,13 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
             }
             // 2. Otherwise, run possibly update the key generator for store with key.
             else {
-                TRY(m_database->possibly_update_the_key_generator(object_store_id, *keys.generator_current_number, sort_form_of_key));
+                TRY(m_database->possibly_update_the_key_generator(object_store_id, *keys.generator_current_number, key_of_record.sort_form));
             }
         } else if (!key.has_value()) {
             return invalid_claim();
         }
 
-        auto existing_record = TRY(m_database->id_of_record(object_store_id, sort_form_of_key));
+        auto existing_record = TRY(m_database->find_record(object_store_id, key_of_record.sort_form));
 
         // 2. If the no-overwrite flag was given to these steps and is true, and a record already exists in store
         //    with its key equal to key, then this operation failed with a "ConstraintError" DOMException. Abort this
@@ -892,7 +1253,7 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
         // 3. If a record already exists in store with its key equal to key, then remove the record from store using
         //    delete records from an object store.
         if (existing_record.has_value())
-            TRY(m_database->remove_record(*existing_record));
+            TRY(m_database->remove_record(existing_record->id));
 
         // 4. Store a record in store containing key as its key and ! StructuredSerializeForStorage(value) as its
         //    value. The record is stored in the object store's list of records such that the list is sorted
@@ -913,7 +1274,32 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
         if (serialized_value.is_error())
             return out_of_memory();
 
-        TRY(m_database->add_record(object_store_id, sort_form_of_key, exact_form_of_key, serialized_value.value()));
+        auto record_id = TRY(m_database->add_record(object_store_id, key_of_record, serialized_value.value()));
+
+        // 5. For each index which references store:
+        //    1. Let index key be the result of extracting a key from a value using a key path with value, index's key
+        //       path, and index's multiEntry flag.
+        //    2. If index key is an exception, or invalid, or failure, take no further actions for index, and continue
+        //       these steps for the next index.
+        // NB: The renderer did these two before it sent the request, and names the indexes that it has keys for. An
+        //     index key can hold the key that was generated and injected, which the renderer sends as a marker.
+        auto injected_generated_key = injects_a_generated_key ? generated_key : Optional<u64> {};
+
+        HashTable<i64> named_indexes;
+        for (auto const& keys_of_index : index_keys) {
+            // NB: A renderer names each index once, and only the indexes of this object store.
+            auto index = TRY(m_database->index(keys_of_index.index_id));
+            if (index.object_store_id != object_store_id)
+                return invalid_claim();
+
+            auto was_named = named_indexes.try_set(index.id);
+            if (was_named.is_error())
+                return out_of_memory();
+            if (was_named.value() != HashSetResult::InsertedNewEntry)
+                return invalid_claim();
+
+            TRY(m_database->add_index_records(index, keys_of_index.keys, injected_generated_key, record_id, key_of_record));
+        }
 
         // 6. Return key.
         return StoredRecord { .generated_key = generated_key };
@@ -927,6 +1313,9 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::delete_records(i64 obje
         auto range = TRY(m_database->check_key_range(key_range));
 
         // 1. Remove all records, if any, from store's list of records with key in range.
+        // 2. For each index which references store, remove every record from index's list of records whose value is
+        //    in range, if any such records exist.
+        // NB: The records of an index go with the record that they refer to.
         TRY(m_database->remove_records(object_store_id, range));
 
         // 3. Return undefined.
@@ -938,6 +1327,7 @@ ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::delete_records(i64 obje
 ErrorOr<void, IndexedDBError> IndexedDBDatabase::Writer::clear(i64 object_store_id)
 {
     // 1. Remove all records from store.
+    // 2. In all indexes which reference store, remove all records.
     TRY(delete_records(object_store_id, {}));
 
     // 3. Return undefined.

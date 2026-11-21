@@ -9,11 +9,11 @@
 
 namespace Web::IndexedDB {
 
-ErrorOr<CheckedKey, KeyCheckError> check_received_key(ReadonlyBytes bytes)
+ErrorOr<CheckedKey, KeyCheckError> check_received_key(ReadonlyBytes bytes, Optional<u64> injected_generated_key)
 {
     Optional<CheckedKey> checked_key;
 
-    auto outcome = FFI::indexed_db_check_received_key(bytes, &checked_key, [](void* ctx, ReadonlyBytes sort_form, bool has_exact_form, ReadonlyBytes exact_form) {
+    auto outcome = FFI::indexed_db_check_received_key(bytes, injected_generated_key.has_value(), injected_generated_key.value_or(0), &checked_key, [](void* ctx, ReadonlyBytes sort_form, bool has_exact_form, ReadonlyBytes exact_form) {
         auto sort_form_copy = ByteBuffer::copy(sort_form);
         if (sort_form_copy.is_error())
             return false;

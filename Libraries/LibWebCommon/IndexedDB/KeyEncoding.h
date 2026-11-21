@@ -15,7 +15,7 @@
 
 namespace Web::IndexedDB {
 
-// A key that another process sent, in the forms that a database stores.
+// A key in the forms that a database stores.
 struct CheckedKey {
     // Compares bytewise as the key compares.
     ByteBuffer sort_form;
@@ -28,7 +28,10 @@ enum class KeyCheckError : u8 {
     OutOfMemory,
 };
 
-WEBCOMMON_API ErrorOr<CheckedKey, KeyCheckError> check_received_key(ReadonlyBytes);
+// A key generator's number is given with an index key of the record that the number was generated for and injected
+// into. Such a key may hold markers, which the number takes the place of. The number has to be one that a key
+// generator makes.
+WEBCOMMON_API ErrorOr<CheckedKey, KeyCheckError> check_received_key(ReadonlyBytes, Optional<u64> injected_generated_key);
 
 // https://w3c.github.io/IndexedDB/#key-generator-construct
 // The key that a key generator makes of the number, as a record's key is stored.

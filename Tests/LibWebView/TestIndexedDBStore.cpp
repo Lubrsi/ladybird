@@ -22,7 +22,10 @@ using WebView::IndexedDBStore;
 
 using Direction = IndexedDBDatabase::Direction;
 using KeyGenerator = IndexedDBDatabase::KeyGenerator;
+using MultiEntry = IndexedDBDatabase::MultiEntry;
 using NoOverwrite = IndexedDBDatabase::NoOverwrite;
+using RecordsOfEachKey = IndexedDBDatabase::RecordsOfEachKey;
+using Unique = IndexedDBDatabase::Unique;
 using WithValues = IndexedDBDatabase::WithValues;
 
 // Lets a failed comparison of keys or values print them.
@@ -50,6 +53,11 @@ static constexpr Array<u8, 7> STRING_AB { 0x30, 0x00, 0x61, 0x00, 0x62, 0x00, 0x
 static constexpr Array<u8, 2> ARRAY_EMPTY { 0x50, 0x00 };
 static constexpr Array<u8, 11> ARRAY_OF_1 { 0x50, 0x10, 0xbf, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 static constexpr Array<u8, 4> ARRAY_OF_AN_EMPTY_ARRAY { 0x50, 0x50, 0x00, 0x00 };
+
+// Bytes that are no stored key. The marker stands in an index key for the key that a database generates.
+static constexpr Array<u8, 1> UNKNOWN_TAG { 0x60 };
+static constexpr Array<u8, 1> GENERATED_KEY_MARKER { 0x11 };
+static constexpr Array<u8, 3> ARRAY_OF_A_GENERATED_KEY_MARKER { 0x50, 0x11, 0x00 };
 
 static constexpr u64 TWO_TO_THE_53 = 1ULL << 53;
 
@@ -119,18 +127,18 @@ static ByteBuffer buffer_of(StringView text)
 
 static auto put(IndexedDBDatabase::Writer& writer, i64 object_store, auto const& key, StringView value)
 {
-    return writer.store_record(object_store, bytes_of(key), value.bytes(), NoOverwrite::No);
+    return writer.store_record(object_store, bytes_of(key), value.bytes(), NoOverwrite::No, {});
 }
 
 static auto add(IndexedDBDatabase::Writer& writer, i64 object_store, auto const& key, StringView value)
 {
-    return writer.store_record(object_store, bytes_of(key), value.bytes(), NoOverwrite::Yes);
+    return writer.store_record(object_store, bytes_of(key), value.bytes(), NoOverwrite::Yes, {});
 }
 
 // Stores a record whose key the object store generates, and returns that key.
 static u64 put_with_a_generated_key(IndexedDBDatabase::Writer& writer, i64 object_store)
 {
-    return MUST(writer.store_record(object_store, {}, "value"sv.bytes(), NoOverwrite::No)).generated_key.release_value();
+    return MUST(writer.store_record(object_store, {}, "value"sv.bytes(), NoOverwrite::No, {})).generated_key.release_value();
 }
 
 static Vector<ByteBuffer> keys_of(IndexedDBDatabase& database, i64 object_store, IndexedDBKeyRange const& range = {}, Direction direction = Direction::Ascending, Optional<u32> limit = {})
@@ -409,6 +417,7 @@ TEST_CASE(object_stores_are_created_renamed_and_deleted)
     };
     EXPECT_EQ(kind_of_failure(upgrade->create_object_store("plain"_utf16, {}, KeyGenerator::No)), IndexedDBError::Kind::InvalidClaim);
     EXPECT_EQ(create_other(WebView::IndexedDBKeyPath { odd_name }, KeyGenerator::No), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(create_other(WebView::IndexedDBKeyPath { Vector { "a"_utf16, odd_name } }, KeyGenerator::No), IndexedDBError::Kind::InvalidClaim);
     EXPECT_EQ(create_other(WebView::IndexedDBKeyPath { Vector<Utf16String> {} }, KeyGenerator::No), IndexedDBError::Kind::InvalidClaim);
     EXPECT_EQ(create_other(WebView::IndexedDBKeyPath { Vector { "a"_utf16 } }, KeyGenerator::Yes), IndexedDBError::Kind::InvalidClaim);
     EXPECT_EQ(create_other(WebView::IndexedDBKeyPath { ""_utf16 }, KeyGenerator::Yes), IndexedDBError::Kind::InvalidClaim);
@@ -827,7 +836,7 @@ TEST_CASE(a_key_generator_stops_after_2_to_the_53)
     EXPECT_EQ(put_with_a_generated_key(*writer, object_store), TWO_TO_THE_53);
     EXPECT_EQ(keys_of(*database, object_store, {}, Direction::Descending, 1)[0], number_key(TWO_TO_THE_53));
 
-    auto past_the_end = writer->store_record(object_store, {}, "value"sv.bytes(), NoOverwrite::No);
+    auto past_the_end = writer->store_record(object_store, {}, "value"sv.bytes(), NoOverwrite::No, {});
     EXPECT_EQ(kind_of_failure(past_the_end), IndexedDBError::Kind::Constraint);
     EXPECT(writer->is_open());
 
@@ -837,7 +846,7 @@ TEST_CASE(a_key_generator_stops_after_2_to_the_53)
     // A number past the end, infinity included, ends a generator too.
     auto other_object_store = TRY_OR_FAIL(writer->create_object_store("other"_utf16, {}, KeyGenerator::Yes));
     TRY_OR_FAIL(put(*writer, other_object_store, NUMBER_INFINITY, "value"sv));
-    auto after_infinity = writer->store_record(other_object_store, {}, "value"sv.bytes(), NoOverwrite::No);
+    auto after_infinity = writer->store_record(other_object_store, {}, "value"sv.bytes(), NoOverwrite::No, {});
     EXPECT_EQ(kind_of_failure(after_infinity), IndexedDBError::Kind::Constraint);
 }
 
@@ -867,7 +876,7 @@ TEST_CASE(a_generated_key_is_put_between_the_parts_of_a_value)
     auto writer = TRY_OR_FAIL(database->begin_writer());
 
     WebView::IndexedDBValueSegments segments { .before_the_key = "before"sv.bytes(), .after_the_key = "after"sv.bytes() };
-    auto stored = TRY_OR_FAIL(writer->store_record(object_store, {}, segments, NoOverwrite::No));
+    auto stored = TRY_OR_FAIL(writer->store_record(object_store, {}, segments, NoOverwrite::No, {}));
     EXPECT_EQ(stored.generated_key, 1u);
 
     // The key is in the form that the serialization of a value has for a number: a double, least significant byte
@@ -881,7 +890,7 @@ TEST_CASE(a_generated_key_is_put_between_the_parts_of_a_value)
 
     // A value has no place for the key where its holder drops its properties when serialized, as a Date does. Such
     // a value is whole.
-    auto whole = TRY_OR_FAIL(writer->store_record(object_store, {}, "whole"sv.bytes(), NoOverwrite::No));
+    auto whole = TRY_OR_FAIL(writer->store_record(object_store, {}, "whole"sv.bytes(), NoOverwrite::No, {}));
     EXPECT_EQ(whole.generated_key, 2u);
     EXPECT_EQ(value_at(*database, object_store, number_key(2)), buffer_of("whole"sv));
 }
@@ -900,7 +909,7 @@ TEST_CASE(the_parts_of_a_value_are_only_taken_where_a_key_is_injected)
     WebView::IndexedDBValueSegments segments { .before_the_key = "before"sv.bytes(), .after_the_key = "after"sv.bytes() };
     auto key = number_key(7);
     auto store_segments = [&](i64 object_store, Optional<ReadonlyBytes> key) {
-        return kind_of_failure(writer->store_record(object_store, key, segments, NoOverwrite::No));
+        return kind_of_failure(writer->store_record(object_store, key, segments, NoOverwrite::No, {}));
     };
 
     // An object store with out-of-line keys generates a key and injects nothing.
@@ -915,8 +924,8 @@ TEST_CASE(the_parts_of_a_value_are_only_taken_where_a_key_is_injected)
 
     // Without a key generator the key has to be given.
     EXPECT_EQ(store_segments(path_only, {}), IndexedDBError::Kind::InvalidClaim);
-    EXPECT_EQ(kind_of_failure(writer->store_record(neither, {}, "value"sv.bytes(), NoOverwrite::No)), IndexedDBError::Kind::InvalidClaim);
-    EXPECT_EQ(kind_of_failure(writer->store_record(1000, key.bytes(), "value"sv.bytes(), NoOverwrite::No)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(writer->store_record(neither, {}, "value"sv.bytes(), NoOverwrite::No, {})), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(writer->store_record(1000, key.bytes(), "value"sv.bytes(), NoOverwrite::No, {})), IndexedDBError::Kind::InvalidClaim);
 
     EXPECT_EQ(store_segments(generator_and_path, {}), Optional<IndexedDBError::Kind> {});
     EXPECT(writer->is_open());
@@ -931,12 +940,10 @@ TEST_CASE(bytes_that_are_not_a_key_are_refused)
     auto [store, database, object_store] = store_with_a_database();
     auto writer = TRY_OR_FAIL(database->begin_writer());
 
-    Array<u8, 1> const unknown_tag { 0x60 };
     Array<u8, 3> const truncated_number { 0x10, 0x80, 0x00 };
     Array<u8, 10> const number_and_a_byte { 0x10, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    Array<u8, 1> const generated_key_marker { 0x11 };
 
-    ReadonlyBytes const not_keys[] = { unknown_tag.span(), truncated_number.span(), number_and_a_byte.span(), generated_key_marker.span(), {} };
+    ReadonlyBytes const not_keys[] = { UNKNOWN_TAG.span(), truncated_number.span(), number_and_a_byte.span(), GENERATED_KEY_MARKER.span(), {} };
     for (auto bytes : not_keys) {
         EXPECT_EQ(kind_of_failure(put(*writer, object_store, bytes, "value"sv)), IndexedDBError::Kind::InvalidClaim);
 
@@ -1098,14 +1105,14 @@ TEST_CASE(a_request_that_fails_undoes_what_it_changed)
     auto const large_value = MUST(ByteBuffer::create_zeroed(4 * MiB));
 
     auto generating_a_key = with_little_memory_for_sqlite([&] {
-        return writer->store_record(object_store, {}, large_value.bytes(), NoOverwrite::No);
+        return writer->store_record(object_store, {}, large_value.bytes(), NoOverwrite::No, {});
     });
     EXPECT_EQ(kind_of_failure(generating_a_key), IndexedDBError::Kind::OutOfMemory);
     EXPECT(!generating_a_key.error().lost_the_writer);
 
     auto first_key = number_key(1);
     auto replacing_a_record = with_little_memory_for_sqlite([&] {
-        return writer->store_record(object_store, first_key.bytes(), large_value.bytes(), NoOverwrite::No);
+        return writer->store_record(object_store, first_key.bytes(), large_value.bytes(), NoOverwrite::No, {});
     });
     EXPECT_EQ(kind_of_failure(replacing_a_record), IndexedDBError::Kind::OutOfMemory);
     EXPECT(!replacing_a_record.error().lost_the_writer);
@@ -1227,4 +1234,575 @@ TEST_CASE(a_failed_allocation_is_told_apart_from_other_failures)
     EXPECT_EQ(kind_of(Database::Error::from_result_code(to_underlying(Database::ResultCode::Full))), IndexedDBError::Kind::Unknown);
     EXPECT_EQ(kind_of(AK::Error::from_errno(EIO)), IndexedDBError::Kind::Unknown);
     EXPECT_EQ(kind_of(Database::Error::from_string_literal("Some other failure")), IndexedDBError::Kind::Unknown);
+}
+
+struct StoreWithAnIndex {
+    NonnullOwnPtr<IndexedDBStore> store;
+    NonnullRefPtr<IndexedDBDatabase> database;
+    i64 object_store { 0 };
+    i64 index { 0 };
+};
+
+// A store with a database at version 1, which has one object store with one index.
+static StoreWithAnIndex store_with_an_index(Unique unique = Unique::No, MultiEntry multi_entry = MultiEntry::No, Optional<WebView::IndexedDBKeyPath> key_path_of_object_store = {}, KeyGenerator key_generator = KeyGenerator::No)
+{
+    auto store = MUST(IndexedDBStore::create_transient());
+    auto database = MUST(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+
+    auto upgrade = MUST(database->begin_upgrade(1));
+    auto object_store = MUST(upgrade->create_object_store("store"_utf16, key_path_of_object_store, key_generator));
+    auto index = MUST(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, unique, multi_entry));
+    MUST(upgrade->commit(at(1)));
+
+    return { move(store), move(database), object_store, index };
+}
+
+// Stores a record with its keys in one index. Without a key, the object store generates one.
+static auto store_with_index_keys(IndexedDBDatabase::Writer& writer, i64 object_store, Optional<ReadonlyBytes> key, WebView::IndexedDBValue const& value, i64 index, ReadonlySpan<ReadonlyBytes> keys)
+{
+    Array index_keys { WebView::IndexedDBIndexKeys { .index_id = index, .keys = keys } };
+    return writer.store_record(object_store, key, value, NoOverwrite::No, index_keys.span());
+}
+
+static auto put_with_index_keys(IndexedDBDatabase::Writer& writer, i64 object_store, auto const& key, StringView value, i64 index, ReadonlySpan<ReadonlyBytes> keys)
+{
+    return store_with_index_keys(writer, object_store, bytes_of(key), value.bytes(), index, keys);
+}
+
+static auto put_with_index_key(IndexedDBDatabase::Writer& writer, i64 object_store, auto const& key, StringView value, i64 index, auto const& index_key)
+{
+    Array keys { bytes_of(index_key) };
+    return put_with_index_keys(writer, object_store, key, value, index, keys.span());
+}
+
+static auto fill_index(IndexedDBDatabase::Writer& upgrade, i64 index, auto const& key_of_record, ReadonlySpan<ReadonlyBytes> keys)
+{
+    return upgrade.fill_index(index, bytes_of(key_of_record), keys);
+}
+
+// The records of an index as "key/primary key", where both are whole numbers.
+static Vector<String> records_of_index(IndexedDBDatabase& database, i64 index, IndexedDBKeyRange const& range = {}, Direction direction = Direction::Ascending, RecordsOfEachKey records_of_each_key = RecordsOfEachKey::All, Optional<u32> count = {})
+{
+    Vector<String> records;
+    for (auto const& record : MUST(database.read_index_records(index, range, direction, records_of_each_key, count, WithValues::No))) {
+        EXPECT(!record.value.has_value());
+        auto key = Web::IndexedDB::number_of_key(record.key).release_value();
+        auto primary_key = Web::IndexedDB::number_of_key(record.primary_key).release_value();
+        records.append(MUST(String::formatted("{}/{}", key, primary_key)));
+    }
+    return records;
+}
+
+TEST_CASE(indexes_are_created_renamed_and_deleted)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    auto first_store = TRY_OR_FAIL(upgrade->create_object_store("first"_utf16, {}, KeyGenerator::No));
+    TRY_OR_FAIL(upgrade->create_object_store("without indexes"_utf16, {}, KeyGenerator::No));
+    auto last_store = TRY_OR_FAIL(upgrade->create_object_store("last"_utf16, {}, KeyGenerator::No));
+
+    // An object store has index names of its own. The indexes are not created in the order of their object stores.
+    auto by_a_of_last = TRY_OR_FAIL(upgrade->create_index(last_store, "by a"_utf16, WebView::IndexedDBKeyPath { Vector { "a"_utf16, "b"_utf16 } }, Unique::No, MultiEntry::No));
+    auto by_a = TRY_OR_FAIL(upgrade->create_index(first_store, "by a"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::Yes, MultiEntry::No));
+    auto by_tags = TRY_OR_FAIL(upgrade->create_index(first_store, "by tags"_utf16, WebView::IndexedDBKeyPath { "tags"_utf16 }, Unique::No, MultiEntry::Yes));
+    {
+        auto object_stores = TRY_OR_FAIL(database->object_stores());
+        EXPECT_EQ(object_stores.size(), 3u);
+
+        auto const& indexes_of_first = object_stores[0].indexes;
+        EXPECT_EQ(indexes_of_first.size(), 2u);
+        EXPECT_EQ(indexes_of_first[0].id, by_a);
+        EXPECT_EQ(indexes_of_first[0].name, "by a"_utf16);
+        EXPECT_EQ(indexes_of_first[0].key_path.get<Utf16String>(), "a"_utf16);
+        EXPECT(indexes_of_first[0].is_unique);
+        EXPECT(!indexes_of_first[0].is_multi_entry);
+        EXPECT_EQ(indexes_of_first[1].id, by_tags);
+        EXPECT_EQ(indexes_of_first[1].name, "by tags"_utf16);
+        EXPECT(!indexes_of_first[1].is_unique);
+        EXPECT(indexes_of_first[1].is_multi_entry);
+
+        EXPECT(object_stores[1].indexes.is_empty());
+
+        auto const& indexes_of_last = object_stores[2].indexes;
+        EXPECT_EQ(indexes_of_last.size(), 1u);
+        EXPECT_EQ(indexes_of_last[0].id, by_a_of_last);
+        EXPECT_EQ(indexes_of_last[0].name, "by a"_utf16);
+        EXPECT_EQ(indexes_of_last[0].key_path.get<Vector<Utf16String>>(), (Vector { "a"_utf16, "b"_utf16 }));
+    }
+
+    // A renderer that runs LibWeb throws for each of these before it sends anything.
+    char16_t const path_with_a_lone_surrogate[] = { u'a', 0xd800 };
+    auto odd_path = Utf16String::from_utf16(Utf16View { path_with_a_lone_surrogate, 2 });
+    auto create_other = [&](i64 object_store, WebView::IndexedDBKeyPath key_path, MultiEntry multi_entry) {
+        return kind_of_failure(upgrade->create_index(object_store, "other"_utf16, key_path, Unique::No, multi_entry));
+    };
+    auto a_path = WebView::IndexedDBKeyPath { "a"_utf16 };
+    EXPECT_EQ(kind_of_failure(upgrade->create_index(first_store, "by a"_utf16, a_path, Unique::No, MultiEntry::No)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(create_other(1000, a_path, MultiEntry::No), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(create_other(first_store, WebView::IndexedDBKeyPath { Vector<Utf16String> {} }, MultiEntry::No), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(create_other(first_store, WebView::IndexedDBKeyPath { Vector { "a"_utf16 } }, MultiEntry::Yes), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(create_other(first_store, WebView::IndexedDBKeyPath { odd_path }, MultiEntry::No), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(upgrade->rename_index(by_a, "by tags"_utf16)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(upgrade->rename_index(1000, "other"_utf16)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(upgrade->delete_index(1000)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT(upgrade->is_open());
+
+    TRY_OR_FAIL(upgrade->rename_index(by_tags, "renamed"_utf16));
+    TRY_OR_FAIL(upgrade->delete_index(by_a));
+
+    // The indexes of an object store go with it.
+    TRY_OR_FAIL(upgrade->delete_object_store(last_store));
+    EXPECT_EQ(kind_of_failure(upgrade->rename_index(by_a_of_last, "other"_utf16)), IndexedDBError::Kind::InvalidClaim);
+
+    TRY_OR_FAIL(put(*upgrade, first_store, number_key(1), "value"sv));
+    TRY_OR_FAIL(upgrade->commit(at(1)));
+
+    auto object_stores = TRY_OR_FAIL(database->object_stores());
+    EXPECT_EQ(object_stores.size(), 2u);
+    EXPECT_EQ(object_stores[0].indexes.size(), 1u);
+    EXPECT_EQ(object_stores[0].indexes[0].id, by_tags);
+    EXPECT_EQ(object_stores[0].indexes[0].name, "renamed"_utf16);
+    EXPECT(object_stores[1].indexes.is_empty());
+
+    // Changes to the indexes are an upgrade's alone.
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    EXPECT_EQ(kind_of_failure(writer->create_index(first_store, "other"_utf16, a_path, Unique::No, MultiEntry::No)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(writer->rename_index(by_tags, "other"_utf16)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(writer->delete_index(by_tags)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(fill_index(*writer, by_tags, number_key(1), {})), IndexedDBError::Kind::InvalidClaim);
+    EXPECT(writer->is_open());
+    EXPECT_EQ(TRY_OR_FAIL(database->object_stores())[0].indexes[0].name, "renamed"_utf16);
+}
+
+TEST_CASE(an_index_orders_its_records_by_key_and_then_by_primary_key)
+{
+    auto [store, database, object_store, index] = store_with_an_index();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    // Records 1 and 2 have the index key 10, 3 and 4 have 20, 5 and 6 have 30. They are stored in another order.
+    for (u64 primary_key : { 6, 1, 4, 5, 2, 3 }) {
+        auto index_key = number_key(((primary_key + 1) / 2) * 10);
+        auto value = MUST(String::formatted("value of {}", primary_key));
+        TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(primary_key), value, index, index_key));
+    }
+
+    auto read = [&](Direction direction, RecordsOfEachKey records_of_each_key, Optional<u32> count = {}) {
+        return records_of_index(*database, index, {}, direction, records_of_each_key, count);
+    };
+    EXPECT_EQ(read(Direction::Ascending, RecordsOfEachKey::All), (Vector { "10/1"_string, "10/2"_string, "20/3"_string, "20/4"_string, "30/5"_string, "30/6"_string }));
+    EXPECT_EQ(read(Direction::Descending, RecordsOfEachKey::All), (Vector { "30/6"_string, "30/5"_string, "20/4"_string, "20/3"_string, "10/2"_string, "10/1"_string }));
+
+    // In either direction the first record of a key is the one with the lowest primary key.
+    EXPECT_EQ(read(Direction::Ascending, RecordsOfEachKey::First), (Vector { "10/1"_string, "20/3"_string, "30/5"_string }));
+    EXPECT_EQ(read(Direction::Descending, RecordsOfEachKey::First), (Vector { "30/5"_string, "20/3"_string, "10/1"_string }));
+
+    // A count is taken from where the direction starts.
+    EXPECT_EQ(read(Direction::Ascending, RecordsOfEachKey::All, 1), (Vector { "10/1"_string }));
+    EXPECT_EQ(read(Direction::Descending, RecordsOfEachKey::All, 1), (Vector { "30/6"_string }));
+    EXPECT_EQ(read(Direction::Ascending, RecordsOfEachKey::First, 2), (Vector { "10/1"_string, "20/3"_string }));
+    EXPECT_EQ(read(Direction::Descending, RecordsOfEachKey::First, 1), (Vector { "30/5"_string }));
+    EXPECT_EQ(read(Direction::Descending, RecordsOfEachKey::First, 2), (Vector { "30/5"_string, "20/3"_string }));
+    EXPECT_EQ(read(Direction::Ascending, RecordsOfEachKey::All, 0).size(), 6u);
+
+    // A range is one of index keys.
+    auto const ten = number_key(10);
+    auto const twenty = number_key(20);
+    auto const thirty = number_key(30);
+    IndexedDBKeyRange above_ten { .lower_bound = ten.bytes(), .lower_bound_is_open = true, .upper_bound = {}, .upper_bound_is_open = false };
+    IndexedDBKeyRange up_to_twenty { .lower_bound = {}, .lower_bound_is_open = false, .upper_bound = twenty.bytes(), .upper_bound_is_open = false };
+    IndexedDBKeyRange below_thirty { .lower_bound = ten.bytes(), .lower_bound_is_open = false, .upper_bound = thirty.bytes(), .upper_bound_is_open = true };
+    EXPECT_EQ(records_of_index(*database, index, only(twenty)), (Vector { "20/3"_string, "20/4"_string }));
+    EXPECT_EQ(records_of_index(*database, index, above_ten), (Vector { "20/3"_string, "20/4"_string, "30/5"_string, "30/6"_string }));
+    EXPECT_EQ(records_of_index(*database, index, up_to_twenty, Direction::Descending), (Vector { "20/4"_string, "20/3"_string, "10/2"_string, "10/1"_string }));
+    EXPECT_EQ(records_of_index(*database, index, below_thirty, Direction::Descending, RecordsOfEachKey::First, 1), (Vector { "20/3"_string }));
+
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 6u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(twenty))), 2u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, above_ten)), 4u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, below_thirty)), 4u);
+
+    // A record of an index has the value of the record that it refers to.
+    auto last = TRY_OR_FAIL(database->read_index_records(index, {}, Direction::Descending, RecordsOfEachKey::All, 1, WithValues::Yes));
+    EXPECT_EQ(last.size(), 1u);
+    EXPECT_EQ(last[0].key, thirty);
+    EXPECT_EQ(last[0].primary_key, number_key(6));
+    EXPECT_EQ(last[0].value, buffer_of("value of 6"sv));
+
+    auto first_of_twenty = TRY_OR_FAIL(database->read_index_records(index, only(twenty), Direction::Ascending, RecordsOfEachKey::First, {}, WithValues::Yes));
+    EXPECT_EQ(first_of_twenty.size(), 1u);
+    EXPECT_EQ(first_of_twenty[0].value, buffer_of("value of 3"sv));
+
+    // Both keys are read back as they were written, with or without the value.
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, NUMBER_NEGATIVE_0, "value of -0"sv, index, NUMBER_NEGATIVE_0));
+    for (auto with_values : { WithValues::No, WithValues::Yes }) {
+        auto at_zero = TRY_OR_FAIL(database->read_index_records(index, only(NUMBER_0), Direction::Ascending, RecordsOfEachKey::All, {}, with_values));
+        EXPECT_EQ(at_zero.size(), 1u);
+        if (at_zero.size() != 1)
+            return;
+
+        EXPECT_EQ(at_zero[0].key.bytes(), NUMBER_NEGATIVE_0.span());
+        EXPECT_EQ(at_zero[0].primary_key.bytes(), NUMBER_NEGATIVE_0.span());
+        if (with_values == WithValues::Yes)
+            EXPECT_EQ(at_zero[0].value, buffer_of("value of -0"sv));
+    }
+}
+
+TEST_CASE(an_index_only_looks_at_its_own_records)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    auto object_store = TRY_OR_FAIL(upgrade->create_object_store("store"_utf16, {}, KeyGenerator::No));
+    auto first_index = TRY_OR_FAIL(upgrade->create_index(object_store, "first"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto second_index = TRY_OR_FAIL(upgrade->create_index(object_store, "second"_utf16, WebView::IndexedDBKeyPath { "b"_utf16 }, Unique::Yes, MultiEntry::No));
+
+    // Record 1 has the key 7 in the first index. That is not in the way of record 2 having it in the second index,
+    // which is unique.
+    auto const seven = number_key(7);
+    TRY_OR_FAIL(put_with_index_key(*upgrade, object_store, number_key(1), "value"sv, first_index, seven));
+    TRY_OR_FAIL(put_with_index_key(*upgrade, object_store, number_key(2), "value"sv, second_index, seven));
+
+    // Nor does record 1 come before record 2 among the records that the second index has of the key.
+    EXPECT_EQ(records_of_index(*database, second_index, {}, Direction::Ascending, RecordsOfEachKey::First), (Vector { "7/2"_string }));
+    EXPECT_EQ(records_of_index(*database, second_index, {}, Direction::Descending, RecordsOfEachKey::First), (Vector { "7/2"_string }));
+    EXPECT_EQ(records_of_index(*database, first_index), (Vector { "7/1"_string }));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(second_index, {})), 1u);
+}
+
+TEST_CASE(the_records_of_an_index_go_with_the_record_that_they_refer_to)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    auto object_store = TRY_OR_FAIL(upgrade->create_object_store("store"_utf16, {}, KeyGenerator::No));
+    auto index = TRY_OR_FAIL(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto other_index = TRY_OR_FAIL(upgrade->create_index(object_store, "other index"_utf16, WebView::IndexedDBKeyPath { "b"_utf16 }, Unique::No, MultiEntry::No));
+
+    for (u64 number = 1; number <= 4; ++number) {
+        auto const key = number_key(number);
+        Array keys { key.bytes() };
+        Array index_keys {
+            WebView::IndexedDBIndexKeys { .index_id = index, .keys = keys.span() },
+            WebView::IndexedDBIndexKeys { .index_id = other_index, .keys = keys.span() },
+        };
+        TRY_OR_FAIL(upgrade->store_record(object_store, key.bytes(), "value"sv.bytes(), NoOverwrite::No, index_keys.span()));
+    }
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "1/1"_string, "2/2"_string, "3/3"_string, "4/4"_string }));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(other_index, {})), 4u);
+
+    // A record that is replaced has the keys of its new value, and none where it names no index.
+    TRY_OR_FAIL(put_with_index_key(*upgrade, object_store, number_key(1), "value"sv, index, number_key(10)));
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "2/2"_string, "3/3"_string, "4/4"_string, "10/1"_string }));
+    EXPECT_EQ(records_of_index(*database, other_index), (Vector { "2/2"_string, "3/3"_string, "4/4"_string }));
+
+    auto two = number_key(2);
+    auto three = number_key(3);
+    IndexedDBKeyRange two_to_three { .lower_bound = two.bytes(), .lower_bound_is_open = false, .upper_bound = three.bytes(), .upper_bound_is_open = false };
+    TRY_OR_FAIL(upgrade->delete_records(object_store, two_to_three));
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "4/4"_string, "10/1"_string }));
+    EXPECT_EQ(records_of_index(*database, other_index), (Vector { "4/4"_string }));
+
+    // An index that is deleted takes its records and no others.
+    TRY_OR_FAIL(upgrade->delete_index(other_index));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(other_index, {})), 0u);
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "4/4"_string, "10/1"_string }));
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 2u);
+
+    TRY_OR_FAIL(upgrade->clear(object_store));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
+
+    TRY_OR_FAIL(put_with_index_key(*upgrade, object_store, number_key(1), "value"sv, index, number_key(10)));
+    TRY_OR_FAIL(upgrade->delete_object_store(object_store));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
+}
+
+TEST_CASE(a_unique_index_refuses_a_key_that_another_record_has)
+{
+    auto [store, database, object_store, index] = store_with_an_index(Unique::Yes, MultiEntry::No, {}, KeyGenerator::Yes);
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    auto const ten = number_key(10);
+    Array keys { ten.bytes() };
+
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(1), "first"sv, index, ten));
+
+    auto refused = put_with_index_key(*writer, object_store, number_key(2), "second"sv, index, ten);
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Constraint);
+    EXPECT(!refused.error().lost_the_writer);
+    EXPECT(writer->is_open());
+    EXPECT_EQ(keys_of(*database, object_store), (Vector { number_key(1) }));
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "10/1"_string }));
+
+    // A request that is refused by an index gives back the key that it generated.
+    auto refused_with_a_generated_key = store_with_index_keys(*writer, object_store, {}, "second"sv.bytes(), index, keys.span());
+    EXPECT_EQ(kind_of_failure(refused_with_a_generated_key), IndexedDBError::Kind::Constraint);
+    EXPECT_EQ(put_with_a_generated_key(*writer, object_store), 2u);
+
+    // -0 and 0 are one key.
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(3), "third"sv, index, NUMBER_NEGATIVE_0));
+    EXPECT_EQ(kind_of_failure(put_with_index_key(*writer, object_store, number_key(4), "fourth"sv, index, NUMBER_0)), IndexedDBError::Kind::Constraint);
+
+    // A record is not in the way of its own replacement.
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(1), "first again"sv, index, ten));
+    EXPECT_EQ(value_at(*database, object_store, number_key(1)), buffer_of("first again"sv));
+
+    // A put that is refused leaves the record that it would have replaced, with its place in the index.
+    auto const fifty = number_key(50);
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(5), "fifth"sv, index, fifty));
+    auto refused_replacement = put_with_index_key(*writer, object_store, number_key(5), "fifth again"sv, index, ten);
+    EXPECT_EQ(kind_of_failure(refused_replacement), IndexedDBError::Kind::Constraint);
+    EXPECT_EQ(value_at(*database, object_store, number_key(5)), buffer_of("fifth"sv));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(ten))), 1u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(fifty))), 1u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 3u);
+}
+
+TEST_CASE(a_multi_entry_index_has_a_record_for_each_key)
+{
+    auto [store, database, object_store, index] = store_with_an_index(Unique::Yes, MultiEntry::Yes);
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    auto const ten = number_key(10);
+    auto const twenty = number_key(20);
+    auto const thirty = number_key(30);
+
+    // Equal keys of one record are one record of the index.
+    Array keys_of_first { ten.bytes(), twenty.bytes(), ten.bytes() };
+    TRY_OR_FAIL(put_with_index_keys(*writer, object_store, number_key(1), "value"sv, index, keys_of_first.span()));
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "10/1"_string, "20/1"_string }));
+
+    // Of -0 and 0, which are one key, the first is the one that is read back.
+    Array zeros { NUMBER_NEGATIVE_0.span(), NUMBER_0.span() };
+    TRY_OR_FAIL(put_with_index_keys(*writer, object_store, number_key(2), "value"sv, index, zeros.span()));
+    auto records_at_zero = TRY_OR_FAIL(database->read_index_records(index, only(NUMBER_0), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::No));
+    EXPECT_EQ(records_at_zero.size(), 1u);
+    EXPECT_EQ(records_at_zero[0].key.bytes(), NUMBER_NEGATIVE_0.span());
+
+    // An array among the keys is a key, and is not taken apart.
+    Array an_array { ARRAY_OF_1.span() };
+    TRY_OR_FAIL(put_with_index_keys(*writer, object_store, number_key(3), "value"sv, index, an_array.span()));
+    auto records_at_the_array = TRY_OR_FAIL(database->read_index_records(index, only(ARRAY_OF_1), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::No));
+    EXPECT_EQ(records_at_the_array.size(), 1u);
+    EXPECT_EQ(records_at_the_array[0].primary_key, number_key(3));
+
+    // A record with no keys has no records in the index.
+    TRY_OR_FAIL(put_with_index_keys(*writer, object_store, number_key(4), "value"sv, index, {}));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 4u);
+
+    // One key that another record has is enough for a unique index to refuse all of them.
+    Array keys_with_one_taken { thirty.bytes(), twenty.bytes() };
+    auto refused = put_with_index_keys(*writer, object_store, number_key(5), "value"sv, index, keys_with_one_taken.span());
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Constraint);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(thirty))), 0u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 4u);
+}
+
+TEST_CASE(index_keys_are_taken_as_the_index_allows)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    auto object_store = TRY_OR_FAIL(upgrade->create_object_store("store"_utf16, {}, KeyGenerator::No));
+    auto index = TRY_OR_FAIL(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto other_object_store = TRY_OR_FAIL(upgrade->create_object_store("other"_utf16, {}, KeyGenerator::No));
+    auto index_of_other = TRY_OR_FAIL(upgrade->create_index(other_object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+
+    auto const ten = number_key(10);
+    auto const twenty = number_key(20);
+    Array one_key { ten.bytes() };
+    Array two_keys { ten.bytes(), twenty.bytes() };
+    Array not_a_key { UNKNOWN_TAG.span() };
+
+    // A renderer that runs LibWeb sends none of these.
+    auto put_with = [&](i64 named_index, ReadonlySpan<ReadonlyBytes> keys) {
+        return kind_of_failure(put_with_index_keys(*upgrade, object_store, number_key(1), "value"sv, named_index, keys));
+    };
+    EXPECT_EQ(put_with(index, two_keys.span()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(put_with(index, not_a_key.span()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(put_with(index_of_other, one_key.span()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(put_with(1000, one_key.span()), IndexedDBError::Kind::InvalidClaim);
+
+    Array the_index_twice {
+        WebView::IndexedDBIndexKeys { .index_id = index, .keys = one_key.span() },
+        WebView::IndexedDBIndexKeys { .index_id = index, .keys = {} },
+    };
+    auto named_twice = upgrade->store_record(object_store, ten.bytes(), "value"sv.bytes(), NoOverwrite::No, the_index_twice.span());
+    EXPECT_EQ(kind_of_failure(named_twice), IndexedDBError::Kind::InvalidClaim);
+
+    EXPECT(upgrade->is_open());
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 0u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index_of_other, {})), 0u);
+}
+
+TEST_CASE(a_marker_in_an_index_key_becomes_the_generated_key)
+{
+    auto [store, database, object_store, index] = store_with_an_index(Unique::No, MultiEntry::No, WebView::IndexedDBKeyPath { "id"_utf16 }, KeyGenerator::Yes);
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    Array marker_as_a_key { GENERATED_KEY_MARKER.span() };
+    Array array_as_a_key { ARRAY_OF_A_GENERATED_KEY_MARKER.span() };
+    WebView::IndexedDBValueSegments segments { .before_the_key = "before"sv.bytes(), .after_the_key = "after"sv.bytes() };
+    auto store_with_keys = [&](Optional<ReadonlyBytes> key, WebView::IndexedDBValue value, ReadonlySpan<ReadonlyBytes> keys) {
+        return store_with_index_keys(*writer, object_store, key, value, index, keys);
+    };
+
+    EXPECT_EQ(TRY_OR_FAIL(store_with_keys({}, segments, marker_as_a_key.span())).generated_key, 1u);
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "1/1"_string }));
+
+    // The key that is injected can be in an index key while the value has no place for it.
+    EXPECT_EQ(TRY_OR_FAIL(store_with_keys({}, "whole"sv.bytes(), marker_as_a_key.span())).generated_key, 2u);
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "1/1"_string, "2/2"_string }));
+
+    EXPECT_EQ(TRY_OR_FAIL(store_with_keys({}, segments, array_as_a_key.span())).generated_key, 3u);
+    auto const three = number_key(3);
+    ByteBuffer array_of_three;
+    array_of_three.append(0x50);
+    array_of_three.append(three.bytes());
+    array_of_three.append(0x00);
+    auto records_at_the_array = TRY_OR_FAIL(database->read_index_records(index, only(array_of_three), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::No));
+    EXPECT_EQ(records_at_the_array.size(), 1u);
+    EXPECT_EQ(records_at_the_array[0].key, array_of_three);
+    EXPECT_EQ(records_at_the_array[0].primary_key, number_key(3));
+
+    // A key that is given is not generated, so no index key of that record holds a marker.
+    auto const nine = number_key(9);
+    EXPECT_EQ(kind_of_failure(store_with_keys(nine.bytes(), "value"sv.bytes(), marker_as_a_key.span())), IndexedDBError::Kind::InvalidClaim);
+    EXPECT(writer->is_open());
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 3u);
+}
+
+TEST_CASE(a_marker_is_refused_where_no_generated_key_is_injected)
+{
+    // An object store with out-of-line keys generates a key and injects nothing.
+    auto [store, database, object_store, index] = store_with_an_index(Unique::No, MultiEntry::No, {}, KeyGenerator::Yes);
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    Array marker_as_a_key { GENERATED_KEY_MARKER.span() };
+
+    auto refused = store_with_index_keys(*writer, object_store, {}, "value"sv.bytes(), index, marker_as_a_key.span());
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::InvalidClaim);
+    EXPECT(writer->is_open());
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 0u);
+
+    // The key that the refused request generated is the next one again.
+    EXPECT_EQ(put_with_a_generated_key(*writer, object_store), 1u);
+}
+
+TEST_CASE(filling_an_index_gives_older_records_their_keys)
+{
+    auto [store, database, object_store] = store_with_a_database();
+
+    // An array of 0 and an array of -0 are one key in two forms, as 0 and -0 are.
+    auto array_of = [](ReadonlyBytes key) {
+        ByteBuffer array;
+        array.append(0x50);
+        array.append(key);
+        array.append(0x00);
+        return array;
+    };
+    auto const array_of_zero = array_of(NUMBER_0);
+    auto const array_of_negative_zero = array_of(NUMBER_NEGATIVE_0);
+    {
+        auto writer = TRY_OR_FAIL(database->begin_writer());
+        for (u64 number = 1; number <= 3; ++number) {
+            auto value = MUST(String::formatted("value of {}", number));
+            TRY_OR_FAIL(put(*writer, object_store, number_key(number), value));
+        }
+        TRY_OR_FAIL(put(*writer, object_store, NUMBER_NEGATIVE_0, "value"sv));
+        TRY_OR_FAIL(put(*writer, object_store, array_of_zero, "value"sv));
+        TRY_OR_FAIL(writer->commit(at(2)));
+    }
+
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(2));
+
+    // Another index comes first, so that the index is not numbered as its object store is.
+    auto other_object_store = TRY_OR_FAIL(upgrade->create_object_store("other"_utf16, {}, KeyGenerator::No));
+    TRY_OR_FAIL(upgrade->create_index(other_object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto index = TRY_OR_FAIL(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::Yes));
+    EXPECT(index != object_store);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
+
+    auto const ten = number_key(10);
+    auto const twenty = number_key(20);
+    Array keys_of_first { ten.bytes(), twenty.bytes() };
+    Array keys_of_third { ten.bytes() };
+    TRY_OR_FAIL(fill_index(*upgrade, index, number_key(1), keys_of_first.span()));
+    TRY_OR_FAIL(fill_index(*upgrade, index, number_key(2), {}));
+    TRY_OR_FAIL(fill_index(*upgrade, index, number_key(3), keys_of_third.span()));
+    EXPECT_EQ(records_of_index(*database, index), (Vector { "10/1"_string, "10/3"_string, "20/1"_string }));
+
+    // A record of the index has the value of the record that it was filled for.
+    auto at_ten = TRY_OR_FAIL(database->read_index_records(index, only(ten), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::Yes));
+    EXPECT_EQ(at_ten.size(), 2u);
+    if (at_ten.size() != 2)
+        return;
+
+    EXPECT_EQ(at_ten[0].value, buffer_of("value of 1"sv));
+    EXPECT_EQ(at_ten[1].value, buffer_of("value of 3"sv));
+
+    // The key of the record is read back as the record has it, whichever form of it the fill names.
+    auto const thirty = number_key(30);
+    Array keys_of_the_zeros { thirty.bytes() };
+    TRY_OR_FAIL(fill_index(*upgrade, index, NUMBER_0, keys_of_the_zeros.span()));
+    TRY_OR_FAIL(fill_index(*upgrade, index, array_of_negative_zero, keys_of_the_zeros.span()));
+
+    auto at_thirty = TRY_OR_FAIL(database->read_index_records(index, only(thirty), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::No));
+    EXPECT_EQ(at_thirty.size(), 2u);
+    if (at_thirty.size() != 2)
+        return;
+
+    EXPECT_EQ(at_thirty[0].primary_key.bytes(), NUMBER_NEGATIVE_0.span());
+    EXPECT_EQ(at_thirty[1].primary_key, array_of_zero);
+
+    // A renderer that runs LibWeb sends none of these.
+    Array marker_as_a_key { GENERATED_KEY_MARKER.span() };
+    EXPECT_EQ(kind_of_failure(fill_index(*upgrade, index, number_key(4), keys_of_third.span())), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(fill_index(*upgrade, index, number_key(2), marker_as_a_key.span())), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(fill_index(*upgrade, 1000, number_key(2), keys_of_third.span())), IndexedDBError::Kind::InvalidClaim);
+    EXPECT(upgrade->is_open());
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 5u);
+
+    // The records of the index go with the record that they were filled for.
+    auto const three = number_key(3);
+    TRY_OR_FAIL(upgrade->delete_records(object_store, only(three)));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(ten))), 1u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 4u);
+
+    TRY_OR_FAIL(upgrade->commit(at(3)));
+    EXPECT_EQ(database->version(), 2u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 4u);
+}
+
+TEST_CASE(a_fill_that_a_unique_index_refuses_ends_the_upgrade)
+{
+    auto [store, database, object_store] = store_with_a_database();
+    {
+        auto writer = TRY_OR_FAIL(database->begin_writer());
+        TRY_OR_FAIL(put(*writer, object_store, number_key(1), "value"sv));
+        TRY_OR_FAIL(put(*writer, object_store, number_key(2), "value"sv));
+        TRY_OR_FAIL(writer->commit(at(2)));
+    }
+
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(2));
+    auto index = TRY_OR_FAIL(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::Yes, MultiEntry::No));
+
+    auto const ten = number_key(10);
+    Array keys { ten.bytes() };
+    TRY_OR_FAIL(fill_index(*upgrade, index, number_key(1), keys.span()));
+
+    auto refused = fill_index(*upgrade, index, number_key(2), keys.span());
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Constraint);
+    EXPECT(refused.error().lost_the_writer);
+
+    // Nothing of the upgrade is kept, the records of the index that it did store included.
+    EXPECT(!upgrade->is_open());
+    EXPECT(!database->has_writer());
+    EXPECT_EQ(database->version(), 1u);
+    EXPECT(TRY_OR_FAIL(database->object_stores())[0].indexes.is_empty());
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 2u);
 }

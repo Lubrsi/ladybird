@@ -29,7 +29,9 @@ type OnCheckedKey = unsafe extern "C" fn(
     exact_form: Span<'_, u8>,
 ) -> bool;
 
-/// Checks a key that another process sent, and calls `on_checked_key` with its forms if it is one.
+/// Checks a key that another process sent, and calls `on_checked_key` with its forms if it is one. `injected_key` is
+/// only read with `has_injected_key`, and is the number that a key generator made for the record whose index key the
+/// bytes are.
 ///
 /// # Safety
 ///
@@ -37,11 +39,16 @@ type OnCheckedKey = unsafe extern "C" fn(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn indexed_db_check_received_key(
     bytes: Span<'_, u8>,
+    has_injected_key: bool,
+    injected_key: u64,
     ctx: *mut c_void,
     on_checked_key: OnCheckedKey,
 ) -> KeyCheckOutcome {
     abort_on_panic(|| {
-        let checked_key = match check_received_key(bytes.as_slice(), None) {
+        let injected_key =
+            has_injected_key.then(|| GeneratedKey::new(injected_key).expect("a key generator made the number"));
+
+        let checked_key = match check_received_key(bytes.as_slice(), injected_key) {
             Ok(checked_key) => checked_key,
             Err(KeyCheckError::Invalid(_)) => return KeyCheckOutcome::Invalid,
             Err(KeyCheckError::OutOfMemory) => return KeyCheckOutcome::OutOfMemory,
