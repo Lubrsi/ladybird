@@ -206,7 +206,7 @@ public:
     }
 
     template<typename T, typename BindCallback, typename ReadCallback>
-    ErrorOr<T, Error> try_execute_bound_statement_one(StatementID statement_id, BindCallback&& bind_all, ReadCallback&& read_row)
+    ErrorOr<Optional<T>, Error> try_execute_bound_statement_optional(StatementID statement_id, BindCallback&& bind_all, ReadCallback&& read_row)
     {
         Optional<T> result;
         TRY(try_execute_bound_statement(statement_id, forward<BindCallback>(bind_all), [&](ResultRow& row) -> ErrorOr<void, Error> {
@@ -216,6 +216,13 @@ public:
             result = TRY(read_row(row));
             return {};
         }));
+        return result;
+    }
+
+    template<typename T, typename BindCallback, typename ReadCallback>
+    ErrorOr<T, Error> try_execute_bound_statement_one(StatementID statement_id, BindCallback&& bind_all, ReadCallback&& read_row)
+    {
+        auto result = TRY(try_execute_bound_statement_optional<T>(statement_id, forward<BindCallback>(bind_all), forward<ReadCallback>(read_row)));
         if (!result.has_value())
             return Error::from_string_literal("Statement returned no rows");
         return result.release_value();

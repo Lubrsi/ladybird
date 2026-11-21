@@ -1214,6 +1214,63 @@ TEST_CASE(column_name_cache_survives_a_reprepare)
     }));
 }
 
+TEST_CASE(optional_row_execution_maps_the_row_if_there_is_one)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);"sv));
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, v) VALUES (1, 10), (2, 20);"sv));
+
+    auto select_by_id = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t WHERE id = :id;"sv));
+    auto read_v = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
+        return row.read_integer<i64>("v"sv);
+    };
+
+    auto value = database->try_execute_bound_statement_optional<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(2)); }, read_v);
+    EXPECT_EQ(TRY_OR_FAIL(move(value)), Optional<i64> { 20 });
+
+    auto none = database->try_execute_bound_statement_optional<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(99)); }, read_v);
+    EXPECT_EQ(TRY_OR_FAIL(move(none)), Optional<i64> {});
+
+    auto select_all = TRY_OR_FAIL(database->prepare_statement("SELECT v FROM t;"sv));
+    auto many = database->try_execute_bound_statement_optional<i64>(select_all, [](auto&) -> ErrorOr<void, Database::Error> { return {}; }, read_v);
+    EXPECT(many.is_error());
+    EXPECT_EQ(many.error().string_literal(), "Statement returned more than one row"sv);
+
+    // A row that cannot be read is an error, and not the absence of a row.
+    auto read_a_column_that_is_not_there = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
+        return row.read_integer<i64>("w"sv);
+    };
+    auto unreadable = database->try_execute_bound_statement_optional<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(1)); }, read_a_column_that_is_not_there);
+    EXPECT(unreadable.is_error());
+
+    auto again = database->try_execute_bound_statement_optional<i64>(select_by_id, [](auto& bind) -> ErrorOr<void, Database::Error> { return bind("id"sv, static_cast<i64>(1)); }, read_v);
+    EXPECT_EQ(TRY_OR_FAIL(move(again)), Optional<i64> { 10 });
+}
+
+TEST_CASE(optional_row_execution_tells_whether_a_returning_clause_gave_a_row)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER);"sv));
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, v) VALUES (1, 10);"sv));
+
+    auto update = TRY_OR_FAIL(database->prepare_statement("UPDATE t SET v = :v WHERE id = :id RETURNING id;"sv));
+    auto read_id = [](Database::ResultRow& row) -> ErrorOr<i64, Database::Error> {
+        return row.read_integer<i64>("id"sv);
+    };
+    auto update_row = [&](i64 id) {
+        return database->try_execute_bound_statement_optional<i64>(
+            update,
+            [&](auto& bind) -> ErrorOr<void, Database::Error> {
+                TRY(bind("v"sv, static_cast<i64>(30)));
+                return bind("id"sv, id);
+            },
+            read_id);
+    };
+
+    EXPECT_EQ(TRY_OR_FAIL(update_row(1)), Optional<i64> { 1 });
+    EXPECT_EQ(TRY_OR_FAIL(update_row(2)), Optional<i64> {});
+}
+
 TEST_CASE(one_row_execution_maps_the_single_row)
 {
     auto database = TRY_OR_FAIL(DB::create_memory_backed());

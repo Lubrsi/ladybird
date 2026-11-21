@@ -140,21 +140,16 @@ Optional<ByteBuffer> FaviconStore::PersistedStorage::favicon_png(StringView hash
     if (hash_string.is_error())
         return {};
 
-    Optional<ByteBuffer> favicon_png;
-
-    auto result = m_database->try_execute_bound_statement(
+    auto favicon_png = m_database->try_execute_bound_statement_optional<ByteBuffer>(
         m_statements.select_favicon,
         [&](auto& bind) -> ErrorOr<void, Database::Error> {
             return bind("hash"sv, hash_string.value());
         },
-        [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
-            favicon_png = TRY(row.read_blob("png_data"sv, MAXIMUM_FAVICON_BYTE_COUNT));
-            return {};
-        });
-    if (result.is_error())
+        [](Database::ResultRow& row) { return row.read_blob("png_data"sv, MAXIMUM_FAVICON_BYTE_COUNT); });
+    if (favicon_png.is_error())
         return {};
 
-    return favicon_png;
+    return favicon_png.release_value();
 }
 
 void FaviconStore::PersistedStorage::remove_unreferenced_favicons(HashTable<String> const& referenced_hashes)
