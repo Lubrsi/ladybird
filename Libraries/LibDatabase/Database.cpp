@@ -845,6 +845,23 @@ ErrorOr<void, Error> Database::set_busy_timeout(i32 milliseconds)
 ErrorOr<void, Error> Database::set_foreign_keys_pragma(ForeignKeys foreign_keys)
 {
     TRY(execute_raw(foreign_keys == ForeignKeys::Yes ? "PRAGMA foreign_keys=ON;" : "PRAGMA foreign_keys=OFF;"));
+    if (foreign_keys == ForeignKeys::No)
+        return {};
+
+    // https://www.sqlite.org/foreignkeys.html#fk_enable
+    // SQLite can be built to parse foreign keys without enforcing them. Such a build takes the pragma without acting
+    // on it, and has no value to read back.
+    auto statement_id = TRY(prepare_statement("PRAGMA foreign_keys;"sv));
+    size_t row_count = 0;
+    bool are_enforced = false;
+    TRY(try_execute_statement(statement_id, [&](auto result_statement_id) -> ErrorOr<void, Error> {
+        ++row_count;
+        are_enforced = result_column<i32>(result_statement_id, 0) == 1;
+        return {};
+    }));
+
+    if (row_count != 1 || !are_enforced)
+        return Error::from_string_literal("This build of SQLite does not enforce foreign keys");
     return {};
 }
 
