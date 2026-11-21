@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BitCast.h>
+#include <AK/Endian.h>
 #include <AK/LEB128.h>
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Encoder.h>
@@ -51,6 +53,15 @@ StorageSerializationRecord storage_serialization_record_for_undefined()
 StorageSerializationRecord storage_serialization_record_for_null()
 {
     return storage_serialization_record_for_primitive(ValueTag::NullPrimitive);
+}
+
+Array<u8, 8> storage_format_bytes_of_number(double number)
+{
+    auto little_endian_bits = AK::convert_between_host_and_little_endian(bit_cast<u64>(number));
+
+    Array<u8, 8> bytes;
+    __builtin_memcpy(bytes.data(), &little_endian_bits, bytes.size());
+    return bytes;
 }
 
 TransferDataEncoder::TransferDataEncoder()

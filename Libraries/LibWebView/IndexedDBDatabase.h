@@ -1,0 +1,318 @@
+/*
+ * Copyright (c) 2026-present, the Ladybird developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#pragma once
+
+#include <AK/ByteBuffer.h>
+#include <AK/Format.h>
+#include <AK/HashFunctions.h>
+#include <AK/HashMap.h>
+#include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/Optional.h>
+#include <AK/RefCounted.h>
+#include <AK/String.h>
+#include <AK/Time.h>
+#include <AK/Traits.h>
+#include <AK/Utf16String.h>
+#include <AK/Variant.h>
+#include <AK/Vector.h>
+#include <LibDatabase/Database.h>
+#include <LibWebView/Export.h>
+#include <LibWebView/Forward.h>
+
+namespace WebView {
+
+// Only the kind of a failure is meant for whoever made the request. The cause is SQLite's own.
+struct WEBVIEW_API IndexedDBError {
+    enum class Kind : u8 {
+        Constraint,
+        Version,
+        // The request is a writer's that has finished: it committed, was aborted, or lost its SQL transaction.
+        TransactionLost,
+        // The request is one that no renderer running LibWeb sends.
+        InvalidClaim,
+        OutOfMemory,
+        Unknown,
+    };
+
+    static IndexedDBError from(Database::Error&&);
+
+    Kind kind { Kind::Unknown };
+
+    // When set, the database finished its writer while handling this failure. The request may have come from a reader.
+    bool lost_the_writer { false };
+
+    Optional<Database::Error> cause {};
+};
+
+// https://w3c.github.io/IndexedDB/#key-path-construct
+using IndexedDBKeyPath = Variant<Utf16String, Vector<Utf16String>>;
+
+struct IndexedDBObjectStoreDescription {
+    i64 id { 0 };
+    Utf16String name;
+    Optional<IndexedDBKeyPath> key_path;
+    bool has_key_generator { false };
+};
+
+// https://w3c.github.io/IndexedDB/#range-construct
+// The bounds are keys as a renderer encoded them, which the database checks.
+struct IndexedDBKeyRange {
+    Optional<ReadonlyBytes> lower_bound;
+    bool lower_bound_is_open { false };
+    Optional<ReadonlyBytes> upper_bound;
+    bool upper_bound_is_open { false };
+};
+
+struct IndexedDBRecord {
+    ByteBuffer key;
+    Optional<ByteBuffer> value;
+};
+
+// The serialization of a value around the place of the key that the database generates and injects.
+struct IndexedDBValueSegments {
+    ReadonlyBytes before_the_key;
+    ReadonlyBytes after_the_key;
+};
+
+using IndexedDBValue = Variant<ReadonlyBytes, IndexedDBValueSegments>;
+
+// https://w3c.github.io/IndexedDB/#database-construct
+class WEBVIEW_API IndexedDBDatabase : public RefCounted<IndexedDBDatabase> {
+public:
+    class Writer;
+
+    enum class Direction : u8 {
+        Ascending,
+        Descending,
+    };
+
+    enum class WithValues : u8 {
+        No,
+        Yes,
+    };
+
+    enum class NoOverwrite : u8 {
+        No,
+        Yes,
+    };
+
+    enum class KeyGenerator : u8 {
+        No,
+        Yes,
+    };
+
+    // https://webidl.spec.whatwg.org/#EnforceRange
+    // A version is an [EnforceRange] unsigned long long, and open() throws for 0.
+    static constexpr u64 LARGEST_VERSION = (1ULL << 53) - 1;
+
+    // https://www.sqlite.org/limits.html
+    // SQLite's default limit on the length of a string or BLOB, which the databases leave alone.
+    static constexpr size_t MAXIMUM_CELL_SIZE = 1'000'000'000;
+
+    static ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now);
+    ~IndexedDBDatabase();
+
+    // The version of the last upgrade that committed, or 0. A read of the stored version would see an upgrade that is
+    // still under way, since it shares its connection.
+    u64 version() const { return m_committed_version; }
+
+    bool has_writer() const { return m_writer != nullptr; }
+    ErrorOr<NonnullOwnPtr<Writer>, IndexedDBError> begin_writer();
+
+    // https://w3c.github.io/IndexedDB/#upgrade-a-database
+    // The version has to be greater than version().
+    ErrorOr<NonnullOwnPtr<Writer>, IndexedDBError> begin_upgrade(u64 version);
+
+    ErrorOr<Vector<IndexedDBObjectStoreDescription>, IndexedDBError> object_stores();
+    ErrorOr<u64, IndexedDBError> count(i64 object_store_id, IndexedDBKeyRange const&);
+    ErrorOr<Vector<IndexedDBRecord>, IndexedDBError> read_records(i64 object_store_id, IndexedDBKeyRange const&, Direction, Optional<u32> count, WithValues);
+
+    ErrorOr<void, IndexedDBError> mark_opened(UnixDateTime now);
+    ErrorOr<UnixDateTime, IndexedDBError> last_open_or_write_time();
+
+private:
+    struct Statements {
+        Database::StatementID set_version { 0 };
+        Database::StatementID set_last_open_or_write_time { 0 };
+        Database::StatementID get_last_open_or_write_time { 0 };
+        Database::StatementID get_object_stores { 0 };
+        Database::StatementID get_object_store { 0 };
+        Database::StatementID create_object_store { 0 };
+        Database::StatementID rename_object_store { 0 };
+        Database::StatementID delete_object_store { 0 };
+        Database::StatementID set_key_generator { 0 };
+        Database::StatementID get_record_id { 0 };
+        Database::StatementID delete_record { 0 };
+        Database::StatementID insert_record { 0 };
+    };
+
+    enum class RangeStatement : u8 {
+        Count,
+        ReadKeys,
+        ReadKeysAndValues,
+        Delete,
+    };
+
+    enum class RangeBound : u8 {
+        None,
+        Closed,
+        Open,
+    };
+
+    // Each shape of range is a statement of its own, so that SQLite can seek to a bound in the index on the key.
+    struct RangeStatementShape {
+        bool operator==(RangeStatementShape const&) const = default;
+
+        RangeStatement statement { RangeStatement::Count };
+        RangeBound lower_bound { RangeBound::None };
+        RangeBound upper_bound { RangeBound::None };
+        bool is_descending { false };
+    };
+
+    struct RangeStatementShapeTraits : public DefaultTraits<RangeStatementShape> {
+        static unsigned hash(RangeStatementShape const& shape)
+        {
+            auto bounds = pair_int_hash(to_underlying(shape.lower_bound), to_underlying(shape.upper_bound));
+            return pair_int_hash(pair_int_hash(to_underlying(shape.statement), bounds), shape.is_descending);
+        }
+    };
+
+    struct CheckedKeyRange;
+
+    struct KeysOfObjectStore {
+        bool are_in_line { false };
+        Optional<i64> generator_current_number;
+    };
+
+    IndexedDBDatabase(NonnullRefPtr<Database::Database>, Statements);
+
+    IndexedDBError failure(Database::Error&&);
+    IndexedDBError failure_to_name_an_object_store(Database::Error&&);
+    static ErrorOr<CheckedKeyRange, IndexedDBError> check_key_range(IndexedDBKeyRange const&);
+    ErrorOr<Database::StatementID, IndexedDBError> range_statement(RangeStatement, CheckedKeyRange const&, Direction);
+
+    ErrorOr<NonnullOwnPtr<Writer>, IndexedDBError> begin_writer_for(Optional<u64> upgrade_version);
+    void writer_did_finish(Optional<u64> committed_version);
+
+    ErrorOr<void, IndexedDBError> write_version(u64);
+    ErrorOr<void, IndexedDBError> write_last_open_or_write_time(UnixDateTime);
+    ErrorOr<UnixDateTime, IndexedDBError> write_time_of_commit(UnixDateTime now);
+    void did_commit_last_open_or_write_time(UnixDateTime);
+
+    ErrorOr<i64, IndexedDBError> add_object_store(Utf16String const& name, Optional<String> const& serialized_key_path, KeyGenerator);
+    ErrorOr<void, IndexedDBError> set_name_of_object_store(i64 object_store_id, Utf16String const& name);
+    ErrorOr<void, IndexedDBError> remove_object_store(i64 object_store_id);
+
+    ErrorOr<KeysOfObjectStore, IndexedDBError> keys_of_object_store(i64 object_store_id);
+    ErrorOr<void, IndexedDBError> set_key_generator(i64 object_store_id, i64 current_number);
+    ErrorOr<u64, IndexedDBError> generate_a_key(i64 object_store_id, i64 current_number);
+    ErrorOr<void, IndexedDBError> possibly_update_the_key_generator(i64 object_store_id, i64 current_number, ReadonlyBytes checked_key);
+
+    ErrorOr<Optional<i64>, IndexedDBError> id_of_record(i64 object_store_id, ReadonlyBytes sort_form_of_key);
+    ErrorOr<void, IndexedDBError> add_record(i64 object_store_id, ReadonlyBytes sort_form_of_key, Optional<ByteBuffer> const& exact_form_of_key, ReadonlyBytes value);
+    ErrorOr<void, IndexedDBError> remove_record(i64 record_id);
+    ErrorOr<void, IndexedDBError> remove_records(i64 object_store_id, CheckedKeyRange const&);
+
+    NonnullRefPtr<Database::Database> m_sqlite_database;
+    Statements m_statements;
+    HashMap<RangeStatementShape, Database::StatementID, RangeStatementShapeTraits> m_range_statements;
+
+    u64 m_committed_version { 0 };
+    Writer* m_writer { nullptr };
+
+    // The time of an open that happened while a writer was at work. Kept until that time or a later one is committed,
+    // so that the writer's rollback can't undo it.
+    Optional<UnixDateTime> m_held_open_time;
+};
+
+// https://w3c.github.io/IndexedDB/#transaction-construct
+// The SQL transaction of the one read/write or upgrade transaction that has started on a database. Each request runs
+// in a savepoint, so that one that fails undoes only itself. A change to the object stores that was accepted and then
+// cannot be made aborts the upgrade.
+class WEBVIEW_API IndexedDBDatabase::Writer {
+    AK_MAKE_NONCOPYABLE(Writer);
+    AK_MAKE_NONMOVABLE(Writer);
+
+public:
+    AK_ALLOC_WITH_KMALLOC;
+
+    ~Writer();
+
+    bool is_open() const;
+    bool is_upgrade() const { return m_upgrade_version.has_value(); }
+
+    // Changes to the object stores are an upgrade's alone.
+    ErrorOr<i64, IndexedDBError> create_object_store(Utf16String const& name, Optional<IndexedDBKeyPath> const&, KeyGenerator);
+    ErrorOr<void, IndexedDBError> rename_object_store(i64 object_store_id, Utf16String const& name);
+    ErrorOr<void, IndexedDBError> delete_object_store(i64 object_store_id);
+
+    struct StoredRecord {
+        Optional<u64> generated_key;
+    };
+    ErrorOr<StoredRecord, IndexedDBError> store_record(i64 object_store_id, Optional<ReadonlyBytes> key, IndexedDBValue const&, NoOverwrite);
+    ErrorOr<void, IndexedDBError> delete_records(i64 object_store_id, IndexedDBKeyRange const&);
+    ErrorOr<void, IndexedDBError> clear(i64 object_store_id);
+
+    ErrorOr<void, IndexedDBError> commit(UnixDateTime now);
+    ErrorOr<void, IndexedDBError> abort();
+
+private:
+    friend class IndexedDBDatabase;
+
+    Writer(IndexedDBDatabase&, Database::Database::Transaction, Optional<u64> upgrade_version);
+
+    template<typename Request>
+    auto run_request(Request&&) -> decltype(declval<Request>()());
+
+    template<typename Request>
+    auto run_schema_change(Request&&) -> decltype(declval<Request>()());
+
+    void finish(Optional<u64> committed_version);
+
+    NonnullRefPtr<IndexedDBDatabase> m_database;
+    Database::Database::Transaction m_transaction;
+    Optional<u64> m_upgrade_version;
+    bool m_is_finished { false };
+};
+
+}
+
+template<>
+struct AK::Formatter<WebView::IndexedDBError::Kind> : Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, WebView::IndexedDBError::Kind kind)
+    {
+        switch (kind) {
+        case WebView::IndexedDBError::Kind::Constraint:
+            return Formatter<StringView>::format(builder, "Constraint"sv);
+        case WebView::IndexedDBError::Kind::Version:
+            return Formatter<StringView>::format(builder, "Version"sv);
+        case WebView::IndexedDBError::Kind::TransactionLost:
+            return Formatter<StringView>::format(builder, "TransactionLost"sv);
+        case WebView::IndexedDBError::Kind::InvalidClaim:
+            return Formatter<StringView>::format(builder, "InvalidClaim"sv);
+        case WebView::IndexedDBError::Kind::OutOfMemory:
+            return Formatter<StringView>::format(builder, "OutOfMemory"sv);
+        case WebView::IndexedDBError::Kind::Unknown:
+            return Formatter<StringView>::format(builder, "Unknown"sv);
+        }
+        VERIFY_NOT_REACHED();
+    }
+};
+
+template<>
+struct AK::Formatter<WebView::IndexedDBError> : Formatter<FormatString> {
+    ErrorOr<void> format(FormatBuilder& builder, WebView::IndexedDBError const& error)
+    {
+        TRY(Formatter<FormatString>::format(builder, "{}"sv, error.kind));
+        if (error.lost_the_writer)
+            TRY(builder.put_string(", which lost the writer"sv));
+        if (error.cause.has_value())
+            TRY(Formatter<FormatString>::format(builder, ": {}"sv, *error.cause));
+        return {};
+    }
+};

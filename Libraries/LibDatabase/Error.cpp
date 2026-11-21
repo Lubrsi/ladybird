@@ -10,6 +10,7 @@
 
 namespace Database {
 
+static_assert(to_underlying(ResultCode::NoMemory) == SQLITE_NOMEM);
 static_assert(to_underlying(ResultCode::Full) == SQLITE_FULL);
 static_assert(to_underlying(ResultCode::TooBig) == SQLITE_TOOBIG);
 static_assert(to_underlying(ResultCode::ConstraintPrimaryKey) == SQLITE_CONSTRAINT_PRIMARYKEY);

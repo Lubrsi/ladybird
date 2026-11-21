@@ -83,6 +83,7 @@ set(TEST_SOURCES
     TestHelperProcessPaths.cpp
     TestHistoryStore.cpp
     TestHSTSStore.cpp
+    TestIndexedDBStore.cpp
     TestLingeringIndicator.cpp
     TestMediaSessionCoordinator.cpp
     TestNavigationLoader.cpp
@@ -192,6 +193,13 @@ endif()
 
 target_sources(TestLibWebView PRIVATE ${TEST_SOURCES})
 target_link_libraries(TestLibWebView PRIVATE LibAudio LibCompositing LibDatabase LibGamepad LibGC LibGfx LibHTTP LibIPC LibRequests LibThreading LibURL LibWeb LibWebCommon LibWebView)
+
+# TestIndexedDBStore.cpp limits the memory that SQLite may use.
+if (CMAKE_VERSION VERSION_GREATER_EQUAL 4.3.1)
+    target_link_libraries(TestLibWebView PRIVATE SQLite3::SQLite3)
+else()
+    target_link_libraries(TestLibWebView PRIVATE SQLite::SQLite3)
+endif()
 
 if (APPLE)
     add_dependencies(TestLibWebView ProcessReaper)

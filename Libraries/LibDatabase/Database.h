@@ -270,6 +270,9 @@ public:
 
     ErrorOr<int, Error> result_column_index(StatementID, StringView name);
 
+    // https://www.sqlite.org/c3ref/last_insert_rowid.html
+    i64 last_insert_rowid() const;
+
     ErrorOr<void, Error> execute_raw(ByteString const& sql);
 
     class Savepoint;

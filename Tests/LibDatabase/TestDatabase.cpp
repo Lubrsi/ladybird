@@ -1315,6 +1315,19 @@ TEST_CASE(one_row_execution_reads_a_returning_clause)
     EXPECT_EQ(TRY_OR_FAIL(move(second)), 2);
 }
 
+TEST_CASE(last_insert_rowid_is_that_of_the_last_insert_that_succeeded)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER UNIQUE);"sv));
+
+    TRY_OR_FAIL(database->execute_raw("INSERT INTO t (id, v) VALUES (7, 10);"sv));
+    EXPECT_EQ(database->last_insert_rowid(), 7);
+
+    auto duplicate = database->execute_raw("INSERT INTO t (id, v) VALUES (8, 10);"sv);
+    EXPECT(duplicate.is_error());
+    EXPECT_EQ(database->last_insert_rowid(), 7);
+}
+
 TEST_CASE(bounded_execution_stops_before_the_callback_past_the_budget)
 {
     auto database = TRY_OR_FAIL(DB::create_memory_backed());

@@ -476,6 +476,11 @@ bool Database::result_column_is_null(Badge<ResultRow>, StatementID statement_id,
     return sqlite3_column_type(prepared_statement(statement_id).statement, column) == SQLITE_NULL;
 }
 
+i64 Database::last_insert_rowid() const
+{
+    return sqlite3_last_insert_rowid(m_database);
+}
+
 void Database::clear_bound_parameters(StatementID statement_id)
 {
     auto& prepared = prepared_statement(statement_id);

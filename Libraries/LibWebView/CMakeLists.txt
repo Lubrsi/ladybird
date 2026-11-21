@@ -43,6 +43,8 @@ set(SOURCES
     HSTSStore.cpp
     ImageDecoderControlClient.cpp
     ImageDecoderManager.cpp
+    IndexedDBDatabase.cpp
+    IndexedDBStore.cpp
     LingeringIndicator.cpp
     LocalFileRoot.cpp
     MediaSessionCoordinator.cpp

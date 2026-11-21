@@ -16,6 +16,7 @@ namespace Database {
 
 // https://www.sqlite.org/rescode.html
 enum class ResultCode : int {
+    NoMemory = 7,
     Full = 13,
     TooBig = 18,
     ConstraintPrimaryKey = 1555,

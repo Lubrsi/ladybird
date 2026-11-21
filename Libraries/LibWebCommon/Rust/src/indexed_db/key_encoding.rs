@@ -393,6 +393,21 @@ impl GeneratedKey {
         const LARGEST_NUMBER: u64 = 1 << 53;
         (1..=LARGEST_NUMBER).contains(&number).then_some(Self(number as f64))
     }
+
+    /// The key as a record's key is stored. A number key has one form.
+    pub fn encoded(self) -> [u8; 9] {
+        let mut encoded = [NUMBER_TAG; 9];
+        encoded[1..].copy_from_slice(&encode_double(self.0));
+        encoded
+    }
+}
+
+/// The number that a checked key holds, if the key is a number.
+pub fn number_of_key(checked_key: &[u8]) -> Option<f64> {
+    let (&NUMBER_TAG, encoded_number) = checked_key.split_first()? else {
+        return None;
+    };
+    Some(decode_double(*encoded_number.as_array()?))
 }
 
 /// Why a key that another process sent was not accepted.
@@ -1075,6 +1090,35 @@ mod tests {
 
         let last = check_received_key(&[GENERATED_KEY_MARKER], GeneratedKey::new(largest)).expect("2^53 is generated");
         assert_eq!(last.sort_form, exact_form(&Key::Number(9_007_199_254_740_992.0)));
+    }
+
+    #[test]
+    fn a_generated_key_is_stored_as_a_number_key() {
+        let seven = GeneratedKey::new(7).expect("7 is generated").encoded();
+        assert_eq!(seven.as_slice(), exact_form(&Key::Number(7.0)));
+        assert_eq!(number_of_key(&seven), Some(7.0));
+    }
+
+    #[test]
+    fn only_a_number_key_has_a_number() {
+        let negative_zero = number_of_key(&exact_form(&Key::Number(-0.0))).expect("the key is a number");
+        assert_eq!(negative_zero.to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(
+            number_of_key(&exact_form(&Key::Number(f64::INFINITY))),
+            Some(f64::INFINITY)
+        );
+
+        let other_keys = [
+            Key::Date(7.0),
+            Key::String(vec![0x0037]),
+            Key::Binary(vec![7]),
+            Key::Array(vec![Key::Number(7.0)]),
+            Key::Array(vec![]),
+        ];
+        for key in &other_keys {
+            assert_eq!(number_of_key(&exact_form(key)), None, "{key:?}");
+        }
+        assert_eq!(number_of_key(&[]), None);
     }
 
     #[test]

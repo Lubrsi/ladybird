@@ -116,6 +116,9 @@ WEBCOMMON_API void append_storage_format_prologue(ByteBuffer&);
 WEBCOMMON_API StorageSerializationRecord storage_serialization_record_for_undefined();
 WEBCOMMON_API StorageSerializationRecord storage_serialization_record_for_null();
 
+// The eight bytes that a storage serialization record has for a number after the tag of its 8-byte form.
+WEBCOMMON_API Array<u8, 8> storage_format_bytes_of_number(double);
+
 class WEBCOMMON_API TransferDataEncoder {
     AK_ALLOC_WITH_KMALLOC;
 

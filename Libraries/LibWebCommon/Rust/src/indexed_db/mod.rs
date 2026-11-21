@@ -6,4 +6,5 @@
 
 //! Indexed Database API, https://w3c.github.io/IndexedDB/
 
+pub mod ffi;
 pub mod key_encoding;
