@@ -35,10 +35,108 @@ struct IndexedDBDatabase::CheckedKeyRange {
         return {};
     }
 
+    static RangeBound kind_of(Optional<ByteBuffer> const& bound, bool is_open)
+    {
+        if (!bound.has_value())
+            return RangeBound::None;
+        return is_open ? RangeBound::Open : RangeBound::Closed;
+    }
+
+    RangeBound kind_of_lower_bound() const { return kind_of(lower_bound, lower_bound_is_open); }
+    RangeBound kind_of_upper_bound() const { return kind_of(upper_bound, upper_bound_is_open); }
+
+    // Each bound is given the expression for the key that it is compared with.
+    void append_bounds_to(StringBuilder& sql, StringView key_of_lower_bound, StringView key_of_upper_bound) const
+    {
+        if (kind_of_lower_bound() == RangeBound::Closed)
+            sql.appendff(" AND {} >= :lower_bound", key_of_lower_bound);
+        else if (kind_of_lower_bound() == RangeBound::Open)
+            sql.appendff(" AND {} > :lower_bound", key_of_lower_bound);
+
+        if (kind_of_upper_bound() == RangeBound::Closed)
+            sql.appendff(" AND {} <= :upper_bound", key_of_upper_bound);
+        else if (kind_of_upper_bound() == RangeBound::Open)
+            sql.appendff(" AND {} < :upper_bound", key_of_upper_bound);
+    }
+
     Optional<ByteBuffer> lower_bound;
     bool lower_bound_is_open { false };
     Optional<ByteBuffer> upper_bound;
     bool upper_bound_is_open { false };
+};
+
+// https://w3c.github.io/IndexedDB/#iterate-a-cursor
+// Where a cursor is, and the key and primary key that it is to go to, in the form that records are sorted by.
+struct IndexedDBDatabase::CheckedCursorBounds {
+    template<typename Bind>
+    ErrorOr<void, Database::Error> bind_to(Bind& bind) const
+    {
+        if (position.has_value())
+            TRY(bind("position"sv, *position));
+        if (object_store_position.has_value())
+            TRY(bind("object_store_position"sv, *object_store_position));
+        if (key.has_value())
+            TRY(bind("key"sv, *key));
+        if (primary_key.has_value())
+            TRY(bind("primary_key"sv, *primary_key));
+        return {};
+    }
+
+    static CursorBound kind_of(Optional<ByteBuffer> const& key, Optional<ByteBuffer> const& primary_key)
+    {
+        if (!key.has_value())
+            return CursorBound::None;
+        return primary_key.has_value() ? CursorBound::KeyAndPrimaryKey : CursorBound::Key;
+    }
+
+    CursorBound kind_of_position() const { return kind_of(position, object_store_position); }
+    CursorBound kind_of_seek() const { return kind_of(key, primary_key); }
+
+    // The requirements of a found record that are not its range. They are quoted as "next" has them, and "prev" has
+    // "less than" where "next" has "greater than". A term on key can be sought with, and one on key_to_filter_by
+    // cannot.
+    void append_requirements_to(StringBuilder& sql, StringView key, StringView key_to_filter_by, bool is_descending) const
+    {
+        auto is_past = is_descending ? "<"sv : ">"sv;
+        auto is_at_or_past = is_descending ? "<="sv : ">="sv;
+
+        // * If key is defined:
+        //     * The record's key is greater than or equal to key.
+        if (kind_of_seek() == CursorBound::Key)
+            sql.appendff(" AND {} {} :key", key, is_at_or_past);
+
+        // * If primaryKey is defined:
+        //     * The record's key is equal to key and the record's value is greater than or equal to primaryKey
+        //     * The record's key is greater than key.
+        // https://www.sqlite.org/rowvalue.html#row_value_comparisons
+        // NB: Row values compare their first columns, and their second where the first are equal. That is either of
+        //     these two, and neither holds for a key that is less than key.
+        if (kind_of_seek() == CursorBound::KeyAndPrimaryKey)
+            sql.appendff(" AND ({}, IndexRecords.primary_key) {} (:key, :primary_key)", key, is_at_or_past);
+
+        // NB: A renderer throws for a key to go to that is not past the position, so beside a key to go to the position
+        //     only filters.
+        auto key_of_position = kind_of_seek() == CursorBound::None ? key : key_to_filter_by;
+
+        // * If position is defined and source is an object store:
+        //     * The record's key is greater than position.
+        // "nextunique"
+        // * If position is defined:
+        //     * The record's key is greater than position.
+        if (kind_of_position() == CursorBound::Key)
+            sql.appendff(" AND {} {} :position", key_of_position, is_past);
+
+        // * If position is defined and source is an index:
+        //     * The record's key is equal to position and the record's value is greater than object store position
+        //     * The record's key is greater than position.
+        if (kind_of_position() == CursorBound::KeyAndPrimaryKey)
+            sql.appendff(" AND ({}, IndexRecords.primary_key) {} (:position, :object_store_position)", key_of_position, is_past);
+    }
+
+    Optional<ByteBuffer> position;
+    Optional<ByteBuffer> object_store_position;
+    Optional<ByteBuffer> key;
+    Optional<ByteBuffer> primary_key;
 };
 
 IndexedDBError IndexedDBError::from(Database::Error&& cause)
@@ -417,16 +515,50 @@ ErrorOr<IndexedDBDatabase::CheckedKeyRange, IndexedDBError> IndexedDBDatabase::c
     return checked_range;
 }
 
+// A key is read back as it was written, which for a key that holds a -0 is not the form that it is sorted by.
+static constexpr auto KEY_OF_A_RECORD = "COALESCE(exact_key, key) AS record_key"sv;
+static constexpr auto KEYS_OF_AN_INDEX_RECORD = "COALESCE(IndexRecords.exact_key, IndexRecords.key) AS index_key, COALESCE(exact_primary_key, primary_key) AS record_key"sv;
+
+// An index sorts the records of one key by the keys of the records that they refer to.
+static constexpr auto IS_THE_FIRST_RECORD_OF_ITS_KEY = " AND NOT EXISTS (SELECT 1 FROM IndexRecords AS Earlier WHERE Earlier.index_id = IndexRecords.index_id AND Earlier.key = IndexRecords.key AND Earlier.primary_key < IndexRecords.primary_key)"sv;
+
+static ErrorOr<IndexedDBRecord, Database::Error> read_record(Database::ResultRow& row, IndexedDBDatabase::WithValues with_values)
+{
+    IndexedDBRecord record { .key = TRY(row.read_blob("record_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)), .value = {} };
+    if (with_values == IndexedDBDatabase::WithValues::Yes)
+        record.value = TRY(row.read_blob("record_value"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE));
+
+    return record;
+}
+
+static ErrorOr<IndexedDBIndexRecord, Database::Error> read_index_record(Database::ResultRow& row, IndexedDBDatabase::WithValues with_values)
+{
+    IndexedDBIndexRecord record {
+        .key = TRY(row.read_blob("index_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)),
+        .primary_key = TRY(row.read_blob("record_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)),
+        .value = {},
+    };
+    if (with_values == IndexedDBDatabase::WithValues::Yes)
+        record.value = TRY(row.read_blob("record_value"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE));
+
+    return record;
+}
+
+StringView IndexedDBDatabase::RangeStatementShape::key() const
+{
+    return source == RangeSource::Index ? "IndexRecords.key"sv : "Records.key"sv;
+}
+
+void IndexedDBDatabase::RangeStatementShape::append_order_to(StringBuilder& sql) const
+{
+    auto order = is_descending ? "DESC"sv : "ASC"sv;
+    sql.appendff(" ORDER BY {} {}", key(), order);
+    if (source == RangeSource::Index)
+        sql.appendff(", IndexRecords.primary_key {}", order);
+}
+
 ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statement(RangeSource source, RangeStatement statement, CheckedKeyRange const& range, Direction direction, RecordsOfEachKey records_of_each_key)
 {
-    auto kind_of_bound = [](Optional<ByteBuffer> const& bound, bool is_open) {
-        if (!bound.has_value())
-            return RangeBound::None;
-        return is_open ? RangeBound::Open : RangeBound::Closed;
-    };
-    auto lower_bound = kind_of_bound(range.lower_bound, range.lower_bound_is_open);
-    auto upper_bound = kind_of_bound(range.upper_bound, range.upper_bound_is_open);
-
     bool is_read = statement == RangeStatement::ReadKeys || statement == RangeStatement::ReadKeysAndValues;
     bool is_of_an_index = source == RangeSource::Index;
     bool is_descending = is_read && direction == Direction::Descending;
@@ -437,10 +569,12 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
     RangeStatementShape shape {
         .source = source,
         .statement = statement,
-        .lower_bound = lower_bound,
-        .upper_bound = upper_bound,
+        .lower_bound = range.kind_of_lower_bound(),
+        .upper_bound = range.kind_of_upper_bound(),
         .is_descending = is_descending,
         .has_the_first_record_of_each_key = has_the_first_record_of_each_key,
+        .position = CursorBound::None,
+        .seek = CursorBound::None,
     };
     if (auto prepared = m_range_statements.get(shape); prepared.has_value())
         return *prepared;
@@ -452,12 +586,14 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
             sql.append("SELECT COUNT(*) AS count FROM IndexRecords"sv);
             break;
         case RangeStatement::ReadKeys:
-            sql.append("SELECT COALESCE(IndexRecords.exact_key, IndexRecords.key) AS index_key, COALESCE(exact_primary_key, primary_key) AS record_key FROM IndexRecords"sv);
+            sql.appendff("SELECT {} FROM IndexRecords", KEYS_OF_AN_INDEX_RECORD);
             break;
         case RangeStatement::ReadKeysAndValues:
-            sql.append("SELECT COALESCE(IndexRecords.exact_key, IndexRecords.key) AS index_key, COALESCE(exact_primary_key, primary_key) AS record_key, Records.value AS record_value FROM IndexRecords JOIN Records ON Records.id = IndexRecords.record_id"sv);
+            sql.appendff("SELECT {}, Records.value AS record_value FROM IndexRecords JOIN Records ON Records.id = IndexRecords.record_id", KEYS_OF_AN_INDEX_RECORD);
             break;
         case RangeStatement::Delete:
+        case RangeStatement::IterateKeys:
+        case RangeStatement::IterateKeysAndValues:
             VERIFY_NOT_REACHED();
         }
         sql.append(" WHERE IndexRecords.index_id = :source"sv);
@@ -467,49 +603,119 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
             sql.append("SELECT COUNT(*) AS count FROM Records"sv);
             break;
         case RangeStatement::ReadKeys:
-            sql.append("SELECT COALESCE(exact_key, key) AS record_key FROM Records"sv);
+            sql.appendff("SELECT {} FROM Records", KEY_OF_A_RECORD);
             break;
         case RangeStatement::ReadKeysAndValues:
-            sql.append("SELECT COALESCE(exact_key, key) AS record_key, value AS record_value FROM Records"sv);
+            sql.appendff("SELECT {}, value AS record_value FROM Records", KEY_OF_A_RECORD);
             break;
         case RangeStatement::Delete:
             sql.append("DELETE FROM Records"sv);
             break;
+        case RangeStatement::IterateKeys:
+        case RangeStatement::IterateKeysAndValues:
+            VERIFY_NOT_REACHED();
         }
         sql.append(" WHERE Records.object_store_id = :source"sv);
     }
-    auto key = is_of_an_index ? "IndexRecords.key"sv : "Records.key"sv;
+    range.append_bounds_to(sql, shape.key(), shape.key());
 
-    if (lower_bound == RangeBound::Closed)
-        sql.appendff(" AND {} >= :lower_bound", key);
-    else if (lower_bound == RangeBound::Open)
-        sql.appendff(" AND {} > :lower_bound", key);
-
-    if (upper_bound == RangeBound::Closed)
-        sql.appendff(" AND {} <= :upper_bound", key);
-    else if (upper_bound == RangeBound::Open)
-        sql.appendff(" AND {} < :upper_bound", key);
-
-    // An index sorts the records of one key by the keys of the records that they refer to.
     if (has_the_first_record_of_each_key)
-        sql.append(" AND NOT EXISTS (SELECT 1 FROM IndexRecords AS Earlier WHERE Earlier.index_id = IndexRecords.index_id AND Earlier.key = IndexRecords.key AND Earlier.primary_key < IndexRecords.primary_key)"sv);
+        sql.append(IS_THE_FIRST_RECORD_OF_ITS_KEY);
 
     if (is_read) {
-        auto order = is_descending ? "DESC"sv : "ASC"sv;
-        sql.appendff(" ORDER BY {} {}", key, order);
-        if (is_of_an_index)
-            sql.appendff(", IndexRecords.primary_key {}", order);
+        shape.append_order_to(sql);
         sql.append(" LIMIT :limit"sv);
     }
     sql.append(';');
 
-    auto prepared = m_sqlite_database->prepare_statement(sql.string_view());
+    return prepare_range_statement(shape, sql.string_view());
+}
+
+ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::prepare_range_statement(RangeStatementShape const& shape, StringView sql)
+{
+    auto prepared = m_sqlite_database->prepare_statement(sql);
     if (prepared.is_error())
         return failure(prepared.release_error());
     if (m_range_statements.try_set(shape, prepared.value()).is_error())
         return out_of_memory();
 
     return prepared.release_value();
+}
+
+// https://w3c.github.io/IndexedDB/#iterate-a-cursor
+// A statement for the turns of step 9. Of the records that meet the requirements, it finds the one that :skip of them
+// come before.
+ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::cursor_statement(RangeSource source, WithValues with_values, CheckedKeyRange const& range, CheckedCursorBounds const& bounds, Direction direction, RecordsOfEachKey records_of_each_key)
+{
+    bool is_of_an_index = source == RangeSource::Index;
+    bool is_descending = direction == Direction::Descending;
+    bool has_values = with_values == WithValues::Yes;
+
+    // An object store has one record for each key.
+    bool has_the_first_record_of_each_key = is_of_an_index && records_of_each_key == RecordsOfEachKey::First;
+
+    RangeStatementShape shape {
+        .source = source,
+        .statement = has_values ? RangeStatement::IterateKeysAndValues : RangeStatement::IterateKeys,
+        .lower_bound = range.kind_of_lower_bound(),
+        .upper_bound = range.kind_of_upper_bound(),
+        .is_descending = is_descending,
+        .has_the_first_record_of_each_key = has_the_first_record_of_each_key,
+        .position = bounds.kind_of_position(),
+        .seek = bounds.kind_of_seek(),
+    };
+    if (auto prepared = m_range_statements.get(shape); prepared.has_value())
+        return *prepared;
+
+    StringBuilder sql;
+
+    // A value is read for the record that is found, and for none of the records that are skipped.
+    if (has_values) {
+        auto keys_of_the_found_record = is_of_an_index ? "Found.index_key AS index_key, Found.record_key AS record_key"sv : "Found.record_key AS record_key"sv;
+        sql.appendff("SELECT {}, Records.value AS record_value FROM (", keys_of_the_found_record);
+    }
+
+    if (is_of_an_index)
+        sql.appendff("SELECT {}, record_id FROM IndexRecords WHERE IndexRecords.index_id = :source", KEYS_OF_AN_INDEX_RECORD);
+    else
+        sql.appendff("SELECT {}, id AS record_id FROM Records WHERE Records.object_store_id = :source", KEY_OF_A_RECORD);
+
+    // https://www.sqlite.org/optoverview.html#disqualifying_where_clause_terms_using_unary_
+    // Of the terms that say where the records start in the cursor's direction, SQLite seeks with one and filters with
+    // the rest. The key to go to is the furthest on, then the position, then the range's bound, and a unary + keeps
+    // the ones behind from being the one that is sought with.
+    auto key = shape.key();
+    auto key_to_filter_by = is_of_an_index ? "+IndexRecords.key"sv : "+Records.key"sv;
+    bool starts_at_the_range = bounds.kind_of_position() == CursorBound::None && bounds.kind_of_seek() == CursorBound::None;
+    auto key_of_first_bound = starts_at_the_range ? key : key_to_filter_by;
+
+    // * The record's key is in range.
+    if (is_descending)
+        range.append_bounds_to(sql, key, key_of_first_bound);
+    else
+        range.append_bounds_to(sql, key_of_first_bound, key);
+
+    bounds.append_requirements_to(sql, key, key_to_filter_by, is_descending);
+
+    // "prevunique"
+    // If temp record is defined, let found record be the first record in records whose key is equal to temp record's
+    // key.
+    // NB: The first record that "nextunique" finds past a position is the first record of its key as well.
+    if (has_the_first_record_of_each_key)
+        sql.append(IS_THE_FIRST_RECORD_OF_ITS_KEY);
+
+    // "next"
+    // Let found record be the first record in records which satisfy all of the following requirements:
+    // "prev"
+    // Let found record be the last record in records which satisfy all of the following requirements:
+    shape.append_order_to(sql);
+    sql.append(" LIMIT 1 OFFSET :skip"sv);
+
+    if (has_values)
+        sql.append(") AS Found JOIN Records ON Records.id = Found.record_id"sv);
+    sql.append(';');
+
+    return prepare_range_statement(shape, sql.string_view());
 }
 
 ErrorOr<u64, IndexedDBError> IndexedDBDatabase::count(i64 object_store_id, IndexedDBKeyRange const& key_range)
@@ -566,10 +772,7 @@ ErrorOr<Vector<IndexedDBRecord>, IndexedDBError> IndexedDBDatabase::read_records
             return bind("limit"sv, limit);
         },
         [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
-            IndexedDBRecord record { .key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)), .value = {} };
-            if (with_values == WithValues::Yes)
-                record.value = TRY(row.read_blob("record_value"sv, MAXIMUM_CELL_SIZE));
-            TRY(records.try_append(move(record)));
+            TRY(records.try_append(TRY(read_record(row, with_values))));
             return {};
         });
     if (result.is_error())
@@ -609,20 +812,107 @@ ErrorOr<Vector<IndexedDBIndexRecord>, IndexedDBError> IndexedDBDatabase::read_in
             return bind("limit"sv, limit);
         },
         [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
-            IndexedDBIndexRecord record {
-                .key = TRY(row.read_blob("index_key"sv, MAXIMUM_CELL_SIZE)),
-                .primary_key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)),
-                .value = {},
-            };
-            if (with_values == WithValues::Yes)
-                record.value = TRY(row.read_blob("record_value"sv, MAXIMUM_CELL_SIZE));
-            TRY(records.try_append(move(record)));
+            TRY(records.try_append(TRY(read_index_record(row, with_values))));
             return {};
         });
     if (result.is_error())
         return failure(result.release_error());
 
     return records;
+}
+
+ErrorOr<Optional<IndexedDBRecord>, IndexedDBError> IndexedDBDatabase::iterate_cursor(i64 object_store_id, IndexedDBKeyRange const& key_range, Direction direction, Optional<ReadonlyBytes> position, Optional<ReadonlyBytes> key, u32 count, WithValues with_values)
+{
+    CheckedCursorBounds bounds;
+    if (position.has_value())
+        bounds.position = TRY(check_key(*position)).sort_form;
+    if (key.has_value())
+        bounds.key = TRY(check_key(*key)).sort_form;
+
+    // An object store has one record for each key.
+    return iterate_a_cursor(RangeSource::ObjectStore, object_store_id, key_range, direction, RecordsOfEachKey::All, move(bounds), count, with_values, read_record);
+}
+
+ErrorOr<Optional<IndexedDBIndexRecord>, IndexedDBError> IndexedDBDatabase::iterate_index_cursor(i64 index_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, Optional<IndexedDBIndexCursorPosition> const& position, Optional<IndexedDBIndexCursorSeek> const& seek, u32 count, WithValues with_values)
+{
+    CheckedCursorBounds bounds;
+    if (position.has_value()) {
+        bounds.position = TRY(check_key(position->key)).sort_form;
+        bounds.object_store_position = TRY(check_key(position->primary_key)).sort_form;
+    }
+    if (seek.has_value()) {
+        bounds.key = TRY(check_key(seek->key)).sort_form;
+        if (seek->primary_key.has_value())
+            bounds.primary_key = TRY(check_key(*seek->primary_key)).sort_form;
+    }
+
+    return iterate_a_cursor(RangeSource::Index, index_id, key_range, direction, records_of_each_key, move(bounds), count, with_values, read_index_record);
+}
+
+// https://w3c.github.io/IndexedDB/#iterate-a-cursor
+// NB: The steps that set the cursor are the renderer's, which keeps it.
+template<typename Record>
+ErrorOr<Optional<Record>, IndexedDBError> IndexedDBDatabase::iterate_a_cursor(RangeSource source, i64 source_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, CheckedCursorBounds bounds, u32 count, WithValues with_values, ErrorOr<Record, Database::Error> (*read_found_record)(Database::ResultRow&, WithValues))
+{
+    // 1. Let source be cursor's source.
+    // 2. Let direction be cursor's direction.
+    // NB: "nextunique" and "prevunique" are "next" and "prev" for an object store, which has one record for each key.
+    bool visits_each_key_once = source == RangeSource::Index && records_of_each_key == RecordsOfEachKey::First;
+
+    // 3. Assert: if primaryKey is given, source is an index and direction is "next" or "prev".
+    // NB: A renderer throws for another direction before it sends the request, and only an index is asked for a
+    //     primary key.
+    if (bounds.primary_key.has_value() && visits_each_key_once)
+        return invalid_claim();
+
+    // 4. Let records be the list of records in source.
+    // 5. Let range be cursor's range.
+    auto range = TRY(check_key_range(key_range));
+
+    // 6. Let position be cursor's position.
+    // 7. Let object store position be cursor's object store position.
+    // NB: "nextunique" and "prevunique" require a record's key to be past the position, whatever its value is.
+    if (visits_each_key_once)
+        bounds.object_store_position.clear();
+
+    // 8. If count is not given, let count be 1.
+    // NB: A request always gives the count.
+
+    // https://w3c.github.io/IndexedDB/#dom-idbcursor-advance
+    // 1. If count is 0 (zero), throw a TypeError.
+    // NB: A renderer does this before it sends the request.
+    if (count == 0)
+        return invalid_claim();
+
+    // https://w3c.github.io/IndexedDB/#iterate-a-cursor
+    // 9. While count is greater than 0:
+    //    1. Switch on direction: [...]
+    //    2. If found record is not defined, then: [...]
+    //       4. Return null.
+    //    3. Let position be found record's key.
+    //    4. If source is an index, let object store position be found record's value.
+    //    5. Decrease count by 1.
+    // NB: Each turn finds the next record that meets the requirements, in the direction's order, so the last turn
+    //     finds the one that count - 1 of them come before.
+    auto statement = TRY(cursor_statement(source, with_values, range, bounds, direction, records_of_each_key));
+
+    // 13. If cursor's key only flag is false, then:
+    //     1. Let serialized be found record's value if source is an object store, or found record's referenced value
+    //        otherwise.
+    // NB: The renderer does the rest of step 13, and steps 10 to 12 and 14, with the record that it gets.
+    auto found_record = m_sqlite_database->try_execute_bound_statement_optional<Record>(
+        statement,
+        [&](auto& bind) -> ErrorOr<void, Database::Error> {
+            TRY(range.bind_with_source(bind, source_id));
+            TRY(bounds.bind_to(bind));
+            return bind("skip"sv, static_cast<i64>(count) - 1);
+        },
+        [&](Database::ResultRow& row) { return read_found_record(row, with_values); });
+    if (found_record.is_error())
+        return failure(found_record.release_error());
+
+    // 15. Return cursor.
+    return found_record.release_value();
 }
 
 ErrorOr<void, IndexedDBError> IndexedDBDatabase::write_version(u64 version)

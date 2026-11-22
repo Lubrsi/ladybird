@@ -77,6 +77,12 @@ static ByteBuffer number_key(u64 number)
     return MUST(ByteBuffer::copy(Web::IndexedDB::encoded_generated_key(number).release_value().span()));
 }
 
+// The whole number that a key is the key of.
+static u64 number_of(ReadonlyBytes key)
+{
+    return static_cast<u64>(Web::IndexedDB::number_of_key(key).release_value());
+}
+
 // A binary key: 0x40, the bytes with 0x00 and 0x01 escaped, 0x00.
 template<typename... Bytes>
 static ByteBuffer binary_key(Bytes... payload)
@@ -599,7 +605,7 @@ TEST_CASE(a_range_has_open_and_closed_bounds)
     auto keys_in = [&](IndexedDBKeyRange const& range, Direction direction = Direction::Ascending, Optional<u32> limit = {}) {
         Vector<u64> numbers;
         for (auto const& key : keys_of(*database, object_store, range, direction, limit))
-            numbers.append(static_cast<u64>(Web::IndexedDB::number_of_key(key.bytes()).release_value()));
+            numbers.append(number_of(key));
         return numbers;
     };
     IndexedDBKeyRange closed { .lower_bound = two.bytes(), .lower_bound_is_open = false, .upper_bound = four.bytes(), .upper_bound_is_open = false };
@@ -1280,15 +1286,18 @@ static auto fill_index(IndexedDBDatabase::Writer& upgrade, i64 index, auto const
     return upgrade.fill_index(index, bytes_of(key_of_record), keys);
 }
 
-// The records of an index as "key/primary key", where both are whole numbers.
+// A record of an index as "key/primary key", where both are whole numbers.
+static String key_and_primary_key(u64 key, u64 primary_key)
+{
+    return MUST(String::formatted("{}/{}", key, primary_key));
+}
+
 static Vector<String> records_of_index(IndexedDBDatabase& database, i64 index, IndexedDBKeyRange const& range = {}, Direction direction = Direction::Ascending, RecordsOfEachKey records_of_each_key = RecordsOfEachKey::All, Optional<u32> count = {})
 {
     Vector<String> records;
     for (auto const& record : MUST(database.read_index_records(index, range, direction, records_of_each_key, count, WithValues::No))) {
         EXPECT(!record.value.has_value());
-        auto key = Web::IndexedDB::number_of_key(record.key).release_value();
-        auto primary_key = Web::IndexedDB::number_of_key(record.primary_key).release_value();
-        records.append(MUST(String::formatted("{}/{}", key, primary_key)));
+        records.append(key_and_primary_key(number_of(record.key), number_of(record.primary_key)));
     }
     return records;
 }
@@ -1805,4 +1814,374 @@ TEST_CASE(a_fill_that_a_unique_index_refuses_ends_the_upgrade)
     EXPECT(TRY_OR_FAIL(database->object_stores())[0].indexes.is_empty());
     EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 0u);
     EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 2u);
+}
+
+// The key of the record that a cursor over an object store comes to, where the keys are whole numbers.
+static Optional<u64> step_of_cursor(IndexedDBDatabase& database, i64 object_store, Direction direction, Optional<u64> position, Optional<u64> key = {}, u32 count = 1, IndexedDBKeyRange const& range = {})
+{
+    auto const position_key = position.map(number_key);
+    auto const seek_key = key.map(number_key);
+
+    auto record = MUST(database.iterate_cursor(object_store, range, direction, Optional<ReadonlyBytes> { position_key }, Optional<ReadonlyBytes> { seek_key }, count, WithValues::No));
+    if (!record.has_value())
+        return {};
+
+    EXPECT(!record->value.has_value());
+    return number_of(record->key);
+}
+
+TEST_CASE(a_cursor_steps_through_the_records_of_an_object_store)
+{
+    auto [store, database, object_store] = store_with_a_database();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    for (u64 number : { 30, 10, 50, 20, 40 })
+        TRY_OR_FAIL(put(*writer, object_store, number_key(number), "value"sv));
+
+    auto step = [&](Direction direction, Optional<u64> position, Optional<u64> key = {}, u32 count = 1, IndexedDBKeyRange const& range = {}) {
+        return step_of_cursor(*database, object_store, direction, position, key, count, range);
+    };
+
+    // A cursor that is nowhere yet comes to the first record of its direction. Each step starts from the key of the
+    // record that the step before came to, and the step after the last record comes to none.
+    auto walk = [&](Direction direction) {
+        Vector<u64> numbers;
+        Optional<u64> position;
+        for (size_t steps = 0; steps < 10; ++steps) {
+            position = step(direction, position);
+            if (!position.has_value())
+                break;
+            numbers.append(*position);
+        }
+        return numbers;
+    };
+    auto read = [&](Direction direction) {
+        Vector<u64> numbers;
+        for (auto const& key : keys_of(*database, object_store, {}, direction))
+            numbers.append(number_of(key));
+        return numbers;
+    };
+    EXPECT_EQ(walk(Direction::Ascending), (Vector<u64> { 10, 20, 30, 40, 50 }));
+    EXPECT_EQ(walk(Direction::Descending), (Vector<u64> { 50, 40, 30, 20, 10 }));
+    EXPECT_EQ(walk(Direction::Ascending), read(Direction::Ascending));
+    EXPECT_EQ(walk(Direction::Descending), read(Direction::Descending));
+
+    // A position is not always the key of a record.
+    EXPECT_EQ(step(Direction::Ascending, 25), 30u);
+    EXPECT_EQ(step(Direction::Descending, 25), 20u);
+
+    // A key to go to is the least that the key of the record may be, or the most for a cursor that goes down.
+    EXPECT_EQ(step(Direction::Ascending, 10, 30), 30u);
+    EXPECT_EQ(step(Direction::Ascending, 10, 35), 40u);
+    EXPECT_EQ(step(Direction::Descending, 50, 30), 30u);
+    EXPECT_EQ(step(Direction::Descending, 50, 35), 30u);
+    EXPECT_EQ(step(Direction::Ascending, {}, 30), 30u);
+    EXPECT(!step(Direction::Ascending, 10, 55).has_value());
+
+    // The record is past the position all the same.
+    EXPECT_EQ(step(Direction::Ascending, 30, 10), 40u);
+    EXPECT_EQ(step(Direction::Descending, 30, 50), 20u);
+
+    // A count is the number of records to go on by.
+    EXPECT_EQ(step(Direction::Ascending, {}, {}, 2), 20u);
+    EXPECT_EQ(step(Direction::Ascending, 20, {}, 3), 50u);
+    EXPECT_EQ(step(Direction::Descending, 40, {}, 2), 20u);
+    EXPECT(!step(Direction::Ascending, 20, {}, 4).has_value());
+    EXPECT(!step(Direction::Ascending, {}, {}, 0xffffffff).has_value());
+
+    // The record is in the range.
+    auto const twenty = number_key(20);
+    auto const forty = number_key(40);
+    IndexedDBKeyRange from_twenty_to_below_forty { .lower_bound = twenty.bytes(), .lower_bound_is_open = false, .upper_bound = forty.bytes(), .upper_bound_is_open = true };
+    EXPECT_EQ(step(Direction::Ascending, {}, {}, 1, from_twenty_to_below_forty), 20u);
+    EXPECT_EQ(step(Direction::Descending, {}, {}, 1, from_twenty_to_below_forty), 30u);
+    EXPECT_EQ(step(Direction::Ascending, {}, 10, 2, from_twenty_to_below_forty), 30u);
+    EXPECT(!step(Direction::Ascending, 30, {}, 1, from_twenty_to_below_forty).has_value());
+    EXPECT(!step(Direction::Descending, 20, {}, 1, from_twenty_to_below_forty).has_value());
+
+    // A cursor goes on from a position whose record is gone, and comes to a record that was stored after its last step.
+    auto const thirty = number_key(30);
+    TRY_OR_FAIL(writer->delete_records(object_store, only(thirty)));
+    EXPECT_EQ(step(Direction::Ascending, 30), 40u);
+    EXPECT_EQ(step(Direction::Descending, 30), 20u);
+
+    TRY_OR_FAIL(put(*writer, object_store, number_key(35), "value"sv));
+    EXPECT_EQ(step(Direction::Ascending, 30), 35u);
+
+    // A renderer that runs LibWeb throws for a count of 0 before it sends anything, and only sends keys.
+    auto const ten = number_key(10);
+    EXPECT_EQ(kind_of_failure(database->iterate_cursor(object_store, {}, Direction::Ascending, {}, {}, 0, WithValues::No)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(database->iterate_cursor(object_store, {}, Direction::Ascending, UNKNOWN_TAG.span(), {}, 1, WithValues::No)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(database->iterate_cursor(object_store, {}, Direction::Ascending, ten.bytes(), UNKNOWN_TAG.span(), 1, WithValues::No)), IndexedDBError::Kind::InvalidClaim);
+}
+
+// IndexedDBIndexCursorPosition and IndexedDBIndexCursorSeek with whole numbers for keys.
+struct IndexCursorPosition {
+    u64 key { 0 };
+    u64 primary_key { 0 };
+};
+
+struct IndexCursorSeek {
+    u64 key { 0 };
+    Optional<u64> primary_key;
+};
+
+// The record that a cursor over an index comes to, where its key and its primary key are whole numbers.
+static Optional<IndexCursorPosition> step_of_index_cursor(IndexedDBDatabase& database, i64 index, Direction direction, RecordsOfEachKey records_of_each_key, Optional<IndexCursorPosition> position, Optional<IndexCursorSeek> seek = {}, u32 count = 1, IndexedDBKeyRange const& range = {})
+{
+    Optional<ByteBuffer> position_key;
+    Optional<ByteBuffer> position_primary_key;
+    Optional<WebView::IndexedDBIndexCursorPosition> cursor_position;
+    if (position.has_value()) {
+        position_key = number_key(position->key);
+        position_primary_key = number_key(position->primary_key);
+        cursor_position = WebView::IndexedDBIndexCursorPosition { .key = position_key->bytes(), .primary_key = position_primary_key->bytes() };
+    }
+
+    Optional<ByteBuffer> seek_key;
+    Optional<ByteBuffer> seek_primary_key;
+    Optional<WebView::IndexedDBIndexCursorSeek> cursor_seek;
+    if (seek.has_value()) {
+        seek_key = number_key(seek->key);
+        cursor_seek = WebView::IndexedDBIndexCursorSeek { .key = seek_key->bytes(), .primary_key = {} };
+    }
+    if (seek.has_value() && seek->primary_key.has_value()) {
+        seek_primary_key = number_key(*seek->primary_key);
+        cursor_seek->primary_key = seek_primary_key->bytes();
+    }
+
+    auto record = MUST(database.iterate_index_cursor(index, range, direction, records_of_each_key, cursor_position, cursor_seek, count, WithValues::No));
+    if (!record.has_value())
+        return {};
+
+    EXPECT(!record->value.has_value());
+    return IndexCursorPosition { .key = number_of(record->key), .primary_key = number_of(record->primary_key) };
+}
+
+TEST_CASE(a_cursor_steps_through_the_records_of_an_index)
+{
+    auto [store, database, object_store, index] = store_with_an_index();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    // Records 1 and 2 have the index key 30, 3 and 4 have 20, 5 and 6 have 10, so that a later key has lower primary
+    // keys. They are stored in another order.
+    for (u64 primary_key : { 6, 1, 4, 5, 2, 3 }) {
+        auto index_key = number_key((4 - ((primary_key + 1) / 2)) * 10);
+        TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(primary_key), "value"sv, index, index_key));
+    }
+
+    using Position = IndexCursorPosition;
+    using Seek = IndexCursorSeek;
+    auto as_text = [](Optional<Position> const& record) {
+        if (!record.has_value())
+            return "none"_string;
+        return key_and_primary_key(record->key, record->primary_key);
+    };
+    auto step = [&](Direction direction, RecordsOfEachKey records_of_each_key, Optional<Position> position, Optional<Seek> seek = {}, u32 count = 1, IndexedDBKeyRange const& range = {}) {
+        return as_text(step_of_index_cursor(*database, index, direction, records_of_each_key, position, seek, count, range));
+    };
+
+    // Each step starts from the key and the primary key of the record that the step before came to.
+    auto walk = [&](Direction direction, RecordsOfEachKey records_of_each_key) {
+        Vector<String> records;
+        Optional<Position> position;
+        for (size_t steps = 0; steps < 10; ++steps) {
+            position = step_of_index_cursor(*database, index, direction, records_of_each_key, position);
+            if (!position.has_value())
+                break;
+            records.append(as_text(position));
+        }
+        return records;
+    };
+    EXPECT_EQ(walk(Direction::Ascending, RecordsOfEachKey::All), records_of_index(*database, index));
+    EXPECT_EQ(walk(Direction::Ascending, RecordsOfEachKey::All), (Vector { "10/5"_string, "10/6"_string, "20/3"_string, "20/4"_string, "30/1"_string, "30/2"_string }));
+    EXPECT_EQ(walk(Direction::Descending, RecordsOfEachKey::All), (Vector { "30/2"_string, "30/1"_string, "20/4"_string, "20/3"_string, "10/6"_string, "10/5"_string }));
+
+    // "nextunique" and "prevunique" come to the first record of each key, which has the lowest primary key.
+    EXPECT_EQ(walk(Direction::Ascending, RecordsOfEachKey::First), (Vector { "10/5"_string, "20/3"_string, "30/1"_string }));
+    EXPECT_EQ(walk(Direction::Descending, RecordsOfEachKey::First), (Vector { "30/1"_string, "20/3"_string, "10/5"_string }));
+
+    // They go past every record of the key that the cursor is at, whatever primary key it is at.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::First, Position { 20, 1 }), "30/1"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::First, Position { 30, 2 }), "20/3"sv);
+
+    // A key to go to is the least that the key of the record may be, or the most for a cursor that goes down.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 10, 5 }, Seek { 20, {} }), "20/3"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 10, 5 }, Seek { 25, {} }), "30/1"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 30, 2 }, Seek { 20, {} }), "20/4"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::First, Position { 10, 5 }, Seek { 30, {} }), "30/1"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::First, Position { 30, 1 }, Seek { 10, {} }), "10/5"sv);
+
+    // A primary key to go to is the least that a record of that key may have, or the most for a cursor that goes down.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 10, 5 }, Seek { 20, 4 }), "20/4"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 30, 2 }, Seek { 20, 3 }), "20/3"sv);
+
+    // It says nothing of the records of the keys that come after.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 20, 3 }, Seek { 20, 99 }), "30/1"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 30, 2 }, Seek { 20, 2 }), "10/6"sv);
+
+    // The record is past the position all the same.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 20, 3 }, Seek { 10, 5 }), "20/4"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 20, 4 }, Seek { 30, 2 }), "20/3"sv);
+
+    // A count is the number of records to go on by, which for "nextunique" and "prevunique" is a number of keys.
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, {}, {}, 3), "20/3"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 30, 2 }, {}, 2), "20/4"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::First, {}, {}, 2), "20/3"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::First, {}, {}, 3), "10/5"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::First, {}, {}, 4), "none"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, {}, {}, 0xffffffff), "none"sv);
+
+    // The key of the record is in the range.
+    auto const twenty = number_key(20);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, {}, {}, 1, only(twenty)), "20/3"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 20, 3 }, {}, 1, only(twenty)), "20/4"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 20, 4 }, {}, 1, only(twenty)), "none"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::First, {}, {}, 1, only(twenty)), "20/3"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::First, Position { 20, 3 }, {}, 1, only(twenty)), "none"sv);
+
+    // A cursor goes on from a position whose record is gone.
+    auto const three = number_key(3);
+    TRY_OR_FAIL(writer->delete_records(object_store, only(three)));
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::All, Position { 20, 3 }), "20/4"sv);
+    EXPECT_EQ(step(Direction::Descending, RecordsOfEachKey::All, Position { 20, 3 }), "10/6"sv);
+    EXPECT_EQ(step(Direction::Ascending, RecordsOfEachKey::First, Position { 10, 5 }), "20/4"sv);
+
+    auto const ten = number_key(10);
+    auto const one = number_key(1);
+    auto refused = [&](RecordsOfEachKey records_of_each_key, ReadonlyBytes position_key, ReadonlyBytes position_primary_key, ReadonlyBytes seek_key, Optional<ReadonlyBytes> seek_primary_key, u32 count = 1) {
+        WebView::IndexedDBIndexCursorPosition position { .key = position_key, .primary_key = position_primary_key };
+        WebView::IndexedDBIndexCursorSeek seek { .key = seek_key, .primary_key = seek_primary_key };
+        return kind_of_failure(database->iterate_index_cursor(index, {}, Direction::Ascending, records_of_each_key, position, seek, count, WithValues::No));
+    };
+    EXPECT(!refused(RecordsOfEachKey::All, ten, one, twenty, one.bytes()).has_value());
+    EXPECT(!refused(RecordsOfEachKey::First, ten, one, twenty, {}).has_value());
+
+    // A renderer that runs LibWeb throws for each of these before it sends anything, and only sends keys.
+    EXPECT_EQ(refused(RecordsOfEachKey::First, ten, one, twenty, one.bytes()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::All, ten, one, twenty, one.bytes(), 0), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::All, UNKNOWN_TAG, one, twenty, one.bytes()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::All, ten, UNKNOWN_TAG, twenty, one.bytes()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::First, ten, UNKNOWN_TAG, twenty, {}), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::All, ten, one, UNKNOWN_TAG, one.bytes()), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(refused(RecordsOfEachKey::All, ten, one, twenty, UNKNOWN_TAG.span()), IndexedDBError::Kind::InvalidClaim);
+}
+
+TEST_CASE(a_cursor_gets_the_keys_as_they_were_written_and_the_value_of_the_record)
+{
+    auto [store, database, object_store, index] = store_with_an_index();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    // Records 1, 2 and 3 have the index keys 30, 20 and 10.
+    for (u64 primary_key : { 1, 2, 3 }) {
+        auto index_key = number_key((4 - primary_key) * 10);
+        auto value = MUST(String::formatted("value of {}", primary_key));
+        TRY_OR_FAIL(put_with_index_key(*writer, object_store, number_key(primary_key), value, index, index_key));
+    }
+
+    // A step without the value comes first, and the same step with the value is another statement.
+    EXPECT_EQ(step_of_cursor(*database, object_store, Direction::Ascending, {}), 1u);
+    EXPECT(step_of_index_cursor(*database, index, Direction::Ascending, RecordsOfEachKey::All, {}).has_value());
+
+    // The value is that of the record that the cursor comes to, and not of one that it goes past.
+    auto third = TRY_OR_FAIL(database->iterate_cursor(object_store, {}, Direction::Ascending, {}, {}, 3, WithValues::Yes));
+    EXPECT(third.has_value());
+    if (!third.has_value())
+        return;
+
+    EXPECT_EQ(third->key, number_key(3));
+    EXPECT_EQ(third->value, buffer_of("value of 3"sv));
+
+    // For an index it is the value of the record that the index's record refers to.
+    auto third_of_index = TRY_OR_FAIL(database->iterate_index_cursor(index, {}, Direction::Ascending, RecordsOfEachKey::All, {}, {}, 3, WithValues::Yes));
+    EXPECT(third_of_index.has_value());
+    if (!third_of_index.has_value())
+        return;
+
+    EXPECT_EQ(third_of_index->key, number_key(30));
+    EXPECT_EQ(third_of_index->primary_key, number_key(1));
+    EXPECT_EQ(third_of_index->value, buffer_of("value of 1"sv));
+
+    // Both keys are read back as they were written, with or without the value.
+    TRY_OR_FAIL(put_with_index_key(*writer, object_store, NUMBER_NEGATIVE_0, "value of -0"sv, index, NUMBER_NEGATIVE_0));
+    for (auto with_values : { WithValues::No, WithValues::Yes }) {
+        auto first = TRY_OR_FAIL(database->iterate_cursor(object_store, {}, Direction::Ascending, {}, {}, 1, with_values));
+        auto first_of_index = TRY_OR_FAIL(database->iterate_index_cursor(index, {}, Direction::Ascending, RecordsOfEachKey::All, {}, {}, 1, with_values));
+        EXPECT(first.has_value());
+        EXPECT(first_of_index.has_value());
+        if (!first.has_value() || !first_of_index.has_value())
+            return;
+
+        EXPECT_EQ(first->key.bytes(), NUMBER_NEGATIVE_0.span());
+        EXPECT_EQ(first_of_index->key.bytes(), NUMBER_NEGATIVE_0.span());
+        EXPECT_EQ(first_of_index->primary_key.bytes(), NUMBER_NEGATIVE_0.span());
+
+        EXPECT_EQ(first->value.has_value(), with_values == WithValues::Yes);
+        EXPECT_EQ(first_of_index->value.has_value(), with_values == WithValues::Yes);
+        if (with_values == WithValues::Yes) {
+            EXPECT_EQ(first->value, buffer_of("value of -0"sv));
+            EXPECT_EQ(first_of_index->value, buffer_of("value of -0"sv));
+        }
+    }
+
+    // A renderer sends back the keys that it got, so a position and a key to go to can be -0. They are compared as the
+    // records are sorted, where -0 is 0.
+    auto const negative_zero = MUST(ByteBuffer::copy(NUMBER_NEGATIVE_0.span()));
+    auto key_at = [&](Direction direction, Optional<ReadonlyBytes> position, Optional<ReadonlyBytes> key) -> Optional<ByteBuffer> {
+        auto record = MUST(database->iterate_cursor(object_store, {}, direction, position, key, 1, WithValues::No));
+        if (!record.has_value())
+            return {};
+        return move(record->key);
+    };
+    EXPECT_EQ(key_at(Direction::Ascending, NUMBER_NEGATIVE_0.span(), {}), number_key(1));
+    EXPECT_EQ(key_at(Direction::Ascending, NUMBER_0.span(), {}), number_key(1));
+    EXPECT_EQ(key_at(Direction::Descending, {}, NUMBER_NEGATIVE_0.span()), negative_zero);
+
+    auto primary_key_at = [&](Direction direction, Optional<WebView::IndexedDBIndexCursorPosition> position, Optional<WebView::IndexedDBIndexCursorSeek> seek) -> Optional<ByteBuffer> {
+        auto record = MUST(database->iterate_index_cursor(index, {}, direction, RecordsOfEachKey::All, position, seek, 1, WithValues::No));
+        if (!record.has_value())
+            return {};
+        return move(record->primary_key);
+    };
+    WebView::IndexedDBIndexCursorPosition at_negative_zero { .key = NUMBER_NEGATIVE_0.span(), .primary_key = NUMBER_NEGATIVE_0.span() };
+    WebView::IndexedDBIndexCursorSeek to_key_negative_zero { .key = NUMBER_NEGATIVE_0.span(), .primary_key = {} };
+    WebView::IndexedDBIndexCursorSeek to_record_negative_zero { .key = NUMBER_NEGATIVE_0.span(), .primary_key = NUMBER_NEGATIVE_0.span() };
+    EXPECT_EQ(primary_key_at(Direction::Ascending, at_negative_zero, {}), number_key(3));
+    EXPECT_EQ(primary_key_at(Direction::Descending, {}, to_key_negative_zero), negative_zero);
+    EXPECT_EQ(primary_key_at(Direction::Descending, {}, to_record_negative_zero), negative_zero);
+}
+
+TEST_CASE(a_cursor_only_comes_to_the_records_of_its_source)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    auto first_store = TRY_OR_FAIL(upgrade->create_object_store("first"_utf16, {}, KeyGenerator::No));
+    auto second_store = TRY_OR_FAIL(upgrade->create_object_store("second"_utf16, {}, KeyGenerator::No));
+    auto first_index = TRY_OR_FAIL(upgrade->create_index(first_store, "first"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto second_index = TRY_OR_FAIL(upgrade->create_index(first_store, "second"_utf16, WebView::IndexedDBKeyPath { "b"_utf16 }, Unique::No, MultiEntry::No));
+
+    // Records 1 and 3 of the first object store have the key 7, each in one of its indexes. The second object store
+    // has a record 2.
+    auto const seven = number_key(7);
+    TRY_OR_FAIL(put_with_index_key(*upgrade, first_store, number_key(1), "value"sv, first_index, seven));
+    TRY_OR_FAIL(put_with_index_key(*upgrade, first_store, number_key(3), "value"sv, second_index, seven));
+    TRY_OR_FAIL(put(*upgrade, second_store, number_key(2), "value"sv));
+
+    EXPECT_EQ(step_of_cursor(*database, first_store, Direction::Ascending, 1), 3u);
+    EXPECT_EQ(step_of_cursor(*database, first_store, Direction::Descending, 3), 1u);
+    EXPECT_EQ(step_of_cursor(*database, second_store, Direction::Ascending, {}), 2u);
+    EXPECT(!step_of_cursor(*database, second_store, Direction::Ascending, 2).has_value());
+
+    for (auto records_of_each_key : { RecordsOfEachKey::All, RecordsOfEachKey::First }) {
+        for (auto direction : { Direction::Ascending, Direction::Descending }) {
+            auto first_of_second_index = step_of_index_cursor(*database, second_index, direction, records_of_each_key, {});
+            EXPECT(first_of_second_index.has_value());
+            if (!first_of_second_index.has_value())
+                return;
+
+            EXPECT_EQ(first_of_second_index->primary_key, 3u);
+            EXPECT(!step_of_index_cursor(*database, second_index, direction, records_of_each_key, first_of_second_index).has_value());
+        }
+    }
 }

@@ -98,6 +98,19 @@ struct IndexedDBIndexKeys {
     ReadonlySpan<ReadonlyBytes> keys;
 };
 
+// https://w3c.github.io/IndexedDB/#cursor-position
+// Where a cursor over an index is: its position, and its object store position.
+struct IndexedDBIndexCursorPosition {
+    ReadonlyBytes key;
+    ReadonlyBytes primary_key;
+};
+
+// What a cursor over an index is to go to: a key, and with continuePrimaryKey() a primary key as well.
+struct IndexedDBIndexCursorSeek {
+    ReadonlyBytes key;
+    Optional<ReadonlyBytes> primary_key;
+};
+
 // The serialization of a value around the place of the key that the database generates and injects.
 struct IndexedDBValueSegments {
     ReadonlyBytes before_the_key;
@@ -177,6 +190,11 @@ public:
     ErrorOr<u64, IndexedDBError> count_index_records(i64 index_id, IndexedDBKeyRange const&);
     ErrorOr<Vector<IndexedDBIndexRecord>, IndexedDBError> read_index_records(i64 index_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, Optional<u32> count, WithValues);
 
+    // https://w3c.github.io/IndexedDB/#iterate-a-cursor
+    // A cursor is kept by its renderer, which says where the cursor is and gets the record that the cursor comes to.
+    ErrorOr<Optional<IndexedDBRecord>, IndexedDBError> iterate_cursor(i64 object_store_id, IndexedDBKeyRange const&, Direction, Optional<ReadonlyBytes> position, Optional<ReadonlyBytes> key, u32 count, WithValues);
+    ErrorOr<Optional<IndexedDBIndexRecord>, IndexedDBError> iterate_index_cursor(i64 index_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, Optional<IndexedDBIndexCursorPosition> const&, Optional<IndexedDBIndexCursorSeek> const&, u32 count, WithValues);
+
     ErrorOr<void, IndexedDBError> mark_opened(UnixDateTime now);
     ErrorOr<UnixDateTime, IndexedDBError> last_open_or_write_time();
 
@@ -213,12 +231,21 @@ private:
         ReadKeys,
         ReadKeysAndValues,
         Delete,
+        IterateKeys,
+        IterateKeysAndValues,
     };
 
     enum class RangeBound : u8 {
         None,
         Closed,
         Open,
+    };
+
+    // What a cursor's position or the place that it is to go to is given by.
+    enum class CursorBound : u8 {
+        None,
+        Key,
+        KeyAndPrimaryKey,
     };
 
     // Each shape of range is a statement of its own, so that SQLite can seek to a bound in the index on the key.
@@ -231,6 +258,12 @@ private:
         RangeBound upper_bound { RangeBound::None };
         bool is_descending { false };
         bool has_the_first_record_of_each_key { false };
+        CursorBound position { CursorBound::None };
+        CursorBound seek { CursorBound::None };
+
+        // The column that the source's records are sorted by first.
+        StringView key() const;
+        void append_order_to(StringBuilder& sql) const;
     };
 
     struct RangeStatementShapeTraits : public DefaultTraits<RangeStatementShape> {
@@ -239,11 +272,13 @@ private:
             auto statement = pair_int_hash(to_underlying(shape.source), to_underlying(shape.statement));
             auto bounds = pair_int_hash(to_underlying(shape.lower_bound), to_underlying(shape.upper_bound));
             auto order = pair_int_hash(shape.is_descending, shape.has_the_first_record_of_each_key);
-            return pair_int_hash(pair_int_hash(statement, bounds), order);
+            auto cursor = pair_int_hash(to_underlying(shape.position), to_underlying(shape.seek));
+            return pair_int_hash(pair_int_hash(statement, bounds), pair_int_hash(order, cursor));
         }
     };
 
     struct CheckedKeyRange;
+    struct CheckedCursorBounds;
 
     struct KeysOfObjectStore {
         bool are_in_line { false };
@@ -269,6 +304,11 @@ private:
     static ErrorOr<CheckedKeyRange, IndexedDBError> check_key_range(IndexedDBKeyRange const&);
     ErrorOr<Database::StatementID, IndexedDBError> range_statement(RangeSource, RangeStatement, CheckedKeyRange const&, Direction, RecordsOfEachKey);
     ErrorOr<u64, IndexedDBError> count_the_records_in_a_range(RangeSource, i64 source_id, IndexedDBKeyRange const&);
+
+    ErrorOr<Database::StatementID, IndexedDBError> prepare_range_statement(RangeStatementShape const&, StringView sql);
+    ErrorOr<Database::StatementID, IndexedDBError> cursor_statement(RangeSource, WithValues, CheckedKeyRange const&, CheckedCursorBounds const&, Direction, RecordsOfEachKey);
+    template<typename Record>
+    ErrorOr<Optional<Record>, IndexedDBError> iterate_a_cursor(RangeSource, i64 source_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, CheckedCursorBounds, u32 count, WithValues, ErrorOr<Record, Database::Error> (*read_found_record)(Database::ResultRow&, WithValues));
 
     ErrorOr<NonnullOwnPtr<Writer>, IndexedDBError> begin_writer_for(Optional<u64> upgrade_version);
     void writer_did_finish(Optional<u64> committed_version);
