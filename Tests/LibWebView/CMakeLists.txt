@@ -105,6 +105,7 @@ set(TEST_SOURCES
     TestStartupSettings.cpp
     TestStorageAreaRegistry.cpp
     TestStorageJar.cpp
+    TestSystemDescription.cpp
     TestTabIndicators.cpp
     TestTabPerformanceStats.cpp
     TestWebDriverBiDiNetwork.cpp
