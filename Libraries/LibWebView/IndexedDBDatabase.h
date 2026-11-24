@@ -169,6 +169,10 @@ public:
     // SQLite's default limit on the length of a string or BLOB, which the databases leave alone.
     static constexpr size_t MAXIMUM_CELL_SIZE = 1'000'000'000;
 
+    // A value that is longer than this is stored in chunks of at most this length. A value is read back from the
+    // chunks that it was stored in, whatever this was then.
+    static constexpr size_t VALUE_CHUNK_SIZE = 1 * MiB;
+
     static ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now);
     ~IndexedDBDatabase();
 
@@ -212,6 +216,9 @@ private:
         Database::StatementID get_record { 0 };
         Database::StatementID delete_record { 0 };
         Database::StatementID insert_record { 0 };
+        Database::StatementID insert_value_chunk { 0 };
+        Database::StatementID get_length_of_value_chunks { 0 };
+        Database::StatementID get_value_chunks { 0 };
         Database::StatementID get_indexes { 0 };
         Database::StatementID get_index { 0 };
         Database::StatementID create_index { 0 };
@@ -308,7 +315,12 @@ private:
     ErrorOr<Database::StatementID, IndexedDBError> prepare_range_statement(RangeStatementShape const&, StringView sql);
     ErrorOr<Database::StatementID, IndexedDBError> cursor_statement(RangeSource, WithValues, CheckedKeyRange const&, CheckedCursorBounds const&, Direction, RecordsOfEachKey);
     template<typename Record>
-    ErrorOr<Optional<Record>, IndexedDBError> iterate_a_cursor(RangeSource, i64 source_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, CheckedCursorBounds, u32 count, WithValues, ErrorOr<Record, Database::Error> (*read_found_record)(Database::ResultRow&, WithValues));
+    ErrorOr<Optional<Record>, IndexedDBError> iterate_a_cursor(RangeSource, i64 source_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, CheckedCursorBounds, u32 count, WithValues, ErrorOr<Record, Database::Error> (IndexedDBDatabase::*read_found_record)(Database::ResultRow&, WithValues));
+
+    ErrorOr<IndexedDBRecord, Database::Error> read_record(Database::ResultRow&, WithValues);
+    ErrorOr<IndexedDBIndexRecord, Database::Error> read_index_record(Database::ResultRow&, WithValues);
+    ErrorOr<ByteBuffer, Database::Error> read_value(Database::ResultRow&);
+    ErrorOr<ByteBuffer, Database::Error> read_value_chunks(i64 record_id);
 
     ErrorOr<NonnullOwnPtr<Writer>, IndexedDBError> begin_writer_for(Optional<u64> upgrade_version);
     void writer_did_finish(Optional<u64> committed_version);
@@ -328,7 +340,8 @@ private:
     ErrorOr<void, IndexedDBError> possibly_update_the_key_generator(i64 object_store_id, i64 current_number, ReadonlyBytes checked_key);
 
     ErrorOr<Optional<FoundRecord>, IndexedDBError> find_record(i64 object_store_id, ReadonlyBytes sort_form_of_key);
-    ErrorOr<i64, IndexedDBError> add_record(i64 object_store_id, Web::IndexedDB::CheckedKey const&, ReadonlyBytes value);
+    ErrorOr<i64, IndexedDBError> add_record(i64 object_store_id, Web::IndexedDB::CheckedKey const&, ReadonlySpan<ReadonlyBytes> parts_of_value);
+    ErrorOr<void, IndexedDBError> add_value_chunks(i64 record_id, ReadonlySpan<ReadonlyBytes> parts_of_value);
     ErrorOr<void, IndexedDBError> remove_record(i64 record_id);
     ErrorOr<void, IndexedDBError> remove_records(i64 object_store_id, CheckedKeyRange const&);
 

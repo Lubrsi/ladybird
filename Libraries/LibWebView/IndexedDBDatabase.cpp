@@ -269,6 +269,13 @@ static ErrorOr<void, Database::Error> migrate_schema(Database::Database& databas
                     UNIQUE (object_store_id, key)
                 );
 
+                CREATE TABLE ValueChunks (
+                    record_id INTEGER NOT NULL REFERENCES Records(id) ON DELETE CASCADE,
+                    sequence INTEGER NOT NULL,
+                    bytes BLOB NOT NULL,
+                    PRIMARY KEY (record_id, sequence)
+                );
+
                 CREATE TABLE Indexes (
                     id INTEGER PRIMARY KEY,
                     object_store_id INTEGER NOT NULL REFERENCES ObjectStores(id) ON DELETE CASCADE,
@@ -334,6 +341,9 @@ ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::cre
         statements.get_record = TRY(database->prepare_statement("SELECT id, exact_key FROM Records WHERE object_store_id = :store AND key = :key;"sv));
         statements.delete_record = TRY(database->prepare_statement("DELETE FROM Records WHERE id = :record;"sv));
         statements.insert_record = TRY(database->prepare_statement("INSERT INTO Records (object_store_id, key, exact_key, value) VALUES (:store, :key, :exact_key, :value) RETURNING id;"sv));
+        statements.insert_value_chunk = TRY(database->prepare_statement("INSERT INTO ValueChunks (record_id, sequence, bytes) VALUES (:record, :sequence, :bytes);"sv));
+        statements.get_length_of_value_chunks = TRY(database->prepare_statement("SELECT SUM(LENGTH(bytes)) AS length FROM ValueChunks WHERE record_id = :record;"sv));
+        statements.get_value_chunks = TRY(database->prepare_statement("SELECT bytes FROM ValueChunks WHERE record_id = :record ORDER BY sequence;"sv));
         statements.get_indexes = TRY(database->prepare_statement("SELECT id, object_store_id, name, key_path, is_unique, is_multi_entry FROM Indexes ORDER BY object_store_id, id;"sv));
         statements.get_index = TRY(database->prepare_statement("SELECT object_store_id, is_unique, is_multi_entry FROM Indexes WHERE id = :index;"sv));
         statements.create_index = TRY(database->prepare_statement("INSERT INTO Indexes (object_store_id, name, key_path, is_unique, is_multi_entry) VALUES (:store, :name, :key_path, :is_unique, :is_multi_entry) RETURNING id;"sv));
@@ -522,26 +532,65 @@ static constexpr auto KEYS_OF_AN_INDEX_RECORD = "COALESCE(IndexRecords.exact_key
 // An index sorts the records of one key by the keys of the records that they refer to.
 static constexpr auto IS_THE_FIRST_RECORD_OF_ITS_KEY = " AND NOT EXISTS (SELECT 1 FROM IndexRecords AS Earlier WHERE Earlier.index_id = IndexRecords.index_id AND Earlier.key = IndexRecords.key AND Earlier.primary_key < IndexRecords.primary_key)"sv;
 
-static ErrorOr<IndexedDBRecord, Database::Error> read_record(Database::ResultRow& row, IndexedDBDatabase::WithValues with_values)
+// A value is selected together with the id of its record. A value that is in chunks is read by that id.
+static constexpr auto VALUE_OF_A_RECORD = "Records.id AS record_id, Records.value AS record_value"sv;
+
+ErrorOr<IndexedDBRecord, Database::Error> IndexedDBDatabase::read_record(Database::ResultRow& row, WithValues with_values)
 {
-    IndexedDBRecord record { .key = TRY(row.read_blob("record_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)), .value = {} };
-    if (with_values == IndexedDBDatabase::WithValues::Yes)
-        record.value = TRY(row.read_blob("record_value"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE));
+    IndexedDBRecord record { .key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)), .value = {} };
+    if (with_values == WithValues::Yes)
+        record.value = TRY(read_value(row));
 
     return record;
 }
 
-static ErrorOr<IndexedDBIndexRecord, Database::Error> read_index_record(Database::ResultRow& row, IndexedDBDatabase::WithValues with_values)
+ErrorOr<IndexedDBIndexRecord, Database::Error> IndexedDBDatabase::read_index_record(Database::ResultRow& row, WithValues with_values)
 {
     IndexedDBIndexRecord record {
-        .key = TRY(row.read_blob("index_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)),
-        .primary_key = TRY(row.read_blob("record_key"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE)),
+        .key = TRY(row.read_blob("index_key"sv, MAXIMUM_CELL_SIZE)),
+        .primary_key = TRY(row.read_blob("record_key"sv, MAXIMUM_CELL_SIZE)),
         .value = {},
     };
-    if (with_values == IndexedDBDatabase::WithValues::Yes)
-        record.value = TRY(row.read_blob("record_value"sv, IndexedDBDatabase::MAXIMUM_CELL_SIZE));
+    if (with_values == WithValues::Yes)
+        record.value = TRY(read_value(row));
 
     return record;
+}
+
+ErrorOr<ByteBuffer, Database::Error> IndexedDBDatabase::read_value(Database::ResultRow& row)
+{
+    // A record whose value is NULL has it in chunks. An empty value is not NULL.
+    auto value = TRY(row.read_optional_blob("record_value"sv, MAXIMUM_CELL_SIZE));
+    if (value.has_value())
+        return value.release_value();
+
+    // The chunks are read while the statement that found the record is between two rows, so that the record and its
+    // chunks are read as one. For that, nothing that runs for a row may write, roll back or call failure().
+    auto record_id = TRY(row.read_integer<i64>("record_id"sv));
+    return read_value_chunks(record_id);
+}
+
+ErrorOr<ByteBuffer, Database::Error> IndexedDBDatabase::read_value_chunks(i64 record_id)
+{
+    auto bind_the_record = [&](auto& bind) { return bind("record"sv, record_id); };
+
+    // The lengths of the chunks are summed first, so that the value is allocated once. A value that is in chunks has
+    // at least one of them, and the sum of none is NULL, which fails the read.
+    auto length = TRY(m_sqlite_database->try_execute_bound_statement_one<size_t>(
+        m_statements.get_length_of_value_chunks,
+        bind_the_record,
+        [](Database::ResultRow& row) { return row.read_integer<size_t>("length"sv); }));
+
+    ByteBuffer value;
+    TRY(value.try_ensure_capacity(length));
+
+    TRY(m_sqlite_database->try_execute_bound_statement(m_statements.get_value_chunks, bind_the_record, [&](Database::ResultRow& row) -> ErrorOr<void, Database::Error> {
+        auto chunk = TRY(row.read_blob("bytes"sv, MAXIMUM_CELL_SIZE));
+        TRY(value.try_append(chunk));
+        return {};
+    }));
+
+    return value;
 }
 
 StringView IndexedDBDatabase::RangeStatementShape::key() const
@@ -589,7 +638,7 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
             sql.appendff("SELECT {} FROM IndexRecords", KEYS_OF_AN_INDEX_RECORD);
             break;
         case RangeStatement::ReadKeysAndValues:
-            sql.appendff("SELECT {}, Records.value AS record_value FROM IndexRecords JOIN Records ON Records.id = IndexRecords.record_id", KEYS_OF_AN_INDEX_RECORD);
+            sql.appendff("SELECT {}, {} FROM IndexRecords JOIN Records ON Records.id = IndexRecords.record_id", KEYS_OF_AN_INDEX_RECORD, VALUE_OF_A_RECORD);
             break;
         case RangeStatement::Delete:
         case RangeStatement::IterateKeys:
@@ -606,7 +655,7 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::range_statemen
             sql.appendff("SELECT {} FROM Records", KEY_OF_A_RECORD);
             break;
         case RangeStatement::ReadKeysAndValues:
-            sql.appendff("SELECT {}, value AS record_value FROM Records", KEY_OF_A_RECORD);
+            sql.appendff("SELECT {}, {} FROM Records", KEY_OF_A_RECORD, VALUE_OF_A_RECORD);
             break;
         case RangeStatement::Delete:
             sql.append("DELETE FROM Records"sv);
@@ -672,7 +721,7 @@ ErrorOr<Database::StatementID, IndexedDBError> IndexedDBDatabase::cursor_stateme
     // A value is read for the record that is found, and for none of the records that are skipped.
     if (has_values) {
         auto keys_of_the_found_record = is_of_an_index ? "Found.index_key AS index_key, Found.record_key AS record_key"sv : "Found.record_key AS record_key"sv;
-        sql.appendff("SELECT {}, Records.value AS record_value FROM (", keys_of_the_found_record);
+        sql.appendff("SELECT {}, {} FROM (", keys_of_the_found_record, VALUE_OF_A_RECORD);
     }
 
     if (is_of_an_index)
@@ -830,7 +879,7 @@ ErrorOr<Optional<IndexedDBRecord>, IndexedDBError> IndexedDBDatabase::iterate_cu
         bounds.key = TRY(check_key(*key)).sort_form;
 
     // An object store has one record for each key.
-    return iterate_a_cursor(RangeSource::ObjectStore, object_store_id, key_range, direction, RecordsOfEachKey::All, move(bounds), count, with_values, read_record);
+    return iterate_a_cursor(RangeSource::ObjectStore, object_store_id, key_range, direction, RecordsOfEachKey::All, move(bounds), count, with_values, &IndexedDBDatabase::read_record);
 }
 
 ErrorOr<Optional<IndexedDBIndexRecord>, IndexedDBError> IndexedDBDatabase::iterate_index_cursor(i64 index_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, Optional<IndexedDBIndexCursorPosition> const& position, Optional<IndexedDBIndexCursorSeek> const& seek, u32 count, WithValues with_values)
@@ -846,13 +895,13 @@ ErrorOr<Optional<IndexedDBIndexRecord>, IndexedDBError> IndexedDBDatabase::itera
             bounds.primary_key = TRY(check_key(*seek->primary_key)).sort_form;
     }
 
-    return iterate_a_cursor(RangeSource::Index, index_id, key_range, direction, records_of_each_key, move(bounds), count, with_values, read_index_record);
+    return iterate_a_cursor(RangeSource::Index, index_id, key_range, direction, records_of_each_key, move(bounds), count, with_values, &IndexedDBDatabase::read_index_record);
 }
 
 // https://w3c.github.io/IndexedDB/#iterate-a-cursor
 // NB: The steps that set the cursor are the renderer's, which keeps it.
 template<typename Record>
-ErrorOr<Optional<Record>, IndexedDBError> IndexedDBDatabase::iterate_a_cursor(RangeSource source, i64 source_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, CheckedCursorBounds bounds, u32 count, WithValues with_values, ErrorOr<Record, Database::Error> (*read_found_record)(Database::ResultRow&, WithValues))
+ErrorOr<Optional<Record>, IndexedDBError> IndexedDBDatabase::iterate_a_cursor(RangeSource source, i64 source_id, IndexedDBKeyRange const& key_range, Direction direction, RecordsOfEachKey records_of_each_key, CheckedCursorBounds bounds, u32 count, WithValues with_values, ErrorOr<Record, Database::Error> (IndexedDBDatabase::*read_found_record)(Database::ResultRow&, WithValues))
 {
     // 1. Let source be cursor's source.
     // 2. Let direction be cursor's direction.
@@ -907,7 +956,7 @@ ErrorOr<Optional<Record>, IndexedDBError> IndexedDBDatabase::iterate_a_cursor(Ra
             TRY(bounds.bind_to(bind));
             return bind("skip"sv, static_cast<i64>(count) - 1);
         },
-        [&](Database::ResultRow& row) { return read_found_record(row, with_values); });
+        [&](Database::ResultRow& row) { return (this->*read_found_record)(row, with_values); });
     if (found_record.is_error())
         return failure(found_record.release_error());
 
@@ -1120,21 +1169,69 @@ ErrorOr<Optional<IndexedDBDatabase::FoundRecord>, IndexedDBError> IndexedDBDatab
     return record.release_value();
 }
 
-ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_record(i64 object_store_id, Web::IndexedDB::CheckedKey const& key, ReadonlyBytes value)
+ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_record(i64 object_store_id, Web::IndexedDB::CheckedKey const& key, ReadonlySpan<ReadonlyBytes> parts_of_value)
 {
+    Checked<size_t> length_of_value = 0;
+    for (auto part : parts_of_value)
+        length_of_value += part.size();
+    if (length_of_value.has_overflow())
+        return out_of_memory();
+
+    // A value that is not stored in chunks is one byte string in its record. The record of any other value has NULL.
+    bool is_stored_in_chunks = length_of_value.value() > VALUE_CHUNK_SIZE;
+    ByteBuffer joined_value;
+    Optional<ReadonlyBytes> value_in_the_record;
+
+    if (!is_stored_in_chunks && parts_of_value.size() == 1)
+        value_in_the_record = parts_of_value[0];
+
+    if (!is_stored_in_chunks && parts_of_value.size() != 1) {
+        if (joined_value.try_ensure_capacity(length_of_value.value()).is_error())
+            return out_of_memory();
+        for (auto part : parts_of_value)
+            joined_value.append(part);
+        value_in_the_record = ReadonlyBytes { joined_value.bytes() };
+    }
+
     auto record_id = m_sqlite_database->try_execute_bound_statement_one<i64>(
         m_statements.insert_record,
         [&](auto& bind) -> ErrorOr<void, Database::Error> {
             TRY(bind("store"sv, object_store_id));
             TRY(bind("key"sv, key.sort_form));
             TRY(bind("exact_key"sv, key.exact_form));
-            return bind("value"sv, value);
+            return bind("value"sv, value_in_the_record);
         },
         [](Database::ResultRow& row) { return row.read_integer<i64>("id"sv); });
     if (record_id.is_error())
         return failure(record_id.release_error());
 
+    if (is_stored_in_chunks)
+        TRY(add_value_chunks(record_id.value(), parts_of_value));
+
     return record_id.release_value();
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::add_value_chunks(i64 record_id, ReadonlySpan<ReadonlyBytes> parts_of_value)
+{
+    i64 sequence = 0;
+    for (auto part : parts_of_value) {
+        // A chunk ends where its part ends at the latest, so the last chunk of a part can be a short one.
+        while (!part.is_empty()) {
+            auto chunk = part.trim(VALUE_CHUNK_SIZE);
+            auto result = m_sqlite_database->try_execute_bound_statement(m_statements.insert_value_chunk, [&](auto& bind) -> ErrorOr<void, Database::Error> {
+                TRY(bind("record"sv, record_id));
+                TRY(bind("sequence"sv, sequence));
+                return bind("bytes"sv, chunk);
+            });
+            if (result.is_error())
+                return failure(result.release_error());
+
+            ++sequence;
+            part = part.slice(chunk.size());
+        }
+    }
+
+    return {};
 }
 
 ErrorOr<void, IndexedDBError> IndexedDBDatabase::remove_record(i64 record_id)
@@ -1522,7 +1619,7 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
 
                 // 3. If store also uses in-line keys, then run inject a key into a value using a key path with
                 //    value, key and store's key path.
-                // NB: The injection is the joining of the two parts further down.
+                // NB: The injection is the number that goes between the two parts further down.
             }
             // 2. Otherwise, run possibly update the key generator for store with key.
             else {
@@ -1548,23 +1645,20 @@ ErrorOr<IndexedDBDatabase::Writer::StoredRecord, IndexedDBError> IndexedDBDataba
         // 4. Store a record in store containing key as its key and ! StructuredSerializeForStorage(value) as its
         //    value. The record is stored in the object store's list of records such that the list is sorted
         //    according to the key of the records in ascending order.
-        ByteBuffer joined_value;
-        auto serialized_value = value.visit(
-            [](ReadonlyBytes whole_value) -> ErrorOr<ReadonlyBytes> { return whole_value; },
-            [&](IndexedDBValueSegments const& segments) -> ErrorOr<ReadonlyBytes> {
+        Array<u8, 8> key_in_the_value {};
+        Vector<ReadonlyBytes, 3> parts_of_value;
+        value.visit(
+            [&](ReadonlyBytes whole_value) { parts_of_value.unchecked_append(whole_value); },
+            [&](IndexedDBValueSegments const& segments) {
                 // NB: Inside the value the key is a number, which the renderer left out.
-                auto key_in_the_value = Web::HTML::storage_format_bytes_of_number(static_cast<double>(*generated_key));
+                key_in_the_value = Web::HTML::storage_format_bytes_of_number(static_cast<double>(*generated_key));
 
-                TRY(joined_value.try_ensure_capacity(segments.before_the_key.size() + key_in_the_value.size() + segments.after_the_key.size()));
-                TRY(joined_value.try_append(segments.before_the_key));
-                TRY(joined_value.try_append(key_in_the_value.span()));
-                TRY(joined_value.try_append(segments.after_the_key));
-                return joined_value.bytes();
+                parts_of_value.unchecked_append(segments.before_the_key);
+                parts_of_value.unchecked_append(key_in_the_value.span());
+                parts_of_value.unchecked_append(segments.after_the_key);
             });
-        if (serialized_value.is_error())
-            return out_of_memory();
 
-        auto record_id = TRY(m_database->add_record(object_store_id, key_of_record, serialized_value.value()));
+        auto record_id = TRY(m_database->add_record(object_store_id, key_of_record, parts_of_value));
 
         // 5. For each index which references store:
         //    1. Let index key be the result of extracting a key from a value using a key path with value, index's key

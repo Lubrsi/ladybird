@@ -131,6 +131,25 @@ static ByteBuffer buffer_of(StringView text)
     return MUST(ByteBuffer::copy(text.bytes()));
 }
 
+// A value of the given length. Its bytes repeat every 251, which the length of a chunk is no multiple of, so the few
+// chunks of a value in these tests differ from one another, and do not read back as the value when they are out of
+// order.
+static ByteBuffer value_of_length(size_t length, u8 first_byte)
+{
+    static_assert(IndexedDBDatabase::VALUE_CHUNK_SIZE % 251 != 0);
+
+    auto value = MUST(ByteBuffer::create_uninitialized(length));
+    for (size_t i = 0; i < length; ++i)
+        value[i] = static_cast<u8>(first_byte + (i % 251));
+    return value;
+}
+
+// A comparison that does not print megabytes where the two differ.
+static bool is_the_value(Optional<ByteBuffer> const& read_back, ReadonlyBytes expected)
+{
+    return read_back.has_value() && read_back->bytes() == expected;
+}
+
 static auto put(IndexedDBDatabase::Writer& writer, i64 object_store, auto const& key, StringView value)
 {
     return writer.store_record(object_store, bytes_of(key), value.bytes(), NoOverwrite::No, {});
@@ -982,7 +1001,7 @@ static auto with_room_for_sqlite(i64 bytes, Callback callback)
     return callback();
 }
 
-// Enough for statements over small records, and not for a cell of megabytes.
+// Enough for statements over small records, and not for a cell of a mebibyte or more.
 template<typename Callback>
 static auto with_little_memory_for_sqlite(Callback callback)
 {
@@ -1106,8 +1125,8 @@ TEST_CASE(a_request_that_fails_undoes_what_it_changed)
     EXPECT_EQ(put_with_a_generated_key(*writer, object_store), 1u);
     EXPECT_EQ(put_with_a_generated_key(*writer, object_store), 2u);
 
-    // SQLite has no room for a value of this size. By the time it is asked to store it, the request has taken a key
-    // from the generator, or has deleted the record that it replaces.
+    // SQLite has no room for a value of this size, nor for one chunk of it. By the time it is asked to store it, the
+    // request has taken a key from the generator, or has deleted the record that it replaces.
     auto const large_value = MUST(ByteBuffer::create_zeroed(4 * MiB));
 
     auto generating_a_key = with_little_memory_for_sqlite([&] {
@@ -1567,6 +1586,21 @@ TEST_CASE(a_unique_index_refuses_a_key_that_another_record_has)
     EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(ten))), 1u);
     EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(fifty))), 1u);
     EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 3u);
+
+    // So does one whose value is in chunks, where the value that is refused is in chunks too.
+    auto const six = number_key(6);
+    auto const sixty = number_key(60);
+    Array keys_of_the_sixth { sixty.bytes() };
+    auto const value_in_three_chunks = value_of_length(2 * IndexedDBDatabase::VALUE_CHUNK_SIZE + 1, 1);
+    auto const value_in_two_chunks = value_of_length(IndexedDBDatabase::VALUE_CHUNK_SIZE + 1, 2);
+    TRY_OR_FAIL(store_with_index_keys(*writer, object_store, six.bytes(), value_in_three_chunks.bytes(), index, keys_of_the_sixth.span()));
+
+    auto refused_replacement_in_chunks = store_with_index_keys(*writer, object_store, six.bytes(), value_in_two_chunks.bytes(), index, keys.span());
+    EXPECT_EQ(kind_of_failure(refused_replacement_in_chunks), IndexedDBError::Kind::Constraint);
+    EXPECT(is_the_value(value_at(*database, object_store, six), value_in_three_chunks));
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(ten))), 1u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, only(sixty))), 1u);
+    EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(index, {})), 4u);
 }
 
 TEST_CASE(a_multi_entry_index_has_a_record_for_each_key)
@@ -2184,4 +2218,242 @@ TEST_CASE(a_cursor_only_comes_to_the_records_of_its_source)
             EXPECT(!step_of_index_cursor(*database, second_index, direction, records_of_each_key, first_of_second_index).has_value());
         }
     }
+}
+
+TEST_CASE(a_value_is_read_back_whole_whatever_its_length)
+{
+    auto [store, database, object_store, index] = store_with_an_index();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    // A value of up to the length of a chunk is in its record, and a longer one is in chunks.
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    Array<size_t, 6> lengths { 0, chunk - 1, chunk, chunk + 1, 2 * chunk, 2 * chunk + chunk / 2 };
+
+    for (size_t n = 0; n < lengths.size(); ++n) {
+        u64 number = n + 1;
+        auto count = static_cast<u32>(number);
+        auto const key = number_key(number);
+        auto const index_key = number_key(number * 10);
+        auto const value = value_of_length(lengths[n], static_cast<u8>(n));
+        Array index_keys { index_key.bytes() };
+        TRY_OR_FAIL(store_with_index_keys(*writer, object_store, key.bytes(), value.bytes(), index, index_keys.span()));
+
+        EXPECT(is_the_value(value_at(*database, object_store, key), value));
+
+        auto records_of_the_index_key = TRY_OR_FAIL(database->read_index_records(index, only(index_key), Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::Yes));
+        EXPECT_EQ(records_of_the_index_key.size(), 1u);
+        if (records_of_the_index_key.size() == 1)
+            EXPECT(is_the_value(records_of_the_index_key[0].value, value));
+
+        // A cursor goes past the records before this one and gets the value of this one.
+        auto found = TRY_OR_FAIL(database->iterate_cursor(object_store, {}, Direction::Ascending, {}, {}, count, WithValues::Yes));
+        EXPECT(found.has_value());
+        if (found.has_value())
+            EXPECT(is_the_value(found->value, value));
+
+        auto found_in_the_index = TRY_OR_FAIL(database->iterate_index_cursor(index, {}, Direction::Ascending, RecordsOfEachKey::All, {}, {}, count, WithValues::Yes));
+        EXPECT(found_in_the_index.has_value());
+        if (found_in_the_index.has_value())
+            EXPECT(is_the_value(found_in_the_index->value, value));
+    }
+
+    // One read gives every record its own value, the ones in chunks among the others.
+    auto all_records = TRY_OR_FAIL(database->read_records(object_store, {}, Direction::Ascending, {}, WithValues::Yes));
+    auto all_records_of_the_index = TRY_OR_FAIL(database->read_index_records(index, {}, Direction::Ascending, RecordsOfEachKey::All, {}, WithValues::Yes));
+    EXPECT_EQ(all_records.size(), lengths.size());
+    EXPECT_EQ(all_records_of_the_index.size(), lengths.size());
+    if (all_records.size() != lengths.size() || all_records_of_the_index.size() != lengths.size())
+        return;
+
+    for (size_t n = 0; n < lengths.size(); ++n) {
+        auto const value = value_of_length(lengths[n], static_cast<u8>(n));
+        EXPECT(is_the_value(all_records[n].value, value));
+        EXPECT(is_the_value(all_records_of_the_index[n].value, value));
+    }
+
+    // Without their values the records are read as any others are.
+    EXPECT_EQ(keys_of(*database, object_store).size(), lengths.size());
+    EXPECT_EQ(records_of_index(*database, index).size(), lengths.size());
+    EXPECT_EQ(step_of_cursor(*database, object_store, Direction::Descending, {}), lengths.size());
+}
+
+TEST_CASE(a_generated_key_is_put_between_the_parts_of_a_large_value)
+{
+    auto [store, database, object_store] = store_with_a_database(WebView::IndexedDBKeyPath { "id"_utf16 }, KeyGenerator::Yes);
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    struct Parts {
+        size_t before_the_key { 0 };
+        size_t after_the_key { 0 };
+    };
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    constexpr size_t key_in_the_value = sizeof(double);
+    Array cases {
+        // With the key the value is as long as a chunk, and then one byte longer.
+        Parts { 100, chunk - key_in_the_value - 100 },
+        Parts { 100, chunk - key_in_the_value - 99 },
+        // The key lies across the place where the first chunk of a whole value would end.
+        Parts { chunk - 3, chunk / 2 },
+        // Each part is longer than a chunk.
+        Parts { chunk + chunk / 2, 2 * chunk + 5 },
+        // The key is the first thing in the value, or the last.
+        Parts { 0, chunk + 1 },
+        Parts { chunk + 1, 0 },
+    };
+
+    u64 generated_key = 0;
+    for (auto const& parts : cases) {
+        ++generated_key;
+        auto const before_the_key = value_of_length(parts.before_the_key, 1);
+        auto const after_the_key = value_of_length(parts.after_the_key, 2);
+
+        WebView::IndexedDBValueSegments segments { .before_the_key = before_the_key.bytes(), .after_the_key = after_the_key.bytes() };
+        auto stored = TRY_OR_FAIL(writer->store_record(object_store, {}, segments, NoOverwrite::No, {}));
+        EXPECT_EQ(stored.generated_key, generated_key);
+
+        auto number = AK::convert_between_host_and_little_endian(bit_cast<u64>(static_cast<double>(generated_key)));
+        ByteBuffer expected_value;
+        expected_value.append(before_the_key.bytes());
+        expected_value.append(&number, sizeof(number));
+        expected_value.append(after_the_key.bytes());
+        EXPECT(is_the_value(value_at(*database, object_store, number_key(generated_key)), expected_value));
+    }
+}
+
+TEST_CASE(the_chunks_of_a_value_go_with_its_record)
+{
+    auto [store, database, object_store] = store_with_a_database();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    auto const value_in_three_chunks = value_of_length(2 * chunk + 1, 1);
+    auto const value_in_two_chunks = value_of_length(chunk + 1, 2);
+    auto const short_value = value_of_length(10, 3);
+    auto put_value = [&](ReadonlyBytes key, ByteBuffer const& value) {
+        return writer->store_record(object_store, key, value.bytes(), NoOverwrite::No, {});
+    };
+
+    // A record that is stored once another is deleted has none of the chunks of that one.
+    auto const one = number_key(1);
+    auto const two = number_key(2);
+    TRY_OR_FAIL(put_value(one, value_in_three_chunks));
+    TRY_OR_FAIL(writer->delete_records(object_store, only(one)));
+    TRY_OR_FAIL(put_value(two, value_in_two_chunks));
+    EXPECT(is_the_value(value_at(*database, object_store, two), value_in_two_chunks));
+    EXPECT(!value_at(*database, object_store, one).has_value());
+
+    // Nor has a record that takes the place of another, whichever of the two values is in chunks.
+    TRY_OR_FAIL(put_value(two, short_value));
+    EXPECT(is_the_value(value_at(*database, object_store, two), short_value));
+    TRY_OR_FAIL(put_value(two, value_in_three_chunks));
+    EXPECT(is_the_value(value_at(*database, object_store, two), value_in_three_chunks));
+    TRY_OR_FAIL(put_value(two, value_in_two_chunks));
+    EXPECT(is_the_value(value_at(*database, object_store, two), value_in_two_chunks));
+
+    // Clearing the object store takes the chunks too.
+    TRY_OR_FAIL(writer->clear(object_store));
+    TRY_OR_FAIL(put_value(one, value_in_three_chunks));
+    EXPECT(is_the_value(value_at(*database, object_store, one), value_in_three_chunks));
+    EXPECT_EQ(TRY_OR_FAIL(database->count(object_store, {})), 1u);
+}
+
+TEST_CASE(a_value_in_chunks_is_read_a_chunk_at_a_time)
+{
+    auto [store, database, object_store] = store_with_a_database(WebView::IndexedDBKeyPath { "id"_utf16 }, KeyGenerator::Yes);
+
+    // Two values of four chunks and more. The second comes in parts, of which the first is a short one.
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    auto const whole_value = value_of_length(4 * chunk, 1);
+    auto const before_the_key = value_of_length(100, 2);
+    auto const after_the_key = value_of_length(4 * chunk, 3);
+    {
+        auto writer = TRY_OR_FAIL(database->begin_writer());
+        TRY_OR_FAIL(writer->store_record(object_store, {}, whole_value.bytes(), NoOverwrite::No, {}));
+
+        WebView::IndexedDBValueSegments segments { .before_the_key = before_the_key.bytes(), .after_the_key = after_the_key.bytes() };
+        TRY_OR_FAIL(writer->store_record(object_store, {}, segments, NoOverwrite::No, {}));
+        TRY_OR_FAIL(writer->commit(at(2)));
+    }
+
+    // SQLite has room for two chunks, which a value in one cell would not fit in.
+    Array<size_t, 2> lengths { whole_value.size(), before_the_key.size() + sizeof(double) + after_the_key.size() };
+    for (u64 number = 1; number <= 2; ++number) {
+        auto const key = number_key(number);
+        auto records = with_room_for_sqlite(2 * chunk, [&] {
+            return database->read_records(object_store, only(key), Direction::Ascending, {}, WithValues::Yes);
+        });
+        EXPECT(!records.is_error());
+        if (records.is_error())
+            continue;
+
+        EXPECT_EQ(records.value().size(), 1u);
+        if (records.value().size() == 1)
+            EXPECT_EQ(records.value()[0].value->size(), lengths[number - 1]);
+    }
+}
+
+TEST_CASE(a_put_that_fails_between_two_chunks_can_lose_the_writer)
+{
+    auto [store, database, object_store] = store_with_a_database();
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    TRY_OR_FAIL(put(*writer, object_store, number_key(1), "value"sv));
+
+    // SQLite has room to take a chunk, and runs out of it while it stores the chunks.
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    auto const key = number_key(2);
+    auto const value_in_four_chunks = value_of_length(4 * chunk, 1);
+    auto failed = with_room_for_sqlite(2 * chunk, [&] {
+        return writer->store_record(object_store, key.bytes(), value_in_four_chunks.bytes(), NoOverwrite::No, {});
+    });
+    EXPECT_EQ(kind_of_failure(failed), IndexedDBError::Kind::OutOfMemory);
+    if (!failed.is_error())
+        return;
+
+    // SQLite undoes the statement that failed or everything that the writer did. The failure, the writer and the
+    // database say the same about which of the two it was.
+    bool has_the_earlier_put = value_at(*database, object_store, number_key(1)).has_value();
+    EXPECT_EQ(failed.error().lost_the_writer, !has_the_earlier_put);
+    EXPECT_EQ(writer->is_open(), has_the_earlier_put);
+    EXPECT_EQ(database->has_writer(), has_the_earlier_put);
+    EXPECT(!value_at(*database, object_store, key).has_value());
+}
+
+TEST_CASE(a_value_is_not_read_in_part_when_a_chunk_cannot_be_read)
+{
+    auto [store, database, object_store] = store_with_a_database(WebView::IndexedDBKeyPath { "id"_utf16 }, KeyGenerator::Yes);
+
+    // The first two chunks of the value are short ones: the part before the key, and the key.
+    constexpr size_t chunk = IndexedDBDatabase::VALUE_CHUNK_SIZE;
+    auto const before_the_key = value_of_length(100, 1);
+    auto const after_the_key = value_of_length(chunk + 1, 2);
+    {
+        auto writer = TRY_OR_FAIL(database->begin_writer());
+        WebView::IndexedDBValueSegments segments { .before_the_key = before_the_key.bytes(), .after_the_key = after_the_key.bytes() };
+        TRY_OR_FAIL(writer->store_record(object_store, {}, segments, NoOverwrite::No, {}));
+        TRY_OR_FAIL(writer->commit(at(2)));
+    }
+    auto const key_of_the_value = number_key(1);
+    auto read_the_value = [&] {
+        return database->read_records(object_store, only(key_of_the_value), Direction::Ascending, {}, WithValues::Yes);
+    };
+
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    TRY_OR_FAIL(put(*writer, object_store, number_key(2), "value"sv));
+
+    // SQLite has room for the two short chunks and not for the third.
+    auto failed = with_little_memory_for_sqlite(read_the_value);
+    EXPECT_EQ(kind_of_failure(failed), IndexedDBError::Kind::OutOfMemory);
+    if (!failed.is_error())
+        return;
+
+    // The read fails as a read that finds no room for a record does, and the writer is lost where SQLite undid what
+    // it did.
+    bool has_the_put_of_the_writer = TRY_OR_FAIL(database->count(object_store, {})) == 2;
+    EXPECT_EQ(failed.error().lost_the_writer, !has_the_put_of_the_writer);
+    EXPECT_EQ(writer->is_open(), has_the_put_of_the_writer);
+
+    auto records = TRY_OR_FAIL(read_the_value());
+    EXPECT_EQ(records.size(), 1u);
+    if (records.size() == 1)
+        EXPECT_EQ(records[0].value->size(), before_the_key.size() + sizeof(double) + after_the_key.size());
 }
