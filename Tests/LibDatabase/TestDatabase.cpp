@@ -1328,6 +1328,62 @@ TEST_CASE(last_insert_rowid_is_that_of_the_last_insert_that_succeeded)
     EXPECT_EQ(database->last_insert_rowid(), 7);
 }
 
+static constexpr u64 LENGTH_OF_THE_BLOB = 256 * KiB;
+
+static ErrorOr<void, Database::Error> insert_the_blob(DB& database)
+{
+    return database.execute_raw(ByteString::formatted("INSERT INTO t (id, v) VALUES (1, zeroblob({}));", LENGTH_OF_THE_BLOB));
+}
+
+static void expect_the_size_estimate_to_follow_the_pages_in_use(DB& database)
+{
+    TRY_OR_FAIL(database.execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v BLOB NOT NULL);"sv));
+    auto size_of_the_empty_table = TRY_OR_FAIL(database.size_estimate());
+
+    // Each page keeps a few bytes for itself, so the blob takes a little more than its length.
+    TRY_OR_FAIL(insert_the_blob(database));
+    auto size_with_the_blob = TRY_OR_FAIL(database.size_estimate());
+    EXPECT(size_with_the_blob >= size_of_the_empty_table + LENGTH_OF_THE_BLOB);
+    EXPECT(size_with_the_blob < size_of_the_empty_table + 2 * LENGTH_OF_THE_BLOB);
+
+    // The database keeps the pages of the deleted row as free pages, which are not in use.
+    TRY_OR_FAIL(database.execute_raw("DELETE FROM t;"sv));
+    EXPECT_EQ(TRY_OR_FAIL(database.size_estimate()), size_of_the_empty_table);
+}
+
+TEST_CASE(size_estimate_is_the_bytes_of_the_pages_in_use)
+{
+    // A page size that is not SQLite's default, which an estimate that assumed the default would get wrong.
+    auto memory_backed_database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(memory_backed_database->execute_raw("PRAGMA page_size = 8192;"sv));
+    expect_the_size_estimate_to_follow_the_pages_in_use(*memory_backed_database);
+
+    auto database_directory = ByteString::formatted(
+        "{}/ladybird-database-test-{}",
+        Core::StandardPaths::tempfile_directory(),
+        generate_random_uuid());
+    auto cleanup = ScopeGuard([&] {
+        MUST(FileSystem::remove(database_directory, FileSystem::RecursionMode::Allowed));
+    });
+
+    auto database_in_a_file = TRY_OR_FAIL(DB::create(database_directory, "Sized"sv));
+    expect_the_size_estimate_to_follow_the_pages_in_use(*database_in_a_file);
+}
+
+TEST_CASE(size_estimate_includes_what_an_open_transaction_has_changed)
+{
+    auto database = TRY_OR_FAIL(DB::create_memory_backed());
+    TRY_OR_FAIL(database->execute_raw("CREATE TABLE t (id INTEGER PRIMARY KEY, v BLOB NOT NULL);"sv));
+    auto size_before_the_transaction = TRY_OR_FAIL(database->size_estimate());
+
+    auto transaction = TRY_OR_FAIL(database->begin_transaction());
+    TRY_OR_FAIL(insert_the_blob(*database));
+    EXPECT(TRY_OR_FAIL(database->size_estimate()) >= size_before_the_transaction + LENGTH_OF_THE_BLOB);
+
+    TRY_OR_FAIL(transaction.rollback());
+    EXPECT_EQ(TRY_OR_FAIL(database->size_estimate()), size_before_the_transaction);
+}
+
 TEST_CASE(bounded_execution_stops_before_the_callback_past_the_budget)
 {
     auto database = TRY_OR_FAIL(DB::create_memory_backed());

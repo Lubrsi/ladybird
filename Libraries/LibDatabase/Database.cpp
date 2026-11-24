@@ -481,6 +481,17 @@ i64 Database::last_insert_rowid() const
     return sqlite3_last_insert_rowid(m_database);
 }
 
+ErrorOr<u64, Error> Database::size_estimate()
+{
+    if (!m_size_estimate_statement.has_value())
+        m_size_estimate_statement = TRY(prepare_statement("SELECT (page_count - freelist_count) * page_size AS size FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size();"sv));
+
+    return try_execute_bound_statement_one<u64>(
+        *m_size_estimate_statement,
+        [](auto&) -> ErrorOr<void, Error> { return {}; },
+        [](ResultRow& row) { return row.read_integer<u64>("size"sv); });
+}
+
 void Database::clear_bound_parameters(StatementID statement_id)
 {
     auto& prepared = prepared_statement(statement_id);

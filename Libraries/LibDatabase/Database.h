@@ -273,6 +273,11 @@ public:
     // https://www.sqlite.org/c3ref/last_insert_rowid.html
     i64 last_insert_rowid() const;
 
+    // https://www.sqlite.org/pragma.html#pragma_page_count
+    // The bytes of the pages that are in use, which leaves out the free pages that the database keeps. Inside a
+    // transaction this includes what the transaction has changed.
+    ErrorOr<u64, Error> size_estimate();
+
     ErrorOr<void, Error> execute_raw(ByteString const& sql);
 
     class Savepoint;
@@ -391,6 +396,7 @@ private:
     Vector<PreparedStatement> m_prepared_statements;
     Optional<StatementID> m_table_exists_statement;
     Optional<StatementID> m_schema_version_statement;
+    Optional<StatementID> m_size_estimate_statement;
 
     Optional<OpenTransaction> m_open_transaction;
     u64 m_last_transaction_id { 0 };
