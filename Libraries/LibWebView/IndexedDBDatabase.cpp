@@ -145,13 +145,27 @@ IndexedDBError IndexedDBError::from(Database::Error&& cause)
     bool is_out_of_memory = cause.has_result_code(Database::ResultCode::NoMemory)
         || (cause.error().is_errno() && cause.error().code() == ENOMEM);
 
-    auto kind = is_out_of_memory ? Kind::OutOfMemory : Kind::Unknown;
+    // https://www.sqlite.org/pragma.html#pragma_max_page_count
+    // A database is full when it would grow past the room that its session has left.
+    bool is_full = cause.has_result_code(Database::ResultCode::Full);
+
+    auto kind = Kind::Unknown;
+    if (is_out_of_memory)
+        kind = Kind::OutOfMemory;
+    else if (is_full)
+        kind = Kind::Quota;
+
     return { .kind = kind, .cause = move(cause) };
 }
 
 static IndexedDBError invalid_claim()
 {
     return { .kind = IndexedDBError::Kind::InvalidClaim };
+}
+
+static IndexedDBError quota()
+{
+    return { .kind = IndexedDBError::Kind::Quota };
 }
 
 static IndexedDBError out_of_memory()
@@ -315,7 +329,7 @@ static ErrorOr<void, Database::Error> migrate_schema(Database::Database& databas
     return {};
 }
 
-ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now)
+ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now, Quotas const& quotas)
 {
     auto create = [&]() -> ErrorOr<NonnullRefPtr<IndexedDBDatabase>, Database::Error> {
         auto database = TRY(Database::Database::create_memory_backed({
@@ -326,7 +340,13 @@ ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::cre
         // https://www.sqlite.org/pragma.html#pragma_auto_vacuum
         // SQLite only takes this before the database has its first table, which the migration creates.
         TRY(database->execute_raw("PRAGMA auto_vacuum = INCREMENTAL;"));
+
+        // The migration writes the name, which is as long as whoever opens the database made it, so the database is
+        // held to the room of its session from its first page on.
+        auto held_pages = TRY(IndexedDBHeldPages::create(database, quotas.ceiling_of_session, quotas.charge));
+        TRY(held_pages->allow_growth_into_the_room());
         TRY(migrate_schema(*database, storage_key, name, now));
+        TRY(held_pages->count());
 
         Statements statements {};
         statements.set_version = TRY(database->prepare_statement("UPDATE Metadata SET version = :version;"sv));
@@ -359,22 +379,55 @@ ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBDatabase::cre
             ON CONFLICT DO NOTHING;
         )#"sv));
 
-        return TRY(adopt_nonnull_ref_or_enomem(new (nothrow) IndexedDBDatabase(move(database), statements)));
+        return TRY(adopt_nonnull_ref_or_enomem(new (nothrow) IndexedDBDatabase(move(database), statements, move(held_pages), quotas)));
     };
 
     auto database = create();
     if (database.is_error())
         return IndexedDBError::from(database.release_error());
+
+    // A database that its storage key has no room for is not kept.
+    TRY(database.value()->charge_the_storage_key());
+
     return database.release_value();
 }
 
-IndexedDBDatabase::IndexedDBDatabase(NonnullRefPtr<Database::Database> database, Statements statements)
+IndexedDBDatabase::IndexedDBDatabase(NonnullRefPtr<Database::Database> database, Statements statements, NonnullOwnPtr<IndexedDBHeldPages> held_pages, Quotas const& quotas)
     : m_sqlite_database(move(database))
     , m_statements(statements)
+    , m_held_pages(move(held_pages))
+    , m_ceiling_of_session(quotas.ceiling_of_session)
+    , m_budget_of_storage_key(quotas.budget_of_storage_key)
+    , m_charge(quotas.charge)
 {
+    // https://www.sqlite.org/fileformat2.html#pointer_map_or_ptrmap_pages
+    // With the free pages a vacuum takes away pages that were in use, which SQLite keeps to find the others by.
+    m_held_pages->on_free_pages_given_back = [this] { (void)charge_the_storage_key(); };
 }
 
-IndexedDBDatabase::~IndexedDBDatabase() = default;
+IndexedDBDatabase::~IndexedDBDatabase()
+{
+    m_budget_of_storage_key->change(m_bytes_taken_of_budget, 0);
+}
+
+// A storage key is charged for the pages that its databases have in use, and for each database. While a database has
+// a writer its charge only goes up, since a rollback brings back what the writer deleted.
+ErrorOr<void, IndexedDBError> IndexedDBDatabase::charge_the_storage_key()
+{
+    auto bytes_in_use = m_sqlite_database->size_estimate();
+    if (bytes_in_use.is_error())
+        return failure(bytes_in_use.release_error());
+
+    auto bytes = m_charge + bytes_in_use.value();
+    if (m_writer)
+        bytes = max(bytes, m_bytes_taken_of_budget);
+
+    if (!m_budget_of_storage_key->try_change(m_bytes_taken_of_budget, bytes))
+        return quota();
+
+    m_bytes_taken_of_budget = bytes;
+    return {};
+}
 
 IndexedDBError IndexedDBDatabase::failure(Database::Error&& cause)
 {
@@ -387,6 +440,18 @@ IndexedDBError IndexedDBDatabase::failure(Database::Error&& cause)
         error.lost_the_writer = true;
         m_writer->finish({});
     }
+
+    // https://www.sqlite.org/lang_transaction.html
+    // In a database that is full, SQLite undoes the statement or the whole transaction, depending on the statement.
+    // Either way the writer does not go on in a session that has no room left, as it would not on a full disk.
+    if (m_writer && error.kind == IndexedDBError::Kind::Quota) {
+        error.lost_the_writer = true;
+        (void)m_writer->abort();
+    }
+
+    // What was refused is not tried again here. A transaction that comes after it finds the room of the free pages.
+    if (error.kind == IndexedDBError::Kind::Quota)
+        m_ceiling_of_session->give_back_free_pages();
 
     return error;
 }
@@ -439,6 +504,7 @@ ErrorOr<NonnullOwnPtr<IndexedDBDatabase::Writer>, IndexedDBError> IndexedDBDatab
         return out_of_memory();
 
     m_writer = writer.value().ptr();
+    m_held_pages->transaction_did_begin();
     return writer.release_value();
 }
 
@@ -448,12 +514,16 @@ void IndexedDBDatabase::writer_did_finish(Optional<u64> committed_version)
     if (committed_version.has_value())
         m_committed_version = *committed_version;
 
-    if (!m_held_open_time.has_value())
-        return;
+    if (m_held_open_time.has_value()) {
+        auto held_open_time = *m_held_open_time;
+        if (!write_last_open_or_write_time(held_open_time).is_error())
+            did_commit_last_open_or_write_time(held_open_time);
+    }
 
-    auto held_open_time = *m_held_open_time;
-    if (!write_last_open_or_write_time(held_open_time).is_error())
-        did_commit_last_open_or_write_time(held_open_time);
+    // The database is counted again as its transaction left it. If that fails, what was counted for the writer
+    // stays, which is no less.
+    (void)m_held_pages->transaction_did_end();
+    (void)charge_the_storage_key();
 }
 
 ErrorOr<Vector<IndexedDBObjectStoreDescription>, IndexedDBError> IndexedDBDatabase::object_stores()
@@ -1177,6 +1247,10 @@ ErrorOr<i64, IndexedDBError> IndexedDBDatabase::add_record(i64 object_store_id, 
     if (length_of_value.has_overflow())
         return out_of_memory();
 
+    // A value that the whole budget of the storage key has no room for is refused without being written first.
+    if (length_of_value.value() > m_budget_of_storage_key->limit())
+        return quota();
+
     // A value that is not stored in chunks is one byte string in its record. The record of any other value has NULL.
     bool is_stored_in_chunks = length_of_value.value() > VALUE_CHUNK_SIZE;
     ByteBuffer joined_value;
@@ -1426,13 +1500,36 @@ auto IndexedDBDatabase::Writer::run_request(Request&& request) -> decltype(declv
     if (m_is_finished)
         return IndexedDBError { .kind = IndexedDBError::Kind::TransactionLost };
 
+    // The session's room is what its other databases have left of it by now.
+    if (auto allowed = m_database->m_held_pages->allow_growth_into_the_room(); allowed.is_error())
+        return m_database->failure(allowed.release_error());
+
     auto savepoint = m_transaction.savepoint();
     if (savepoint.is_error())
         return m_database->failure(savepoint.release_error());
 
     auto result = request();
 
-    // A request whose savepoint can't be released has failed like one that failed by itself.
+    // SQLite keeps the memory of the pages that a rollback gives back until the transaction ends, so the pages are
+    // counted while the savepoint is there, whether or not the request failed.
+    if (!m_is_finished) {
+        if (auto counted = m_database->m_held_pages->count(); counted.is_error()) {
+            auto failure_to_count = m_database->failure(counted.release_error());
+
+            // A request that failed by itself keeps its own failure, which says so if the count lost the writer.
+            if (result.is_error())
+                result.error().lost_the_writer = failure_to_count.lost_the_writer;
+            else
+                result = move(failure_to_count);
+        }
+    }
+
+    // A request that the budget of its storage key has no room for has failed like one that failed by itself, and so
+    // has one whose savepoint can't be released.
+    if (!result.is_error()) {
+        if (auto charged = m_database->charge_the_storage_key(); charged.is_error())
+            result = charged.release_error();
+    }
     if (!result.is_error()) {
         if (auto released = savepoint.value().release(); released.is_error())
             result = m_database->failure(released.release_error());

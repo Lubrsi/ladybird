@@ -1014,14 +1014,20 @@ static auto with_no_memory_left_for_sqlite(Callback callback)
     return with_room_for_sqlite(1, move(callback));
 }
 
-// A key is one cell however large it is, so that reading it back takes one allocation of its size.
-static ByteBuffer binary_key_of_4_mebibytes()
+// A binary key of that many bytes.
+static ByteBuffer binary_key_of_length(size_t length)
 {
-    auto key = MUST(ByteBuffer::create_uninitialized(4 * MiB + 2));
+    auto key = MUST(ByteBuffer::create_uninitialized(length + 2));
     key.bytes().fill(0x61);
     key[0] = 0x40;
     key[key.size() - 1] = 0x00;
     return key;
+}
+
+// A key is one cell however large it is, so that reading it back takes one allocation of its size.
+static ByteBuffer binary_key_of_4_mebibytes()
+{
+    return binary_key_of_length(4 * MiB);
 }
 
 TEST_CASE(a_read_that_fails_can_lose_the_writer)
@@ -1256,7 +1262,7 @@ TEST_CASE(a_failed_allocation_is_told_apart_from_other_failures)
 
     EXPECT_EQ(kind_of(Database::Error::from_result_code(to_underlying(Database::ResultCode::NoMemory))), IndexedDBError::Kind::OutOfMemory);
     EXPECT_EQ(kind_of(AK::Error::from_errno(ENOMEM)), IndexedDBError::Kind::OutOfMemory);
-    EXPECT_EQ(kind_of(Database::Error::from_result_code(to_underlying(Database::ResultCode::Full))), IndexedDBError::Kind::Unknown);
+    EXPECT_EQ(kind_of(Database::Error::from_result_code(to_underlying(Database::ResultCode::TooBig))), IndexedDBError::Kind::Unknown);
     EXPECT_EQ(kind_of(AK::Error::from_errno(EIO)), IndexedDBError::Kind::Unknown);
     EXPECT_EQ(kind_of(Database::Error::from_string_literal("Some other failure")), IndexedDBError::Kind::Unknown);
 }
@@ -2456,4 +2462,444 @@ TEST_CASE(a_value_is_not_read_in_part_when_a_chunk_cannot_be_read)
     EXPECT_EQ(records.size(), 1u);
     if (records.size() == 1)
         EXPECT_EQ(records[0].value->size(), before_the_key.size() + sizeof(double) + after_the_key.size());
+}
+
+static String other_example()
+{
+    return "https://other.example"_string;
+}
+
+struct DatabaseWithAnObjectStore {
+    NonnullRefPtr<IndexedDBDatabase> database;
+    i64 object_store { 0 };
+};
+
+// Opens a database of the store at version 1, and gives it one object store.
+static DatabaseWithAnObjectStore open_a_database(IndexedDBStore& store, String const& storage_key, Utf16String const& name)
+{
+    auto database = MUST(store.open_database(storage_key, name, 1, at(1))).database;
+
+    auto upgrade = MUST(database->begin_upgrade(1));
+    auto object_store = MUST(upgrade->create_object_store("store"_utf16, {}, KeyGenerator::No));
+    MUST(upgrade->commit(at(1)));
+
+    return { move(database), object_store };
+}
+
+// Stores a value of the given length under a whole number.
+static auto put_of_length(IndexedDBDatabase::Writer& writer, i64 object_store, u64 key, size_t length)
+{
+    auto const key_of_record = number_key(key);
+    auto const value = value_of_length(length, 1);
+    return writer.store_record(object_store, key_of_record.bytes(), value.bytes(), NoOverwrite::No, {});
+}
+
+// Stores a value of the given length in a transaction of its own.
+static ErrorOr<void, IndexedDBError> commit_a_put_of_length(IndexedDBDatabase& database, i64 object_store, u64 key, size_t length)
+{
+    auto writer = TRY(database.begin_writer());
+    TRY(put_of_length(*writer, object_store, key, length));
+    return writer->commit(at(2));
+}
+
+TEST_CASE(the_databases_of_a_storage_key_share_its_budget)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 1 * MiB, .ceiling_of_the_session = 64 * MiB, .charge_for_a_database = 0 }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+    auto [second, store_of_second] = open_a_database(*store, example_com(), "second"_utf16);
+    auto [other, store_of_other] = open_a_database(*store, other_example(), "first"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, 600 * KiB));
+
+    // The second database has next to nothing in it, and its storage key no room for as much again.
+    auto writer = TRY_OR_FAIL(second->begin_writer());
+    TRY_OR_FAIL(put(*writer, store_of_second, number_key(1), "small"sv));
+    auto refused = put_of_length(*writer, store_of_second, 2, 600 * KiB);
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Quota);
+
+    // Only the request is undone, and its writer goes on.
+    EXPECT(refused.is_error() && !refused.error().lost_the_writer);
+    EXPECT(writer->is_open());
+    TRY_OR_FAIL(put_of_length(*writer, store_of_second, 3, 100 * KiB));
+    TRY_OR_FAIL(writer->commit(at(3)));
+    EXPECT_EQ(keys_of(*second, store_of_second), (Vector { number_key(1), number_key(3) }));
+
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*first, store_of_first, 2, 600 * KiB)), IndexedDBError::Kind::Quota);
+
+    // Another storage key has a budget of its own.
+    TRY_OR_FAIL(commit_a_put_of_length(*other, store_of_other, 1, 600 * KiB));
+}
+
+TEST_CASE(a_writer_is_charged_for_what_it_deleted_until_it_ends)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 1 * MiB, .ceiling_of_the_session = 64 * MiB, .charge_for_a_database = 0 }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+    auto [second, store_of_second] = open_a_database(*store, example_com(), "second"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, 600 * KiB));
+    auto put_as_much_again = [&] { return commit_a_put_of_length(*second, store_of_second, 1, 600 * KiB); };
+
+    // A rollback would bring the deleted record back, so its room is not given away before the writer ends.
+    {
+        auto writer = TRY_OR_FAIL(first->begin_writer());
+        TRY_OR_FAIL(writer->delete_records(store_of_first, {}));
+        EXPECT_EQ(kind_of_failure(put_as_much_again()), IndexedDBError::Kind::Quota);
+
+        TRY_OR_FAIL(writer->abort());
+        EXPECT_EQ(kind_of_failure(put_as_much_again()), IndexedDBError::Kind::Quota);
+    }
+
+    auto writer = TRY_OR_FAIL(first->begin_writer());
+    TRY_OR_FAIL(writer->delete_records(store_of_first, {}));
+    TRY_OR_FAIL(writer->commit(at(3)));
+    TRY_OR_FAIL(put_as_much_again());
+}
+
+TEST_CASE(a_value_is_replaced_by_one_of_its_length_where_the_budget_has_no_room_for_both)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 1 * MiB, .ceiling_of_the_session = 64 * MiB, .charge_for_a_database = 0 }));
+    auto [database, object_store] = open_a_database(*store, example_com(), "database"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*database, object_store, 1, 700 * KiB));
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*database, object_store, 2, 700 * KiB)), IndexedDBError::Kind::Quota);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*database, object_store, 1, 700 * KiB));
+    EXPECT_EQ(keys_of(*database, object_store), (Vector { number_key(1) }));
+}
+
+TEST_CASE(a_value_that_is_larger_than_the_budget_is_refused_before_it_is_written)
+{
+    // The session has no room for the value either. A writer that began to write it would be lost.
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 1 * MiB, .ceiling_of_the_session = 1536 * KiB, .charge_for_a_database = 0 }));
+    auto [database, object_store] = open_a_database(*store, example_com(), "database"_utf16);
+
+    auto writer = TRY_OR_FAIL(database->begin_writer());
+    TRY_OR_FAIL(put(*writer, object_store, number_key(1), "small"sv));
+
+    auto refused = put_of_length(*writer, object_store, 2, 2 * MiB);
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Quota);
+    EXPECT(refused.is_error() && !refused.error().lost_the_writer);
+    EXPECT(writer->is_open());
+
+    TRY_OR_FAIL(writer->commit(at(3)));
+    EXPECT_EQ(keys_of(*database, object_store), (Vector { number_key(1) }));
+}
+
+TEST_CASE(the_databases_of_a_session_share_its_ceiling)
+{
+    // Each storage key has room for two of the values, and the session for the first and less than another.
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 8 * MiB, .ceiling_of_the_session = 2560 * KiB, .charge_for_a_database = 0 }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+    auto [second, store_of_second] = open_a_database(*store, other_example(), "second"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, 1536 * KiB));
+
+    // SQLite leaves the transaction open over a value that is one row, and ends it over one that is in chunks.
+    for (size_t length : { 900 * KiB, 1536 * KiB }) {
+        auto writer = TRY_OR_FAIL(second->begin_writer());
+        TRY_OR_FAIL(put(*writer, store_of_second, number_key(1), "small"sv));
+        auto refused = put_of_length(*writer, store_of_second, 2, length);
+        EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Quota);
+
+        // As on a disk that is full, the writer is lost either way, and what it wrote before goes with it.
+        EXPECT(refused.is_error() && refused.error().lost_the_writer);
+        EXPECT(!writer->is_open());
+        EXPECT(keys_of(*second, store_of_second).is_empty());
+    }
+
+    TRY_OR_FAIL(commit_a_put_of_length(*second, store_of_second, 2, 512 * KiB));
+}
+
+TEST_CASE(a_request_that_is_undone_keeps_its_room_of_the_session_until_its_writer_ends)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 8 * MiB, .ceiling_of_the_session = 3 * MiB, .charge_for_a_database = 0 }));
+    auto [second, store_of_second] = open_a_database(*store, other_example(), "second"_utf16);
+
+    auto first = TRY_OR_FAIL(store->open_database(example_com(), "first"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(first->begin_upgrade(1));
+    auto store_of_first = TRY_OR_FAIL(upgrade->create_object_store("store"_utf16, {}, KeyGenerator::No));
+    auto index = TRY_OR_FAIL(upgrade->create_index(store_of_first, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::Yes, MultiEntry::No));
+    auto const ten = number_key(10);
+    TRY_OR_FAIL(put_with_index_key(*upgrade, store_of_first, number_key(1), "first"sv, index, ten));
+    TRY_OR_FAIL(upgrade->commit(at(1)));
+
+    // The value is written before the index refuses its key.
+    auto writer = TRY_OR_FAIL(first->begin_writer());
+    auto const two = number_key(2);
+    auto const value = value_of_length(1536 * KiB, 1);
+    Array keys { ten.bytes() };
+    auto refused = store_with_index_keys(*writer, store_of_first, two.bytes(), value.bytes(), index, keys.span());
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Constraint);
+    EXPECT(writer->is_open());
+
+    // SQLite keeps the memory of the pages that the request took for as long as the writer is open, whatever the
+    // writer does next.
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*second, store_of_second, 1, 1536 * KiB)), IndexedDBError::Kind::Quota);
+    TRY_OR_FAIL(put(*writer, store_of_first, two, "small"sv));
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*second, store_of_second, 1, 1536 * KiB)), IndexedDBError::Kind::Quota);
+
+    TRY_OR_FAIL(writer->abort());
+    TRY_OR_FAIL(commit_a_put_of_length(*second, store_of_second, 1, 1536 * KiB));
+}
+
+TEST_CASE(each_database_counts_for_a_charge_besides_its_pages)
+{
+    constexpr u64 charge = 1 * MiB;
+    constexpr u64 room_for_two_databases = 2 * charge + charge / 2;
+    auto open = [](IndexedDBStore& store, String const& storage_key, Utf16String const& name) {
+        return store.open_database(storage_key, name, 1, at(1));
+    };
+
+    {
+        auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = room_for_two_databases, .ceiling_of_the_session = 64 * MiB, .charge_for_a_database = charge }));
+
+        // A database that was never upgraded is at version 0 and counts like any other. An open of a database that
+        // is there does not count again.
+        TRY_OR_FAIL(open(*store, example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, example_com(), "second"_utf16));
+        EXPECT_EQ(kind_of_failure(open(*store, example_com(), "third"_utf16)), IndexedDBError::Kind::Quota);
+
+        TRY_OR_FAIL(open(*store, other_example(), "third"_utf16));
+
+        // A database that is deleted gives back what it counted for.
+        TRY_OR_FAIL(store->delete_database(example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, example_com(), "third"_utf16));
+    }
+
+    {
+        auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 64 * MiB, .ceiling_of_the_session = room_for_two_databases, .charge_for_a_database = charge }));
+
+        TRY_OR_FAIL(open(*store, example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, other_example(), "first"_utf16));
+        EXPECT_EQ(kind_of_failure(open(*store, example_com(), "second"_utf16)), IndexedDBError::Kind::Quota);
+
+        TRY_OR_FAIL(store->delete_database(example_com(), "first"_utf16));
+        TRY_OR_FAIL(open(*store, example_com(), "second"_utf16));
+    }
+}
+
+TEST_CASE(an_index_fill_that_the_budget_refuses_ends_the_upgrade)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 1 * MiB, .ceiling_of_the_session = 64 * MiB, .charge_for_a_database = 0 }));
+    auto [database, object_store] = open_a_database(*store, example_com(), "database"_utf16);
+    {
+        auto writer = TRY_OR_FAIL(database->begin_writer());
+        for (u64 key = 1; key <= 4; ++key)
+            TRY_OR_FAIL(put(*writer, object_store, number_key(key), "value"sv));
+        TRY_OR_FAIL(writer->commit(at(2)));
+    }
+
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(2));
+    auto index = TRY_OR_FAIL(upgrade->create_index(object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+
+    // The keys of the four records are more than the budget has room for.
+    auto const large_key = binary_key_of_length(400 * KiB);
+    Array keys { large_key.bytes() };
+    Optional<IndexedDBError> refusal;
+    for (u64 key = 1; key <= 4 && !refusal.has_value(); ++key) {
+        if (auto filled = fill_index(*upgrade, index, number_key(key), keys.span()); filled.is_error())
+            refusal = filled.release_error();
+    }
+
+    // https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+    // "if creating the index failed due to quota reasons, a QuotaExceededError must be used as error"
+    EXPECT(refusal.has_value());
+    if (!refusal.has_value())
+        return;
+    EXPECT_EQ(refusal->kind, IndexedDBError::Kind::Quota);
+    EXPECT(refusal->lost_the_writer);
+    EXPECT(!upgrade->is_open());
+
+    EXPECT_EQ(database->version(), 1u);
+    EXPECT(TRY_OR_FAIL(database->object_stores())[0].indexes.is_empty());
+}
+
+TEST_CASE(the_names_of_databases_take_room_of_the_session)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 64 * MiB, .ceiling_of_the_session = 1 * MiB, .charge_for_a_database = 0 }));
+
+    // A session has the name of a database in the database and in the catalog of its databases. The database of the
+    // first name leaves room for the value, and the catalog does not.
+    auto [database, object_store] = open_a_database(*store, example_com(), Utf16String::repeated('a', 175 * KiB));
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*database, object_store, 1, 512 * KiB)), IndexedDBError::Kind::Quota);
+
+    // A database of the second name has room, and its row of the catalog has not.
+    EXPECT_EQ(kind_of_failure(store->open_database(example_com(), Utf16String::repeated('b', 175 * KiB), 1, at(1))), IndexedDBError::Kind::Quota);
+}
+
+TEST_CASE(the_ceiling_of_a_session_is_a_quarter_of_the_memory_of_the_machine)
+{
+    auto ceiling_with = [](u64 bytes_of_physical_memory) {
+        return IndexedDBStore::Limits::for_a_machine_with(bytes_of_physical_memory).ceiling_of_the_session;
+    };
+
+    EXPECT_EQ(ceiling_with(24 * GiB), 6 * GiB);
+    EXPECT_EQ(ceiling_with(2 * GiB), 512 * MiB);
+
+    // A query that fails gives 0, or a negative number that reads as a huge one.
+    EXPECT_EQ(ceiling_with(0), 1 * GiB);
+    EXPECT_EQ(ceiling_with(static_cast<u64>(-16384)), 1 * GiB);
+}
+
+TEST_CASE(a_write_that_the_session_has_no_room_for_gives_back_free_pages)
+{
+    // The value takes more pages than one step of a vacuum gives back.
+    constexpr size_t length = 6 * MiB;
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 16 * MiB, .ceiling_of_the_session = 8 * MiB, .charge_for_a_database = 0 }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+    auto [second, store_of_second] = open_a_database(*store, other_example(), "second"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, length));
+
+    // A database with a writer keeps the pages that the writer freed, since a rollback takes them again. A vacuum
+    // inside the writer's transaction would also keep a copy of each page that it gives back.
+    {
+        auto writer = TRY_OR_FAIL(first->begin_writer());
+        TRY_OR_FAIL(writer->clear(store_of_first));
+
+        auto memory_of_sqlite = sqlite3_memory_used();
+        EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*second, store_of_second, 1, length)), IndexedDBError::Kind::Quota);
+        EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*second, store_of_second, 1, length)), IndexedDBError::Kind::Quota);
+        EXPECT(sqlite3_memory_used() < memory_of_sqlite + static_cast<i64>(1 * MiB));
+
+        TRY_OR_FAIL(writer->commit(at(3)));
+    }
+
+    // The pages are free and still the first database's. The write that finds no room is lost with what its writer
+    // wrote before it, and a write that comes after it has the room.
+    auto writer = TRY_OR_FAIL(second->begin_writer());
+    TRY_OR_FAIL(put(*writer, store_of_second, number_key(2), "small"sv));
+    auto refused = put_of_length(*writer, store_of_second, 1, length);
+    EXPECT_EQ(kind_of_failure(refused), IndexedDBError::Kind::Quota);
+    EXPECT(refused.is_error() && refused.error().lost_the_writer);
+    EXPECT(keys_of(*second, store_of_second).is_empty());
+
+    TRY_OR_FAIL(commit_a_put_of_length(*second, store_of_second, 1, length));
+}
+
+TEST_CASE(an_open_that_the_session_has_no_room_for_gives_back_free_pages)
+{
+    constexpr u64 charge = 1 * MiB;
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 16 * MiB, .ceiling_of_the_session = 3 * charge + charge / 2, .charge_for_a_database = charge }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, 2 * MiB));
+    {
+        auto writer = TRY_OR_FAIL(first->begin_writer());
+        TRY_OR_FAIL(writer->clear(store_of_first));
+        TRY_OR_FAIL(writer->commit(at(3)));
+    }
+
+    // The free pages of the first database leave no room for what another database counts for.
+    auto open_another = [&] { return store->open_database(other_example(), "second"_utf16, 1, at(4)); };
+    EXPECT_EQ(kind_of_failure(open_another()), IndexedDBError::Kind::Quota);
+    TRY_OR_FAIL(open_another());
+}
+
+TEST_CASE(the_catalog_gives_back_the_pages_of_a_name_that_is_gone)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 64 * MiB, .ceiling_of_the_session = 1 * MiB, .charge_for_a_database = 0 }));
+
+    auto const long_name = Utf16String::repeated('a', 175 * KiB);
+    TRY_OR_FAIL(store->open_database(example_com(), long_name, 1, at(1)));
+    TRY_OR_FAIL(store->delete_database(example_com(), long_name));
+
+    // The catalog still has the pages of the name, which leave no room for the value.
+    auto [database, object_store] = open_a_database(*store, example_com(), "database"_utf16);
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*database, object_store, 1, 700 * KiB)), IndexedDBError::Kind::Quota);
+    TRY_OR_FAIL(commit_a_put_of_length(*database, object_store, 1, 700 * KiB));
+}
+
+TEST_CASE(a_database_is_held_to_the_room_of_its_session_while_it_is_created)
+{
+    constexpr u64 ceiling = 1 * MiB;
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 64 * MiB, .ceiling_of_the_session = ceiling, .charge_for_a_database = 0 }));
+
+    // SQLite copies the name to bind it, and again into the row that it is to write. Past the two copies the
+    // database takes no more than its session has room for, where the pages of the whole name are a third copy.
+    constexpr size_t length_of_name = 16 * MiB;
+    auto const name = Utf16String::repeated('a', length_of_name);
+    auto memory_of_sqlite = sqlite3_memory_used();
+    sqlite3_memory_highwater(1);
+
+    EXPECT_EQ(kind_of_failure(store->open_database(example_com(), name, 1, at(1))), IndexedDBError::Kind::Quota);
+
+    auto most_memory_taken = sqlite3_memory_highwater(0) - memory_of_sqlite;
+    EXPECT(most_memory_taken < static_cast<i64>(2 * length_of_name + ceiling + length_of_name / 2));
+}
+
+TEST_CASE(an_open_that_its_storage_key_has_no_room_for_leaves_free_pages_where_they_are)
+{
+    constexpr u64 charge = 1 * MiB;
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient({ .budget_of_a_storage_key = 4 * charge, .ceiling_of_the_session = 8 * charge, .charge_for_a_database = charge }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+
+    TRY_OR_FAIL(commit_a_put_of_length(*first, store_of_first, 1, 2 * MiB));
+    {
+        auto writer = TRY_OR_FAIL(first->begin_writer());
+        TRY_OR_FAIL(writer->clear(store_of_first));
+        TRY_OR_FAIL(writer->commit(at(3)));
+    }
+
+    // A fourth database is more than its storage key has room for, and the session has room for it.
+    for (auto const& name : { "first"_utf16, "second"_utf16, "third"_utf16 })
+        TRY_OR_FAIL(store->open_database(other_example(), name, 1, at(4)));
+    EXPECT_EQ(kind_of_failure(store->open_database(other_example(), "fourth"_utf16, 1, at(4))), IndexedDBError::Kind::Quota);
+
+    // The free pages of the first database are still held, and leave the session no room for the value.
+    auto [third, store_of_third] = open_a_database(*store, "https://third.example"_string, "database"_utf16);
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*third, store_of_third, 1, 1536 * KiB)), IndexedDBError::Kind::Quota);
+    TRY_OR_FAIL(commit_a_put_of_length(*third, store_of_third, 1, 1536 * KiB));
+}
+
+// Two databases of one storage key. The first gives back the pages of a value that it no longer has, and then the
+// second is filled until its storage key has no room for more. Returns how many small values the second took last.
+template<typename Callback>
+static size_t small_values_that_a_storage_key_has_room_for_after_a_vacuum(Callback after_the_vacuum)
+{
+    constexpr size_t length = 16 * MiB;
+    auto store = MUST(IndexedDBStore::create_transient({ .budget_of_a_storage_key = length + 2 * MiB, .ceiling_of_the_session = length + 8 * MiB, .charge_for_a_database = 0 }));
+    auto [first, store_of_first] = open_a_database(*store, example_com(), "first"_utf16);
+    auto [second, store_of_second] = open_a_database(*store, example_com(), "second"_utf16);
+
+    MUST(commit_a_put_of_length(*first, store_of_first, 1, length));
+    {
+        auto writer = MUST(first->begin_writer());
+        MUST(writer->clear(store_of_first));
+        MUST(writer->commit(at(3)));
+    }
+
+    // The session has no room for the value while the first database holds its free pages.
+    EXPECT_EQ(kind_of_failure(commit_a_put_of_length(*second, store_of_second, 1, length - 4 * MiB)), IndexedDBError::Kind::Quota);
+    after_the_vacuum(*first);
+
+    MUST(commit_a_put_of_length(*second, store_of_second, 1, length));
+
+    // Each of the small values takes a page.
+    auto const small_value = value_of_length(3000, 1);
+    auto writer = MUST(second->begin_writer());
+    size_t values_taken = 0;
+    for (u64 key = 2; key < 2000; ++key) {
+        auto const key_of_record = number_key(key);
+        if (writer->store_record(store_of_second, key_of_record.bytes(), small_value.bytes(), NoOverwrite::No, {}).is_error())
+            break;
+        ++values_taken;
+    }
+    return values_taken;
+}
+
+TEST_CASE(a_vacuum_takes_its_pages_off_what_the_storage_key_is_charged_for)
+{
+    // A writer that ends charges its storage key for what its database has in use by then. After a vacuum the
+    // storage key has to have been charged like that already.
+    auto with_a_writer_that_ends = small_values_that_a_storage_key_has_room_for_after_a_vacuum([](IndexedDBDatabase& first) {
+        auto writer = MUST(first.begin_writer());
+        MUST(writer->abort());
+    });
+    auto without_one = small_values_that_a_storage_key_has_room_for_after_a_vacuum([](IndexedDBDatabase&) { });
+
+    EXPECT(with_a_writer_that_ends > 0);
+    EXPECT_EQ(without_one, with_a_writer_that_ends);
 }

@@ -30,8 +30,22 @@ class WEBVIEW_API IndexedDBStore {
 public:
     AK_ALLOC_WITH_KMALLOC;
 
+    struct WEBVIEW_API Limits {
+        static Limits for_a_machine_with(u64 bytes_of_physical_memory);
+
+        // What the databases of one storage key may take together: their pages that are in use.
+        u64 budget_of_a_storage_key { 0 };
+
+        // What the databases of the session may hold together: their pages, the free ones too.
+        u64 ceiling_of_the_session { 0 };
+
+        // What each database counts for towards both, besides its pages.
+        u64 charge_for_a_database { 0 };
+    };
+
     // A store that keeps nothing in files. A database of it lasts until it is deleted or the store goes, whether or
     // not anything is connected to it, since closing an in-memory SQLite database destroys it.
+    static ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> create_transient(Limits const&);
     static ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> create_transient();
     ~IndexedDBStore();
 
@@ -59,15 +73,23 @@ private:
         Database::StatementID list_databases { 0 };
     };
 
-    IndexedDBStore(NonnullRefPtr<Database::Database> catalog, Statements);
+    IndexedDBStore(NonnullRefPtr<Database::Database> catalog, Statements, Limits const&, NonnullRefPtr<IndexedDBCeiling>, NonnullOwnPtr<IndexedDBHeldPages> held_pages_of_catalog);
 
     ErrorOr<Optional<i64>, IndexedDBError> id_of_database(String const& storage_key, Utf16String const& name);
     ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> create_database(String const& storage_key, Utf16String const& name, UnixDateTime now);
     ErrorOr<void, IndexedDBError> remove_from_catalog(i64 database_id);
 
+    ErrorOr<NonnullRefPtr<IndexedDBQuota>, IndexedDBError> budget_of(String const& storage_key);
+    void forget_an_unused_budget(String const& storage_key);
+
     // Which databases the session has, by storage key and name.
     NonnullRefPtr<Database::Database> m_catalog;
     Statements m_statements;
+
+    Limits m_limits;
+    NonnullRefPtr<IndexedDBCeiling> m_ceiling;
+    NonnullOwnPtr<IndexedDBHeldPages> m_held_pages_of_catalog;
+    HashMap<String, NonnullRefPtr<IndexedDBQuota>> m_budgets;
 
     HashMap<i64, NonnullRefPtr<IndexedDBDatabase>> m_databases;
 };

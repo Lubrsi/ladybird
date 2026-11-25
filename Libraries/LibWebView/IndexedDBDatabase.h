@@ -24,6 +24,7 @@
 #include <LibWebCommon/IndexedDB/KeyEncoding.h>
 #include <LibWebView/Export.h>
 #include <LibWebView/Forward.h>
+#include <LibWebView/IndexedDBQuota.h>
 
 namespace WebView {
 
@@ -32,6 +33,8 @@ struct WEBVIEW_API IndexedDBError {
     enum class Kind : u8 {
         Constraint,
         Version,
+        // There was no room for what was asked, in the budget of its storage key or in its session.
+        Quota,
         // The request is a writer's that has finished: it committed, was aborted, or lost its SQL transaction.
         TransactionLost,
         // The request is one that no renderer running LibWeb sends.
@@ -173,7 +176,14 @@ public:
     // chunks that it was stored in, whatever this was then.
     static constexpr size_t VALUE_CHUNK_SIZE = 1 * MiB;
 
-    static ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now);
+    // Where the bytes of a database are counted, and what the database counts for besides its pages.
+    struct Quotas {
+        NonnullRefPtr<IndexedDBQuota> budget_of_storage_key;
+        NonnullRefPtr<IndexedDBCeiling> ceiling_of_session;
+        u64 charge { 0 };
+    };
+
+    static ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> create_transient(String const& storage_key, Utf16String const& name, UnixDateTime now, Quotas const&);
     ~IndexedDBDatabase();
 
     // The version of the last upgrade that committed, or 0. A read of the stored version would see an upgrade that is
@@ -304,7 +314,9 @@ private:
         Optional<ByteBuffer> exact_form_of_key;
     };
 
-    IndexedDBDatabase(NonnullRefPtr<Database::Database>, Statements);
+    IndexedDBDatabase(NonnullRefPtr<Database::Database>, Statements, NonnullOwnPtr<IndexedDBHeldPages>, Quotas const&);
+
+    ErrorOr<void, IndexedDBError> charge_the_storage_key();
 
     IndexedDBError failure(Database::Error&&);
     IndexedDBError failure_to_give_a_name(Database::Error&&);
@@ -357,6 +369,12 @@ private:
     NonnullRefPtr<Database::Database> m_sqlite_database;
     Statements m_statements;
     HashMap<RangeStatementShape, Database::StatementID, RangeStatementShapeTraits> m_range_statements;
+
+    NonnullOwnPtr<IndexedDBHeldPages> m_held_pages;
+    NonnullRefPtr<IndexedDBCeiling> m_ceiling_of_session;
+    NonnullRefPtr<IndexedDBQuota> m_budget_of_storage_key;
+    u64 m_charge { 0 };
+    u64 m_bytes_taken_of_budget { 0 };
 
     u64 m_committed_version { 0 };
     Writer* m_writer { nullptr };
@@ -434,6 +452,8 @@ struct AK::Formatter<WebView::IndexedDBError::Kind> : Formatter<StringView> {
             return Formatter<StringView>::format(builder, "Constraint"sv);
         case WebView::IndexedDBError::Kind::Version:
             return Formatter<StringView>::format(builder, "Version"sv);
+        case WebView::IndexedDBError::Kind::Quota:
+            return Formatter<StringView>::format(builder, "Quota"sv);
         case WebView::IndexedDBError::Kind::TransactionLost:
             return Formatter<StringView>::format(builder, "TransactionLost"sv);
         case WebView::IndexedDBError::Kind::InvalidClaim:

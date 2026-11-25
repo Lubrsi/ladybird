@@ -4,16 +4,54 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/NumericLimits.h>
 #include <AK/RefPtr.h>
+#include <AK/ScopeGuard.h>
+#include <LibCore/System.h>
 #include <LibDatabase/ResultRow.h>
 #include <LibWebView/IndexedDBStore.h>
 
 namespace WebView {
 
+// https://storage.spec.whatwg.org/#storage-quota
+// The quota that a storage shelf is reported to have, less what the shelf's local storage may take of it.
+static constexpr u64 BUDGET_OF_A_STORAGE_KEY = 10 * GiB - 5 * MiB;
+
+// What an open database takes besides its pages, most of it for its prepared statements.
+static constexpr u64 CHARGE_FOR_A_DATABASE = 4 * MiB;
+
+static constexpr u64 CEILING_OF_A_SESSION_WHEN_THE_MEMORY_IS_NOT_KNOWN = 1 * GiB;
+
+IndexedDBStore::Limits IndexedDBStore::Limits::for_a_machine_with(u64 bytes_of_physical_memory)
+{
+    // A number that is 0, or negative when it is read as a signed one, is what a failed query leaves.
+    bool memory_is_known = bytes_of_physical_memory > 0 && bytes_of_physical_memory <= static_cast<u64>(NumericLimits<i64>::max());
+
+    // The databases of a session are in memory, and the bytes of their pages may come to a quarter of it. What SQLite
+    // takes to hold the pages, and for its journals, comes on top.
+    auto ceiling_of_the_session = memory_is_known ? bytes_of_physical_memory / 4 : CEILING_OF_A_SESSION_WHEN_THE_MEMORY_IS_NOT_KNOWN;
+
+    return {
+        .budget_of_a_storage_key = BUDGET_OF_A_STORAGE_KEY,
+        .ceiling_of_the_session = ceiling_of_the_session,
+        .charge_for_a_database = CHARGE_FOR_A_DATABASE,
+    };
+}
+
 ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> IndexedDBStore::create_transient()
+{
+    return create_transient(Limits::for_a_machine_with(Core::System::physical_memory_bytes()));
+}
+
+ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> IndexedDBStore::create_transient(Limits const& limits)
 {
     auto create = [&]() -> ErrorOr<NonnullOwnPtr<IndexedDBStore>, Database::Error> {
         auto catalog = TRY(Database::Database::create_memory_backed({ .temp_store = Database::Database::TempStore::Memory }));
+
+        // https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+        // The catalog gives back the pages of the names that are gone from it, which SQLite only lets a database do
+        // that was told so before its first table.
+        TRY(catalog->execute_raw("PRAGMA auto_vacuum = INCREMENTAL;"));
 
         auto migrations = to_array<Database::Migration>({
             {
@@ -39,7 +77,11 @@ ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> IndexedDBStore::create_tr
         statements.delete_database = TRY(catalog->prepare_statement("DELETE FROM Databases WHERE id = :database;"sv));
         statements.list_databases = TRY(catalog->prepare_statement("SELECT id, name FROM Databases WHERE storage_key = :storage_key ORDER BY id;"sv));
 
-        return TRY(adopt_nonnull_own_or_enomem(new (nothrow) IndexedDBStore(move(catalog), statements)));
+        // The catalog is in memory like the databases that it lists, so its pages are the session's as well.
+        auto ceiling = TRY(IndexedDBCeiling::create(limits.ceiling_of_the_session));
+        auto held_pages_of_catalog = TRY(IndexedDBHeldPages::create(catalog, ceiling, 0));
+
+        return TRY(adopt_nonnull_own_or_enomem(new (nothrow) IndexedDBStore(move(catalog), statements, limits, move(ceiling), move(held_pages_of_catalog))));
     };
 
     auto store = create();
@@ -48,13 +90,35 @@ ErrorOr<NonnullOwnPtr<IndexedDBStore>, IndexedDBError> IndexedDBStore::create_tr
     return store.release_value();
 }
 
-IndexedDBStore::IndexedDBStore(NonnullRefPtr<Database::Database> catalog, Statements statements)
+IndexedDBStore::IndexedDBStore(NonnullRefPtr<Database::Database> catalog, Statements statements, Limits const& limits, NonnullRefPtr<IndexedDBCeiling> ceiling, NonnullOwnPtr<IndexedDBHeldPages> held_pages_of_catalog)
     : m_catalog(move(catalog))
     , m_statements(statements)
+    , m_limits(limits)
+    , m_ceiling(move(ceiling))
+    , m_held_pages_of_catalog(move(held_pages_of_catalog))
 {
 }
 
 IndexedDBStore::~IndexedDBStore() = default;
+
+ErrorOr<NonnullRefPtr<IndexedDBQuota>, IndexedDBError> IndexedDBStore::budget_of(String const& storage_key)
+{
+    if (auto budget = m_budgets.get(storage_key); budget.has_value())
+        return NonnullRefPtr { *budget.value() };
+
+    auto budget = IndexedDBQuota::create(m_limits.budget_of_a_storage_key);
+    if (budget.is_error() || m_budgets.try_set(storage_key, budget.value()).is_error())
+        return IndexedDBError { .kind = IndexedDBError::Kind::OutOfMemory };
+
+    return budget.release_value();
+}
+
+void IndexedDBStore::forget_an_unused_budget(String const& storage_key)
+{
+    auto budget = m_budgets.get(storage_key);
+    if (budget.has_value() && (*budget)->has_nothing_taken())
+        m_budgets.remove(storage_key);
+}
 
 ErrorOr<Optional<i64>, IndexedDBError> IndexedDBStore::id_of_database(String const& storage_key, Utf16String const& name)
 {
@@ -83,11 +147,18 @@ ErrorOr<void, IndexedDBError> IndexedDBStore::remove_from_catalog(i64 database_i
 
 ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBStore::create_database(String const& storage_key, Utf16String const& name, UnixDateTime now)
 {
+    auto budget = TRY(budget_of(storage_key));
+    ScopeGuard forget_the_budget_of_a_database_that_is_not_created = [&] { forget_an_unused_budget(storage_key); };
+
     // A row of the catalog stands for a database in m_databases. The row is the last thing that can fail, so that
     // there is never one to take back.
-    auto database = TRY(IndexedDBDatabase::create_transient(storage_key, name, now));
+    IndexedDBDatabase::Quotas quotas { .budget_of_storage_key = budget, .ceiling_of_session = m_ceiling, .charge = m_limits.charge_for_a_database };
+    auto database = TRY(IndexedDBDatabase::create_transient(storage_key, name, now, quotas));
     if (m_databases.try_ensure_capacity(m_databases.size() + 1).is_error())
         return IndexedDBError { .kind = IndexedDBError::Kind::OutOfMemory };
+
+    if (auto allowed = m_held_pages_of_catalog->allow_growth_into_the_room(); allowed.is_error())
+        return IndexedDBError::from(allowed.release_error());
 
     auto result = m_catalog->try_execute_bound_statement(m_statements.insert_database, [&](auto& bind) -> ErrorOr<void, Database::Error> {
         TRY(bind("storage_key"sv, storage_key));
@@ -98,6 +169,9 @@ ErrorOr<NonnullRefPtr<IndexedDBDatabase>, IndexedDBError> IndexedDBStore::create
 
     // The id column is the table's rowid.
     m_databases.set(m_catalog->last_insert_rowid(), database);
+
+    // A count that fails leaves the catalog's pages as they were counted last.
+    (void)m_held_pages_of_catalog->count();
 
     return database;
 }
@@ -122,8 +196,19 @@ ErrorOr<IndexedDBStore::OpenedDatabase, IndexedDBError> IndexedDBStore::open_dat
     // 6. If db is null, let db be a new database with name name, version 0 (zero), and with no object stores. If
     //    this fails for any reason, return an appropriate error (e.g. a QuotaExceededError, or an "UnknownError"
     //    DOMException).
-    if (!database)
-        database = TRY(create_database(storage_key, name, now));
+    if (!database) {
+        auto created = create_database(storage_key, name, now);
+
+        // Only SQLite refuses a database for its session, and a storage key has nothing to gain from the free pages
+        // of others. An open that the session had no room for is not tried again here. One that comes after it finds
+        // the room of the free pages.
+        bool the_session_had_no_room = created.is_error() && created.error().cause.has_value()
+            && created.error().cause->has_result_code(Database::ResultCode::Full);
+        if (the_session_had_no_room)
+            m_ceiling->give_back_free_pages();
+
+        database = TRY(move(created));
+    }
 
     // 7. If db's version is greater than version, return a newly created "VersionError" DOMException and abort
     //    these steps.
@@ -160,6 +245,7 @@ ErrorOr<u64, IndexedDBError> IndexedDBStore::delete_database(String const& stora
     //     "UnknownError" DOMException).
     TRY(remove_from_catalog(*database_id));
     m_databases.remove(*database_id);
+    forget_an_unused_budget(storage_key);
 
     // 12. Return version.
     return version;

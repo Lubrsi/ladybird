@@ -44,6 +44,7 @@ set(SOURCES
     ImageDecoderControlClient.cpp
     ImageDecoderManager.cpp
     IndexedDBDatabase.cpp
+    IndexedDBQuota.cpp
     IndexedDBStore.cpp
     LingeringIndicator.cpp
     LocalFileRoot.cpp
