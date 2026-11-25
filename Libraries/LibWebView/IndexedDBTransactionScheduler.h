@@ -93,6 +93,10 @@ public:
 
     void did_begin(TransactionID);
     void did_fail_to_begin(TransactionID, IndexedDBErrorKind);
+
+    // For an entry that waits for something from outside. Its transaction is asked to do nothing more until the entry
+    // is reported as run, except to roll back.
+    void did_park(TransactionID, u64 place);
     void did_run(TransactionID, u64 place, Optional<IndexedDBErrorKind> failure);
     void did_commit(TransactionID);
     void did_fail_to_commit(TransactionID, IndexedDBErrorKind);
@@ -126,6 +130,7 @@ private:
         Queue<EntryKind> entries_to_run;
         u64 entries_placed { 0 };
         u64 entries_run { 0 };
+        bool has_a_parked_entry { false };
         u64 results_run { 0 };
         Vector<FailedResult> failed_results;
 

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/AllOf.h>
 #include <AK/BinarySearch.h>
 #include <AK/Queue.h>
 #include <AK/QuickSort.h>
@@ -67,7 +68,23 @@ struct IndexedDBSession::QueuedRequest {
 struct IndexedDBSession::Transaction : public Weakable<Transaction> {
     AK_ALLOC_WITH_KMALLOC;
 
-    using Entry = Variant<QueuedRequest, Message::CreateObjectStore, Message::RenameObjectStore, Message::DeleteObjectStore>;
+    using Entry = Variant<QueuedRequest, Message::CreateObjectStore, Message::RenameObjectStore, Message::DeleteObjectStore, Message::CreateIndex, Message::RenameIndex, Message::DeleteIndex>;
+
+    // https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+    // The index that an upgrade transaction has created and is giving the records of its object store their keys
+    // in, one record at a time.
+    struct Fill {
+        // Of the entry that creates the index, which waits until the fill is over.
+        u64 place { 0 };
+
+        u64 number_of_index { 0 };
+        i64 index_id { 0 };
+        i64 object_store_id { 0 };
+
+        // The record whose keys the renderer was asked for, and the token of that.
+        Optional<ByteBuffer> key_of_record {};
+        u64 token { 0 };
+    };
 
     Transaction(NamedDatabase& database, Scheduler::TransactionID id, ChannelID channel, Message::TransactionName name, ConnectionQueue::ConnectionID connection)
         : database(database)
@@ -80,13 +97,18 @@ struct IndexedDBSession::Transaction : public Weakable<Transaction> {
 
     bool is_upgrade() const { return open_request.has_value(); }
     bool has_in_scope(Message::ObjectStoreName const&) const;
+    bool can_name(Message::IndexName const&) const;
     bool allows(Message::Operation const&) const;
     i64 id_of(Message::ObjectStoreName const&) const;
+    i64 id_of(Message::IndexName const&) const;
+    ErrorOr<i64, IndexedDBError> id_of_index_in_scope(Message::IndexName const&) const;
 
     ErrorOr<Message::ResultOfRequest, IndexedDBError> carry_out(Message::Operation const&);
     ErrorOr<void, IndexedDBError> carry_out(Message::CreateObjectStore const&);
     ErrorOr<void, IndexedDBError> carry_out(Message::RenameObjectStore const&);
     ErrorOr<void, IndexedDBError> carry_out(Message::DeleteObjectStore const&);
+    ErrorOr<void, IndexedDBError> carry_out(Message::RenameIndex const&);
+    ErrorOr<void, IndexedDBError> carry_out(Message::DeleteIndex const&);
 
     NamedDatabase& database;
     Scheduler::TransactionID id;
@@ -112,6 +134,13 @@ struct IndexedDBSession::Transaction : public Weakable<Transaction> {
     // An upgrade transaction's: how many object stores it was asked to create, and the ids of the ones that it has.
     u64 object_stores_to_create { 0 };
     Vector<i64> created_object_stores;
+
+    // The same for its indexes.
+    u64 indexes_to_create { 0 };
+    Vector<i64> created_indexes;
+
+    Optional<Fill> fill;
+    u64 tokens_given { 0 };
 };
 
 // https://w3c.github.io/IndexedDB/#database-connection
@@ -205,7 +234,24 @@ bool IndexedDBSession::Transaction::allows(Message::Operation const& operation) 
     if (changes_records && !writes)
         return false;
 
-    return operation.visit([&](auto const& specific) { return has_in_scope(specific.object_store); });
+    return operation.visit(
+        [&](Message::StoreRecord const& store) {
+            // The database refuses the keys of an index that is not one of the object store's.
+            bool can_name_the_indexes = all_of(store.index_keys, [&](auto const& keys) { return can_name(keys.index); });
+            return has_in_scope(store.object_store) && can_name_the_indexes;
+        },
+        [&](OneOf<Message::ReadIndexRecords, Message::CountIndexRecords, Message::IterateIndexCursor> auto const& of_index) { return can_name(of_index.index); },
+        [&](auto const& of_object_store) { return has_in_scope(of_object_store.object_store); });
+}
+
+// Whether an index that is named by its id is of an object store in the scope is the database's to say, when the
+// request is carried out.
+bool IndexedDBSession::Transaction::can_name(Message::IndexName const& index) const
+{
+    return index.visit(
+        [](i64) { return true; },
+        // Only an upgrade transaction is asked to create indexes.
+        [&](Message::IndexOfUpgrade const& created) { return created.number >= 1 && created.number <= indexes_to_create; });
 }
 
 i64 IndexedDBSession::Transaction::id_of(Message::ObjectStoreName const& object_store) const
@@ -215,6 +261,26 @@ i64 IndexedDBSession::Transaction::id_of(Message::ObjectStoreName const& object_
         // The change that creates an object store runs before whatever names the object store by its number, and
         // nothing more of an upgrade runs once one of its changes has failed.
         [&](Message::ObjectStoreOfUpgrade const& created) { return created_object_stores[created.number - 1]; });
+}
+
+i64 IndexedDBSession::Transaction::id_of(Message::IndexName const& index) const
+{
+    return index.visit(
+        [](i64 index_id) { return index_id; },
+        [&](Message::IndexOfUpgrade const& created) { return created_indexes[created.number - 1]; });
+}
+
+// https://w3c.github.io/IndexedDB/#transaction-construct
+// A renderer throws for an index of an object store that is not in the scope of the transaction, before it sends
+// anything.
+ErrorOr<i64, IndexedDBError> IndexedDBSession::Transaction::id_of_index_in_scope(Message::IndexName const& index) const
+{
+    auto index_id = id_of(index);
+    auto object_store_id = TRY(database.database->object_store_of_index(index_id));
+    if (!has_in_scope(object_store_id))
+        return IndexedDBError { .kind = IndexedDBError::Kind::InvalidClaim };
+
+    return index_id;
 }
 
 // https://w3c.github.io/IndexedDB/#asynchronously-execute-a-request
@@ -234,7 +300,20 @@ ErrorOr<Message::ResultOfRequest, IndexedDBError> IndexedDBSession::Transaction:
                     return IndexedDBValueSegments { segments.before_the_key.bytes(), segments.after_the_key.bytes() };
                 });
 
-            auto stored = TRY(writer->store_record(id_of(store.object_store), bytes_of(store.key), value, store.no_overwrite, {}));
+            // The keys of each index are borrowed, so all of them are gathered before any is pointed at.
+            Vector<Vector<ReadonlyBytes>> keys_of_each_index;
+            for (auto const& keys_of_index : store.index_keys) {
+                Vector<ReadonlyBytes> keys;
+                for (auto const& key : keys_of_index.keys)
+                    keys.append(key.bytes());
+                keys_of_each_index.append(move(keys));
+            }
+
+            Vector<IndexedDBIndexKeys> index_keys;
+            for (size_t i = 0; i < store.index_keys.size(); ++i)
+                index_keys.append({ .index_id = id_of(store.index_keys[i].index), .keys = keys_of_each_index[i].span() });
+
+            auto stored = TRY(writer->store_record(id_of(store.object_store), bytes_of(store.key), value, store.no_overwrite, index_keys));
             return Message::RecordStored { stored.generated_key };
         },
         [&](Message::DeleteRecords const& delete_records) -> Result {
@@ -256,6 +335,24 @@ ErrorOr<Message::ResultOfRequest, IndexedDBError> IndexedDBSession::Transaction:
         [&](Message::IterateCursor const& iterate) -> Result {
             auto record = TRY(records.iterate_cursor(id_of(iterate.object_store), iterate.range.as_range_of_database(), iterate.direction, bytes_of(iterate.position), bytes_of(iterate.key), iterate.count, iterate.with_values));
             return Message::CursorIterated { move(record) };
+        },
+        [&](Message::ReadIndexRecords const& read) -> Result {
+            auto index_id = TRY(id_of_index_in_scope(read.index));
+            auto read_records = TRY(records.read_index_records(index_id, read.range.as_range_of_database(), read.direction, read.records_of_each_key, read.count, read.with_values));
+            return Message::IndexRecordsRead { move(read_records) };
+        },
+        [&](Message::CountIndexRecords const& count) -> Result {
+            auto index_id = TRY(id_of_index_in_scope(count.index));
+            auto number_of_records = TRY(records.count_index_records(index_id, count.range.as_range_of_database()));
+            return Message::RecordsCounted { number_of_records };
+        },
+        [&](Message::IterateIndexCursor const& iterate) -> Result {
+            auto index_id = TRY(id_of_index_in_scope(iterate.index));
+            auto position = iterate.position.map([](auto const& position) { return position.as_position_of_database(); });
+            auto seek = iterate.seek.map([](auto const& seek) { return seek.as_seek_of_database(); });
+
+            auto record = TRY(records.iterate_index_cursor(index_id, iterate.range.as_range_of_database(), iterate.direction, iterate.records_of_each_key, position, seek, iterate.count, iterate.with_values));
+            return Message::IndexCursorIterated { move(record) };
         });
 }
 
@@ -274,6 +371,16 @@ ErrorOr<void, IndexedDBError> IndexedDBSession::Transaction::carry_out(Message::
 ErrorOr<void, IndexedDBError> IndexedDBSession::Transaction::carry_out(Message::DeleteObjectStore const& delete_object_store)
 {
     return writer->delete_object_store(id_of(delete_object_store.object_store));
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBSession::Transaction::carry_out(Message::RenameIndex const& rename)
+{
+    return writer->rename_index(id_of(rename.index), rename.name);
+}
+
+ErrorOr<void, IndexedDBError> IndexedDBSession::Transaction::carry_out(Message::DeleteIndex const& delete_index)
+{
+    return writer->delete_index(id_of(delete_index.index));
 }
 
 IndexedDBSession::IndexedDBSession(NonnullOwnPtr<IndexedDBStore> store, Function<UnixDateTime()> clock)
@@ -776,6 +883,87 @@ void IndexedDBSession::handle(Channel& channel, Message::DeleteObjectStore& dele
     place_change(channel, *upgrade, delete_object_store);
 }
 
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+void IndexedDBSession::handle(Channel& channel, Message::CreateIndex& create)
+{
+    // 3. If transaction is not an upgrade transaction, throw an "InvalidStateError" DOMException.
+    auto* upgrade = upgrade_named_by(channel, create.upgrade);
+    if (!upgrade)
+        return;
+
+    if (!upgrade->has_in_scope(create.object_store)) {
+        retire_for_a_false_claim(channel);
+        return;
+    }
+
+    ++upgrade->indexes_to_create;
+    place_change(channel, *upgrade, create);
+}
+
+void IndexedDBSession::handle(Channel& channel, Message::RenameIndex& rename)
+{
+    auto* upgrade = upgrade_named_by(channel, rename.upgrade);
+    if (!upgrade)
+        return;
+
+    if (!upgrade->can_name(rename.index)) {
+        retire_for_a_false_claim(channel);
+        return;
+    }
+
+    place_change(channel, *upgrade, rename);
+}
+
+void IndexedDBSession::handle(Channel& channel, Message::DeleteIndex& delete_index)
+{
+    auto* upgrade = upgrade_named_by(channel, delete_index.upgrade);
+    if (!upgrade)
+        return;
+
+    if (!upgrade->can_name(delete_index.index)) {
+        retire_for_a_false_claim(channel);
+        return;
+    }
+
+    place_change(channel, *upgrade, delete_index);
+}
+
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+void IndexedDBSession::handle(Channel& channel, Message::IndexKeys& index_keys)
+{
+    auto* upgrade = upgrade_named_by(channel, index_keys.upgrade);
+    if (!upgrade)
+        return;
+
+    // A renderer answers the one extraction that its upgrade waits for, and answers it once.
+    if (!upgrade->fill.has_value() || upgrade->fill->token != index_keys.token) {
+        retire_for_a_false_claim(channel);
+        return;
+    }
+    auto const& fill = *upgrade->fill;
+    auto place = fill.place;
+
+    Vector<ReadonlyBytes> keys;
+    for (auto const& key : index_keys.keys)
+        keys.append(key.bytes());
+
+    // NB: "If the referenced object store already contains data which violates these constraints, this must not
+    //     cause the implementation of createIndex() to throw an exception or affect what it returns. The
+    //     implementation must still create and return an IDBIndex object, and the implementation must queue a
+    //     database task to abort the upgrade transaction which was used for the createIndex() call."
+    auto progress = [&]() -> ErrorOr<Progress, IndexedDBError> {
+        TRY(upgrade->writer->fill_index(fill.index_id, *fill.key_of_record, keys));
+        return continue_the_fill(*upgrade);
+    }();
+    if (!progress.is_error() && progress.value() == Progress::Waiting)
+        return;
+
+    Optional<IndexedDBError> failure;
+    if (progress.is_error())
+        failure = progress.release_error();
+    did_run(*upgrade, place, failure);
+}
+
 void IndexedDBSession::has_work(NamedDatabase& database)
 {
     if (database.has_work)
@@ -836,26 +1024,46 @@ void IndexedDBSession::perform(NamedDatabase& database, Scheduler::Begin const& 
 void IndexedDBSession::perform(NamedDatabase& database, Scheduler::Run const& run)
 {
     auto& transaction = *database.transactions.get(run.transaction).release_value();
-    auto channel = transaction.channel;
-
     auto entry = transaction.entries.dequeue();
-    auto failure = entry.visit(
-        [&](QueuedRequest const& request) { return carry_out(transaction, request); },
-        [&](auto const& change) -> Optional<IndexedDBError> {
+
+    auto progress = entry.visit(
+        [&](QueuedRequest const& request) -> ErrorOr<Progress, IndexedDBError> {
+            TRY(carry_out(transaction, request));
+            return Progress::Done;
+        },
+        [&](Message::CreateIndex const& create) { return carry_out(transaction, run.place, create); },
+        [&](auto const& change) -> ErrorOr<Progress, IndexedDBError> {
             // A change has no result. One that cannot be made ends the upgrade, which its renderer is told of.
-            auto changed = transaction.carry_out(change);
-            if (changed.is_error())
-                return changed.release_error();
-            return {};
+            TRY(transaction.carry_out(change));
+            return Progress::Done;
         });
 
-    database.scheduler.did_run(run.transaction, run.place, failure.map([](auto const& error) { return error.kind; }));
+    if (!progress.is_error() && progress.value() == Progress::Waiting) {
+        database.scheduler.did_park(run.transaction, run.place);
+        return;
+    }
+
+    Optional<IndexedDBError> failure;
+    if (progress.is_error())
+        failure = progress.release_error();
+    did_run(transaction, run.place, failure);
+}
+
+// What a transaction was asked to do at the place is over, whether or not it waited for its renderer first.
+void IndexedDBSession::did_run(Transaction& transaction, u64 place, Optional<IndexedDBError> const& failure)
+{
+    auto& database = transaction.database;
+    auto channel = transaction.channel;
+    transaction.fill.clear();
+
+    database.scheduler.did_run(transaction.id, place, failure.map([](auto const& error) { return error.kind; }));
     if (failure.has_value())
         did_fail(database, channel, *failure);
+    has_work(database);
 }
 
 // https://w3c.github.io/IndexedDB/#asynchronously-execute-a-request
-Optional<IndexedDBError> IndexedDBSession::carry_out(Transaction& transaction, QueuedRequest const& request)
+ErrorOr<void, IndexedDBError> IndexedDBSession::carry_out(Transaction& transaction, QueuedRequest const& request)
 {
     auto result = transaction.carry_out(request.operation);
 
@@ -872,6 +1080,47 @@ Optional<IndexedDBError> IndexedDBSession::carry_out(Transaction& transaction, Q
     if (error.kind != IndexedDBError::Kind::InvalidClaim)
         reply(transaction.channel, Message::RequestResult { transaction.name, request.number, error.kind });
     return error;
+}
+
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+ErrorOr<IndexedDBSession::Progress, IndexedDBError> IndexedDBSession::carry_out(Transaction& upgrade, u64 place, Message::CreateIndex const& create)
+{
+    // 11. Let index be a new index in store. Set index's name to name, key path to keyPath, unique flag to unique,
+    //     and multiEntry flag to multiEntry.
+    auto object_store_id = upgrade.id_of(create.object_store);
+    auto index_id = TRY(upgrade.writer->create_index(object_store_id, create.name, create.key_path, create.unique, create.multi_entry));
+    upgrade.created_indexes.append(index_id);
+
+    // NB: "Although this method does not return an IDBRequest object, the index creation itself is processed as an
+    //     asynchronous request within the upgrade transaction." The records that the object store has are given
+    //     their keys in the index as part of it. Only the renderer can read a value, so it is asked for the keys of
+    //     one record at a time, and what the upgrade was asked to do after this waits for its answers.
+    upgrade.fill = Transaction::Fill {
+        .place = place,
+        .number_of_index = upgrade.created_indexes.size(),
+        .index_id = index_id,
+        .object_store_id = object_store_id,
+    };
+    return continue_the_fill(upgrade);
+}
+
+// Asks the renderer for the index keys of the record after the one that the fill has done, if there is one.
+ErrorOr<IndexedDBSession::Progress, IndexedDBError> IndexedDBSession::continue_the_fill(Transaction& upgrade)
+{
+    auto& fill = *upgrade.fill;
+    auto& records = *upgrade.database.database;
+
+    auto key_of_last_record = fill.key_of_record.map([](auto const& key) { return key.bytes(); });
+    auto record = TRY(records.iterate_cursor(fill.object_store_id, {}, IndexedDBDatabase::Direction::Ascending, key_of_last_record, {}, 1, IndexedDBDatabase::WithValues::Yes));
+    if (!record.has_value())
+        return Progress::Done;
+
+    fill.key_of_record = move(record->key);
+    fill.token = ++upgrade.tokens_given;
+
+    auto connection = upgrade.name.get<Message::UpgradeOf>().connection;
+    reply(upgrade.channel, Message::ExtractIndexKeys { connection, fill.number_of_index, fill.token, record->value.release_value() });
+    return Progress::Waiting;
 }
 
 // What a failure of the store means besides the request that it was the failure of.
@@ -909,7 +1158,7 @@ void IndexedDBSession::perform(NamedDatabase& database, Scheduler::Commit const&
 
     // 2.5. Queue a database task to run these steps:
     // 2.5.3. Fire an event named complete at transaction.
-    reply(transaction.channel, Message::TransactionCompleted { transaction.name, transaction.created_object_stores });
+    reply(transaction.channel, Message::TransactionCompleted { transaction.name, transaction.created_object_stores, transaction.created_indexes });
     did_finish(transaction, ConnectionQueue::WasCommitted::Yes);
 }
 

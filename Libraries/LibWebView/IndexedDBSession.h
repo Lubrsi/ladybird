@@ -102,6 +102,10 @@ private:
     void handle(Channel&, IndexedDBMessages::CreateObjectStore&);
     void handle(Channel&, IndexedDBMessages::RenameObjectStore&);
     void handle(Channel&, IndexedDBMessages::DeleteObjectStore&);
+    void handle(Channel&, IndexedDBMessages::CreateIndex&);
+    void handle(Channel&, IndexedDBMessages::RenameIndex&);
+    void handle(Channel&, IndexedDBMessages::DeleteIndex&);
+    void handle(Channel&, IndexedDBMessages::IndexKeys&);
 
     template<typename Change>
     void place_change(Channel&, Transaction&, Change&);
@@ -121,7 +125,16 @@ private:
     void perform(NamedDatabase&, IndexedDBConnectionQueue::Upgrade const&);
     void perform(NamedDatabase&, IndexedDBConnectionQueue::Delete const&);
 
-    Optional<IndexedDBError> carry_out(Transaction&, QueuedRequest const&);
+    // What became of something that a transaction was asked to do: it is done with, or it waits for its renderer.
+    enum class Progress : u8 {
+        Done,
+        Waiting,
+    };
+
+    ErrorOr<void, IndexedDBError> carry_out(Transaction&, QueuedRequest const&);
+    ErrorOr<Progress, IndexedDBError> carry_out(Transaction&, u64 place, IndexedDBMessages::CreateIndex const&);
+    ErrorOr<Progress, IndexedDBError> continue_the_fill(Transaction&);
+    void did_run(Transaction&, u64 place, Optional<IndexedDBError> const& failure);
 
     void did_fail(NamedDatabase&, ChannelID, IndexedDBError const&);
     void did_finish(Transaction&, IndexedDBConnectionQueue::WasCommitted);

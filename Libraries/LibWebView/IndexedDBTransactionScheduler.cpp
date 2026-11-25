@@ -215,7 +215,7 @@ Optional<IndexedDBTransactionScheduler::Action> IndexedDBTransactionScheduler::n
     }
 
     for (auto& transaction : m_transactions) {
-        if (transaction->state != State::Started)
+        if (transaction->state != State::Started || transaction->has_a_parked_entry)
             continue;
 
         // https://w3c.github.io/IndexedDB/#asynchronously-execute-a-request
@@ -248,13 +248,30 @@ void IndexedDBTransactionScheduler::did_fail_to_begin(TransactionID id, IndexedD
     transaction.end_with(cause);
 }
 
-void IndexedDBTransactionScheduler::did_run(TransactionID id, u64 place, Optional<IndexedDBErrorKind> failure)
+void IndexedDBTransactionScheduler::did_park(TransactionID id, u64 place)
 {
     VERIFY(m_action_awaiting_its_report.has_value() && m_action_awaiting_its_report->has<Run>());
     VERIFY(m_action_awaiting_its_report->get<Run>().place == place);
     take_report_of<Run>(id);
 
+    transaction(id).has_a_parked_entry = true;
+}
+
+void IndexedDBTransactionScheduler::did_run(TransactionID id, u64 place, Optional<IndexedDBErrorKind> failure)
+{
     auto& transaction = this->transaction(id);
+
+    // A parked entry is reported when what it waited for has come, which is while nothing else is under way.
+    if (transaction.has_a_parked_entry) {
+        VERIFY(!m_action_awaiting_its_report.has_value());
+        VERIFY(transaction.entries_run == place);
+        transaction.has_a_parked_entry = false;
+    } else {
+        VERIFY(m_action_awaiting_its_report.has_value() && m_action_awaiting_its_report->has<Run>());
+        VERIFY(m_action_awaiting_its_report->get<Run>().place == place);
+        take_report_of<Run>(id);
+    }
+
     auto kind = transaction.entries_to_run.dequeue();
     ++transaction.entries_run;
 

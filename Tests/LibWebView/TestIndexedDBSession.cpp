@@ -80,9 +80,16 @@ static String described(TransactionName const& transaction)
         [](UpgradeOf const& upgrade) { return MUST(String::formatted("the upgrade of connection {}", upgrade.connection.value())); });
 }
 
+// The object stores as "books=1", with their indexes where they have any: "books=1 with the indexes [by_title=1]".
 static String described(Vector<WebView::IndexedDBObjectStoreDescription> const& object_stores)
 {
-    return list_of(object_stores, [](auto const& object_store) { return MUST(String::formatted("{}={}", object_store.name, object_store.id)); });
+    return list_of(object_stores, [](auto const& object_store) {
+        if (object_store.indexes.is_empty())
+            return MUST(String::formatted("{}={}", object_store.name, object_store.id));
+
+        auto indexes = list_of(object_store.indexes, [](auto const& index) { return MUST(String::formatted("{}={}", index.name, index.id)); });
+        return MUST(String::formatted("{}={} with the indexes {}", object_store.name, object_store.id, indexes));
+    });
 }
 
 static String described(Optional<u64> version)
@@ -102,6 +109,17 @@ static String described(WebView::IndexedDBRecord const& record)
     return MUST(String::formatted("{}={}", key, StringView { record.value->bytes() }));
 }
 
+// A record of an index whose keys are whole numbers, as "7/1=one": the key in the index, the key of the record that
+// it refers to, and that record's value where it was asked for.
+static String described(WebView::IndexedDBIndexRecord const& record)
+{
+    auto key = static_cast<u64>(Web::IndexedDB::number_of_key(record.key).release_value());
+    auto primary_key = static_cast<u64>(Web::IndexedDB::number_of_key(record.primary_key).release_value());
+    if (!record.value.has_value())
+        return MUST(String::formatted("{}/{}", key, primary_key));
+    return MUST(String::formatted("{}/{}={}", key, primary_key, StringView { record.value->bytes() }));
+}
+
 static String described(ResultOfRequest const& result)
 {
     return result.visit(
@@ -116,6 +134,14 @@ static String described(ResultOfRequest const& result)
         },
         [](RecordsCounted const& counted) { return MUST(String::formatted("counted {}", counted.count)); },
         [](CursorIterated const& iterated) {
+            if (!iterated.record.has_value())
+                return "the cursor is at the end"_string;
+            return MUST(String::formatted("the cursor is at {}", described(*iterated.record)));
+        },
+        [](IndexRecordsRead const& read) {
+            return MUST(String::formatted("read {}", list_of(read.records, [](auto const& record) { return described(record); })));
+        },
+        [](IndexCursorIterated const& iterated) {
             if (!iterated.record.has_value())
                 return "the cursor is at the end"_string;
             return MUST(String::formatted("the cursor is at {}", described(*iterated.record)));
@@ -159,12 +185,19 @@ static String described(Reply const& reply)
         [](RequestResult const& result) {
             return MUST(String::formatted("result {} of {}: {}", result.request, described(result.transaction), described(result.result)));
         },
+        [](ExtractIndexKeys const& extract) {
+            return MUST(String::formatted("the upgrade of connection {} is asked for the keys of its index {} for the value {} (token {})", extract.upgrade.value(), extract.index, StringView { extract.value.bytes() }, extract.token));
+        },
         [](TransactionCompleted const& completed) {
-            if (completed.created_object_stores.is_empty())
-                return MUST(String::formatted("{} completed", described(completed.transaction)));
+            auto ids = [](Vector<i64> const& ids) { return list_of(ids, [](i64 id) { return String::number(id); }); };
 
-            auto ids = list_of(completed.created_object_stores, [](i64 id) { return String::number(id); });
-            return MUST(String::formatted("{} completed, having created object stores {}", described(completed.transaction), ids));
+            StringBuilder text;
+            text.appendff("{} completed", described(completed.transaction));
+            if (!completed.created_object_stores.is_empty())
+                text.appendff(", having created object stores {}", ids(completed.created_object_stores));
+            if (!completed.created_indexes.is_empty())
+                text.appendff(", having created indexes {}", ids(completed.created_indexes));
+            return MUST(text.to_string());
         },
         [](TransactionAborted const& aborted) {
             if (!aborted.cause.has_value())
@@ -259,6 +292,32 @@ static PlaceRequest count(TransactionName transaction, ObjectStoreName object_st
 static CreateTransaction a_transaction(Mode mode, Vector<i64> scope, u64 connection_number = 1)
 {
     return { .connection = connection(connection_number), .mode = mode, .scope = move(scope) };
+}
+
+static CreateIndex an_index(u64 upgrade, ObjectStoreName object_store, IndexedDBDatabase::Unique unique = IndexedDBDatabase::Unique::No)
+{
+    return { .upgrade = connection(upgrade), .object_store = move(object_store), .name = "by_number"_utf16, .key_path = WebView::IndexedDBKeyPath { "number"_utf16 }, .unique = unique };
+}
+
+// The answer to an extraction: the keys that the renderer found in the value, which are whole numbers here.
+static IndexKeys keys_for_index(u64 upgrade, u64 token, Vector<u64> const& keys)
+{
+    Vector<ByteBuffer> encoded_keys;
+    for (auto key : keys)
+        encoded_keys.append(number_key(key));
+    return { .upgrade = connection(upgrade), .token = token, .keys = move(encoded_keys) };
+}
+
+static PlaceRequest put_with_an_index_key(TransactionName transaction, ObjectStoreName object_store, u64 key, StringView value, IndexName index, u64 index_key)
+{
+    Vector<KeysOfIndex> index_keys;
+    index_keys.append({ move(index), { number_key(index_key) } });
+    return { move(transaction), StoreRecord { .object_store = move(object_store), .key = number_key(key), .value = buffer_of(value), .index_keys = move(index_keys) } };
+}
+
+static PlaceRequest read_index(TransactionName transaction, IndexName index)
+{
+    return { move(transaction), ReadIndexRecords { .index = move(index), .range = {} } };
 }
 
 // Has the page open the database "database" at version 1 and create the object stores "books" and "notes" in the
@@ -1104,6 +1163,339 @@ TEST_CASE(a_channel_that_claims_what_cannot_be_so_is_retired)
         page.send(Open { .name = "other"_utf16 });
         page.send(CreateObjectStore { .upgrade = connection(2), .name = "first"_utf16 });
         page.send(CreateObjectStore { .upgrade = connection(2), .name = "first"_utf16 });
+    });
+}
+
+TEST_CASE(an_index_is_filled_with_the_keys_that_its_renderer_extracts)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+
+    page.send(Open { .name = "database"_utf16 });
+    page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+    page.send(put(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 1, "c"sv));
+    page.send(put(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 2, "a"sv));
+    page.send(put(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 3, "b"sv));
+    (void)page.has_heard();
+
+    // The object store has records by the time that the index is asked for. What comes after the index waits until
+    // each of them has its keys, and so does the commit.
+    page.send(an_index(1, ObjectStoreOfUpgrade { 1 }));
+    page.send(read_index(upgrade_of(1), IndexOfUpgrade { 1 }));
+    page.send(Commit { .transaction = upgrade_of(1), .results_started = 3 });
+    EXPECT_EQ(page.has_heard(), (Vector { "the upgrade of connection 1 is asked for the keys of its index 1 for the value c (token 1)"_string }));
+
+    page.send(keys_for_index(1, 1, { 30 }));
+    EXPECT_EQ(page.has_heard(), (Vector { "the upgrade of connection 1 is asked for the keys of its index 1 for the value a (token 2)"_string }));
+
+    // A value that has nothing at the key path of the index has no key in it.
+    page.send(keys_for_index(1, 2, {}));
+    EXPECT_EQ(page.has_heard(), (Vector { "the upgrade of connection 1 is asked for the keys of its index 1 for the value b (token 3)"_string }));
+
+    page.send(keys_for_index(1, 3, { 20 }));
+    EXPECT_EQ(page.has_heard(), (Vector {
+                                    "result 4 of the upgrade of connection 1: read [20/3=b, 30/1=c]"_string,
+                                    "the upgrade of connection 1 completed, having created object stores [1], having created indexes [1]"_string,
+                                    "open 1 succeeded after its upgrade"_string,
+                                }));
+    EXPECT_EQ(session->take_channels_at_fault(), Vector<Session::ChannelID> {});
+
+    auto another_page = a_page(*session);
+    another_page.send(Open { .name = "database"_utf16 });
+    EXPECT_EQ(another_page.has_heard(), (Vector { "open 1 has connection 1 at version 1 with object stores [books=1 with the indexes [by_number=1]]"_string }));
+}
+
+TEST_CASE(an_index_of_an_object_store_without_records_needs_no_keys)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+
+    page.send(Open { .name = "database"_utf16 });
+    page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+    page.send(an_index(1, ObjectStoreOfUpgrade { 1 }));
+    page.send(Commit { .transaction = upgrade_of(1), .results_started = 0 });
+    EXPECT_EQ(page.has_heard(), (Vector {
+                                    "open 1 needs an upgrade of connection 1 from version 0 to 1 with object stores []"_string,
+                                    "the upgrade of connection 1 completed, having created object stores [1], having created indexes [1]"_string,
+                                    "open 1 succeeded after its upgrade"_string,
+                                }));
+}
+
+TEST_CASE(an_abort_is_taken_while_an_index_is_filled)
+{
+    // What a page hears when it aborts an upgrade that waits for the keys of an index and was asked to commit, then
+    // sends the keys all the same, and opens the database again.
+    auto abort_during_a_fill = [](Function<void(Page&)> open_the_database, u64 upgraded_connection, ObjectStoreName object_store) {
+        auto session = a_session();
+        auto page = a_page(*session);
+        open_the_database(page);
+
+        page.send(put(upgrade_of(upgraded_connection), object_store, 1, "a"sv));
+        page.send(an_index(upgraded_connection, object_store));
+        page.send(Commit { .transaction = upgrade_of(upgraded_connection), .results_started = 1 });
+        (void)page.has_heard();
+
+        page.send(Abort { .transaction = upgrade_of(upgraded_connection) });
+        page.send(keys_for_index(upgraded_connection, 1, { 10 }));
+        page.send(Open { .name = "database"_utf16 });
+
+        EXPECT_EQ(session->take_channels_at_fault(), Vector<Session::ChannelID> {});
+        return page.has_heard();
+    };
+
+    // The page hears of the end of the upgrade once, and then of its open. A database that the upgrade was the first
+    // of is as if it had never been.
+    auto in_a_first_upgrade = abort_during_a_fill(
+        [](Page& page) {
+            page.send(Open { .name = "database"_utf16 });
+            page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+        },
+        1, ObjectStoreOfUpgrade { 1 });
+    EXPECT_EQ(in_a_first_upgrade, (Vector {
+                                      "the upgrade of connection 1 aborted"_string,
+                                      "open 1 failed since its upgrade left it no connection"_string,
+                                      "open 2 needs an upgrade of connection 2 from version 0 to 1 with object stores []"_string,
+                                  }));
+
+    // A database that was there before has the version and the object stores from before.
+    auto in_a_later_upgrade = abort_during_a_fill(
+        [](Page& page) {
+            open_a_database(page);
+            page.send(CloseConnection { .connection = connection(1) });
+            page.send(Open { .name = "database"_utf16, .version = 2 });
+        },
+        2, BOOKS);
+    EXPECT_EQ(in_a_later_upgrade, (Vector {
+                                      "the upgrade of connection 2 aborted"_string,
+                                      "open 2 failed since its upgrade left it no connection"_string,
+                                      "open 3 has connection 3 at version 1 with object stores [books=1, notes=2]"_string,
+                                  }));
+}
+
+TEST_CASE(a_record_that_breaks_a_unique_index_ends_the_upgrade)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+
+    page.send(Open { .name = "database"_utf16 });
+    page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+    page.send(put(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 1, "a"sv));
+    page.send(put(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 2, "b"sv));
+    page.send(an_index(1, ObjectStoreOfUpgrade { 1 }, IndexedDBDatabase::Unique::Yes));
+    page.send(keys_for_index(1, 1, { 7 }));
+    (void)page.has_heard();
+
+    page.send(keys_for_index(1, 2, { 7 }));
+    EXPECT_EQ(page.has_heard(), (Vector {
+                                    "the upgrade of connection 1 aborted for Constraint"_string,
+                                    "open 1 failed since its upgrade left it no connection"_string,
+                                }));
+    EXPECT_EQ(session->take_channels_at_fault(), Vector<Session::ChannelID> {});
+}
+
+TEST_CASE(a_channel_that_is_retired_while_its_index_is_filled_leaves_the_database_as_it_was)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+    open_a_database(page);
+
+    page.send(a_transaction(Mode::ReadWrite, { BOOKS }));
+    page.send(put(transaction(1), BOOKS, 1, "a"sv));
+    page.send(Commit { .transaction = transaction(1), .results_started = 1 });
+    page.send(CloseConnection { .connection = connection(1) });
+
+    page.send(Open { .name = "database"_utf16, .version = 2 });
+    page.send(an_index(2, BOOKS));
+    session->retire_channel(page.channel);
+
+    auto another_page = a_page(*session);
+    another_page.send(Open { .name = "database"_utf16 });
+    EXPECT_EQ(another_page.has_heard(), (Vector { "open 1 has connection 1 at version 1 with object stores [books=1, notes=2]"_string }));
+}
+
+TEST_CASE(requests_store_the_keys_of_indexes_and_read_through_them)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+
+    page.send(Open { .name = "database"_utf16 });
+    page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+    page.send(an_index(1, ObjectStoreOfUpgrade { 1 }, IndexedDBDatabase::Unique::Yes));
+    page.send(put_with_an_index_key(upgrade_of(1), ObjectStoreOfUpgrade { 1 }, 1, "one"sv, IndexOfUpgrade { 1 }, 20));
+    page.send(Commit { .transaction = upgrade_of(1), .results_started = 1 });
+    (void)page.has_heard();
+
+    // The index has the id that the page was told, as the object store has.
+    i64 const index = 1;
+    auto iterate_from = [&](Optional<IndexCursorPosition> position) {
+        return PlaceRequest { transaction(1), IterateIndexCursor { .index = index, .range = {}, .position = move(position) } };
+    };
+
+    page.send(a_transaction(Mode::ReadWrite, { BOOKS }));
+    page.send(put_with_an_index_key(transaction(1), BOOKS, 2, "two"sv, index, 10));
+    page.send(put_with_an_index_key(transaction(1), BOOKS, 3, "three"sv, index, 10));
+    page.send(read_index(transaction(1), index));
+    page.send(PlaceRequest { transaction(1), ReadIndexRecords { .index = index, .range = {}, .direction = IndexedDBDatabase::Direction::Descending, .count = 1, .with_values = IndexedDBDatabase::WithValues::No } });
+    page.send(PlaceRequest { transaction(1), CountIndexRecords { .index = index, .range = { .lower_bound = number_key(15) } } });
+    page.send(iterate_from({}));
+    page.send(iterate_from(IndexCursorPosition { .key = number_key(10), .primary_key = number_key(2) }));
+    page.send(iterate_from(IndexCursorPosition { .key = number_key(20), .primary_key = number_key(1) }));
+    EXPECT_EQ(page.has_heard(), (Vector {
+                                    "result 1 of transaction 1: stored"_string,
+                                    "result 2 of transaction 1: failed for Constraint"_string,
+                                    "result 3 of transaction 1: read [10/2=two, 20/1=one]"_string,
+                                    "result 4 of transaction 1: read [20/1]"_string,
+                                    "result 5 of transaction 1: counted 1"_string,
+                                    "result 6 of transaction 1: the cursor is at 10/2=two"_string,
+                                    "result 7 of transaction 1: the cursor is at 20/1=one"_string,
+                                    "result 8 of transaction 1: the cursor is at the end"_string,
+                                }));
+}
+
+TEST_CASE(an_upgrade_renames_and_deletes_indexes)
+{
+    auto session = a_session();
+    auto page = a_page(*session);
+
+    page.send(Open { .name = "database"_utf16 });
+    page.send(CreateObjectStore { .upgrade = connection(1), .name = "books"_utf16 });
+    page.send(an_index(1, ObjectStoreOfUpgrade { 1 }));
+    page.send(Commit { .transaction = upgrade_of(1), .results_started = 0 });
+    page.send(CloseConnection { .connection = connection(1) });
+    (void)page.has_heard();
+
+    // The index from before has its id. The ones that this upgrade creates have their numbers in it.
+    page.send(Open { .name = "database"_utf16, .version = 2 });
+    page.send(RenameIndex { .upgrade = connection(2), .index = i64 { 1 }, .name = "renamed"_utf16 });
+    page.send(CreateIndex { .upgrade = connection(2), .object_store = BOOKS, .name = "short-lived"_utf16, .key_path = WebView::IndexedDBKeyPath { "a"_utf16 } });
+    page.send(CreateIndex { .upgrade = connection(2), .object_store = BOOKS, .name = "another"_utf16, .key_path = WebView::IndexedDBKeyPath { "b"_utf16 } });
+    page.send(DeleteIndex { .upgrade = connection(2), .index = IndexOfUpgrade { 1 } });
+    page.send(RenameIndex { .upgrade = connection(2), .index = IndexOfUpgrade { 2 }, .name = "kept"_utf16 });
+    page.send(Commit { .transaction = upgrade_of(2), .results_started = 0 });
+    page.send(Open { .name = "database"_utf16 });
+    EXPECT_EQ(page.has_heard(), (Vector {
+                                    "open 2 needs an upgrade of connection 2 from version 1 to 2 with object stores [books=1 with the indexes [by_number=1]]"_string,
+                                    "the upgrade of connection 2 completed, having created indexes [2, 3]"_string,
+                                    "open 2 succeeded after its upgrade"_string,
+                                    "open 3 has connection 3 at version 2 with object stores [books=1 with the indexes [renamed=1, kept=3]]"_string,
+                                }));
+}
+
+TEST_CASE(a_channel_that_claims_what_cannot_be_so_of_an_index_is_retired)
+{
+    // The page has opened "database" with the object stores "books", which has a record and an index, and "notes".
+    // It has its second connection, and the last thing that it sends is the claim.
+    auto expect_a_false_claim = [](StringView claim, Function<void(Page&)> send_the_claim) {
+        auto session = a_session();
+        auto page = a_page(*session);
+        open_a_database(page);
+
+        page.send(a_transaction(Mode::ReadWrite, { BOOKS }));
+        page.send(put(transaction(1), BOOKS, 1, "a"sv));
+        page.send(Commit { .transaction = transaction(1), .results_started = 1 });
+        page.send(CloseConnection { .connection = connection(1) });
+
+        page.send(Open { .name = "database"_utf16, .version = 2 });
+        page.send(an_index(2, BOOKS));
+        page.send(keys_for_index(2, 1, { 10 }));
+        page.send(Commit { .transaction = upgrade_of(2), .results_started = 0 });
+        (void)page.has_heard();
+        if (!session->take_channels_at_fault().is_empty())
+            FAIL("The channel was retired before it claimed anything");
+
+        send_the_claim(page);
+        if (session->take_channels_at_fault() != Vector { page.channel })
+            FAIL(MUST(String::formatted("The channel was not retired for {}", claim)));
+        (void)page.has_heard();
+
+        page.send(ListDatabases {});
+        if (!page.has_heard().is_empty())
+            FAIL(MUST(String::formatted("The channel was answered after {}", claim)));
+    };
+
+    // Has the page begin a third upgrade, of another database, in which it puts two records and asks for an index.
+    auto begin_to_fill_an_index = [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(CreateObjectStore { .upgrade = connection(3), .name = "first"_utf16 });
+        page.send(put(upgrade_of(3), ObjectStoreOfUpgrade { 1 }, 1, "a"sv));
+        page.send(put(upgrade_of(3), ObjectStoreOfUpgrade { 1 }, 2, "b"sv));
+        page.send(an_index(3, ObjectStoreOfUpgrade { 1 }));
+    };
+
+    expect_a_false_claim("keys for an index while its upgrade waits for none"sv, [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(keys_for_index(3, 1, { 10 }));
+    });
+    expect_a_false_claim("keys with a token that it was not given"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(keys_for_index(3, 2, { 10 }));
+    });
+    expect_a_false_claim("keys for a record that has its keys"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(keys_for_index(3, 1, { 10 }));
+        page.send(keys_for_index(3, 1, { 10 }));
+    });
+    expect_a_false_claim("keys for an index that has been filled"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(keys_for_index(3, 1, { 10 }));
+        page.send(keys_for_index(3, 2, { 20 }));
+        page.send(keys_for_index(3, 2, { 20 }));
+    });
+    expect_a_false_claim("two keys for a record in an index that takes one"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(keys_for_index(3, 1, { 10, 20 }));
+    });
+    expect_a_false_claim("a change to the object stores of an upgrade that it has asked to commit"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(Commit { .transaction = upgrade_of(3), .results_started = 2 });
+        page.send(CreateObjectStore { .upgrade = connection(3), .name = "second"_utf16 });
+    });
+    expect_a_false_claim("an index of an object store that its upgrade has not created"sv, [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(an_index(3, ObjectStoreOfUpgrade { 1 }));
+    });
+    expect_a_false_claim("an index that its upgrade has not created"sv, [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(read_index(upgrade_of(3), IndexOfUpgrade { 1 }));
+    });
+    expect_a_false_claim("an index of its upgrade without a number"sv, [&](Page& page) {
+        begin_to_fill_an_index(page);
+        page.send(read_index(upgrade_of(3), IndexOfUpgrade { 0 }));
+    });
+    expect_a_false_claim("the rename of an index that its upgrade has not created"sv, [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(RenameIndex { .upgrade = connection(3), .index = IndexOfUpgrade { 1 }, .name = "renamed"_utf16 });
+    });
+    expect_a_false_claim("the deletion of an index that its upgrade has not created"sv, [](Page& page) {
+        page.send(Open { .name = "other"_utf16 });
+        page.send(DeleteIndex { .upgrade = connection(3), .index = IndexOfUpgrade { 1 } });
+    });
+    expect_a_false_claim("keys for an index by its number in a transaction that is no upgrade"sv, [](Page& page) {
+        page.send(a_transaction(Mode::ReadWrite, { BOOKS }, 2));
+        page.send(put_with_an_index_key(transaction(2), BOOKS, 2, "b"sv, IndexOfUpgrade { 1 }, 20));
+    });
+
+    // The database finds these out, when it is asked to do what was sent.
+    i64 const index_of_books = 1;
+    expect_a_false_claim("an index that the database does not have"sv, [](Page& page) {
+        page.send(a_transaction(Mode::ReadOnly, { BOOKS }, 2));
+        page.send(read_index(transaction(2), i64 { 1000 }));
+    });
+    expect_a_false_claim("an index of an object store outside the scope of its transaction"sv, [&](Page& page) {
+        page.send(a_transaction(Mode::ReadOnly, { NOTES }, 2));
+        page.send(read_index(transaction(2), index_of_books));
+    });
+    expect_a_false_claim("the count of an index of an object store outside the scope of its transaction"sv, [&](Page& page) {
+        page.send(a_transaction(Mode::ReadOnly, { NOTES }, 2));
+        page.send(PlaceRequest { transaction(2), CountIndexRecords { .index = index_of_books, .range = {} } });
+    });
+    expect_a_false_claim("a cursor over an index of an object store outside the scope of its transaction"sv, [&](Page& page) {
+        page.send(a_transaction(Mode::ReadOnly, { NOTES }, 2));
+        page.send(PlaceRequest { transaction(2), IterateIndexCursor { .index = index_of_books, .range = {} } });
+    });
+    expect_a_false_claim("keys for an index of another object store than the record's"sv, [&](Page& page) {
+        page.send(a_transaction(Mode::ReadWrite, { BOOKS, NOTES }, 2));
+        page.send(put_with_an_index_key(transaction(2), NOTES, 1, "a"sv, index_of_books, 20));
     });
 }
 

@@ -191,6 +191,10 @@ public:
     ErrorOr<u64, IndexedDBError> count(i64 object_store_id, IndexedDBKeyRange const&);
     ErrorOr<Vector<IndexedDBRecord>, IndexedDBError> read_records(i64 object_store_id, IndexedDBKeyRange const&, Direction, Optional<u32> count, WithValues);
 
+    // https://w3c.github.io/IndexedDB/#index-construct
+    // The object store that the index references.
+    ErrorOr<i64, IndexedDBError> object_store_of_index(i64 index_id);
+
     ErrorOr<u64, IndexedDBError> count_index_records(i64 index_id, IndexedDBKeyRange const&);
     ErrorOr<Vector<IndexedDBIndexRecord>, IndexedDBError> read_index_records(i64 index_id, IndexedDBKeyRange const&, Direction, RecordsOfEachKey, Optional<u32> count, WithValues);
 

@@ -406,3 +406,76 @@ TEST_CASE(an_upgrade_has_the_database_to_itself)
     EXPECT(scheduler.ask_to_commit(upgrade, 0));
     EXPECT_EQ(do_everything(scheduler), (Vector { "commit 1"_string, "begin 3"_string, "run 2/0"_string, "run 3/0"_string }));
 }
+
+// Has the entry that the scheduler asks for next wait. The entry is given by its text.
+static void park(Scheduler& scheduler, StringView entry)
+{
+    auto action = scheduler.next_action();
+    if (!action.has_value() || described(*action) != entry) {
+        FAIL(MUST(String::formatted("The scheduler did not ask for {}", entry)));
+        return;
+    }
+
+    auto const& run = action->get<Scheduler::Run>();
+    scheduler.did_park(run.transaction, run.place);
+}
+
+TEST_CASE(an_entry_that_waits_holds_back_the_rest_of_its_transaction)
+{
+    Scheduler scheduler;
+    auto upgrade = scheduler.create_upgrade_transaction();
+    EXPECT_EQ(scheduler.place(upgrade, EntryKind::Change), 0u);
+    place_requests(scheduler, upgrade, 1);
+
+    park(scheduler, "run 1/0"sv);
+    EXPECT_EQ(do_everything(scheduler), Vector<String> {});
+
+    // A commit that is asked for meanwhile waits as the entries do.
+    EXPECT(scheduler.ask_to_commit(upgrade, 0));
+    EXPECT_EQ(do_everything(scheduler), Vector<String> {});
+
+    scheduler.did_run(upgrade, 0, {});
+    EXPECT_EQ(do_everything(scheduler), (Vector { "run 1/1"_string, "commit 1"_string }));
+}
+
+TEST_CASE(a_transaction_whose_entry_waits_can_be_ended)
+{
+    // Whoever made the transaction asks for its abort.
+    {
+        Scheduler scheduler;
+        auto upgrade = scheduler.create_upgrade_transaction();
+        EXPECT_EQ(scheduler.place(upgrade, EntryKind::Change), 0u);
+        place_requests(scheduler, upgrade, 1);
+
+        park(scheduler, "run 1/0"sv);
+        scheduler.ask_to_abort(upgrade);
+        EXPECT_EQ(do_everything(scheduler), (Vector { "roll back 1"_string }));
+    }
+
+    // What the entry waited for comes, and the entry fails with it.
+    {
+        Scheduler scheduler;
+        auto upgrade = scheduler.create_upgrade_transaction();
+        EXPECT_EQ(scheduler.place(upgrade, EntryKind::Change), 0u);
+        place_requests(scheduler, upgrade, 1);
+
+        park(scheduler, "run 1/0"sv);
+        scheduler.did_run(upgrade, 0, Kind::Constraint);
+        EXPECT_EQ(do_everything(scheduler), (Vector { "roll back 1 for Constraint"_string }));
+    }
+}
+
+TEST_CASE(an_entry_that_waits_does_not_hold_back_other_transactions)
+{
+    Scheduler scheduler;
+    auto first = scheduler.create_transaction(Mode::ReadOnly, { 1 });
+    auto second = scheduler.create_transaction(Mode::ReadOnly, { 1 });
+    place_requests(scheduler, first, 2);
+    place_requests(scheduler, second, 1);
+
+    park(scheduler, "run 1/0"sv);
+    EXPECT_EQ(do_everything(scheduler), (Vector { "run 2/0"_string }));
+
+    scheduler.did_run(first, 0, {});
+    EXPECT_EQ(do_everything(scheduler), (Vector { "run 1/1"_string }));
+}

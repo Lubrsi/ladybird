@@ -49,6 +49,14 @@ struct ObjectStoreOfUpgrade {
 // An object store is named by its id, or by its number in the upgrade that created it.
 using ObjectStoreName = Variant<i64, ObjectStoreOfUpgrade>;
 
+// The n-th index that an upgrade created.
+struct IndexOfUpgrade {
+    u64 number { 0 };
+};
+
+// An index is named by its id, or by its number in the upgrade that created it.
+using IndexName = Variant<i64, IndexOfUpgrade>;
+
 // https://w3c.github.io/IndexedDB/#range-construct
 // The bounds are keys as the renderer encoded them.
 struct KeyRange {
@@ -76,12 +84,20 @@ struct ValueSegments {
 
 using Value = Variant<ByteBuffer, ValueSegments>;
 
+// The keys that the renderer extracted from a value for one index, as it encoded them. A key may hold a marker in the
+// place of the key that the database generates for the record and injects into the value.
+struct KeysOfIndex {
+    IndexName index;
+    Vector<ByteBuffer> keys;
+};
+
 // https://w3c.github.io/IndexedDB/#store-a-record-into-an-object-store
 struct StoreRecord {
     ObjectStoreName object_store;
     Optional<ByteBuffer> key {};
     Value value;
     IndexedDBDatabase::NoOverwrite no_overwrite { IndexedDBDatabase::NoOverwrite::No };
+    Vector<KeysOfIndex> index_keys {};
 };
 
 // https://w3c.github.io/IndexedDB/#delete-records-from-an-object-store
@@ -122,7 +138,55 @@ struct IterateCursor {
     IndexedDBDatabase::WithValues with_values { IndexedDBDatabase::WithValues::Yes };
 };
 
-using Operation = Variant<StoreRecord, DeleteRecords, Clear, ReadRecords, Count, IterateCursor>;
+// https://w3c.github.io/IndexedDB/#retrieve-multiple-items-from-an-index
+struct ReadIndexRecords {
+    IndexName index;
+    KeyRange range;
+    IndexedDBDatabase::Direction direction { IndexedDBDatabase::Direction::Ascending };
+    IndexedDBDatabase::RecordsOfEachKey records_of_each_key { IndexedDBDatabase::RecordsOfEachKey::All };
+    Optional<u32> count {};
+    IndexedDBDatabase::WithValues with_values { IndexedDBDatabase::WithValues::Yes };
+};
+
+// https://w3c.github.io/IndexedDB/#count-the-records-in-a-range
+struct CountIndexRecords {
+    IndexName index;
+    KeyRange range;
+};
+
+// https://w3c.github.io/IndexedDB/#cursor-position
+// Where a cursor over an index is: its position, and its object store position.
+struct IndexCursorPosition {
+    IndexedDBIndexCursorPosition as_position_of_database() const { return { key.bytes(), primary_key.bytes() }; }
+
+    ByteBuffer key;
+    ByteBuffer primary_key;
+};
+
+// What a cursor over an index is to go to: a key, and with continuePrimaryKey() a primary key as well.
+struct IndexCursorSeek {
+    IndexedDBIndexCursorSeek as_seek_of_database() const
+    {
+        return { key.bytes(), primary_key.map([](auto const& bytes) { return bytes.bytes(); }) };
+    }
+
+    ByteBuffer key;
+    Optional<ByteBuffer> primary_key {};
+};
+
+// https://w3c.github.io/IndexedDB/#iterate-a-cursor
+struct IterateIndexCursor {
+    IndexName index;
+    KeyRange range;
+    IndexedDBDatabase::Direction direction { IndexedDBDatabase::Direction::Ascending };
+    IndexedDBDatabase::RecordsOfEachKey records_of_each_key { IndexedDBDatabase::RecordsOfEachKey::All };
+    Optional<IndexCursorPosition> position {};
+    Optional<IndexCursorSeek> seek {};
+    u32 count { 1 };
+    IndexedDBDatabase::WithValues with_values { IndexedDBDatabase::WithValues::Yes };
+};
+
+using Operation = Variant<StoreRecord, DeleteRecords, Clear, ReadRecords, Count, IterateCursor, ReadIndexRecords, CountIndexRecords, IterateIndexCursor>;
 
 // Commands, which a renderer sends.
 
@@ -200,7 +264,38 @@ struct DeleteObjectStore {
     ObjectStoreName object_store;
 };
 
-using Command = Variant<Open, DeleteDatabase, ListDatabases, CloseConnection, VersionChangeHandled, CreateTransaction, PlaceRequest, Commit, Abort, CreateObjectStore, RenameObjectStore, DeleteObjectStore>;
+// https://w3c.github.io/IndexedDB/#dom-idbobjectstore-createindex
+// The index is the n-th that the upgrade creates. The records that its object store has by then get their keys in
+// the index from the renderer, which is asked for them one record at a time with ExtractIndexKeys.
+struct CreateIndex {
+    ConnectionNumber upgrade;
+    ObjectStoreName object_store;
+    Utf16String name;
+    IndexedDBKeyPath key_path;
+    IndexedDBDatabase::Unique unique { IndexedDBDatabase::Unique::No };
+    IndexedDBDatabase::MultiEntry multi_entry { IndexedDBDatabase::MultiEntry::No };
+};
+
+struct RenameIndex {
+    ConnectionNumber upgrade;
+    IndexName index;
+    Utf16String name;
+};
+
+struct DeleteIndex {
+    ConnectionNumber upgrade;
+    IndexName index;
+};
+
+// The answer to an ExtractIndexKeys, with its token: the keys that the index is to have for the record, which can be
+// none. A renderer that cannot read the value asks for the abort of the upgrade in place of an answer.
+struct IndexKeys {
+    ConnectionNumber upgrade;
+    u64 token { 0 };
+    Vector<ByteBuffer> keys;
+};
+
+using Command = Variant<Open, DeleteDatabase, ListDatabases, CloseConnection, VersionChangeHandled, CreateTransaction, PlaceRequest, Commit, Abort, CreateObjectStore, RenameObjectStore, DeleteObjectStore, CreateIndex, RenameIndex, DeleteIndex, IndexKeys>;
 
 // Replies, which the session sends.
 
@@ -289,7 +384,15 @@ struct CursorIterated {
     Optional<IndexedDBRecord> record {};
 };
 
-using ResultOfRequest = Variant<RecordStored, RecordsDeleted, RecordsRead, RecordsCounted, CursorIterated, IndexedDBErrorKind>;
+struct IndexRecordsRead {
+    Vector<IndexedDBIndexRecord> records;
+};
+
+struct IndexCursorIterated {
+    Optional<IndexedDBIndexRecord> record {};
+};
+
+using ResultOfRequest = Variant<RecordStored, RecordsDeleted, RecordsRead, RecordsCounted, CursorIterated, IndexRecordsRead, IndexCursorIterated, IndexedDBErrorKind>;
 
 struct RequestResult {
     TransactionName transaction;
@@ -297,11 +400,21 @@ struct RequestResult {
     ResultOfRequest result;
 };
 
+// An upgrade asks its renderer for the keys that an index of the upgrade is to have for a record that is older than
+// the index. The index is given by its number in the upgrade, and the answer is an IndexKeys with the token.
+struct ExtractIndexKeys {
+    ConnectionNumber upgrade;
+    u64 index { 0 };
+    u64 token { 0 };
+    ByteBuffer value;
+};
+
 // The last that a channel hears of a transaction that was committed. An upgrade's has the ids of the object stores
-// that the upgrade created, in the order in which it created them.
+// and of the indexes that the upgrade created, in the order in which it created them.
 struct TransactionCompleted {
     TransactionName transaction;
     Vector<i64> created_object_stores;
+    Vector<i64> created_indexes;
 };
 
 // The last that a channel hears of a transaction that was not committed. The cause is there when the session ended
@@ -311,6 +424,6 @@ struct TransactionAborted {
     Optional<IndexedDBErrorKind> cause {};
 };
 
-using Reply = Variant<OpenSucceeded, UpgradeNeeded, OpenSucceededAfterUpgrade, OpenFailed, VersionChange, Blocked, DeleteSucceeded, DeleteFailed, DatabaseList, RequestResult, TransactionCompleted, TransactionAborted>;
+using Reply = Variant<OpenSucceeded, UpgradeNeeded, OpenSucceededAfterUpgrade, OpenFailed, VersionChange, Blocked, DeleteSucceeded, DeleteFailed, DatabaseList, RequestResult, ExtractIndexKeys, TransactionCompleted, TransactionAborted>;
 
 }

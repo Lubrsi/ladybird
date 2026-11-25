@@ -1400,6 +1400,11 @@ ErrorOr<IndexedDBDatabase::Index, IndexedDBError> IndexedDBDatabase::index(i64 i
     return index.release_value().release_value();
 }
 
+ErrorOr<i64, IndexedDBError> IndexedDBDatabase::object_store_of_index(i64 index_id)
+{
+    return TRY(index(index_id)).object_store_id;
+}
+
 ErrorOr<bool, IndexedDBError> IndexedDBDatabase::index_has_key(i64 index_id, ReadonlyBytes sort_form_of_key)
 {
     auto has_key = m_sqlite_database->try_execute_bound_statement_one<bool>(

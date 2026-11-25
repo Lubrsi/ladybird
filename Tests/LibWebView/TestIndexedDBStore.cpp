@@ -1506,6 +1506,28 @@ TEST_CASE(an_index_only_looks_at_its_own_records)
     EXPECT_EQ(TRY_OR_FAIL(database->count_index_records(second_index, {})), 1u);
 }
 
+TEST_CASE(an_index_is_of_one_object_store)
+{
+    auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
+    auto database = TRY_OR_FAIL(store->open_database(example_com(), "database"_utf16, 1, at(1))).database;
+    auto upgrade = TRY_OR_FAIL(database->begin_upgrade(1));
+
+    // The indexes are made in the other order than their object stores, so that no index has the id of its own.
+    auto first_object_store = TRY_OR_FAIL(upgrade->create_object_store("first"_utf16, {}, KeyGenerator::No));
+    auto second_object_store = TRY_OR_FAIL(upgrade->create_object_store("second"_utf16, {}, KeyGenerator::No));
+    auto index_of_the_second = TRY_OR_FAIL(upgrade->create_index(second_object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    auto index_of_the_first = TRY_OR_FAIL(upgrade->create_index(first_object_store, "index"_utf16, WebView::IndexedDBKeyPath { "a"_utf16 }, Unique::No, MultiEntry::No));
+    EXPECT_NE(index_of_the_first, first_object_store);
+    EXPECT_NE(index_of_the_second, second_object_store);
+
+    EXPECT_EQ(TRY_OR_FAIL(database->object_store_of_index(index_of_the_first)), first_object_store);
+    EXPECT_EQ(TRY_OR_FAIL(database->object_store_of_index(index_of_the_second)), second_object_store);
+
+    TRY_OR_FAIL(upgrade->delete_index(index_of_the_first));
+    EXPECT_EQ(kind_of_failure(database->object_store_of_index(index_of_the_first)), IndexedDBError::Kind::InvalidClaim);
+    EXPECT_EQ(kind_of_failure(database->object_store_of_index(1000)), IndexedDBError::Kind::InvalidClaim);
+}
+
 TEST_CASE(the_records_of_an_index_go_with_the_record_that_they_refer_to)
 {
     auto store = TRY_OR_FAIL(IndexedDBStore::create_transient());
