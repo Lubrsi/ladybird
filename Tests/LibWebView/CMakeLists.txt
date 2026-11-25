@@ -84,6 +84,7 @@ set(TEST_SOURCES
     TestHistoryStore.cpp
     TestHSTSStore.cpp
     TestIndexedDBConnectionQueue.cpp
+    TestIndexedDBSession.cpp
     TestIndexedDBStore.cpp
     TestIndexedDBTransactionScheduler.cpp
     TestLingeringIndicator.cpp

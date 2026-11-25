@@ -46,6 +46,7 @@ set(SOURCES
     IndexedDBConnectionQueue.cpp
     IndexedDBDatabase.cpp
     IndexedDBQuota.cpp
+    IndexedDBSession.cpp
     IndexedDBStore.cpp
     IndexedDBTransactionScheduler.cpp
     LingeringIndicator.cpp
