@@ -83,6 +83,7 @@ set(TEST_SOURCES
     TestHelperProcessPaths.cpp
     TestHistoryStore.cpp
     TestHSTSStore.cpp
+    TestIndexedDBConnectionQueue.cpp
     TestIndexedDBStore.cpp
     TestIndexedDBTransactionScheduler.cpp
     TestLingeringIndicator.cpp

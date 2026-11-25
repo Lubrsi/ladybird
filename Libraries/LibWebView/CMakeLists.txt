@@ -43,6 +43,7 @@ set(SOURCES
     HSTSStore.cpp
     ImageDecoderControlClient.cpp
     ImageDecoderManager.cpp
+    IndexedDBConnectionQueue.cpp
     IndexedDBDatabase.cpp
     IndexedDBQuota.cpp
     IndexedDBStore.cpp
