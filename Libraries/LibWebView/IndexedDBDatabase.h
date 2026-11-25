@@ -24,24 +24,14 @@
 #include <LibWebCommon/IndexedDB/KeyEncoding.h>
 #include <LibWebView/Export.h>
 #include <LibWebView/Forward.h>
+#include <LibWebView/IndexedDBErrorKind.h>
 #include <LibWebView/IndexedDBQuota.h>
 
 namespace WebView {
 
 // Only the kind of a failure is meant for whoever made the request. The cause is SQLite's own.
 struct WEBVIEW_API IndexedDBError {
-    enum class Kind : u8 {
-        Constraint,
-        Version,
-        // There was no room for what was asked, in the budget of its storage key or in its session.
-        Quota,
-        // The request is a writer's that has finished: it committed, was aborted, or lost its SQL transaction.
-        TransactionLost,
-        // The request is one that no renderer running LibWeb sends.
-        InvalidClaim,
-        OutOfMemory,
-        Unknown,
-    };
+    using Kind = IndexedDBErrorKind;
 
     static IndexedDBError from(Database::Error&&);
 
@@ -442,30 +432,6 @@ private:
 };
 
 }
-
-template<>
-struct AK::Formatter<WebView::IndexedDBError::Kind> : Formatter<StringView> {
-    ErrorOr<void> format(FormatBuilder& builder, WebView::IndexedDBError::Kind kind)
-    {
-        switch (kind) {
-        case WebView::IndexedDBError::Kind::Constraint:
-            return Formatter<StringView>::format(builder, "Constraint"sv);
-        case WebView::IndexedDBError::Kind::Version:
-            return Formatter<StringView>::format(builder, "Version"sv);
-        case WebView::IndexedDBError::Kind::Quota:
-            return Formatter<StringView>::format(builder, "Quota"sv);
-        case WebView::IndexedDBError::Kind::TransactionLost:
-            return Formatter<StringView>::format(builder, "TransactionLost"sv);
-        case WebView::IndexedDBError::Kind::InvalidClaim:
-            return Formatter<StringView>::format(builder, "InvalidClaim"sv);
-        case WebView::IndexedDBError::Kind::OutOfMemory:
-            return Formatter<StringView>::format(builder, "OutOfMemory"sv);
-        case WebView::IndexedDBError::Kind::Unknown:
-            return Formatter<StringView>::format(builder, "Unknown"sv);
-        }
-        VERIFY_NOT_REACHED();
-    }
-};
 
 template<>
 struct AK::Formatter<WebView::IndexedDBError> : Formatter<FormatString> {

@@ -46,6 +46,7 @@ set(SOURCES
     IndexedDBDatabase.cpp
     IndexedDBQuota.cpp
     IndexedDBStore.cpp
+    IndexedDBTransactionScheduler.cpp
     LingeringIndicator.cpp
     LocalFileRoot.cpp
     MediaSessionCoordinator.cpp

@@ -84,6 +84,7 @@ set(TEST_SOURCES
     TestHistoryStore.cpp
     TestHSTSStore.cpp
     TestIndexedDBStore.cpp
+    TestIndexedDBTransactionScheduler.cpp
     TestLingeringIndicator.cpp
     TestMediaSessionCoordinator.cpp
     TestNavigationLoader.cpp
